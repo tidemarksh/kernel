@@ -95,6 +95,43 @@ unsafe fn alloc_ofd(fd_type: i32, status_flags: i32) -> u32 {
 }
 
 // =========================================================================
+// Pipe FD creation
+// =========================================================================
+
+/// Open a pipe FD. `is_read_end` determines if this is the read or write end.
+/// pipe_idx is the index into the pipe table.
+pub fn open_pipe(vm: &mut ThreadState, _base: u32, pipe_idx: u32, is_read_end: bool, flags: i32) -> i64 {
+    unsafe {
+        let fd_type = FD_TYPE_PIPE;
+        // Encode pipe_idx and read/write flag in host_fd field
+        let host_fd = if is_read_end { pipe_idx as i32 } else { -(pipe_idx as i32) - 1 };
+        let ofd_id = alloc_ofd(fd_type, flags & O_NONBLOCK);
+        if ofd_id == 0 { return EMFILE; }
+        ofd_table()[ofd_id as usize].host_fd = host_fd;
+        ofd_table()[ofd_id as usize].ino = pipe_idx;
+
+        let cloexec = if flags & O_CLOEXEC != 0 { FD_CLOEXEC } else { 0 };
+        let newfd = match find_free_fd(vm, 0) {
+            Some(fd) => fd,
+            None => return EMFILE,
+        };
+        let ps = get_process_state(vm);
+        (*ps).fd_table[newfd] = FdEntry { ofd_id, fd_flags: cloexec };
+        newfd as i64
+    }
+}
+
+/// Check if an OFD is a pipe read-end (host_fd >= 0 and fd_type == PIPE).
+pub fn is_pipe_read(ofd: &OpenFileDesc) -> bool {
+    ofd.fd_type == FD_TYPE_PIPE && ofd.host_fd >= 0
+}
+
+/// Check if an OFD is a pipe write-end (host_fd < 0 and fd_type == PIPE).
+pub fn is_pipe_write(ofd: &OpenFileDesc) -> bool {
+    ofd.fd_type == FD_TYPE_PIPE && ofd.host_fd < 0
+}
+
+// =========================================================================
 // syscall implementations
 // =========================================================================
 

@@ -137,13 +137,22 @@ fn split_parent_name(path: &[u8]) -> (u32, &[u8]) {
 // =========================================================================
 
 pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) -> i64 {
-    // stdout/stderr read → 0
     if fd <= 2 { return 0; }
 
     let ofd = match fd_table::get_ofd(vm, fd) {
         Some(o) => o,
         None => return EBADF,
     };
+
+    if ofd.fd_type == FD_TYPE_PIPE {
+        let mut tmp = [0u8; 4096];
+        let to_read = (count as usize).min(tmp.len());
+        let n = super::pipe::pipe_read(ofd.ino, &mut tmp[..to_read]);
+        if n > 0 {
+            unsafe { guest_mem::write_bytes(base, buf, &tmp[..n as usize]); }
+        }
+        return n;
+    }
 
     let mut tmp = [0u8; 4096];
     let to_read = (count as usize).min(tmp.len());
@@ -175,7 +184,6 @@ pub fn sys_pread64(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u6
 // =========================================================================
 
 pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64, nr: u64) -> i64 {
-    // stdout/stderr stubs
     if nr == SYS_WRITEV { return sys_writev(vm, base, fd, buf, count); }
     if fd == 1 || fd == 2 { return count as i64; }
 
@@ -183,6 +191,13 @@ pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64,
         Some(o) => o,
         None => return EBADF,
     };
+
+    if ofd.fd_type == FD_TYPE_PIPE {
+        let mut tmp = [0u8; 4096];
+        let to_write = (count as usize).min(tmp.len());
+        unsafe { guest_mem::read_bytes(base, buf, &mut tmp[..to_write]); }
+        return super::pipe::pipe_write(ofd.ino, &tmp[..to_write]);
+    }
 
     let mut tmp = [0u8; 4096];
     let to_write = (count as usize).min(tmp.len());

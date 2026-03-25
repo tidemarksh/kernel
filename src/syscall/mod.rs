@@ -97,6 +97,10 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_FCNTL => fd_table::sys_fcntl(vm, base, a0, a1, a2),
         SYS_CLOSE => fd_table::sys_close(vm, base, a0),
 
+        // pipe
+        SYS_PIPE2 => pipe::sys_pipe2(vm, base, a0, a1),
+        SYS_EVENTFD2 => pipe::sys_eventfd2(vm, base, a0, a1),
+
         // process (stubs — real impl with kernel Worker)
         SYS_SET_TID_ADDRESS => {
             vm.clear_child_tid = a0;
