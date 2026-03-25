@@ -39,15 +39,31 @@ struct EpollInstance {
     count: u32,
 }
 
-/// Epoll instance pointers.
-static mut EPOLL_PTRS: [*mut EpollInstance; MAX_EPOLL_ENTRIES] = [core::ptr::null_mut(); MAX_EPOLL_ENTRIES];
+/// Pointer to epoll pointer table, allocated via alloc.rs in kernel Worker memory.
+static mut EPOLL_TABLE_PTR: *mut *mut EpollInstance = core::ptr::null_mut();
+
+/// Initialize epoll table. Allocates via alloc.rs.
+pub fn init() {
+    unsafe {
+        let size = (MAX_EPOLL_ENTRIES * core::mem::size_of::<*mut EpollInstance>()) as u32;
+        let ptr = alloc::alloc_zeroed(size, core::mem::align_of::<*mut EpollInstance>() as u32);
+        if ptr == 0 { core::arch::wasm32::unreachable(); }
+        core::ptr::write(core::ptr::addr_of_mut!(EPOLL_TABLE_PTR), ptr as *mut *mut EpollInstance);
+    }
+}
 
 fn epoll_ptr(idx: usize) -> *mut EpollInstance {
-    unsafe { core::ptr::read((core::ptr::addr_of!(EPOLL_PTRS) as *const *mut EpollInstance).add(idx)) }
+    unsafe {
+        let table = core::ptr::read(core::ptr::addr_of!(EPOLL_TABLE_PTR));
+        core::ptr::read(table.add(idx))
+    }
 }
 
 fn set_epoll_ptr(idx: usize, val: *mut EpollInstance) {
-    unsafe { core::ptr::write((core::ptr::addr_of_mut!(EPOLL_PTRS) as *mut *mut EpollInstance).add(idx), val); }
+    unsafe {
+        let table = core::ptr::read(core::ptr::addr_of!(EPOLL_TABLE_PTR));
+        core::ptr::write(table.add(idx), val);
+    }
 }
 
 // =========================================================================
@@ -210,10 +226,8 @@ mod tests {
                 core::arch::wasm32::memory_grow(0, 256 - current_pages);
             }
             crate::alloc::init(0x80_0000);
-            for i in 0..MAX_EPOLL_ENTRIES {
-                set_epoll_ptr(i, core::ptr::null_mut());
-            }
         }
+        init();
 
         // Allocate an instance
         let size = core::mem::size_of::<EpollInstance>() as u32;

@@ -112,6 +112,7 @@ mod tests {
             super::alloc::init(0x20_0000);
             super::syscall::memory::init(0x10_0000); // brk at 1MB
             super::syscall::signal::init();
+            super::syscall::epoll::init();
             super::fs::fd_table::init();
             super::fs::memfs::init();
 
@@ -434,6 +435,7 @@ mod tests {
             super::alloc::init((elf_result.brk_start as u32 + 0x2000) & !0xF);
             super::syscall::memory::init(elf_result.brk_start);
             super::syscall::signal::init();
+            super::syscall::epoll::init();
             super::fs::fd_table::init();
             super::fs::memfs::init();
 

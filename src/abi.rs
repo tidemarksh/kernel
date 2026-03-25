@@ -271,6 +271,7 @@ pub extern "C" fn kernel_init(heap_base: u32) {
     }
     crate::syscall::memory::init(0);
     crate::syscall::signal::init();
+    crate::syscall::epoll::init();
     crate::fs::fd_table::init();
     crate::fs::memfs::init();
 }
