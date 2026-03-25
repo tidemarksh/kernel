@@ -1,6 +1,6 @@
 //! Epoll syscalls: epoll_create1, epoll_ctl, epoll_pwait.
 //!
-//! Struct layout (RV64, non-packed):
+//! Struct layout (RV64):
 //!
 //! struct epoll_event {                  // 16 bytes total
 //!     events: u32,                      // offset 0
@@ -70,6 +70,7 @@ fn set_epoll_ptr(idx: usize, val: *mut EpollInstance) {
 // epoll_create1
 // =========================================================================
 
+/// epoll_create1: create a new epoll instance and return its FD.
 pub fn sys_epoll_create1(vm: &mut ThreadState, base: u32, flags: u64) -> i64 {
     // Find free epoll slot
     let mut slot_idx = usize::MAX;
@@ -96,6 +97,7 @@ pub fn sys_epoll_create1(vm: &mut ThreadState, base: u32, flags: u64) -> i64 {
 // epoll_ctl
 // =========================================================================
 
+/// epoll_ctl: add, modify, or delete an entry in the epoll interest list.
 pub fn sys_epoll_ctl(vm: &mut ThreadState, base: u32, epfd: u64, op: u64, fd: u64, event_addr: u64) -> i64 {
     let ofd = match fd_table::get_ofd(vm, epfd) {
         Some(o) => o,
@@ -149,7 +151,14 @@ pub fn sys_epoll_ctl(vm: &mut ThreadState, base: u32, epfd: u64, op: u64, fd: u6
 // epoll_pwait
 // =========================================================================
 
-pub fn sys_epoll_pwait(vm: &mut ThreadState, base: u32, epfd: u64, events_addr: u64, maxevents: u64, _timeout: i64, _sigmask: u64) -> i64 {
+/// epoll_pwait: wait for events on an epoll instance.
+///
+/// Returns number of ready events, or blocks via STATUS_EPOLL_WAIT if
+/// no events are ready and timeout != 0.
+///
+/// Blocking info stored in ThreadState:
+///   fault_addr = epfd, fault_pc = events_addr (repacked for resume)
+pub fn sys_epoll_pwait(vm: &mut ThreadState, base: u32, epfd: u64, events_addr: u64, maxevents: u64, timeout: i64, _sigmask: u64) -> i64 {
     let ofd = match fd_table::get_ofd(vm, epfd) {
         Some(o) => o,
         None => return EBADF,
@@ -174,12 +183,20 @@ pub fn sys_epoll_pwait(vm: &mut ThreadState, base: u32, epfd: u64, events_addr: 
         }
     }
 
-    // If no events ready and timeout != 0, we should block (STATUS_EPOLL_WAIT).
-    // For now, return what we have (non-blocking poll).
-    ready as i64
+    if ready > 0 || timeout == 0 {
+        return ready as i64;
+    }
+
+    // No events ready and timeout != 0: block via STATUS_EPOLL_WAIT.
+    // Store context for resume by the TS runtime.
+    vm.fault_addr = epfd;
+    vm.fault_pc = events_addr;
+    vm.x[10] = 0; // will be overwritten on resume
+    vm.status = STATUS_EPOLL_WAIT;
+    return 0; // dispatch() checks vm.status and returns it
 }
 
-/// Poll a single FD for readiness.
+/// Poll a single FD for readiness using pipe_peek (non-consuming).
 fn poll_fd(vm: &ThreadState, fd: u64, interest: u32) -> u32 {
     let ofd = match fd_table::get_ofd(vm, fd) {
         Some(o) => o,
@@ -193,17 +210,22 @@ fn poll_fd(vm: &ThreadState, fd: u64, interest: u32) -> u32 {
         let is_read = fd_table::is_pipe_read(&ofd);
 
         if is_read {
-            // Check if data available or EOF
-            let n = super::pipe::pipe_read(pipe_idx, &mut []);
-            if n == 0 { revents |= EPOLLHUP; }  // EOF
-            else {
-                // Actually check without consuming — peek
-                // pipe_read with empty buf returns EAGAIN if empty, 0 if EOF
-                // We need a peek function. For now, approximate:
-                revents |= EPOLLIN; // Assume readable if pipe exists
+            let peek = super::pipe::pipe_peek(pipe_idx);
+            if peek == 0 {
+                revents |= EPOLLHUP; // EOF: write end closed, no data
+            } else if peek > 0 {
+                revents |= EPOLLIN;  // data available
             }
+            // peek == EAGAIN: empty, write end open → not ready
         } else {
-            revents |= EPOLLOUT; // Assume writable
+            if super::pipe::pipe_writable(pipe_idx) {
+                revents |= EPOLLOUT;
+            }
+            // Check if read end closed → EPOLLERR
+            let addr = super::pipe::slot_addr(pipe_idx);
+            if super::pipe::read_open_ptr(addr).load(core::sync::atomic::Ordering::Acquire) <= 0 {
+                revents |= EPOLLERR;
+            }
         }
     } else if ofd.fd_type == FD_TYPE_FILE {
         // Files are always ready

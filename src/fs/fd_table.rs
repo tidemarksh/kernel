@@ -1,18 +1,38 @@
 //! FD table and OFD (Open File Description) table management.
 //!
-//! FD table lives in guest Memory (ProcessState) — dup/close(refcount>1)/fcntl
+//! Two-layer design:
+//!
+//! FD table lives in guest Memory (ProcessState.fd_table) — dup/close(refcount>1)/fcntl
 //! operate without kernel Worker.
 //!
-//! OFD table lives in kernel Worker (the kernel Worker model). For the current single-process model, we use a static
-//! table and operate directly.
+//! OFD table lives in kernel Worker linear memory (alloc.rs) — shared by FDs via
+//! refcount. Last close triggers OFD cleanup via kernel Worker.
+//!
+//! Struct layouts (RV64):
+//!
+//! struct FdEntry {                      // 8 bytes total
+//!     ofd_id:   u32,                    // offset 0  — index into kernel Worker OFD table (0=unused)
+//!     fd_flags: u32,                    // offset 4  — FD_CLOEXEC
+//! };
+//!
+//! struct OpenFileDesc {                 // 32 bytes total
+//!     fd_type:      i32,               // offset 0  — FD_TYPE_FILE, FD_TYPE_PIPE, etc.
+//!     host_fd:      i32,               // offset 4  — pipe: idx or -(idx+1)
+//!     status_flags: i32,               // offset 8  — O_APPEND, O_NONBLOCK
+//!     refcount:     i32,               // offset 12 — dup/fork increment, close decrement
+//!     offset:       i64,               // offset 16 — current file offset
+//!     ino:          u32,               // offset 24 — inode number (MemFS)
+//!     _pad:         u32,               // offset 28
+//! };
 //!
 //! fcntl commands (https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/fcntl.h):
-//!   F_DUPFD    = 0   dup to >= arg
-//!   F_GETFD    = 1   get close_on_exec
-//!   F_SETFD    = 2   set close_on_exec
-//!   F_GETFL    = 3   get file status flags
-//!   F_SETFL    = 4   set file status flags
-//!   FD_CLOEXEC = 1
+//!   F_DUPFD         = 0     dup to >= arg
+//!   F_GETFD         = 1     get close_on_exec
+//!   F_SETFD         = 2     set close_on_exec
+//!   F_GETFL         = 3     get file status flags
+//!   F_SETFL         = 4     set file status flags
+//!   F_DUPFD_CLOEXEC = 1030  dup with CLOEXEC
+//!   FD_CLOEXEC      = 1
 
 use crate::abi::*;
 use crate::types::{ThreadState, ProcessState, FdEntry, OpenFileDesc};
@@ -135,6 +155,7 @@ pub fn is_pipe_write(ofd: &OpenFileDesc) -> bool {
 // Epoll FD creation
 // =========================================================================
 
+/// Open an epoll FD. epoll_idx is the index into the epoll instance table.
 pub fn open_epoll(vm: &mut ThreadState, _base: u32, epoll_idx: u32, flags: i32) -> i64 {
     unsafe {
         let ofd_id = alloc_ofd(FD_TYPE_EPOLL, 0);
@@ -339,6 +360,27 @@ pub fn get_ofd(vm: &ThreadState, fd: u64) -> Option<OpenFileDesc> {
         let entry = get_fd_entry(vm, fd)?;
         let ofd = &ofd_table()[entry.ofd_id as usize];
         Some(*ofd)
+    }
+}
+
+/// Get OFD by internal OFD id (for mmap file-backed without FD context).
+pub fn get_ofd_by_id(ofd_id: u32) -> Option<OpenFileDesc> {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS { return None; }
+    unsafe {
+        let ofd = &ofd_table()[ofd_id as usize];
+        if ofd.fd_type == FD_TYPE_NONE { return None; }
+        Some(*ofd)
+    }
+}
+
+/// Get the current offset of the OFD associated with fd.
+pub fn get_offset(vm: &ThreadState, fd: u64) -> u64 {
+    unsafe {
+        if let Some(entry) = get_fd_entry(vm, fd) {
+            ofd_table()[entry.ofd_id as usize].offset as u64
+        } else {
+            0
+        }
     }
 }
 

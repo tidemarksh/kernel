@@ -1,5 +1,8 @@
 //! Signal syscalls: rt_sigaction, rt_sigprocmask, sigaltstack, signal delivery.
 //!
+//! Signal delivery pushes a frame onto the guest stack, redirects PC to the
+//! handler, and rt_sigreturn restores the saved context.
+//!
 //! Struct layouts (RV64):
 //!
 //! struct sigaction {                // 24 bytes total (no SA_RESTORER on RISC-V)
@@ -154,15 +157,126 @@ pub fn sys_sigaltstack(vm: &mut ThreadState, base: u32, ss_addr: u64, old_ss_add
     0
 }
 
-/// rt_sigreturn: restore state after signal handler.
-/// For the current single-process model, this is a stub — full implementation requires signal frame on stack.
-pub fn sys_rt_sigreturn(_vm: &mut ThreadState) {
-    // Stub: signal delivery not yet implemented
+/// Signal frame layout on guest stack (RISC-V rt_sigframe).
+///
+/// Linux uses a full ucontext with 32 GP regs + 32 FP regs + PC + signal mask.
+/// We use a simplified layout that preserves the same semantics:
+///
+/// offset  type    field
+/// +0      u64     saved_pc
+/// +8      u64     saved_sig_mask
+/// +16     u64     saved_x[0..31] (256 bytes)
+/// +272    u64     saved_f[0..31] (256 bytes)
+/// +528    u32     saved_fcsr
+/// +532    u32     _pad (alignment)
+/// +536    u8[8]   trampoline: li a7, SYS_RT_SIGRETURN; ecall
+/// Total: 544 bytes, 16-byte aligned
+const SIGFRAME_SIZE: u64 = 544;
+const SIGFRAME_OFF_PC: u64 = 0;
+const SIGFRAME_OFF_MASK: u64 = 8;
+const SIGFRAME_OFF_REGS: u64 = 16;
+const SIGFRAME_OFF_FREGS: u64 = 272;
+const SIGFRAME_OFF_FCSR: u64 = 528;
+const SIGFRAME_OFF_TRAMPOLINE: u64 = 536;
+
+/// RISC-V machine code: li a7, 139 (SYS_RT_SIGRETURN); ecall
+/// addi x17, x0, 139 → 0x08b00893
+/// ecall              → 0x00000073
+const TRAMPOLINE_CODE: [u8; 8] = [
+    0x93, 0x08, 0xb0, 0x08, // addi x17, x0, 139
+    0x73, 0x00, 0x00, 0x00, // ecall
+];
+
+/// Push a signal frame onto the guest stack and redirect execution to the handler.
+///
+/// Stack layout after push:
+///   sp → [signal frame (544 bytes)]
+///   ra → trampoline address (within the frame)
+///   a0 → signal number
+///   pc → handler address
+///
+/// When the handler returns (via ra), it executes the trampoline which
+/// calls SYS_RT_SIGRETURN to restore the saved context.
+fn push_signal_frame(vm: &mut ThreadState, base: u32, sig: usize, action: &SigAction) {
+    // Choose stack: use sigaltstack if SA_ONSTACK and stack is configured
+    let sp = if action.flags & SA_ONSTACK != 0
+        && vm.sigaltstack_flags != SS_DISABLE
+        && vm.sigaltstack_size > 0
+    {
+        vm.sigaltstack_sp + vm.sigaltstack_size
+    } else {
+        vm.x[2] // current sp
+    };
+
+    // Align down to 16 bytes, then reserve frame
+    let frame_base = (sp - SIGFRAME_SIZE) & !15;
+
+    unsafe {
+        // Save PC
+        guest_mem::write_u64(base, frame_base + SIGFRAME_OFF_PC, vm.pc);
+        // Save signal mask
+        guest_mem::write_u64(base, frame_base + SIGFRAME_OFF_MASK, vm.sig_mask);
+        // Save integer registers
+        for i in 0..32 {
+            guest_mem::write_u64(base, frame_base + SIGFRAME_OFF_REGS + i * 8, vm.x[i as usize]);
+        }
+        // Save FP registers
+        for i in 0..32 {
+            guest_mem::write_u64(base, frame_base + SIGFRAME_OFF_FREGS + i * 8, vm.f[i as usize]);
+        }
+        // Save fcsr
+        guest_mem::write_u32(base, frame_base + SIGFRAME_OFF_FCSR, vm.fcsr);
+        // Write trampoline code
+        guest_mem::write_bytes(base, frame_base + SIGFRAME_OFF_TRAMPOLINE, &TRAMPOLINE_CODE);
+    }
+
+    // Block signals specified in sa_mask during handler execution
+    let unblockable = (1u64 << (SIGKILL - 1)) | (1u64 << (SIGSTOP - 1));
+    vm.sig_mask |= action.mask & !unblockable;
+
+    // If SA_NODEFER is not set, also block the delivered signal
+    if action.flags & SA_NODEFER == 0 {
+        vm.sig_mask |= (1u64 << (sig - 1)) & !unblockable;
+    }
+
+    // If SA_RESETHAND, reset disposition to SIG_DFL
+    if action.flags & SA_RESETHAND != 0 {
+        sigactions()[sig] = SigAction { handler: SIG_DFL, flags: 0, mask: 0 };
+    }
+
+    // Set up registers for handler entry
+    vm.x[2] = frame_base;                                       // sp = frame base
+    vm.x[1] = frame_base + SIGFRAME_OFF_TRAMPOLINE;             // ra = trampoline
+    vm.x[10] = sig as u64;                                       // a0 = signal number
+    vm.pc = action.handler;                                      // pc = handler
+}
+
+/// rt_sigreturn: restore state from signal frame on stack.
+/// The frame is at the current sp (x2).
+pub fn sys_rt_sigreturn(vm: &mut ThreadState, base: u32) {
+    let frame_base = vm.x[2];
+
+    unsafe {
+        // Restore PC
+        vm.pc = guest_mem::read_u64(base, frame_base + SIGFRAME_OFF_PC);
+        // Restore signal mask
+        vm.sig_mask = guest_mem::read_u64(base, frame_base + SIGFRAME_OFF_MASK);
+        // Restore integer registers
+        for i in 0..32 {
+            vm.x[i as usize] = guest_mem::read_u64(base, frame_base + SIGFRAME_OFF_REGS + i * 8);
+        }
+        // Restore FP registers
+        for i in 0..32 {
+            vm.f[i as usize] = guest_mem::read_u64(base, frame_base + SIGFRAME_OFF_FREGS + i * 8);
+        }
+        // Restore fcsr
+        vm.fcsr = guest_mem::read_u32(base, frame_base + SIGFRAME_OFF_FCSR);
+    }
 }
 
 /// Check and deliver pending signals at syscall return boundary.
 /// Called after each syscall returns. Returns true if a signal was delivered.
-pub fn check_pending(vm: &mut ThreadState, _base: u32) -> bool {
+pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
     let deliverable = vm.sig_pending & !vm.sig_mask;
     if deliverable == 0 { return false; }
 
@@ -173,25 +287,25 @@ pub fn check_pending(vm: &mut ThreadState, _base: u32) -> bool {
     // Clear from pending
     vm.sig_pending &= !(1u64 << (sig - 1));
 
-    let action = unsafe { &sigactions()[sig] };
+    let action = sigactions()[sig];
 
     match action.handler {
         0 => {
             // SIG_DFL: default action
             match sig as i32 {
                 SIGCHLD | SIGURG | SIGWINCH => {} // ignore by default
+                SIGCONT => {} // ignore (no job control)
                 _ => {
                     // Terminate
-                    vm.exit_code = sig as i32;
+                    vm.exit_code = 128 + sig as i32; // convention: 128 + signal
                     vm.status = STATUS_FAULT;
                 }
             }
         }
         1 => {} // SIG_IGN: ignore
-        handler_addr => {
-            // User handler: signal frame setup not yet implemented.
-            // TODO: push signal frame to stack and redirect PC to handler.
-            let _ = handler_addr;
+        _handler_addr => {
+            // User handler: push signal frame and redirect to handler
+            push_signal_frame(vm, base, sig, &action);
         }
     }
 

@@ -2,9 +2,23 @@
 //!
 //! VMA table and brk state are allocated in kernel Worker's WASM linear
 //! memory via alloc.rs, per the data ownership model.
+//!
+//! Struct layout (RV64):
+//!
+//! struct Vma {                          // 40 bytes total
+//!     start:  u64,                      // offset 0   — region start (page-aligned)
+//!     end:    u64,                      // offset 8   — region end (exclusive)
+//!     prot:   i32,                      // offset 16  — PROT_READ | PROT_WRITE | PROT_EXEC | PROT_NONE
+//!     flags:  i32,                      // offset 20  — MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED
+//!     fd:     i32,                      // offset 24  — file-backed OFD id, -1 = anonymous
+//!     _pad:   i32,                      // offset 28
+//!     offset: u64,                      // offset 32  — file offset for file-backed mmap
+//! };
+//! https://github.com/torvalds/linux/blob/v6.12/include/linux/mm_types.h
 
 use crate::abi::*;
 use crate::alloc;
+use crate::fs::{memfs, fd_table};
 use crate::guest_mem;
 use crate::types::{ThreadState, Vma};
 
@@ -70,6 +84,8 @@ pub fn is_prot_none(addr: u64) -> bool {
 // brk
 // =========================================================================
 
+/// brk: adjust program break. addr=0 returns current break.
+/// Grows WASM memory via memory.grow if needed, zero-fills new region.
 pub fn sys_brk(_vm: &mut ThreadState, _base: u32, addr: u64) -> i64 {
     let s = ms();
     if addr == 0 {
@@ -104,6 +120,9 @@ pub fn sys_brk(_vm: &mut ThreadState, _base: u32, addr: u64) -> i64 {
 // mmap
 // =========================================================================
 
+/// mmap: map pages into the guest address space.
+/// Supports MAP_ANONYMOUS and MAP_PRIVATE file-backed (eager populate).
+/// MAP_FIXED removes overlapping VMAs. WASM memory.grow on demand.
 pub fn sys_mmap(
     _vm: &mut ThreadState, _base: u32,
     addr: u64, length: u64, prot: u64, flags: u64, fd: i64, offset: u64,
@@ -141,6 +160,36 @@ pub fn sys_mmap(
 
     if is_anon {
         unsafe { guest_mem::zero_mem(0, start, len as usize); }
+    } else if fd >= 0 {
+        // File-backed mmap (MAP_PRIVATE): eager populate from MemFS.
+        // Read file content into guest memory, zero-fill beyond EOF.
+        // WASM has no page fault / demand paging, so populate eagerly.
+        unsafe { guest_mem::zero_mem(0, start, len as usize); }
+        let ofd = fd_table::get_ofd_by_id(fd as u32);
+        if let Some(ofd) = ofd {
+            let st = memfs::stat(ofd.ino as u32);
+            if let Some(st) = st {
+                let file_size = st.size;
+                let copy_start = offset.min(file_size);
+                let copy_end = (offset + len).min(file_size);
+                if copy_end > copy_start {
+                    let copy_len = (copy_end - copy_start) as usize;
+                    let mut tmp = [0u8; 4096];
+                    let mut off = 0usize;
+                    while off < copy_len {
+                        let chunk = (copy_len - off).min(tmp.len());
+                        let n = memfs::read_file(
+                            ofd.ino as u32,
+                            copy_start + off as u64,
+                            &mut tmp[..chunk],
+                        );
+                        if n <= 0 { break; }
+                        unsafe { guest_mem::write_bytes(0, start + off as u64, &tmp[..n as usize]); }
+                        off += n as usize;
+                    }
+                }
+            }
+        }
     }
 
     let count = s.vma_count as usize;
@@ -166,6 +215,7 @@ pub fn sys_mmap(
 // munmap
 // =========================================================================
 
+/// munmap: unmap pages. Removes matching VMAs and recomputes PROT_NONE flag.
 pub fn sys_munmap(_vm: &mut ThreadState, _base: u32, addr: u64, length: u64) -> i64 {
     if addr & (PAGE_SIZE - 1) != 0 { return EINVAL; }
     let len = (length + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
@@ -179,6 +229,8 @@ pub fn sys_munmap(_vm: &mut ThreadState, _base: u32, addr: u64, length: u64) -> 
 // mremap
 // =========================================================================
 
+/// mremap: resize or relocate an existing mapping.
+/// Shrink in-place, grow in-place if adjacent space is free, or relocate.
 pub fn sys_mremap(
     _vm: &mut ThreadState, _base: u32,
     old_addr: u64, old_size: u64, new_size: u64, _flags: u64, _new_addr: u64,
@@ -242,6 +294,8 @@ pub fn sys_mremap(
 // mprotect
 // =========================================================================
 
+/// mprotect: change VMA protection flags. Splits VMAs at boundaries if needed.
+/// Sets has_prot_none flag for SIGSEGV detection.
 pub fn sys_mprotect(_vm: &mut ThreadState, _base: u32, addr: u64, length: u64, prot: u64) -> i64 {
     if addr & (PAGE_SIZE - 1) != 0 { return EINVAL; }
     let len = (length + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);

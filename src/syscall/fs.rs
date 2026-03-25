@@ -38,6 +38,7 @@
 use crate::abi::*;
 use crate::fs::{memfs, fd_table};
 use crate::guest_mem;
+use crate::syscall::signal;
 use crate::types::ThreadState;
 
 const AT_FDCWD: i32 = -100;
@@ -73,6 +74,8 @@ fn resolve_at(dirfd: u64, path_addr: u64, base: u32) -> u32 {
 // openat
 // =========================================================================
 
+/// openat: open or create a file. Supports O_CREAT, O_TRUNC.
+/// Path resolution via MemFS (absolute or AT_FDCWD-relative).
 pub fn sys_openat(vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, flags: u64, mode: u64) -> i64 {
     let oflags = flags as i32;
     let mut path_buf = [0u8; 513];
@@ -136,6 +139,7 @@ fn split_parent_name(path: &[u8]) -> (u32, &[u8]) {
 // read / pread64
 // =========================================================================
 
+/// read: read from file or pipe FD. Advances OFD offset for files.
 pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) -> i64 {
     if fd <= 2 { return 0; }
 
@@ -164,6 +168,7 @@ pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) 
     n
 }
 
+/// pread64: read at specified offset without changing OFD offset.
 pub fn sys_pread64(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64, offset: u64) -> i64 {
     let ofd = match fd_table::get_ofd(vm, fd) {
         Some(o) => o,
@@ -180,9 +185,28 @@ pub fn sys_pread64(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u6
 }
 
 // =========================================================================
-// write / pwrite64
+// pwrite64
 // =========================================================================
 
+/// pwrite64: write at specified offset without changing OFD offset.
+pub fn sys_pwrite64(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64, offset: u64) -> i64 {
+    let ofd = match fd_table::get_ofd(vm, fd) {
+        Some(o) => o,
+        None => return EBADF,
+    };
+
+    let mut tmp = [0u8; 4096];
+    let to_write = (count as usize).min(tmp.len());
+    unsafe { guest_mem::read_bytes(base, buf, &mut tmp[..to_write]); }
+    memfs::write_file(ofd.ino as u32, offset, &tmp[..to_write])
+}
+
+// =========================================================================
+// write / writev
+// =========================================================================
+
+/// write: write to file or pipe FD. Sends SIGPIPE on broken pipe.
+/// Also handles writev (dispatched by nr == SYS_WRITEV).
 pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64, nr: u64) -> i64 {
     if nr == SYS_WRITEV { return sys_writev(vm, base, fd, buf, count); }
     if fd == 1 || fd == 2 { return count as i64; }
@@ -196,7 +220,11 @@ pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64,
         let mut tmp = [0u8; 4096];
         let to_write = (count as usize).min(tmp.len());
         unsafe { guest_mem::read_bytes(base, buf, &mut tmp[..to_write]); }
-        return super::pipe::pipe_write(ofd.ino, &tmp[..to_write]);
+        let n = super::pipe::pipe_write(ofd.ino, &tmp[..to_write]);
+        if n == EPIPE {
+            signal::send_signal(vm, SIGPIPE);
+        }
+        return n;
     }
 
     let mut tmp = [0u8; 4096];
@@ -218,14 +246,57 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
         }
         return total as i64;
     }
-    // TODO: writev to file FDs
-    EBADF
+
+    let ofd = match fd_table::get_ofd(vm, fd) {
+        Some(o) => o,
+        None => return EBADF,
+    };
+
+    let mut total = 0i64;
+    for i in 0..iovcnt {
+        let iov_base = unsafe { guest_mem::read_u64(base, iov_addr + i * 16) };
+        let iov_len = unsafe { guest_mem::read_u64(base, iov_addr + i * 16 + 8) };
+        if iov_len == 0 { continue; }
+
+        if ofd.fd_type == FD_TYPE_PIPE {
+            let mut tmp = [0u8; 4096];
+            let to_write = (iov_len as usize).min(tmp.len());
+            unsafe { guest_mem::read_bytes(base, iov_base, &mut tmp[..to_write]); }
+            let n = super::pipe::pipe_write(ofd.ino, &tmp[..to_write]);
+            if n == EPIPE {
+                signal::send_signal(vm, SIGPIPE);
+                if total == 0 { return EPIPE; }
+                return total;
+            }
+            if n < 0 {
+                if total > 0 { return total; }
+                return n;
+            }
+            total += n;
+        } else {
+            let mut tmp = [0u8; 4096];
+            let to_write = (iov_len as usize).min(tmp.len());
+            unsafe { guest_mem::read_bytes(base, iov_base, &mut tmp[..to_write]); }
+            let current_offset = fd_table::get_offset(vm, fd);
+            let n = memfs::write_file(ofd.ino as u32, current_offset, &tmp[..to_write]);
+            if n > 0 {
+                fd_table::advance_offset(vm, fd, n as u64);
+            }
+            if n < 0 {
+                if total > 0 { return total; }
+                return n;
+            }
+            total += n;
+        }
+    }
+    total
 }
 
 // =========================================================================
 // fstat / newfstatat
 // =========================================================================
 
+/// fstat: get file status by FD. Writes 128-byte struct stat to guest memory.
 pub fn sys_fstat(vm: &mut ThreadState, base: u32, fd: u64, stat_buf: u64) -> i64 {
     let ofd = match fd_table::get_ofd(vm, fd) {
         Some(o) => o,
@@ -234,6 +305,7 @@ pub fn sys_fstat(vm: &mut ThreadState, base: u32, fd: u64, stat_buf: u64) -> i64
     write_stat(base, stat_buf, ofd.ino as u32)
 }
 
+/// newfstatat: get file status by path. Writes 128-byte struct stat to guest memory.
 pub fn sys_newfstatat(_vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, stat_buf: u64, _flags: u64) -> i64 {
     let ino = resolve_at(dirfd, path_addr, base);
     if ino == 0 { return ENOENT; }
@@ -265,6 +337,7 @@ fn write_stat(base: u32, stat_buf: u64, ino: u32) -> i64 {
 // mkdir / unlink / rename
 // =========================================================================
 
+/// mkdirat: create a directory. Absolute paths only for now.
 pub fn sys_mkdirat(_vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, mode: u64) -> i64 {
     let mut path_buf = [0u8; 512];
     let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf) };
@@ -282,6 +355,7 @@ pub fn sys_mkdirat(_vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64,
     0
 }
 
+/// unlinkat: remove a file entry from its parent directory.
 pub fn sys_unlinkat(_vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, _flags: u64) -> i64 {
     let ino = resolve_at(dirfd, path_addr, base);
     if ino == 0 { return ENOENT; }
@@ -298,6 +372,8 @@ pub fn sys_unlinkat(_vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64
 // getdents64
 // =========================================================================
 
+/// getdents64: read directory entries into guest buffer.
+/// Writes linux_dirent64 records (variable-size, 8-byte aligned).
 pub fn sys_getdents64(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, buf_size: u64) -> i64 {
     let ofd = match fd_table::get_ofd(vm, fd) {
         Some(o) => o,
@@ -339,6 +415,7 @@ pub fn sys_getdents64(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, buf_si
 // lseek
 // =========================================================================
 
+/// lseek: reposition OFD offset. Supports SEEK_SET (0), SEEK_CUR (1), SEEK_END (2).
 pub fn sys_lseek(vm: &mut ThreadState, _base: u32, fd: u64, offset: i64, whence: u64) -> i64 {
     let ofd = match fd_table::get_ofd(vm, fd) {
         Some(o) => o,
@@ -366,15 +443,31 @@ pub fn sys_lseek(vm: &mut ThreadState, _base: u32, fd: u64, offset: i64, whence:
 // faccessat / readlinkat / ftruncate
 // =========================================================================
 
+/// faccessat: check file accessibility (existence check only).
 pub fn sys_faccessat(_vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, _mode: u64) -> i64 {
     let ino = resolve_at(dirfd, path_addr, base);
     if ino == 0 { ENOENT } else { 0 }
 }
 
-pub fn sys_readlinkat(_vm: &mut ThreadState, _base: u32, _dirfd: u64, _path_addr: u64, _buf: u64, _bufsiz: u64) -> i64 {
-    EINVAL // no symlinks in memfs yet
+/// readlinkat: read symbolic link. Handles /proc/self/exe for Go runtime.
+/// No general symlink support in MemFS yet.
+pub fn sys_readlinkat(_vm: &mut ThreadState, base: u32, _dirfd: u64, path_addr: u64, buf: u64, bufsiz: u64) -> i64 {
+    let mut path_buf = [0u8; 512];
+    let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf) };
+    let path = &path_buf[..len];
+
+    // Handle /proc/self/exe — Go runtime reads this to find its own binary.
+    if path == b"/proc/self/exe" {
+        let result = b"/init";
+        let n = (result.len()).min(bufsiz as usize);
+        unsafe { guest_mem::write_bytes(base, buf, &result[..n]); }
+        return n as i64;
+    }
+
+    EINVAL // no symlinks in memfs
 }
 
+/// ftruncate: truncate file to specified length.
 pub fn sys_ftruncate(vm: &mut ThreadState, _base: u32, fd: u64, length: u64) -> i64 {
     let ofd = match fd_table::get_ofd(vm, fd) {
         Some(o) => o,

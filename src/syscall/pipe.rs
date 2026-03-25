@@ -4,16 +4,17 @@
 //! thread-workers access data plane directly via Atomics.
 //! kernel Worker manages control plane (refcount changes).
 //!
-//! Per-pipe slot layout on SAB (from the design):
+//! Struct layout (RV64):
 //!
-//! offset  type        field        accessed by
-//! +0      AtomicU32   head         reader (Atomics.store)
-//! +4      AtomicU32   tail         writer (Atomics.store)
-//! +8      AtomicI32   read_open    kernel Worker only
-//! +12     AtomicI32   write_open   kernel Worker only
-//! +16     AtomicI32   notify       writer/kernel (Atomics.wait/notify target)
-//! +20     [u8; 12]    _pad
-//! +32     [u8; 4096]  data         writer/reader directly
+//! struct PipeSlot {                     // 4128 bytes total
+//!     head:       AtomicU32,            // offset 0   — reader updates
+//!     tail:       AtomicU32,            // offset 4   — writer updates
+//!     read_open:  AtomicI32,            // offset 8   — kernel Worker only
+//!     write_open: AtomicI32,            // offset 12  — kernel Worker only
+//!     notify:     AtomicI32,            // offset 16  — Atomics.wait/notify target
+//!     _pad:       [u8; 12],             // offset 20
+//!     data:       [u8; 4096],           // offset 32  — circular buffer
+//! };
 
 use core::sync::atomic::{AtomicU32, AtomicI32, Ordering};
 use crate::abi::*;
@@ -59,7 +60,7 @@ fn sab_base() -> u32 {
     unsafe { core::ptr::read(core::ptr::addr_of!(SAB_PIPE_BASE)) }
 }
 
-fn slot_addr(idx: u32) -> u32 {
+pub fn slot_addr(idx: u32) -> u32 {
     sab_base() + idx * PIPE_SLOT_SIZE
 }
 
@@ -69,7 +70,7 @@ fn head_ptr(slot: u32) -> &'static AtomicU32 {
 fn tail_ptr(slot: u32) -> &'static AtomicU32 {
     unsafe { &*((slot + OFF_TAIL) as *const AtomicU32) }
 }
-fn read_open_ptr(slot: u32) -> &'static AtomicI32 {
+pub fn read_open_ptr(slot: u32) -> &'static AtomicI32 {
     unsafe { &*((slot + OFF_READ_OPEN) as *const AtomicI32) }
 }
 fn write_open_ptr(slot: u32) -> &'static AtomicI32 {
@@ -109,6 +110,7 @@ fn free_pipe_slot(idx: u32) {
 // pipe2
 // =========================================================================
 
+/// pipe2: create a pipe with read/write FDs. Supports O_CLOEXEC and O_NONBLOCK flags.
 pub fn sys_pipe2(vm: &mut ThreadState, base: u32, pipefd_addr: u64, flags: u64) -> i64 {
     let pipe_idx = match alloc_pipe_slot() {
         Some(i) => i,
@@ -135,6 +137,7 @@ pub fn sys_pipe2(vm: &mut ThreadState, base: u32, pipefd_addr: u64, flags: u64) 
 // Pipe data plane: read/write via Atomics on SAB
 // =========================================================================
 
+/// Read from pipe's circular buffer via Atomics. Returns bytes read, 0 (EOF), or EAGAIN.
 pub fn pipe_read(pipe_idx: u32, buf: &mut [u8]) -> i64 {
     let addr = slot_addr(pipe_idx);
     let head = head_ptr(addr).load(Ordering::Acquire);
@@ -165,6 +168,7 @@ pub fn pipe_read(pipe_idx: u32, buf: &mut [u8]) -> i64 {
     to_read as i64
 }
 
+/// Write to pipe's circular buffer via Atomics. Returns bytes written, EPIPE, or EAGAIN.
 pub fn pipe_write(pipe_idx: u32, data: &[u8]) -> i64 {
     let addr = slot_addr(pipe_idx);
 
@@ -189,6 +193,46 @@ pub fn pipe_write(pipe_idx: u32, data: &[u8]) -> i64 {
     tail_ptr(addr).store(((tail + to_write) % cap) as u32, Ordering::Release);
 
     to_write as i64
+}
+
+/// Peek at pipe state without consuming data. Returns:
+///   > 0: number of bytes available to read
+///   0:   EOF (write end closed, no data)
+///   EAGAIN: empty but write end still open (would block)
+pub fn pipe_peek(pipe_idx: u32) -> i64 {
+    let addr = slot_addr(pipe_idx);
+    let head = head_ptr(addr).load(Ordering::Acquire);
+    let tail = tail_ptr(addr).load(Ordering::Acquire);
+
+    if head == tail {
+        if write_open_ptr(addr).load(Ordering::Acquire) <= 0 {
+            return 0; // EOF
+        }
+        return EAGAIN;
+    }
+
+    let cap = PIPE_BUF_SIZE as usize;
+    let available = if tail >= head {
+        (tail - head) as usize
+    } else {
+        cap - head as usize + tail as usize
+    };
+    available as i64
+}
+
+/// Check if the write side of a pipe has capacity.
+/// Returns true if at least 1 byte can be written.
+pub fn pipe_writable(pipe_idx: u32) -> bool {
+    let addr = slot_addr(pipe_idx);
+    if read_open_ptr(addr).load(Ordering::Acquire) <= 0 {
+        return true; // writable in the sense that write() will return (EPIPE)
+    }
+    let head = head_ptr(addr).load(Ordering::Acquire) as usize;
+    let tail = tail_ptr(addr).load(Ordering::Acquire) as usize;
+    let cap = PIPE_BUF_SIZE as usize;
+    let used = if tail >= head { tail - head } else { cap - head + tail };
+    let free = cap - 1 - used;
+    free > 0
 }
 
 /// Close one end of a pipe (kernel Worker control plane).

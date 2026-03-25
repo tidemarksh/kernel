@@ -1,35 +1,32 @@
 //! SAB ring buffer for FS request/response between thread-worker and kernel Worker.
 //!
-//! Layout (in SharedArrayBuffer):
+//! Struct layouts (RV64):
 //!
-//! struct FsRingBuffer {
-//!     // Control words (Atomics)
+//! struct FsRingBuffer {                 // 5152 bytes total
 //!     submit_head:   AtomicU32,         // offset 0   — thread-worker writes
 //!     submit_tail:   AtomicU32,         // offset 4   — kernel Worker reads
 //!     complete_head: AtomicU32,         // offset 8   — kernel Worker writes
 //!     complete_tail: AtomicU32,         // offset 12  — thread-worker reads
 //!     notify:        AtomicI32,         // offset 16  — Atomics.wait/notify target
 //!     _pad:          [u8; 12],          // offset 20
-//!     // Submission queue entries
-//!     sq_entries:    [FsRequest; SQ_SIZE],  // offset 32
-//!     // Completion queue entries
-//!     cq_entries:    [FsResponse; CQ_SIZE], // offset 32 + SQ_SIZE * REQ_SIZE
+//!     sq_entries:    [FsRequest; 64],   // offset 32  — submission queue
+//!     cq_entries:    [FsResponse; 64],  // offset 4128 — completion queue
 //! };
 //!
-//! struct FsRequest {                    // 64 bytes
-//!     opcode:  u32,                     // offset 0  (FS_OP_*)
+//! struct FsRequest {                    // 64 bytes total
+//!     opcode:  u32,                     // offset 0
 //!     fd:      i32,                     // offset 4
 //!     offset:  u64,                     // offset 8
 //!     len:     u64,                     // offset 16
-//!     buf_ptr: u64,                     // offset 24  (guest memory address)
-//!     path_ptr:u64,                     // offset 32  (guest memory address)
+//!     buf_ptr: u64,                     // offset 24
+//!     path_ptr:u64,                     // offset 32
 //!     flags:   u32,                     // offset 40
 //!     mode:    u32,                     // offset 44
 //!     _pad:    [u8; 16],               // offset 48
 //! };
 //!
-//! struct FsResponse {                   // 16 bytes
-//!     result:  i64,                     // offset 0  (return value or error)
+//! struct FsResponse {                   // 16 bytes total
+//!     result:  i64,                     // offset 0
 //!     _pad:    u64,                     // offset 8
 //! };
 

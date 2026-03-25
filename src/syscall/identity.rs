@@ -24,7 +24,7 @@
 //!     freeswap:  u64,               // offset 72
 //!     procs:     u16,               // offset 80
 //!     pad:       u16,               // offset 82
-//!     // 4 bytes alignment padding  // offset 84
+//!     _pad:      [u8; 4],           // offset 84 (alignment)
 //!     totalhigh: u64,               // offset 88
 //!     freehigh:  u64,               // offset 96
 //!     mem_unit:  u32,               // offset 104
@@ -35,6 +35,7 @@
 use crate::guest_mem;
 use crate::types::ThreadState;
 
+/// getpid: return process ID from ProcessState in guest Memory.
 pub fn sys_getpid(vm: &ThreadState) -> i64 {
     // Read pid from ProcessState in guest memory
     let ps_ptr = vm.process_ptr;
@@ -45,6 +46,7 @@ pub fn sys_getpid(vm: &ThreadState) -> i64 {
     }
 }
 
+/// getppid: return parent process ID from ProcessState in guest Memory.
 pub fn sys_getppid(vm: &ThreadState) -> i64 {
     let ps_ptr = vm.process_ptr;
     if ps_ptr == 0 { return 0; }
@@ -54,6 +56,7 @@ pub fn sys_getppid(vm: &ThreadState) -> i64 {
     }
 }
 
+/// gettid: return thread ID from ThreadState (thread-local, no kernel Worker).
 pub fn sys_gettid(vm: &ThreadState) -> i64 {
     vm.tid as i64
 }

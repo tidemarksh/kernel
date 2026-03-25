@@ -61,17 +61,14 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_RT_SIGACTION => signal::sys_rt_sigaction(vm, base, a0, a1, a2, a3),
         SYS_RT_SIGPROCMASK => signal::sys_rt_sigprocmask(vm, base, a0, a1, a2, a3),
         SYS_SIGALTSTACK => signal::sys_sigaltstack(vm, base, a0, a1),
-        SYS_RT_SIGRETURN => { signal::sys_rt_sigreturn(vm); 0 }
+        SYS_RT_SIGRETURN => { signal::sys_rt_sigreturn(vm, base); 0 }
 
         // filesystem
         SYS_OPENAT => fs::sys_openat(vm, base, a0, a1, a2, a3),
         SYS_READ => fs::sys_read(vm, base, a0, a1, a2),
         SYS_PREAD64 => fs::sys_pread64(vm, base, a0, a1, a2, a3),
         SYS_WRITE | SYS_WRITEV => fs::sys_write(vm, base, a0, a1, a2, nr),
-        SYS_PWRITE64 => {
-            // TODO: pwrite64 via memfs
-            a2 as i64
-        }
+        SYS_PWRITE64 => fs::sys_pwrite64(vm, base, a0, a1, a2, a3),
         SYS_READV => 0, // TODO
         SYS_NEWFSTATAT => fs::sys_newfstatat(vm, base, a0, a1, a2, a3),
         SYS_FSTAT => fs::sys_fstat(vm, base, a0, a1),
@@ -103,7 +100,11 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         // epoll
         SYS_EPOLL_CREATE1 => epoll::sys_epoll_create1(vm, base, a0),
         SYS_EPOLL_CTL => epoll::sys_epoll_ctl(vm, base, a0, a1, a2, a3),
-        SYS_EPOLL_PWAIT => epoll::sys_epoll_pwait(vm, base, a0, a1, a2, a3 as i64, a4),
+        SYS_EPOLL_PWAIT => {
+            let r = epoll::sys_epoll_pwait(vm, base, a0, a1, a2, a3 as i64, a4);
+            if vm.status == abi::STATUS_EPOLL_WAIT { return abi::STATUS_EPOLL_WAIT; }
+            r
+        }
         SYS_EVENTFD2 => pipe::sys_eventfd2(vm, base, a0, a1),
 
         // process (stubs — real impl with kernel Worker)
