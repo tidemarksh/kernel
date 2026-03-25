@@ -132,6 +132,27 @@ pub fn is_pipe_write(ofd: &OpenFileDesc) -> bool {
 }
 
 // =========================================================================
+// Epoll FD creation
+// =========================================================================
+
+pub fn open_epoll(vm: &mut ThreadState, _base: u32, epoll_idx: u32, flags: i32) -> i64 {
+    unsafe {
+        let ofd_id = alloc_ofd(FD_TYPE_EPOLL, 0);
+        if ofd_id == 0 { return EMFILE; }
+        ofd_table()[ofd_id as usize].ino = epoll_idx;
+
+        let cloexec = if flags & O_CLOEXEC != 0 { FD_CLOEXEC } else { 0 };
+        let newfd = match find_free_fd(vm, 0) {
+            Some(fd) => fd,
+            None => return EMFILE,
+        };
+        let ps = get_process_state(vm);
+        (*ps).fd_table[newfd] = FdEntry { ofd_id, fd_flags: cloexec };
+        newfd as i64
+    }
+}
+
+// =========================================================================
 // syscall implementations
 // =========================================================================
 

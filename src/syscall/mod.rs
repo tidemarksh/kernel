@@ -99,6 +99,11 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
 
         // pipe
         SYS_PIPE2 => pipe::sys_pipe2(vm, base, a0, a1),
+
+        // epoll
+        SYS_EPOLL_CREATE1 => epoll::sys_epoll_create1(vm, base, a0),
+        SYS_EPOLL_CTL => epoll::sys_epoll_ctl(vm, base, a0, a1, a2, a3),
+        SYS_EPOLL_PWAIT => epoll::sys_epoll_pwait(vm, base, a0, a1, a2, a3 as i64, a4),
         SYS_EVENTFD2 => pipe::sys_eventfd2(vm, base, a0, a1),
 
         // process (stubs — real impl with kernel Worker)
