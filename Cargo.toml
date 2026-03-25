@@ -6,7 +6,7 @@ license = "GPL-3.0"
 description = "RISC-V Linux userland kernel for WebAssembly"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 

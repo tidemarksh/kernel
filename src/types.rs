@@ -156,7 +156,7 @@ pub struct Vma {
     pub prot: i32,   // PROT_READ | PROT_WRITE | PROT_EXEC | PROT_NONE
     pub flags: i32,  // MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED
     pub fd: i32,     // file-backed: OFD id. -1 = anonymous
-    _pad: i32,
+    pub _pad: i32,
     pub offset: u64, // file offset for file-backed mmap
 }
 
