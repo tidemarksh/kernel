@@ -252,6 +252,56 @@ pub fn sys_close(vm: &mut ThreadState, _base: u32, fd: u64) -> i64 {
     }
 }
 
+// =========================================================================
+// FS integration: open_file, get_ofd, advance_offset, set_offset
+// =========================================================================
+
+/// Open a file by inode number. Allocates OFD and FD. Returns FD or error.
+pub fn open_file(vm: &mut ThreadState, _base: u32, ino: u32, flags: i32) -> i64 {
+    unsafe {
+        let fd_type = FD_TYPE_FILE;
+        let ofd_id = alloc_ofd(fd_type, flags & (O_APPEND | O_NONBLOCK));
+        if ofd_id == 0 { return EMFILE; }
+        ofd_table()[ofd_id as usize].ino = ino;
+
+        let cloexec = if flags & O_CLOEXEC != 0 { FD_CLOEXEC } else { 0 };
+        let newfd = match find_free_fd(vm, 0) {
+            Some(fd) => fd,
+            None => return EMFILE,
+        };
+        let ps = get_process_state(vm);
+        (*ps).fd_table[newfd] = FdEntry { ofd_id, fd_flags: cloexec };
+        newfd as i64
+    }
+}
+
+/// Get OFD for a file descriptor (read-only snapshot).
+pub fn get_ofd(vm: &ThreadState, fd: u64) -> Option<OpenFileDesc> {
+    unsafe {
+        let entry = get_fd_entry(vm, fd)?;
+        let ofd = &ofd_table()[entry.ofd_id as usize];
+        Some(*ofd)
+    }
+}
+
+/// Advance the offset of the OFD associated with fd.
+pub fn advance_offset(vm: &ThreadState, fd: u64, delta: u64) {
+    unsafe {
+        if let Some(entry) = get_fd_entry(vm, fd) {
+            ofd_table()[entry.ofd_id as usize].offset += delta as i64;
+        }
+    }
+}
+
+/// Set the offset of the OFD associated with fd.
+pub fn set_offset(vm: &ThreadState, fd: u64, offset: u64) {
+    unsafe {
+        if let Some(entry) = get_fd_entry(vm, fd) {
+            ofd_table()[entry.ofd_id as usize].offset = offset as i64;
+        }
+    }
+}
+
 /// Initialize stdin/stdout/stderr FDs for a new process.
 pub unsafe fn init_stdio(vm: &ThreadState) {
     let ps = get_process_state(vm);

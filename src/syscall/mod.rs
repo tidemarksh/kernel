@@ -17,6 +17,7 @@ pub mod time;
 use crate::abi;
 use crate::abi::*;
 use crate::fs::fd_table;
+use crate::guest_mem;
 use crate::types::ThreadState;
 
 /// Dispatch a syscall. Called from ECALL handler in cpu::exec.
@@ -62,13 +63,33 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_SIGALTSTACK => signal::sys_sigaltstack(vm, base, a0, a1),
         SYS_RT_SIGRETURN => { signal::sys_rt_sigreturn(vm); 0 }
 
-        // I/O stubs (stdout/stderr → return length, read → 0)
-        SYS_WRITE | SYS_WRITEV => fs::sys_write_stub(vm, base, a0, a1, a2, nr),
-        SYS_READ | SYS_READV => 0,
-        SYS_OPENAT => ENOENT, // no filesystem yet
-        SYS_NEWFSTATAT | SYS_FSTAT => EBADF,
+        // filesystem
+        SYS_OPENAT => fs::sys_openat(vm, base, a0, a1, a2, a3),
+        SYS_READ => fs::sys_read(vm, base, a0, a1, a2),
+        SYS_PREAD64 => fs::sys_pread64(vm, base, a0, a1, a2, a3),
+        SYS_WRITE | SYS_WRITEV => fs::sys_write(vm, base, a0, a1, a2, nr),
+        SYS_PWRITE64 => {
+            // TODO: pwrite64 via memfs
+            a2 as i64
+        }
+        SYS_READV => 0, // TODO
+        SYS_NEWFSTATAT => fs::sys_newfstatat(vm, base, a0, a1, a2, a3),
+        SYS_FSTAT => fs::sys_fstat(vm, base, a0, a1),
+        SYS_LSEEK => fs::sys_lseek(vm, base, a0, a1 as i64, a2),
+        SYS_GETDENTS64 => fs::sys_getdents64(vm, base, a0, a1, a2),
+        SYS_MKDIRAT => fs::sys_mkdirat(vm, base, a0, a1, a2),
+        SYS_UNLINKAT => fs::sys_unlinkat(vm, base, a0, a1, a2),
+        SYS_FACCESSAT => fs::sys_faccessat(vm, base, a0, a1, a2),
+        SYS_READLINKAT => fs::sys_readlinkat(vm, base, a0, a1, a2, a3),
+        SYS_FTRUNCATE => fs::sys_ftruncate(vm, base, a0, a1),
         SYS_IOCTL => 0,
-        SYS_LSEEK => 0,
+        SYS_GETCWD => {
+            // Write "/" to buf
+            if a1 >= 2 {
+                unsafe { guest_mem::write_bytes(base, a0, b"/\0"); }
+                a0 as i64
+            } else { EINVAL }
+        }
 
         // fd table
         SYS_DUP => fd_table::sys_dup(vm, base, a0),

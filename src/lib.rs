@@ -313,6 +313,95 @@ mod tests {
         assert_eq!(ret4, 10);
     }
 
+    #[test]
+    fn syscall_fs_openat_read_write() {
+        let (mut vm, base) = setup_syscall_vm();
+
+        // Write path string to guest memory
+        let path_addr = 0x30000u64;
+        unsafe { super::guest_mem::write_bytes(base, path_addr, b"/test.txt\0"); }
+
+        // openat with O_CREAT | O_RDWR
+        let fd = super::syscall::fs::sys_openat(
+            &mut vm, base, (-100i64) as u64, path_addr, (O_CREAT | O_RDWR) as u64, 0o644,
+        );
+        assert!(fd >= 3, "openat should return fd >= 3, got {}", fd);
+
+        // write
+        let data_addr = 0x31000u64;
+        unsafe { super::guest_mem::write_bytes(base, data_addr, b"Hello FS!"); }
+        let written = super::syscall::fs::sys_write(
+            &mut vm, base, fd as u64, data_addr, 9, SYS_WRITE,
+        );
+        assert_eq!(written, 9);
+
+        // lseek to beginning
+        let pos = super::syscall::fs::sys_lseek(&mut vm, base, fd as u64, 0, 0);
+        assert_eq!(pos, 0);
+
+        // read
+        let read_addr = 0x32000u64;
+        unsafe { super::guest_mem::zero_mem(base, read_addr, 16); }
+        let nread = super::syscall::fs::sys_read(&mut vm, base, fd as u64, read_addr, 16);
+        assert_eq!(nread, 9);
+        let mut buf = [0u8; 9];
+        unsafe { super::guest_mem::read_bytes(base, read_addr, &mut buf); }
+        assert_eq!(&buf, b"Hello FS!");
+
+        // fstat
+        let stat_addr = 0x33000u64;
+        let ret = super::syscall::fs::sys_fstat(&mut vm, base, fd as u64, stat_addr);
+        assert_eq!(ret, 0);
+        let size = unsafe { super::guest_mem::read_u64(base, stat_addr + 48) };
+        assert_eq!(size, 9);
+
+        // close
+        let ret2 = super::fs::fd_table::sys_close(&mut vm, base, fd as u64);
+        assert_eq!(ret2, 0);
+    }
+
+    #[test]
+    fn syscall_fs_mkdir_getdents() {
+        let (mut vm, base) = setup_syscall_vm();
+
+        // Create /mydir
+        let path_addr = 0x30000u64;
+        unsafe { super::guest_mem::write_bytes(base, path_addr, b"/mydir\0"); }
+        let ret = super::syscall::fs::sys_mkdirat(
+            &mut vm, base, (-100i64) as u64, path_addr, 0o755,
+        );
+        assert_eq!(ret, 0);
+
+        // Create files in /mydir
+        unsafe { super::guest_mem::write_bytes(base, path_addr, b"/mydir/a.txt\0"); }
+        let fd_a = super::syscall::fs::sys_openat(
+            &mut vm, base, (-100i64) as u64, path_addr, (O_CREAT | O_RDWR) as u64, 0o644,
+        );
+        assert!(fd_a >= 3);
+        super::fs::fd_table::sys_close(&mut vm, base, fd_a as u64);
+
+        unsafe { super::guest_mem::write_bytes(base, path_addr, b"/mydir/b.txt\0"); }
+        let fd_b = super::syscall::fs::sys_openat(
+            &mut vm, base, (-100i64) as u64, path_addr, (O_CREAT | O_RDWR) as u64, 0o644,
+        );
+        assert!(fd_b >= 3);
+        super::fs::fd_table::sys_close(&mut vm, base, fd_b as u64);
+
+        // Open /mydir as directory
+        unsafe { super::guest_mem::write_bytes(base, path_addr, b"/mydir\0"); }
+        let dir_fd = super::syscall::fs::sys_openat(
+            &mut vm, base, (-100i64) as u64, path_addr, O_RDONLY as u64, 0,
+        );
+        assert!(dir_fd >= 3);
+
+        // getdents64
+        let dents_buf = 0x34000u64;
+        let n = super::syscall::fs::sys_getdents64(
+            &mut vm, base, dir_fd as u64, dents_buf, 4096,
+        );
+        assert!(n > 0, "getdents64 should return > 0 bytes, got {}", n);
+    }
+
     // =========================================================================
     // ELF integration tests (riscv-tests ISA suite)
     // =========================================================================
