@@ -36,7 +36,8 @@ pub const FD_TYPE_PTY_SLAVE: i32 = 12;
 pub const FD_TYPE_INOTIFY: i32 = 13;
 
 // =============================================================================
-// Syscall numbers (from local-reference-corpus/unistd.h — asm-generic, used by RISC-V)
+// Syscall numbers (asm-generic, used by RISC-V)
+// https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/unistd.h
 // =============================================================================
 pub const SYS_GETCWD: u64 = 17;
 pub const SYS_EVENTFD2: u64 = 19;
@@ -129,7 +130,8 @@ pub const SYS_FLOCK: u64 = 32;
 pub const SYS_UMASK: u64 = 166;
 
 // =============================================================================
-// clone flags (from local-reference-corpus/sched.h)
+// clone flags
+// https://github.com/torvalds/linux/blob/v6.12/include/uapi/linux/sched.h
 // =============================================================================
 pub const CLONE_VM: u64 = 0x00000100;
 pub const CLONE_FS: u64 = 0x00000200;
@@ -143,7 +145,8 @@ pub const CLONE_CHILD_SETTID: u64 = 0x01000000;
 pub const CLONE_VFORK: u64 = 0x00004000;
 
 // =============================================================================
-// mmap / mprotect flags (from local-reference-corpus/mman-common.h)
+// mmap / mprotect flags
+// https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/mman-common.h
 // =============================================================================
 pub const PROT_NONE: i32 = 0x0;
 pub const PROT_READ: i32 = 0x1;
@@ -156,7 +159,8 @@ pub const MAP_PRIVATE: u64 = 0x02;
 pub const MAP_SHARED: u64 = 0x01;
 
 // =============================================================================
-// open flags (from local-reference-corpus/fcntl.h)
+// open flags
+// https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/fcntl.h
 // =============================================================================
 pub const O_RDONLY: i32 = 0;
 pub const O_WRONLY: i32 = 1;
@@ -169,7 +173,8 @@ pub const O_CLOEXEC: i32 = 0x80000;
 pub const O_DIRECTORY: i32 = 0x10000;
 
 // =============================================================================
-// Signal numbers (from local-reference-corpus/signal.h)
+// Signal numbers
+// https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/signal.h
 // =============================================================================
 pub const SIGHUP: i32 = 1;
 pub const SIGINT: i32 = 2;
@@ -188,6 +193,7 @@ pub const SIGCHLD: i32 = 17;
 pub const SIGCONT: i32 = 18;
 pub const SIGSTOP: i32 = 19;
 pub const SIGURG: i32 = 23;
+pub const SIGWINCH: i32 = 28;
 
 // =============================================================================
 // Limits

@@ -131,6 +131,7 @@ pub struct ThreadRecord {
 /// Open file description. Lives in kernel Worker's linear memory.
 /// Shared by FDs via refcount (dup/fork share the same OFD).
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct OpenFileDesc {
     pub fd_type: i32,
     pub host_fd: i32,
@@ -139,7 +140,7 @@ pub struct OpenFileDesc {
     pub offset: i64,
     /// Cached inode number for direct SAB page cache read
     pub ino: u32,
-    _pad: u32,
+    pub _pad: u32,
 }
 
 // =============================================================================

@@ -3,7 +3,7 @@
 //! exec() is the main interpreter loop. It runs `budget` instructions,
 //! then returns to JS. Block cache amortizes decode cost.
 //! JIT hooks (trace recording, JIT_READY handoff) are integrated
-//! but disabled until Phase 7.
+//! but disabled until the JIT compiler.
 
 pub mod block_cache;
 pub mod decode;
@@ -60,7 +60,7 @@ pub unsafe fn exec(
             (guest_mem::read_u32(base, pc), 4)
         };
 
-        // --- Trace recording (JIT Phase 7 hook) ---
+        // --- Trace recording (JIT the JIT compiler hook) ---
         if let Some(ref mut tb) = trace_buf {
             if tb.recording != 0 {
                 if tb.record(pc, raw, step as u32) {
@@ -158,12 +158,22 @@ pub unsafe fn exec(
                     let funct12 = raw >> 20;
                     match funct12 {
                         0 => {
-                            // ECALL — syscall
+                            // ECALL — syscall dispatch
                             vm.x = x;
                             vm.f = f;
                             vm.pc = pc + step;
-                            vm.status = abi::STATUS_FAULT;
-                            return remaining;
+                            vm.fcsr = fcsr;
+                            let status = crate::syscall::dispatch(vm, base);
+                            // Reload registers (syscall may modify them)
+                            x = vm.x;
+                            f = vm.f;
+                            pc = vm.pc;
+                            fcsr = vm.fcsr;
+                            if status != abi::STATUS_OK {
+                                vm.status = status;
+                                return remaining;
+                            }
+                            continue;
                         }
                         1 => {
                             // EBREAK
