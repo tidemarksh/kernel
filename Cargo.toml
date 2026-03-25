@@ -1,0 +1,17 @@
+[package]
+name = "tidemark-kernel"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0"
+description = "RISC-V Linux userland kernel for WebAssembly"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
