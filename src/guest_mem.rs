@@ -16,14 +16,16 @@ static mut THREAD_COUNT: *const AtomicU32 = core::ptr::null();
 /// # Safety
 /// Must be called once before any guest memory access.
 pub unsafe fn init(reservation_gen: *const AtomicU32, thread_count: *const AtomicU32) {
-    RESERVATION_GEN = reservation_gen;
-    THREAD_COUNT = thread_count;
+    unsafe {
+        RESERVATION_GEN = reservation_gen;
+        THREAD_COUNT = thread_count;
+    }
 }
 
 #[inline(always)]
 unsafe fn is_multi_threaded() -> bool {
-    let p = THREAD_COUNT;
-    !p.is_null() && (*p).load(Ordering::Relaxed) > 1
+    let p = unsafe { THREAD_COUNT };
+    !p.is_null() && unsafe { (*p).load(Ordering::Relaxed) } > 1
 }
 
 // ---------------------------------------------------------------------------
@@ -32,21 +34,21 @@ unsafe fn is_multi_threaded() -> bool {
 
 #[inline(always)]
 pub unsafe fn read_u8(base: u32, addr: u64) -> u8 {
-    *((base + addr as u32) as *const u8)
+    unsafe { *((base + addr as u32) as *const u8) }
 }
 
 #[inline(always)]
 pub unsafe fn read_u16(base: u32, addr: u64) -> u16 {
-    ((base + addr as u32) as *const u16).read_unaligned()
+    unsafe { ((base + addr as u32) as *const u16).read_unaligned() }
 }
 
 #[inline(always)]
 pub unsafe fn read_u32(base: u32, addr: u64) -> u32 {
     let ptr = (base + addr as u32) as usize;
     if (ptr & 3) == 0 {
-        (*(ptr as *const AtomicU32)).load(Ordering::Relaxed)
+        unsafe { (*(ptr as *const AtomicU32)).load(Ordering::Relaxed) }
     } else {
-        (ptr as *const u32).read_unaligned()
+        unsafe { (ptr as *const u32).read_unaligned() }
     }
 }
 
@@ -54,24 +56,24 @@ pub unsafe fn read_u32(base: u32, addr: u64) -> u32 {
 pub unsafe fn read_u64(base: u32, addr: u64) -> u64 {
     let ptr = (base + addr as u32) as usize;
     if (ptr & 7) == 0 {
-        (*(ptr as *const core::sync::atomic::AtomicU64)).load(Ordering::Relaxed)
+        unsafe { (*(ptr as *const core::sync::atomic::AtomicU64)).load(Ordering::Relaxed) }
     } else {
-        (ptr as *const u64).read_unaligned()
+        unsafe { (ptr as *const u64).read_unaligned() }
     }
 }
 
 #[inline(always)]
-pub unsafe fn read_i8(base: u32, addr: u64) -> i8 { read_u8(base, addr) as i8 }
+pub unsafe fn read_i8(base: u32, addr: u64) -> i8 { (unsafe { read_u8(base, addr) }) as i8 }
 #[inline(always)]
-pub unsafe fn read_i16(base: u32, addr: u64) -> i16 { read_u16(base, addr) as i16 }
+pub unsafe fn read_i16(base: u32, addr: u64) -> i16 { (unsafe { read_u16(base, addr) }) as i16 }
 #[inline(always)]
-pub unsafe fn read_i32(base: u32, addr: u64) -> i32 { read_u32(base, addr) as i32 }
+pub unsafe fn read_i32(base: u32, addr: u64) -> i32 { (unsafe { read_u32(base, addr) }) as i32 }
 #[inline(always)]
-pub unsafe fn read_i64(base: u32, addr: u64) -> i64 { read_u64(base, addr) as i64 }
+pub unsafe fn read_i64(base: u32, addr: u64) -> i64 { (unsafe { read_u64(base, addr) }) as i64 }
 
 pub unsafe fn read_bytes(base: u32, addr: u64, buf: &mut [u8]) {
     let src = (base + addr as u32) as *const u8;
-    core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), buf.len());
+    unsafe { core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), buf.len()) };
 }
 
 // ---------------------------------------------------------------------------
@@ -80,25 +82,25 @@ pub unsafe fn read_bytes(base: u32, addr: u64, buf: &mut [u8]) {
 
 #[inline(always)]
 unsafe fn bump_gen(slot: usize) {
-    let p = RESERVATION_GEN;
+    let p = unsafe { RESERVATION_GEN };
     if !p.is_null() {
-        (*p.add(slot)).fetch_add(1, Ordering::SeqCst);
+        unsafe { (*p.add(slot)).fetch_add(1, Ordering::SeqCst) };
     }
 }
 
 #[inline(always)]
 pub unsafe fn write_u8(base: u32, addr: u64, val: u8) {
-    *((base + addr as u32) as *mut u8) = val;
-    if is_multi_threaded() {
-        bump_gen(((addr >> 3) & 63) as usize);
+    unsafe { *((base + addr as u32) as *mut u8) = val };
+    if unsafe { is_multi_threaded() } {
+        unsafe { bump_gen(((addr >> 3) & 63) as usize) };
     }
 }
 
 #[inline(always)]
 pub unsafe fn write_u16(base: u32, addr: u64, val: u16) {
-    ((base + addr as u32) as *mut u16).write_unaligned(val);
-    if is_multi_threaded() {
-        bump_gen(((addr >> 3) & 63) as usize);
+    unsafe { ((base + addr as u32) as *mut u16).write_unaligned(val) };
+    if unsafe { is_multi_threaded() } {
+        unsafe { bump_gen(((addr >> 3) & 63) as usize) };
     }
 }
 
@@ -106,12 +108,12 @@ pub unsafe fn write_u16(base: u32, addr: u64, val: u16) {
 pub unsafe fn write_u32(base: u32, addr: u64, val: u32) {
     let ptr = (base + addr as u32) as usize;
     if (ptr & 3) == 0 {
-        (*(ptr as *const AtomicU32)).store(val, Ordering::Relaxed);
+        unsafe { (*(ptr as *const AtomicU32)).store(val, Ordering::Relaxed) };
     } else {
-        (ptr as *mut u32).write_unaligned(val);
+        unsafe { (ptr as *mut u32).write_unaligned(val) };
     }
-    if is_multi_threaded() {
-        bump_gen(((addr >> 3) & 63) as usize);
+    if unsafe { is_multi_threaded() } {
+        unsafe { bump_gen(((addr >> 3) & 63) as usize) };
     }
 }
 
@@ -119,23 +121,23 @@ pub unsafe fn write_u32(base: u32, addr: u64, val: u32) {
 pub unsafe fn write_u64(base: u32, addr: u64, val: u64) {
     let ptr = (base + addr as u32) as usize;
     if (ptr & 7) == 0 {
-        (*(ptr as *const core::sync::atomic::AtomicU64)).store(val, Ordering::Relaxed);
+        unsafe { (*(ptr as *const core::sync::atomic::AtomicU64)).store(val, Ordering::Relaxed) };
     } else {
-        (ptr as *mut u64).write_unaligned(val);
+        unsafe { (ptr as *mut u64).write_unaligned(val) };
     }
-    if is_multi_threaded() {
-        bump_gen(((addr >> 3) & 63) as usize);
+    if unsafe { is_multi_threaded() } {
+        unsafe { bump_gen(((addr >> 3) & 63) as usize) };
     }
 }
 
 pub unsafe fn write_bytes(base: u32, addr: u64, data: &[u8]) {
     let dst = (base + addr as u32) as *mut u8;
-    core::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len());
+    unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len()) };
 }
 
 pub unsafe fn zero_mem(base: u32, addr: u64, len: usize) {
     let dst = (base + addr as u32) as *mut u8;
-    core::ptr::write_bytes(dst, 0, len);
+    unsafe { core::ptr::write_bytes(dst, 0, len) };
 }
 
 /// Read null-terminated string from guest memory. Returns length (excluding null).
@@ -144,7 +146,7 @@ pub unsafe fn read_cstr(base: u32, addr: u64, buf: &mut [u8]) -> usize {
     let max = buf.len() - 1;
     let mut i = 0;
     while i < max {
-        let b = src.add(i).read();
+        let b = unsafe { src.add(i).read() };
         if b == 0 { break; }
         buf[i] = b;
         i += 1;
@@ -154,4 +156,4 @@ pub unsafe fn read_cstr(base: u32, addr: u64, buf: &mut [u8]) -> usize {
 }
 
 // Note: Atomics.wait/notify are handled by the JS runtime layer (thread-worker.ts),
-// not by Rust. Futex wake/wait go through STATUS codes (§6.4).
+// not by Rust. Futex wake/wait go through STATUS codes.

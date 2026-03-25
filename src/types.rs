@@ -1,6 +1,6 @@
 //! Core type definitions for kernel state.
 //!
-//! Ownership model (§6.1):
+//! Ownership model:
 //!   thread-local:   ThreadState (registers, PC, TLS, per-thread signal)
 //!   guest Memory:   FdTable, thread_count (shared between threads in a process)
 //!   SAB page cache: file data, inode metadata, pipe buffers (cross-worker visible)
@@ -143,7 +143,7 @@ pub struct OpenFileDesc {
 }
 
 // =============================================================================
-// VMA — Virtual Memory Area (kernel Worker private, §6.8.1)
+// VMA — Virtual Memory Area (kernel Worker private)
 // =============================================================================
 
 /// VMA entry for mmap/munmap/mprotect management.
@@ -161,7 +161,7 @@ pub struct Vma {
 }
 
 // =============================================================================
-// SigAction — signal disposition (kernel Worker private, §6.8.3)
+// SigAction — signal disposition (kernel Worker private)
 // =============================================================================
 
 #[repr(C)]
@@ -176,16 +176,3 @@ pub const SIG_DFL: u64 = 0;
 pub const SIG_IGN: u64 = 1;
 pub const MAX_SIGNALS: usize = 64;
 
-// =============================================================================
-// MmapEntry legacy compat — will be replaced by Vma
-// =============================================================================
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct MmapEntry {
-    pub guest_addr: u64,
-    pub length: u64,
-    pub prot: i32,
-    pub flags: i32,
-    pub offset: u64,
-}

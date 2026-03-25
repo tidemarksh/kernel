@@ -76,111 +76,113 @@ pub unsafe fn load_elf(
     elf_ptr: u32,
     elf_len: u32,
 ) -> Result<ElfLoadResult, i32> {
-    if elf_len < 64 {
-        return Err(-1); // too small for ELF header
-    }
-
-    // --- Validate ELF header ---
-    let e = elf_ptr as *const u8;
-
-    // Magic number
-    if *e.add(0) != EI_MAG0 || *e.add(1) != EI_MAG1
-        || *e.add(2) != EI_MAG2 || *e.add(3) != EI_MAG3 {
-        return Err(-1);
-    }
-
-    // Class: 64-bit
-    if *e.add(EI_CLASS) != ELFCLASS64 {
-        return Err(-2);
-    }
-
-    // Endianness: little-endian
-    if *e.add(EI_DATA) != ELFDATA2LSB {
-        return Err(-3);
-    }
-
-    // Type: executable
-    let e_type = read_u16(e, E_TYPE);
-    if e_type != ET_EXEC {
-        return Err(-4);
-    }
-
-    // Machine: RISC-V
-    let e_machine = read_u16(e, E_MACHINE);
-    if e_machine != EM_RISCV {
-        return Err(-5);
-    }
-
-    let entry = read_u64(e, E_ENTRY);
-    let ph_off = read_u64(e, E_PHOFF) as usize;
-    let ph_entsize = read_u16(e, E_PHENTSIZE) as usize;
-    let ph_num = read_u16(e, E_PHNUM) as usize;
-
-    if ph_entsize < 56 || ph_off + ph_num * ph_entsize > elf_len as usize {
-        return Err(-6);
-    }
-
-    // --- Load PT_LOAD segments ---
-    let mut brk_end: u64 = 0;
-    let mut phdr_addr: u64 = 0;
-
-    for i in 0..ph_num {
-        let ph = e.add(ph_off + i * ph_entsize);
-        let p_type = read_u32(ph, P_TYPE);
-
-        if p_type != PT_LOAD {
-            continue;
+    unsafe {
+        if elf_len < 64 {
+            return Err(-1); // too small for ELF header
         }
 
-        let p_offset = read_u64(ph, P_OFFSET);
-        let p_vaddr = read_u64(ph, P_VADDR);
-        let p_filesz = read_u64(ph, P_FILESZ);
-        let p_memsz = read_u64(ph, P_MEMSZ);
+        // --- Validate ELF header ---
+        let e = elf_ptr as *const u8;
 
-        // Bounds check
-        if p_vaddr + p_memsz > ram_size {
-            return Err(-7); // segment out of bounds
-        }
-        if p_offset + p_filesz > elf_len as u64 {
-            return Err(-8); // file data out of bounds
+        // Magic number
+        if *e.add(0) != EI_MAG0 || *e.add(1) != EI_MAG1
+            || *e.add(2) != EI_MAG2 || *e.add(3) != EI_MAG3 {
+            return Err(-1);
         }
 
-        // Copy file data to guest memory
-        if p_filesz > 0 {
-            let src = e.add(p_offset as usize);
-            let dst = (ram_base as u64 + p_vaddr) as *mut u8;
-            core::ptr::copy_nonoverlapping(src, dst, p_filesz as usize);
+        // Class: 64-bit
+        if *e.add(EI_CLASS) != ELFCLASS64 {
+            return Err(-2);
         }
 
-        // Zero BSS (memsz > filesz)
-        if p_memsz > p_filesz {
-            let bss_start = p_vaddr + p_filesz;
-            let bss_len = (p_memsz - p_filesz) as usize;
-            guest_mem::zero_mem(ram_base, bss_start, bss_len);
+        // Endianness: little-endian
+        if *e.add(EI_DATA) != ELFDATA2LSB {
+            return Err(-3);
         }
 
-        // Track highest address for brk
-        let seg_end = p_vaddr + p_memsz;
-        if seg_end > brk_end {
-            brk_end = seg_end;
+        // Type: executable
+        let e_type = read_u16(e, E_TYPE);
+        if e_type != ET_EXEC {
+            return Err(-4);
         }
 
-        // Record first LOAD segment for phdr (heuristic: usually first segment contains phdrs)
-        if i == 0 {
-            phdr_addr = p_vaddr + ph_off as u64;
+        // Machine: RISC-V
+        let e_machine = read_u16(e, E_MACHINE);
+        if e_machine != EM_RISCV {
+            return Err(-5);
         }
+
+        let entry = read_u64(e, E_ENTRY);
+        let ph_off = read_u64(e, E_PHOFF) as usize;
+        let ph_entsize = read_u16(e, E_PHENTSIZE) as usize;
+        let ph_num = read_u16(e, E_PHNUM) as usize;
+
+        if ph_entsize < 56 || ph_off + ph_num * ph_entsize > elf_len as usize {
+            return Err(-6);
+        }
+
+        // --- Load PT_LOAD segments ---
+        let mut brk_end: u64 = 0;
+        let mut phdr_addr: u64 = 0;
+
+        for i in 0..ph_num {
+            let ph = e.add(ph_off + i * ph_entsize);
+            let p_type = read_u32(ph, P_TYPE);
+
+            if p_type != PT_LOAD {
+                continue;
+            }
+
+            let p_offset = read_u64(ph, P_OFFSET);
+            let p_vaddr = read_u64(ph, P_VADDR);
+            let p_filesz = read_u64(ph, P_FILESZ);
+            let p_memsz = read_u64(ph, P_MEMSZ);
+
+            // Bounds check
+            if p_vaddr + p_memsz > ram_size {
+                return Err(-7); // segment out of bounds
+            }
+            if p_offset + p_filesz > elf_len as u64 {
+                return Err(-8); // file data out of bounds
+            }
+
+            // Copy file data to guest memory
+            if p_filesz > 0 {
+                let src = e.add(p_offset as usize);
+                let dst = (ram_base as u64 + p_vaddr) as *mut u8;
+                core::ptr::copy_nonoverlapping(src, dst, p_filesz as usize);
+            }
+
+            // Zero BSS (memsz > filesz)
+            if p_memsz > p_filesz {
+                let bss_start = p_vaddr + p_filesz;
+                let bss_len = (p_memsz - p_filesz) as usize;
+                guest_mem::zero_mem(ram_base, bss_start, bss_len);
+            }
+
+            // Track highest address for brk
+            let seg_end = p_vaddr + p_memsz;
+            if seg_end > brk_end {
+                brk_end = seg_end;
+            }
+
+            // Record first LOAD segment for phdr (heuristic: usually first segment contains phdrs)
+            if i == 0 {
+                phdr_addr = p_vaddr + ph_off as u64;
+            }
+        }
+
+        // Align brk to page boundary
+        brk_end = (brk_end + 4095) & !4095;
+
+        Ok(ElfLoadResult {
+            entry,
+            brk_start: brk_end,
+            phdr_addr,
+            phent: ph_entsize as u16,
+            phnum: ph_num as u16,
+        })
     }
-
-    // Align brk to page boundary
-    brk_end = (brk_end + 4095) & !4095;
-
-    Ok(ElfLoadResult {
-        entry,
-        brk_start: brk_end,
-        phdr_addr,
-        phent: ph_entsize as u16,
-        phnum: ph_num as u16,
-    })
 }
 
 /// Set up the initial stack for the loaded ELF.
@@ -198,67 +200,69 @@ pub unsafe fn setup_stack(
     elf_result: &ElfLoadResult,
     random_addr: u64,  // 16 bytes of random data address
 ) -> u64 {
-    // Stack layout (grows downward):
-    //   auxv entries (AT_NULL terminated)
-    //   NULL (end of envp)
-    //   envp[n-1] ... envp[0]
-    //   NULL (end of argv)
-    //   argv[argc-1] ... argv[0]
-    //   argc
+    unsafe {
+        // Stack layout (grows downward):
+        //   auxv entries (AT_NULL terminated)
+        //   NULL (end of envp)
+        //   envp[n-1] ... envp[0]
+        //   NULL (end of argv)
+        //   argv[argc-1] ... argv[0]
+        //   argc
 
-    let argc = argv.len();
-    let envc = envp.len();
+        let argc = argv.len();
+        let envc = envp.len();
 
-    // Auxiliary vector entries
-    let auxv: [(u64, u64); 6] = [
-        (AT_PAGESZ, 4096),
-        (AT_PHDR, elf_result.phdr_addr),
-        (AT_PHENT, elf_result.phent as u64),
-        (AT_PHNUM, elf_result.phnum as u64),
-        (AT_ENTRY, elf_result.entry),
-        (AT_RANDOM, random_addr),
-    ];
+        // Auxiliary vector entries
+        let auxv: [(u64, u64); 6] = [
+            (AT_PAGESZ, 4096),
+            (AT_PHDR, elf_result.phdr_addr),
+            (AT_PHENT, elf_result.phent as u64),
+            (AT_PHNUM, elf_result.phnum as u64),
+            (AT_ENTRY, elf_result.entry),
+            (AT_RANDOM, random_addr),
+        ];
 
-    // Calculate total size needed
-    let auxv_size = (auxv.len() + 1) * 16; // +1 for AT_NULL
-    let total_entries = 1 + argc + 1 + envc + 1; // argc + argv + NULL + envp + NULL
-    let total_size = total_entries * 8 + auxv_size;
+        // Calculate total size needed
+        let auxv_size = (auxv.len() + 1) * 16; // +1 for AT_NULL
+        let total_entries = 1 + argc + 1 + envc + 1; // argc + argv + NULL + envp + NULL
+        let total_size = total_entries * 8 + auxv_size;
 
-    // Align stack to 16 bytes
-    let sp = (stack_top - total_size as u64) & !15;
-    let mut pos = sp;
+        // Align stack to 16 bytes
+        let sp = (stack_top - total_size as u64) & !15;
+        let mut pos = sp;
 
-    // argc
-    guest_mem::write_u64(ram_base, pos, argc as u64);
-    pos += 8;
-
-    // argv pointers
-    for &arg in argv {
-        guest_mem::write_u64(ram_base, pos, arg);
+        // argc
+        guest_mem::write_u64(ram_base, pos, argc as u64);
         pos += 8;
-    }
-    guest_mem::write_u64(ram_base, pos, 0); // NULL terminator
-    pos += 8;
 
-    // envp pointers
-    for &env in envp {
-        guest_mem::write_u64(ram_base, pos, env);
+        // argv pointers
+        for &arg in argv {
+            guest_mem::write_u64(ram_base, pos, arg);
+            pos += 8;
+        }
+        guest_mem::write_u64(ram_base, pos, 0); // NULL terminator
         pos += 8;
-    }
-    guest_mem::write_u64(ram_base, pos, 0); // NULL terminator
-    pos += 8;
 
-    // auxv
-    for &(a_type, a_val) in &auxv {
-        guest_mem::write_u64(ram_base, pos, a_type);
-        guest_mem::write_u64(ram_base, pos + 8, a_val);
-        pos += 16;
-    }
-    // AT_NULL
-    guest_mem::write_u64(ram_base, pos, AT_NULL);
-    guest_mem::write_u64(ram_base, pos + 8, 0);
+        // envp pointers
+        for &env in envp {
+            guest_mem::write_u64(ram_base, pos, env);
+            pos += 8;
+        }
+        guest_mem::write_u64(ram_base, pos, 0); // NULL terminator
+        pos += 8;
 
-    sp
+        // auxv
+        for &(a_type, a_val) in &auxv {
+            guest_mem::write_u64(ram_base, pos, a_type);
+            guest_mem::write_u64(ram_base, pos + 8, a_val);
+            pos += 16;
+        }
+        // AT_NULL
+        guest_mem::write_u64(ram_base, pos, AT_NULL);
+        guest_mem::write_u64(ram_base, pos + 8, 0);
+
+        sp
+    }
 }
 
 // =============================================================================
@@ -267,15 +271,15 @@ pub unsafe fn setup_stack(
 
 #[inline(always)]
 unsafe fn read_u16(base: *const u8, off: usize) -> u16 {
-    (base.add(off) as *const u16).read_unaligned()
+    unsafe { (base.add(off) as *const u16).read_unaligned() }
 }
 
 #[inline(always)]
 unsafe fn read_u32(base: *const u8, off: usize) -> u32 {
-    (base.add(off) as *const u32).read_unaligned()
+    unsafe { (base.add(off) as *const u32).read_unaligned() }
 }
 
 #[inline(always)]
 unsafe fn read_u64(base: *const u8, off: usize) -> u64 {
-    (base.add(off) as *const u64).read_unaligned()
+    unsafe { (base.add(off) as *const u64).read_unaligned() }
 }

@@ -11,8 +11,10 @@ static mut HEAP_PTR: u32 = 0;
 /// # Safety
 /// Must be called once before any allocation.
 pub unsafe fn init(base: u32) {
-    HEAP_BASE = base;
-    HEAP_PTR = base;
+    unsafe {
+        HEAP_BASE = base;
+        HEAP_PTR = base;
+    }
 }
 
 /// Allocate `size` bytes aligned to `align`. Returns 0 on failure.
@@ -20,19 +22,19 @@ pub unsafe fn init(base: u32) {
 /// # Safety
 /// Caller must ensure the WASM linear memory is large enough.
 pub unsafe fn alloc(size: u32, align: u32) -> u32 {
-    let aligned = (HEAP_PTR + align - 1) & !(align - 1);
+    let aligned = (unsafe { HEAP_PTR } + align - 1) & !(align - 1);
     let end = aligned + size;
     // Check against WASM memory size
-    let mem_size = core::arch::wasm32::memory_size(0) as u32 * 65536;
+    let mem_size = unsafe { core::arch::wasm32::memory_size(0) } as u32 * 65536;
     if end > mem_size {
         // Try to grow
         let pages_needed = ((end - mem_size) + 65535) / 65536;
-        let result = core::arch::wasm32::memory_grow(0, pages_needed as usize);
+        let result = unsafe { core::arch::wasm32::memory_grow(0, pages_needed as usize) };
         if result == usize::MAX {
             return 0; // OOM
         }
     }
-    HEAP_PTR = end;
+    unsafe { HEAP_PTR = end };
     aligned
 }
 
@@ -41,9 +43,9 @@ pub unsafe fn alloc(size: u32, align: u32) -> u32 {
 /// # Safety
 /// Same as `alloc`.
 pub unsafe fn alloc_zeroed(size: u32, align: u32) -> u32 {
-    let ptr = alloc(size, align);
+    let ptr = unsafe { alloc(size, align) };
     if ptr != 0 {
-        core::ptr::write_bytes(ptr as *mut u8, 0, size as usize);
+        unsafe { core::ptr::write_bytes(ptr as *mut u8, 0, size as usize) };
     }
     ptr
 }
@@ -53,7 +55,7 @@ pub unsafe fn alloc_zeroed(size: u32, align: u32) -> u32 {
 /// # Safety
 /// Same as `alloc`.
 pub unsafe fn alloc_type<T>() -> u32 {
-    alloc_zeroed(core::mem::size_of::<T>() as u32, core::mem::align_of::<T>() as u32)
+    unsafe { alloc_zeroed(core::mem::size_of::<T>() as u32, core::mem::align_of::<T>() as u32) }
 }
 
 /// Return current heap usage in bytes.

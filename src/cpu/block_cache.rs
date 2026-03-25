@@ -96,91 +96,93 @@ impl BlockCache {
     /// Build a block starting at `pc` by decoding instructions from guest memory.
     /// Returns the block entry, or None if the first instruction is unsupported.
     pub unsafe fn build_block(&mut self, pc: u64, ram_base: u32) -> Option<&BlockEntry> {
-        let idx = ((pc >> 1) as usize) & (CACHE_SIZE - 1);
-        let entry = unsafe { &mut *self.entries.add(idx) };
-        entry.start_pc = pc;
-        entry.len = 0;
-        entry.total_budget = 0;
+        unsafe {
+            let idx = ((pc >> 1) as usize) & (CACHE_SIZE - 1);
+            let entry = &mut *self.entries.add(idx);
+            entry.start_pc = pc;
+            entry.len = 0;
+            entry.total_budget = 0;
 
-        let mut cur_pc = pc;
-        let mut count = 0u16;
+            let mut cur_pc = pc;
+            let mut count = 0u16;
 
-        while (count as usize) < MAX_BLOCK_OPS {
-            let raw16 = guest_mem::read_u16(ram_base, cur_pc);
-            let (raw, step) = if decode::is_compressed(raw16) {
-                let expanded = decode::expand_compressed(raw16);
-                if expanded == 0 { break; } // unknown compressed
-                (expanded, 2u64)
-            } else {
-                (guest_mem::read_u32(ram_base, cur_pc), 4u64)
-            };
+            while (count as usize) < MAX_BLOCK_OPS {
+                let raw16 = guest_mem::read_u16(ram_base, cur_pc);
+                let (raw, step) = if decode::is_compressed(raw16) {
+                    let expanded = decode::expand_compressed(raw16);
+                    if expanded == 0 { break; } // unknown compressed
+                    (expanded, 2u64)
+                } else {
+                    (guest_mem::read_u32(ram_base, cur_pc), 4u64)
+                };
 
-            let opc = decode::opcode(raw);
-            let rd = decode::rd(raw) as u8;
-            let rs1 = decode::rs1(raw) as u8;
-            let rs2 = decode::rs2(raw) as u8;
-            let f3 = decode::funct3(raw) as u8;
-            let f7 = decode::funct7(raw);
-            let f7b5 = (f7 >> 5) & 1 != 0;
+                let opc = decode::opcode(raw);
+                let rd = decode::rd(raw) as u8;
+                let rs1 = decode::rs1(raw) as u8;
+                let rs2 = decode::rs2(raw) as u8;
+                let f3 = decode::funct3(raw) as u8;
+                let f7 = decode::funct7(raw);
+                let f7b5 = (f7 >> 5) & 1 != 0;
 
-            let op_id = match opc {
-                decode::OP_OP_IMM => 1,
-                decode::OP_OP_IMM_32 => 2,
-                decode::OP_OP => 3,
-                decode::OP_OP_32 => 4,
-                decode::OP_LOAD => 5,
-                decode::OP_STORE => 6,
-                decode::OP_LUI => 7,
-                decode::OP_AUIPC => 8,
-                decode::OP_BRANCH => 9,
-                decode::OP_JAL => 10,
-                decode::OP_JALR => 11,
-                decode::OP_SYSTEM => 12,
-                decode::OP_MISC_MEM => 13, // FENCE
-                decode::OP_AMO => 14,
-                decode::OP_LOAD_FP => 15,
-                decode::OP_STORE_FP => 16,
-                decode::OP_OP_FP => 17,
-                decode::OP_FMADD => 18,
-                decode::OP_FMSUB => 19,
-                decode::OP_FNMSUB => 20,
-                decode::OP_FNMADD => 21,
-                _ => 0, // unknown → stop block
-            };
+                let op_id = match opc {
+                    decode::OP_OP_IMM => 1,
+                    decode::OP_OP_IMM_32 => 2,
+                    decode::OP_OP => if f7 == 1 { 22 } else { 3 },       // 22 = M ext
+                    decode::OP_OP_32 => if f7 == 1 { 23 } else { 4 },    // 23 = M ext 32
+                    decode::OP_LOAD => 5,
+                    decode::OP_STORE => 6,
+                    decode::OP_LUI => 7,
+                    decode::OP_AUIPC => 8,
+                    decode::OP_BRANCH => 9,
+                    decode::OP_JAL => 10,
+                    decode::OP_JALR => 11,
+                    decode::OP_SYSTEM => 12,
+                    decode::OP_MISC_MEM => 13, // FENCE
+                    decode::OP_AMO => 14,
+                    decode::OP_LOAD_FP => 15,
+                    decode::OP_STORE_FP => 16,
+                    decode::OP_OP_FP => 17,
+                    decode::OP_FMADD => 18,
+                    decode::OP_FMSUB => 19,
+                    decode::OP_FNMSUB => 20,
+                    decode::OP_FNMADD => 21,
+                    _ => 0, // unknown → stop block
+                };
 
-            if op_id == 0 { break; }
+                if op_id == 0 { break; }
 
-            // Extract immediate based on instruction type
-            let imm = match opc {
-                decode::OP_OP_IMM | decode::OP_OP_IMM_32 | decode::OP_LOAD
-                | decode::OP_LOAD_FP | decode::OP_JALR => decode::imm_i(raw) as i32,
-                decode::OP_STORE | decode::OP_STORE_FP => decode::imm_s(raw) as i32,
-                decode::OP_BRANCH => decode::imm_b(raw) as i32,
-                decode::OP_LUI | decode::OP_AUIPC => decode::imm_u(raw) as i32,
-                decode::OP_JAL => decode::imm_j(raw) as i32,
-                _ => 0,
-            };
+                // Extract immediate based on instruction type
+                let imm = match opc {
+                    decode::OP_OP_IMM | decode::OP_OP_IMM_32 | decode::OP_LOAD
+                    | decode::OP_LOAD_FP | decode::OP_JALR => decode::imm_i(raw) as i32,
+                    decode::OP_STORE | decode::OP_STORE_FP => decode::imm_s(raw) as i32,
+                    decode::OP_BRANCH => decode::imm_b(raw) as i32,
+                    decode::OP_LUI | decode::OP_AUIPC => decode::imm_u(raw) as i32,
+                    decode::OP_JAL => decode::imm_j(raw) as i32,
+                    _ => 0,
+                };
 
-            entry.ops[count as usize] = PackedOp::new(op_id, rd, rs1, rs2, f3, f7b5, step, imm);
-            count += 1;
-            cur_pc += step;
+                entry.ops[count as usize] = PackedOp::new(op_id, rd, rs1, rs2, f3, f7b5, step, imm);
+                count += 1;
+                cur_pc += step;
 
-            // Terminators: branch, JAL, JALR, ECALL, FENCE stop the block
-            match opc {
-                decode::OP_BRANCH | decode::OP_JAL | decode::OP_JALR
-                | decode::OP_SYSTEM | decode::OP_MISC_MEM => break,
-                _ => {}
+                // Terminators: branch, JAL, JALR, ECALL, FENCE stop the block
+                match opc {
+                    decode::OP_BRANCH | decode::OP_JAL | decode::OP_JALR
+                    | decode::OP_SYSTEM | decode::OP_MISC_MEM => break,
+                    _ => {}
+                }
             }
-        }
 
-        if count == 0 {
-            entry.start_pc = 0; // mark empty
-            return None;
-        }
+            if count == 0 {
+                entry.start_pc = 0; // mark empty
+                return None;
+            }
 
-        entry.len = count;
-        entry.total_budget = count;
-        Some(unsafe { &*self.entries.add(idx) })
+            entry.len = count;
+            entry.total_budget = count;
+            Some(&*self.entries.add(idx))
+        }
     }
 
     /// Invalidate all entries (e.g., after execve).
