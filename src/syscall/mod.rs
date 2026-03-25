@@ -43,8 +43,10 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
 
         // time
         SYS_CLOCK_GETTIME => time::sys_clock_gettime(vm, base, a0, a1),
+        114 => time::sys_clock_getres(vm, base, a0, a1), // clock_getres
         SYS_NANOSLEEP => return time::sys_nanosleep(vm, base, a0, a1),
         SYS_SCHED_YIELD => 0, // no-op, return success
+        SYS_TIMES => 0,      // stub: return 0 clock ticks
 
         // memory
         SYS_BRK => memory::sys_brk(vm, base, a0),
@@ -60,6 +62,14 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_SIGALTSTACK => signal::sys_sigaltstack(vm, base, a0, a1),
         SYS_RT_SIGRETURN => { signal::sys_rt_sigreturn(vm); 0 }
 
+        // I/O stubs (stdout/stderr → return length, read → 0)
+        SYS_WRITE | SYS_WRITEV => fs::sys_write_stub(vm, base, a0, a1, a2, nr),
+        SYS_READ | SYS_READV => 0,
+        SYS_OPENAT => ENOENT, // no filesystem yet
+        SYS_NEWFSTATAT | SYS_FSTAT => EBADF,
+        SYS_IOCTL => 0,
+        SYS_LSEEK => 0,
+
         // fd table
         SYS_DUP => fd_table::sys_dup(vm, base, a0),
         SYS_DUP3 => fd_table::sys_dup3(vm, base, a0, a1, a2),
@@ -73,7 +83,9 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         }
         SYS_SET_ROBUST_LIST => 0,
         SYS_PRCTL => 0,
+        SYS_UMASK => 0o022, // return previous umask
         SYS_RSEQ => EINVAL,
+        261 => 0,            // prlimit64: stub success
 
         // exit
         SYS_EXIT | SYS_EXIT_GROUP => {

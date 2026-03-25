@@ -346,7 +346,8 @@ fn expand_c_fldsp(insn: u16) -> u32 {
 fn expand_c_lwsp(insn: u16) -> u32 {
     let rd = ((insn >> 7) & 0x1F) as u32;
     if rd == 0 { return 0; } // reserved
-    let off = (((insn >> 2) & 7) << 6) | (((insn >> 4) & 7) << 2) | (((insn >> 12) & 1) << 5);
+    // CI format: bit12=offset[5], bits6:4=offset[4:2], bits3:2=offset[7:6]
+    let off = (((insn >> 4) & 7) << 2) | (((insn >> 2) & 3) << 6) | (((insn >> 12) & 1) << 5);
     encode_i(OP_LOAD, rd, 2, 2, off as u32) // lw rd, off(x2)
 }
 
@@ -388,19 +389,22 @@ fn expand_c_jr_mv_jalr_add(insn: u16) -> u32 {
 
 fn expand_c_fsdsp(insn: u16) -> u32 {
     let rs2 = ((insn >> 2) & 0x1F) as u32;
-    let off = (((insn >> 7) & 7) << 3) | (((insn >> 10) & 7) << 6);
+    // CSS format: bits12:10=offset[5:3], bits9:7=offset[8:6]
+    let off = (((insn >> 10) & 7) << 3) | (((insn >> 7) & 7) << 6);
     encode_s(OP_STORE_FP, 3, 2, rs2, off as u32)
 }
 
 fn expand_c_swsp(insn: u16) -> u32 {
     let rs2 = ((insn >> 2) & 0x1F) as u32;
-    let off = (((insn >> 7) & 0xF) << 2) | (((insn >> 11) & 3) << 6);
+    // CSS format: bits12:9=offset[5:2], bits8:7=offset[7:6]
+    let off = (((insn >> 9) & 0xF) << 2) | (((insn >> 7) & 3) << 6);
     encode_s(OP_STORE, 2, 2, rs2, off as u32)
 }
 
 fn expand_c_sdsp(insn: u16) -> u32 {
     let rs2 = ((insn >> 2) & 0x1F) as u32;
-    let off = (((insn >> 7) & 7) << 3) | (((insn >> 10) & 7) << 6);
+    // CSS format: bits12:10=offset[5:3], bits9:7=offset[8:6]
+    let off = (((insn >> 10) & 7) << 3) | (((insn >> 7) & 7) << 6);
     encode_s(OP_STORE, 3, 2, rs2, off as u32)
 }
 

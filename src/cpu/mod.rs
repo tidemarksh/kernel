@@ -173,6 +173,7 @@ pub unsafe fn exec(
                                 vm.status = status;
                                 return remaining;
                             }
+                            x[0] = 0;
                             continue;
                         }
                         1 => {

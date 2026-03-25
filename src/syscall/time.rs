@@ -17,10 +17,22 @@ use crate::types::ThreadState;
 /// based on instruction count as a rough approximation.
 pub fn sys_clock_gettime(_vm: &ThreadState, base: u32, _clk_id: u64, tp: u64) -> i64 {
     if tp == 0 { return crate::abi::EFAULT; }
-    // Stub: return 0.0 for now. Runtime (TS) will provide real time via host import.
+    // Return a plausible timestamp. Real time will be provided by the runtime (TS)
+    // via host import. For testing, use a fixed epoch.
     unsafe {
-        guest_mem::write_u64(base, tp, 0);     // tv_sec
-        guest_mem::write_u64(base, tp + 8, 0); // tv_nsec
+        guest_mem::write_u64(base, tp, 1700000000); // tv_sec: ~2023-11-14
+        guest_mem::write_u64(base, tp + 8, 0);       // tv_nsec
+    }
+    0
+}
+
+/// clock_getres: return resolution (1 ns).
+pub fn sys_clock_getres(_vm: &ThreadState, base: u32, _clk_id: u64, res: u64) -> i64 {
+    if res != 0 {
+        unsafe {
+            guest_mem::write_u64(base, res, 0);     // tv_sec = 0
+            guest_mem::write_u64(base, res + 8, 1); // tv_nsec = 1 (1 ns resolution)
+        }
     }
     0
 }
