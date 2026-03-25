@@ -12,6 +12,8 @@ pub mod trace;
 use crate::abi;
 use crate::guest_mem;
 use crate::types::ThreadState;
+use self::block_cache::BlockCache;
+use self::trace::{HotCounts, JitBitmap, TraceBuffer};
 
 /// Execute up to `budget` guest instructions.
 /// Returns remaining budget (negative = overrun).
@@ -23,7 +25,14 @@ use crate::types::ThreadState;
 ///
 /// # Safety
 /// `vm` must point to a valid ThreadState. Guest memory must be accessible.
-pub unsafe fn exec(vm: &mut ThreadState, budget: i32) -> i32 {
+pub unsafe fn exec(
+    vm: &mut ThreadState,
+    budget: i32,
+    mut cache: Option<&mut BlockCache>,
+    mut hot_counts: Option<&mut HotCounts>,
+    jit_bitmap: Option<&JitBitmap>,
+    mut trace_buf: Option<&mut TraceBuffer>,
+) -> i32 {
     let mut pc = vm.pc;
     let mut x = vm.x;
     let mut f = vm.f;
@@ -50,6 +59,19 @@ pub unsafe fn exec(vm: &mut ThreadState, budget: i32) -> i32 {
             (guest_mem::read_u32(base, pc), 4)
         };
 
+        // --- Trace recording (JIT Phase 7 hook) ---
+        if let Some(ref mut tb) = trace_buf {
+            if tb.recording != 0 {
+                if tb.record(pc, raw, step as u32) {
+                    // Buffer full → stop recording, signal trace ready
+                    tb.stop();
+                    vm.x = x; vm.f = f; vm.pc = pc;
+                    vm.status = abi::STATUS_JIT_READY;
+                    return remaining;
+                }
+            }
+        }
+
         let opcode = decode::opcode(raw);
 
         match opcode {
@@ -71,7 +93,31 @@ pub unsafe fn exec(vm: &mut ThreadState, budget: i32) -> i32 {
             }
             decode::OP_BRANCH => {
                 if exec_branch(&x, raw) {
-                    pc = (pc as i64 + decode::imm_b(raw)) as u64;
+                    let target = (pc as i64 + decode::imm_b(raw)) as u64;
+                    let imm = decode::imm_b(raw);
+                    pc = target;
+
+                    // Backward branch → hot count check + JIT hook
+                    if imm < 0 {
+                        // Check JIT bitmap
+                        if let Some(ref bm) = jit_bitmap {
+                            if bm.is_ready(target) {
+                                vm.x = x; vm.f = f; vm.pc = target;
+                                vm.status = abi::STATUS_JIT_READY;
+                                return remaining;
+                            }
+                        }
+                        // Hot count → start trace recording
+                        if let Some(ref mut hc) = hot_counts {
+                            if hc.increment(target) {
+                                if let Some(ref mut tb) = trace_buf {
+                                    if tb.recording == 0 {
+                                        tb.start(target);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 } else {
                     pc += step;
                 }
@@ -83,10 +129,27 @@ pub unsafe fn exec(vm: &mut ThreadState, budget: i32) -> i32 {
             }
             decode::OP_JALR => {
                 let rd = decode::rd(raw);
-                let rs1 = decode::rs1(raw);
-                let target = ((x[rs1] as i64 + decode::imm_i(raw)) as u64) & !1;
+                let rs1v = decode::rs1(raw);
+                let target = ((x[rs1v] as i64 + decode::imm_i(raw)) as u64) & !1;
                 if rd != 0 { x[rd] = pc + step; }
                 pc = target;
+
+                // JALR return prediction: rs1==ra (x1) → try block cache
+                if rs1v == 1 {
+                    if let Some(ref mut bc) = cache {
+                        if let Some(blk) = bc.get(target) {
+                            // Execute the cached block directly
+                            let block_budget = blk.total_budget as i32;
+                            if remaining >= block_budget {
+                                remaining -= block_budget;
+                                // Skip: actual exec_block integration deferred
+                                // (block cache dispatch requires exec_block which
+                                //  duplicates the match arms — implemented in Phase 7
+                                //  when JIT region compilation subsumes block cache)
+                            }
+                        }
+                    }
+                }
             }
             decode::OP_SYSTEM => {
                 let funct3 = decode::funct3(raw);
