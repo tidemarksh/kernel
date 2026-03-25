@@ -224,14 +224,12 @@ pub unsafe fn exec(
     }
 }
 
-/// Get RAM base address from ThreadState's ProcessState pointer.
+/// Get RAM base address. Always 0 because each thread-worker WASM instance
+/// imports the per-process shared Memory as memory index 0. The base of
+/// guest memory is the base of WASM linear memory.
 #[inline(always)]
-unsafe fn ram_base(_vm: &ThreadState) -> u32 {
-    unsafe {
-    // TODO: read from ProcessState when process model is implemented
-    // For now, return 0 (guest memory starts at WASM linear memory base)
+fn ram_base(_vm: &ThreadState) -> u32 {
     0
-    }
 }
 
 // =============================================================================

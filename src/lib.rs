@@ -371,11 +371,19 @@ mod tests {
             super::guest_mem::write_u32(base, ps_addr + fd_off + 8, 2);  // fd 1 ofd_id=2
             super::guest_mem::write_u32(base, ps_addr + fd_off + 16, 3); // fd 2 ofd_id=3
 
+            // Allocate block cache in WASM linear memory via alloc.rs
+            let cache_size = super::cpu::block_cache::BlockCache::allocation_size() as u32;
+            super::alloc::init((ps_addr as u32) + core::mem::size_of::<ProcessState>() as u32 + 16);
+            let cache_ptr = super::alloc::alloc_zeroed(cache_size, 8);
+            let mut cache = super::cpu::block_cache::BlockCache::from_ptr(
+                cache_ptr as *mut super::cpu::block_cache::BlockEntry
+            );
+
             let mut total = 0i64;
             loop {
                 let budget = 500_000i32;
                 vm.status = STATUS_OK;
-                let rem = super::cpu::exec(&mut vm, budget, None, None, None, None);
+                let rem = super::cpu::exec(&mut vm, budget, Some(&mut cache), None, None, None);
                 total += (budget - rem) as i64;
 
                 match vm.status {
