@@ -92,46 +92,227 @@ mod tests {
     }
 
     // =========================================================================
-    // ELF integration tests
+    // Syscall unit tests
     // =========================================================================
 
-    /// Load an ELF, run the interpreter, return the exit code.
-    /// Capture stdout writes from the guest for debugging.
-    /// Uses raw pointer to avoid Rust 2024 mutable static reference issues.
-    static mut STDOUT_BUF: [u8; 4096] = [0; 4096];
-    static mut STDOUT_LEN: usize = 0;
-    static mut WRITE_COUNT: usize = 0;
-
-    fn captured_stdout() -> &'static [u8] {
+    /// Set up minimal VM state for syscall tests.
+    fn setup_syscall_vm() -> (ThreadState, u32) {
         unsafe {
-            let len = core::ptr::read(core::ptr::addr_of!(STDOUT_LEN));
-            let base = core::ptr::addr_of!(STDOUT_BUF) as *const u8;
-            core::slice::from_raw_parts(base, len)
-        }
-    }
+            let base: u32 = 0;
+            super::guest_mem::init(core::ptr::null(), core::ptr::null());
 
-    fn capture_write(base: u32, buf: u64, len: usize) {
-        unsafe {
-            let wc = core::ptr::addr_of_mut!(WRITE_COUNT);
-            core::ptr::write(wc, core::ptr::read(wc) + 1);
-            let cur = core::ptr::read(core::ptr::addr_of!(STDOUT_LEN));
-            let avail = 4096 - cur;
-            let n = if len < avail { len } else { avail };
-            if n > 0 {
-                let dst = (core::ptr::addr_of_mut!(STDOUT_BUF) as *mut u8).add(cur);
-                let src = (base as u64 + buf) as *const u8;
-                core::ptr::copy_nonoverlapping(src, dst, n);
-                core::ptr::write(core::ptr::addr_of_mut!(STDOUT_LEN), cur + n);
+            let current_pages = core::arch::wasm32::memory_size(0);
+            let target_pages = 256;
+            if current_pages < target_pages {
+                core::arch::wasm32::memory_grow(0, target_pages - current_pages);
             }
+
+            super::syscall::memory::init(0x20000); // brk starts at 128KB
+
+            let mut vm: ThreadState = core::mem::zeroed();
+            vm.tid = 1;
+            vm.status = STATUS_OK;
+
+            // ProcessState at 0x10000
+            let ps_addr = 0x10000u64;
+            super::guest_mem::zero_mem(base, ps_addr, core::mem::size_of::<ProcessState>());
+            vm.process_ptr = ps_addr as u32;
+
+            let pid_off = core::mem::offset_of!(ProcessState, pid) as u64;
+            super::guest_mem::write_u32(base, ps_addr + pid_off, 42);
+            let ppid_off = core::mem::offset_of!(ProcessState, ppid) as u64;
+            super::guest_mem::write_u32(base, ps_addr + ppid_off, 1);
+
+            // FD 0/1/2
+            super::guest_mem::write_u32(base, ps_addr + 0, 1);
+            super::guest_mem::write_u32(base, ps_addr + 8, 2);
+            super::guest_mem::write_u32(base, ps_addr + 16, 3);
+
+            (vm, base)
         }
     }
 
-    fn run_elf(elf_bytes: &[u8]) -> (i32, u64) {
+    #[test]
+    fn syscall_identity() {
+        let (vm, base) = setup_syscall_vm();
+        assert_eq!(super::syscall::identity::sys_getpid(&vm), 42);
+        assert_eq!(super::syscall::identity::sys_getppid(&vm), 1);
+        assert_eq!(super::syscall::identity::sys_gettid(&vm), 1);
+
+        // uname
+        let buf = 0x30000u64;
+        assert_eq!(super::syscall::identity::sys_uname(&vm, base, buf), 0);
+        let mut sysname = [0u8; 6];
+        unsafe { super::guest_mem::read_bytes(base, buf, &mut sysname); }
+        assert_eq!(&sysname, b"Linux\0");
+
+        // sysinfo
+        let buf2 = 0x31000u64;
+        assert_eq!(super::syscall::identity::sys_sysinfo(&vm, base, buf2), 0);
+        let totalram = unsafe { super::guest_mem::read_u64(base, buf2 + 32) };
+        assert!(totalram > 0);
+
+        // getrandom
+        let buf3 = 0x32000u64;
+        unsafe { super::guest_mem::zero_mem(base, buf3, 16); }
+        let ret = super::syscall::identity::sys_getrandom(&vm, base, buf3, 16, 0);
+        assert_eq!(ret, 16);
+        let mut bytes = [0u8; 16];
+        unsafe { super::guest_mem::read_bytes(base, buf3, &mut bytes); }
+        assert!(bytes.iter().any(|&b| b != 0), "getrandom should produce non-zero bytes");
+    }
+
+    #[test]
+    fn syscall_time() {
+        let (vm, base) = setup_syscall_vm();
+        let tp = 0x30000u64;
+        assert_eq!(super::syscall::time::sys_clock_gettime(&vm, base, 0, tp), 0);
+        let sec = unsafe { super::guest_mem::read_u64(base, tp) };
+        assert!(sec > 0, "clock_gettime should return non-zero seconds");
+
+        let res = 0x30100u64;
+        assert_eq!(super::syscall::time::sys_clock_getres(&vm, base, 0, res), 0);
+        let nsec = unsafe { super::guest_mem::read_u64(base, res + 8) };
+        assert_eq!(nsec, 1);
+    }
+
+    #[test]
+    fn syscall_brk() {
+        let (mut vm, base) = setup_syscall_vm();
+        // Query current brk
+        let cur = super::syscall::memory::sys_brk(&mut vm, base, 0);
+        assert!(cur > 0);
+
+        // Extend brk
+        let new_brk = cur as u64 + 4096;
+        let ret = super::syscall::memory::sys_brk(&mut vm, base, new_brk);
+        assert_eq!(ret, new_brk as i64);
+    }
+
+    #[test]
+    fn syscall_mmap_munmap() {
+        let (mut vm, base) = setup_syscall_vm();
+        // Anonymous mmap
+        let addr = super::syscall::memory::sys_mmap(
+            &mut vm, base,
+            0, 4096, (PROT_READ | PROT_WRITE) as u64, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0,
+        );
+        assert!(addr > 0, "mmap should return positive address, got {}", addr);
+
+        // Write and read back
         unsafe {
-            core::ptr::write(core::ptr::addr_of_mut!(STDOUT_LEN), 0);
-            core::ptr::write(core::ptr::addr_of_mut!(WRITE_COUNT), 0);
+            super::guest_mem::write_u64(base, addr as u64, 0xDEADBEEF);
+            assert_eq!(super::guest_mem::read_u64(base, addr as u64), 0xDEADBEEF);
         }
-        super::syscall::fs::set_write_capture(Some(capture_write));
+
+        // munmap
+        let ret = super::syscall::memory::sys_munmap(&mut vm, base, addr as u64, 4096);
+        assert_eq!(ret, 0);
+    }
+
+    #[test]
+    fn syscall_mprotect() {
+        let (mut vm, base) = setup_syscall_vm();
+        let addr = super::syscall::memory::sys_mmap(
+            &mut vm, base,
+            0, 4096, (PROT_READ | PROT_WRITE) as u64, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0,
+        );
+        assert!(addr > 0);
+
+        // Change to read-only
+        let ret = super::syscall::memory::sys_mprotect(
+            &mut vm, base, addr as u64, 4096, PROT_READ as u64,
+        );
+        assert_eq!(ret, 0);
+
+        // Change to PROT_NONE should set the flag
+        let ret2 = super::syscall::memory::sys_mprotect(
+            &mut vm, base, addr as u64, 4096, PROT_NONE as u64,
+        );
+        assert_eq!(ret2, 0);
+        assert!(super::syscall::memory::has_prot_none());
+
+        super::syscall::memory::sys_munmap(&mut vm, base, addr as u64, 4096);
+    }
+
+    #[test]
+    fn syscall_signal() {
+        let (mut vm, base) = setup_syscall_vm();
+
+        // rt_sigprocmask: block SIGUSR1 (signal 10)
+        let set_addr = 0x30000u64;
+        let oldset_addr = 0x30100u64;
+        unsafe { super::guest_mem::write_u64(base, set_addr, 1 << 9); } // bit 9 = signal 10
+        let ret = super::syscall::signal::sys_rt_sigprocmask(
+            &mut vm, base, 0, set_addr, oldset_addr, 8, // SIG_BLOCK=0
+        );
+        assert_eq!(ret, 0);
+        assert_eq!(vm.sig_mask & (1 << 9), 1 << 9);
+
+        // rt_sigaction: set handler for SIGUSR1
+        let act_addr = 0x30200u64;
+        let oldact_addr = 0x30300u64;
+        unsafe {
+            super::guest_mem::write_u64(base, act_addr, 0x12345); // handler
+            super::guest_mem::write_u64(base, act_addr + 8, 0);   // flags
+            super::guest_mem::write_u64(base, act_addr + 16, 0);  // mask
+        }
+        let ret2 = super::syscall::signal::sys_rt_sigaction(
+            &mut vm, base, 10, act_addr, oldact_addr, 8,
+        );
+        assert_eq!(ret2, 0);
+
+        // sigaltstack
+        let ss_addr = 0x30400u64;
+        let old_ss_addr = 0x30500u64;
+        unsafe {
+            super::guest_mem::write_u64(base, ss_addr, 0x50000); // sp
+            super::guest_mem::write_u32(base, ss_addr + 8, 0);   // flags
+            super::guest_mem::write_u64(base, ss_addr + 16, 8192); // size
+        }
+        let ret3 = super::syscall::signal::sys_sigaltstack(&mut vm, base, ss_addr, old_ss_addr);
+        assert_eq!(ret3, 0);
+        assert_eq!(vm.sigaltstack_sp, 0x50000);
+        assert_eq!(vm.sigaltstack_size, 8192);
+    }
+
+    #[test]
+    fn syscall_fd_table() {
+        let (mut vm, base) = setup_syscall_vm();
+
+        // dup(1) → should return 3 (next free fd)
+        let newfd = super::fs::fd_table::sys_dup(&mut vm, base, 1);
+        assert_eq!(newfd, 3);
+
+        // fcntl F_GETFD on new fd → should be 0 (no CLOEXEC)
+        let flags = super::fs::fd_table::sys_fcntl(&mut vm, base, 3, 1, 0); // F_GETFD=1
+        assert_eq!(flags, 0);
+
+        // fcntl F_SETFD to set CLOEXEC
+        let ret = super::fs::fd_table::sys_fcntl(&mut vm, base, 3, 2, 1); // F_SETFD=2, FD_CLOEXEC=1
+        assert_eq!(ret, 0);
+        let flags2 = super::fs::fd_table::sys_fcntl(&mut vm, base, 3, 1, 0);
+        assert_eq!(flags2, 1);
+
+        // close(3)
+        let ret2 = super::fs::fd_table::sys_close(&mut vm, base, 3);
+        assert_eq!(ret2, 0);
+
+        // close again → EBADF
+        let ret3 = super::fs::fd_table::sys_close(&mut vm, base, 3);
+        assert_eq!(ret3, EBADF);
+
+        // dup3(1, 10, O_CLOEXEC)
+        let ret4 = super::fs::fd_table::sys_dup3(&mut vm, base, 1, 10, O_CLOEXEC as u64);
+        assert_eq!(ret4, 10);
+    }
+
+    // =========================================================================
+    // ELF integration tests (riscv-tests ISA suite)
+    // =========================================================================
+
+    /// Load an ELF, run the interpreter, return (exit_code, last_pc).
+    fn run_elf(elf_bytes: &[u8]) -> (i32, u64) {
         unsafe {
             let base: u32 = 0;
 
@@ -211,23 +392,8 @@ mod tests {
 
     fn assert_elf_pass(name: &str, elf_bytes: &[u8]) {
         let (code, pc) = run_elf(elf_bytes);
-        let output = core::str::from_utf8(captured_stdout()).unwrap_or("<invalid utf8>");
-        let writes = unsafe { core::ptr::read(core::ptr::addr_of!(WRITE_COUNT)) };
-        assert_eq!(code, 0,
-            "{} failed: exit_code={}, last_pc=0x{:x}, writes={}, output=[{}]",
-            name, code, pc, writes, output);
+        assert_eq!(code, 0, "{} failed: exit_code={}, last_pc=0x{:x}", name, code, pc);
     }
-
-    #[test] fn elf_hello()        { assert_elf_pass("hello.elf",        include_bytes!("../tests/fixtures/hello.elf")); }
-    #[test] fn elf_test_suite()    { assert_elf_pass("test_suite.elf",   include_bytes!("../tests/fixtures/test_suite.elf")); }
-    #[test] fn elf_test_float()    { assert_elf_pass("test_float.elf",   include_bytes!("../tests/fixtures/test_float.elf")); }
-    #[test] fn elf_test_rvc()      { assert_elf_pass("test_rvc.elf",     include_bytes!("../tests/fixtures/test_rvc.elf")); }
-    #[test] fn elf_test_memory()   { assert_elf_pass("test_memory.elf",  include_bytes!("../tests/fixtures/test_memory.elf")); }
-    #[test] fn elf_test_syscalls() { assert_elf_pass("test_syscalls.elf", include_bytes!("../tests/fixtures/test_syscalls.elf")); }
-
-    // =========================================================================
-    // riscv-tests ISA test suite
-    // =========================================================================
 
     macro_rules! riscv_test {
         ($name:ident, $suite:expr, $test:expr) => {
