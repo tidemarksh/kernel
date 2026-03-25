@@ -2,3 +2,4 @@
 
 pub mod fd_table;
 pub mod memfs;
+pub mod ring_buffer;
