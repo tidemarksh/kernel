@@ -9,6 +9,7 @@ description = "RISC-V Linux userland kernel for WebAssembly"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+libm = "0.2"
 
 [profile.release]
 opt-level = 3
