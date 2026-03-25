@@ -113,6 +113,7 @@ mod tests {
             super::syscall::memory::init(0x10_0000); // brk at 1MB
             super::syscall::signal::init();
             super::syscall::epoll::init();
+            super::syscall::pipe::init();
             super::fs::fd_table::init();
             super::fs::memfs::init();
 
@@ -436,6 +437,7 @@ mod tests {
             super::syscall::memory::init(elf_result.brk_start);
             super::syscall::signal::init();
             super::syscall::epoll::init();
+            super::syscall::pipe::init();
             super::fs::fd_table::init();
             super::fs::memfs::init();
 
