@@ -10,6 +10,7 @@ pub mod abi;
 pub mod alloc;
 pub mod cpu;
 pub mod elf;
+pub mod exports;
 pub mod fs;
 pub mod guest_mem;
 pub mod jit;
