@@ -107,11 +107,13 @@ mod tests {
                 core::arch::wasm32::memory_grow(0, target_pages - current_pages);
             }
 
-            // Initialize alloc.rs and kernel state
-            super::alloc::init(0x40000); // heap starts at 256KB
-            super::syscall::memory::init(0x20000); // brk starts at 128KB
+            // Initialize alloc.rs and kernel state.
+            // Heap starts at 2MB to leave room for guest data below.
+            super::alloc::init(0x20_0000);
+            super::syscall::memory::init(0x10_0000); // brk at 1MB
             super::syscall::signal::init();
             super::fs::fd_table::init();
+            super::fs::memfs::init();
 
             let mut vm: ThreadState = core::mem::zeroed();
             vm.tid = 1;
@@ -344,6 +346,7 @@ mod tests {
             super::syscall::memory::init(elf_result.brk_start);
             super::syscall::signal::init();
             super::fs::fd_table::init();
+            super::fs::memfs::init();
 
             // AT_RANDOM: 16 bytes
             let random_addr = 0xBF_FF00u64;
