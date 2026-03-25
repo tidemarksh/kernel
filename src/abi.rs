@@ -257,3 +257,103 @@ export_const!(abi_status_sleep, STATUS_SLEEP);
 export_const!(abi_status_jit_ready, STATUS_JIT_READY);
 export_const!(abi_page_size, PAGE_SIZE as i32);
 export_const!(abi_max_fds, MAX_FDS as i32);
+
+// =============================================================================
+// WASM exports — runtime calls these to manage processes and threads
+// =============================================================================
+
+/// Initialize kernel state. Must be called once after WASM instantiation.
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_init(heap_base: u32) {
+    unsafe {
+        crate::alloc::init(heap_base);
+        crate::guest_mem::init(core::ptr::null(), core::ptr::null());
+    }
+    crate::syscall::memory::init(0);
+    crate::syscall::signal::init();
+    crate::fs::fd_table::init();
+    crate::fs::memfs::init();
+}
+
+/// Create a new process. Loads ELF from `elf_ptr` in WASM memory.
+/// Returns pointer to ThreadState, or 0 on failure.
+#[unsafe(no_mangle)]
+pub extern "C" fn process_create(
+    elf_ptr: u32, elf_len: u32, ram_size: u32, _stack_size: u32,
+) -> u32 {
+    unsafe {
+        let base: u32 = 0;
+        let elf_result = match crate::elf::load_elf(base, ram_size as u64, elf_ptr, elf_len) {
+            Ok(r) => r,
+            Err(_) => return 0,
+        };
+
+        crate::syscall::memory::init(elf_result.brk_start);
+
+        let ps_ptr = crate::alloc::alloc_zeroed(
+            core::mem::size_of::<crate::types::ProcessState>() as u32,
+            core::mem::align_of::<crate::types::ProcessState>() as u32,
+        );
+        if ps_ptr == 0 { return 0; }
+        let ps = &mut *(ps_ptr as *mut crate::types::ProcessState);
+        ps.pid = 1;
+
+        crate::guest_mem::write_u32(base, ps_ptr as u64, 1);
+        crate::guest_mem::write_u32(base, ps_ptr as u64 + 8, 2);
+        crate::guest_mem::write_u32(base, ps_ptr as u64 + 16, 3);
+
+        let ts_ptr = crate::alloc::alloc_zeroed(
+            core::mem::size_of::<crate::types::ThreadState>() as u32,
+            core::mem::align_of::<crate::types::ThreadState>() as u32,
+        );
+        if ts_ptr == 0 { return 0; }
+        let ts = &mut *(ts_ptr as *mut crate::types::ThreadState);
+
+        let stack_top = (ram_size - 4096) as u64;
+        let random_addr = stack_top - 16;
+        crate::guest_mem::write_bytes(base, random_addr, &[0x42u8; 16]);
+        let argv0_addr = stack_top - 64;
+        crate::guest_mem::write_bytes(base, argv0_addr, b"init\0");
+
+        let sp = crate::elf::setup_stack(
+            base, stack_top - 128, &[argv0_addr], &[], &elf_result, random_addr,
+        );
+
+        ts.pc = elf_result.entry;
+        ts.x[2] = sp;
+        ts.status = STATUS_OK;
+        ts.tid = 1;
+        ts.process_ptr = ps_ptr;
+        ts_ptr
+    }
+}
+
+/// Execute `budget` guest instructions. Returns remaining budget.
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_step(vm_ptr: u32, budget: i32) -> i32 {
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut crate::types::ThreadState);
+        vm.status = STATUS_OK;
+        crate::cpu::exec(vm, budget, None, None, None, None)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_status(vm_ptr: u32) -> i32 {
+    unsafe { (*(vm_ptr as *const crate::types::ThreadState)).status }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_exit_code(vm_ptr: u32) -> i32 {
+    unsafe { (*(vm_ptr as *const crate::types::ThreadState)).exit_code }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_pc(vm_ptr: u32) -> u64 {
+    unsafe { (*(vm_ptr as *const crate::types::ThreadState)).pc }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_a0(vm_ptr: u32) -> u64 {
+    unsafe { (*(vm_ptr as *const crate::types::ThreadState)).x[10] }
+}
