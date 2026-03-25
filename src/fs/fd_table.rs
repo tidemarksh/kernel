@@ -27,16 +27,26 @@ const F_DUPFD_CLOEXEC: u64 = 1030;
 
 const FD_CLOEXEC: u32 = 1;
 
-/// Static OFD table for the current single-process model. Moves to kernel Worker in the kernel Worker model.
-static mut OFD_TABLE: [OpenFileDesc; MAX_FDS] = [OpenFileDesc {
-    fd_type: 0,
-    host_fd: -1,
-    status_flags: 0,
-    refcount: 0,
-    offset: 0,
-    ino: 0,
-    _pad: 0,
-}; MAX_FDS];
+/// Pointer to OFD table in kernel Worker linear memory.
+static mut OFD_TABLE_PTR: *mut [OpenFileDesc; MAX_FDS] = core::ptr::null_mut();
+
+fn ofd_table() -> &'static mut [OpenFileDesc; MAX_FDS] {
+    unsafe {
+        let p = core::ptr::read(core::ptr::addr_of!(OFD_TABLE_PTR));
+        &mut *p
+    }
+}
+
+/// Initialize OFD table. Allocates via alloc.rs.
+pub fn init() {
+    unsafe {
+        let size = core::mem::size_of::<[OpenFileDesc; MAX_FDS]>() as u32;
+        let align = core::mem::align_of::<OpenFileDesc>() as u32;
+        let ptr = crate::alloc::alloc_zeroed(size, align);
+        if ptr == 0 { core::arch::wasm32::unreachable(); }
+        core::ptr::write(core::ptr::addr_of_mut!(OFD_TABLE_PTR), ptr as *mut [OpenFileDesc; MAX_FDS]);
+    }
+}
 
 /// Get the ProcessState from guest memory.
 unsafe fn get_process_state(vm: &ThreadState) -> *mut ProcessState {
@@ -68,8 +78,8 @@ unsafe fn find_free_fd(vm: &ThreadState, min_fd: usize) -> Option<usize> {
 /// Allocate a new OFD slot. Returns ofd_id (1-based), or 0 on failure.
 unsafe fn alloc_ofd(fd_type: i32, status_flags: i32) -> u32 {
     for i in 1..MAX_FDS {
-        if OFD_TABLE[i].refcount == 0 {
-            OFD_TABLE[i] = OpenFileDesc {
+        if ofd_table()[i].refcount == 0 {
+            ofd_table()[i] = OpenFileDesc {
                 fd_type,
                 host_fd: -1,
                 status_flags,
@@ -104,7 +114,7 @@ pub fn sys_dup(vm: &mut ThreadState, _base: u32, oldfd: u64) -> i64 {
             ofd_id: entry.ofd_id,
             fd_flags: 0, // dup clears FD_CLOEXEC
         };
-        OFD_TABLE[entry.ofd_id as usize].refcount += 1;
+        ofd_table()[entry.ofd_id as usize].refcount += 1;
         newfd as i64
     }
 }
@@ -125,7 +135,7 @@ pub fn sys_dup3(vm: &mut ThreadState, _base: u32, oldfd: u64, newfd: u64, flags:
         // Close newfd if it's open
         let old_new = &(*ps).fd_table[newfd as usize];
         if old_new.ofd_id != 0 {
-            let ofd = &mut OFD_TABLE[old_new.ofd_id as usize];
+            let ofd = &mut ofd_table()[old_new.ofd_id as usize];
             ofd.refcount -= 1;
             // If refcount reaches 0, the kernel Worker model would send to kernel Worker for cleanup
         }
@@ -135,7 +145,7 @@ pub fn sys_dup3(vm: &mut ThreadState, _base: u32, oldfd: u64, newfd: u64, flags:
             ofd_id: entry.ofd_id,
             fd_flags: cloexec,
         };
-        OFD_TABLE[entry.ofd_id as usize].refcount += 1;
+        ofd_table()[entry.ofd_id as usize].refcount += 1;
         newfd as i64
     }
 }
@@ -158,7 +168,7 @@ pub fn sys_fcntl(vm: &mut ThreadState, _base: u32, fd: u64, cmd: u64, arg: u64) 
                     ofd_id: entry.ofd_id,
                     fd_flags: 0,
                 };
-                OFD_TABLE[entry.ofd_id as usize].refcount += 1;
+                ofd_table()[entry.ofd_id as usize].refcount += 1;
                 newfd as i64
             }
             F_DUPFD_CLOEXEC => {
@@ -175,7 +185,7 @@ pub fn sys_fcntl(vm: &mut ThreadState, _base: u32, fd: u64, cmd: u64, arg: u64) 
                     ofd_id: entry.ofd_id,
                     fd_flags: FD_CLOEXEC,
                 };
-                OFD_TABLE[entry.ofd_id as usize].refcount += 1;
+                ofd_table()[entry.ofd_id as usize].refcount += 1;
                 newfd as i64
             }
             F_GETFD => {
@@ -195,7 +205,7 @@ pub fn sys_fcntl(vm: &mut ThreadState, _base: u32, fd: u64, cmd: u64, arg: u64) 
                     Some(e) => e,
                     None => return EBADF,
                 };
-                OFD_TABLE[entry.ofd_id as usize].status_flags as i64
+                ofd_table()[entry.ofd_id as usize].status_flags as i64
             }
             F_SETFL => {
                 let entry = match get_fd_entry(vm, fd) {
@@ -204,7 +214,7 @@ pub fn sys_fcntl(vm: &mut ThreadState, _base: u32, fd: u64, cmd: u64, arg: u64) 
                 };
                 // Only O_APPEND, O_NONBLOCK, O_DSYNC, O_ASYNC can be changed
                 let changeable = O_APPEND | O_NONBLOCK;
-                let ofd = &mut OFD_TABLE[entry.ofd_id as usize];
+                let ofd = &mut ofd_table()[entry.ofd_id as usize];
                 ofd.status_flags = (ofd.status_flags & !changeable) | (arg as i32 & changeable);
                 0
             }
@@ -228,7 +238,7 @@ pub fn sys_close(vm: &mut ThreadState, _base: u32, fd: u64) -> i64 {
         entry.ofd_id = 0;
         entry.fd_flags = 0;
 
-        let ofd = &mut OFD_TABLE[ofd_id];
+        let ofd = &mut ofd_table()[ofd_id];
         ofd.refcount -= 1;
 
         if ofd.refcount <= 0 {

@@ -107,7 +107,11 @@ mod tests {
                 core::arch::wasm32::memory_grow(0, target_pages - current_pages);
             }
 
+            // Initialize alloc.rs and kernel state
+            super::alloc::init(0x40000); // heap starts at 256KB
             super::syscall::memory::init(0x20000); // brk starts at 128KB
+            super::syscall::signal::init();
+            super::fs::fd_table::init();
 
             let mut vm: ThreadState = core::mem::zeroed();
             vm.tid = 1;
@@ -317,7 +321,6 @@ mod tests {
             let base: u32 = 0;
 
             super::guest_mem::init(core::ptr::null(), core::ptr::null());
-            super::syscall::memory::init(0);
 
             // Grow WASM memory to 16 MB
             let current_pages = core::arch::wasm32::memory_size(0);
@@ -336,7 +339,11 @@ mod tests {
                 elf_bytes.len() as u32,
             ).expect("ELF load failed");
 
+            // Initialize kernel state in WASM linear memory
+            super::alloc::init((elf_result.brk_start as u32 + 0x2000) & !0xF);
             super::syscall::memory::init(elf_result.brk_start);
+            super::syscall::signal::init();
+            super::fs::fd_table::init();
 
             // AT_RANDOM: 16 bytes
             let random_addr = 0xBF_FF00u64;

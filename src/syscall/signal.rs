@@ -38,10 +38,26 @@ const SIG_SETMASK: u64 = 2;
 const SS_ONSTACK: i32 = 1;
 const SS_DISABLE: i32 = 2;
 
-/// Per-process signal disposition table. Static for the current single-process model (single process).
-static mut SIGACTIONS: [SigAction; MAX_SIGNALS] = [SigAction {
-    handler: 0, flags: 0, mask: 0,
-}; MAX_SIGNALS];
+/// Pointer to signal disposition table in kernel Worker linear memory.
+static mut SIGACTIONS_PTR: *mut [SigAction; MAX_SIGNALS] = core::ptr::null_mut();
+
+fn sigactions() -> &'static mut [SigAction; MAX_SIGNALS] {
+    unsafe {
+        let p = core::ptr::read(core::ptr::addr_of!(SIGACTIONS_PTR));
+        &mut *p
+    }
+}
+
+/// Initialize signal state. Allocates via alloc.rs.
+pub fn init() {
+    unsafe {
+        let size = core::mem::size_of::<[SigAction; MAX_SIGNALS]>() as u32;
+        let align = core::mem::align_of::<SigAction>() as u32;
+        let ptr = crate::alloc::alloc_zeroed(size, align);
+        if ptr == 0 { core::arch::wasm32::unreachable(); }
+        core::ptr::write(core::ptr::addr_of_mut!(SIGACTIONS_PTR), ptr as *mut [SigAction; MAX_SIGNALS]);
+    }
+}
 
 /// rt_sigaction: get/set signal disposition.
 /// signum in a0, act in a1, oldact in a2, sigsetsize in a3.
@@ -57,7 +73,7 @@ pub fn sys_rt_sigaction(
     unsafe {
         // Write old action
         if oldact_addr != 0 {
-            let old = &SIGACTIONS[sig];
+            let old = &sigactions()[sig];
             guest_mem::write_u64(base, oldact_addr, old.handler);
             guest_mem::write_u64(base, oldact_addr + 8, old.flags);
             guest_mem::write_u64(base, oldact_addr + 16, old.mask);
@@ -65,7 +81,7 @@ pub fn sys_rt_sigaction(
 
         // Read new action
         if act_addr != 0 {
-            SIGACTIONS[sig] = SigAction {
+            sigactions()[sig] = SigAction {
                 handler: guest_mem::read_u64(base, act_addr),
                 flags: guest_mem::read_u64(base, act_addr + 8),
                 mask: guest_mem::read_u64(base, act_addr + 16),
@@ -157,7 +173,7 @@ pub fn check_pending(vm: &mut ThreadState, _base: u32) -> bool {
     // Clear from pending
     vm.sig_pending &= !(1u64 << (sig - 1));
 
-    let action = unsafe { &SIGACTIONS[sig] };
+    let action = unsafe { &sigactions()[sig] };
 
     match action.handler {
         0 => {

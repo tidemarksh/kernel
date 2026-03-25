@@ -1,53 +1,69 @@
 //! Memory syscalls: brk, mmap, munmap, mremap, mprotect.
 //!
-//! VMA table is a sorted array of Vma entries stored in kernel Worker memory.
-//! For the current single-process model (single-process, no kernel Worker yet), we store VMA state in
-//! static memory and operate directly.
+//! VMA table and brk state are allocated in kernel Worker's WASM linear
+//! memory via alloc.rs, per the data ownership model.
 
 use crate::abi::*;
+use crate::alloc;
 use crate::guest_mem;
 use crate::types::{ThreadState, Vma};
 
 const MAX_VMAS: usize = MAX_MMAP_REGIONS;
 
-/// Per-process VMA state. Static for the current single-process model (single process).
-/// Will move to kernel Worker's linear memory in the kernel Worker model.
-static mut VMA_TABLE: [Vma; MAX_VMAS] = [Vma {
-    start: 0, end: 0, prot: 0, flags: 0, fd: -1, _pad: 0, offset: 0,
-}; MAX_VMAS];
-static mut VMA_COUNT: usize = 0;
-static mut BRK_CURRENT: u64 = 0;
-static mut BRK_BASE: u64 = 0;
-static mut MMAP_NEXT: u64 = 0x4000_0000; // mmap region starts at 1GB
-static mut HAS_PROT_NONE: bool = false;
+/// Memory management state, allocated in kernel Worker linear memory.
+#[repr(C)]
+struct MemState {
+    vma_table: [Vma; MAX_VMAS],
+    vma_count: u32,
+    _pad0: u32,
+    brk_base: u64,
+    brk_current: u64,
+    mmap_next: u64,
+    has_prot_none: u32,
+}
 
-/// Initialize memory state after ELF load.
+/// Pointer to MemState in WASM linear memory.
+static mut MEM_STATE: *mut MemState = core::ptr::null_mut();
+
+fn ms() -> &'static mut MemState {
+    unsafe {
+        let p = core::ptr::read(core::ptr::addr_of!(MEM_STATE));
+        &mut *p
+    }
+}
+
+/// Initialize memory state. Allocates MemState via alloc.rs.
 pub fn init(brk_start: u64) {
     unsafe {
-        BRK_BASE = brk_start;
-        BRK_CURRENT = brk_start;
-        VMA_COUNT = 0;
-        MMAP_NEXT = 0x4000_0000;
-        HAS_PROT_NONE = false;
+        let ptr = alloc::alloc_zeroed(
+            core::mem::size_of::<MemState>() as u32,
+            core::mem::align_of::<MemState>() as u32,
+        );
+        if ptr == 0 { core::arch::wasm32::unreachable(); }
+        core::ptr::write(core::ptr::addr_of_mut!(MEM_STATE), ptr as *mut MemState);
     }
+    let s = ms();
+    s.brk_base = brk_start;
+    s.brk_current = brk_start;
+    s.mmap_next = 0x4000_0000;
+    s.has_prot_none = 0;
+    s.vma_count = 0;
 }
 
-/// Check if any PROT_NONE VMA exists (for interpreter guard check).
 pub fn has_prot_none() -> bool {
-    unsafe { HAS_PROT_NONE }
+    ms().has_prot_none != 0
 }
 
-/// Check if an address falls in a PROT_NONE region.
 pub fn is_prot_none(addr: u64) -> bool {
-    unsafe {
-        for i in 0..VMA_COUNT {
-            let v = &VMA_TABLE[i];
-            if addr >= v.start && addr < v.end && v.prot == PROT_NONE {
-                return true;
-            }
+    let s = ms();
+    let count = s.vma_count as usize;
+    for i in 0..count {
+        let v = &s.vma_table[i];
+        if addr >= v.start && addr < v.end && v.prot == PROT_NONE {
+            return true;
         }
-        false
     }
+    false
 }
 
 // =========================================================================
@@ -55,33 +71,33 @@ pub fn is_prot_none(addr: u64) -> bool {
 // =========================================================================
 
 pub fn sys_brk(_vm: &mut ThreadState, _base: u32, addr: u64) -> i64 {
-    unsafe {
-        if addr == 0 {
-            return BRK_CURRENT as i64;
-        }
-        if addr < BRK_BASE {
-            return BRK_CURRENT as i64;
-        }
+    let s = ms();
+    if addr == 0 {
+        return s.brk_current as i64;
+    }
+    if addr < s.brk_base {
+        return s.brk_current as i64;
+    }
 
-        // Ensure WASM memory is large enough
+    // Ensure WASM memory is large enough
+    unsafe {
         let needed = addr as u32;
         let mem_size = core::arch::wasm32::memory_size(0) as u32 * 65536;
         if needed > mem_size {
             let pages = ((needed - mem_size) + 65535) / 65536;
-            let result = core::arch::wasm32::memory_grow(0, pages as usize);
-            if result == usize::MAX {
-                return BRK_CURRENT as i64; // OOM: return current brk
+            if core::arch::wasm32::memory_grow(0, pages as usize) == usize::MAX {
+                return s.brk_current as i64;
             }
         }
 
         // Zero new region if growing
-        if addr > BRK_CURRENT {
-            guest_mem::zero_mem(0, BRK_CURRENT, (addr - BRK_CURRENT) as usize);
+        if addr > s.brk_current {
+            guest_mem::zero_mem(0, s.brk_current, (addr - s.brk_current) as usize);
         }
-
-        BRK_CURRENT = addr;
-        addr as i64
     }
+
+    s.brk_current = addr;
+    addr as i64
 }
 
 // =========================================================================
@@ -92,28 +108,27 @@ pub fn sys_mmap(
     _vm: &mut ThreadState, _base: u32,
     addr: u64, length: u64, prot: u64, flags: u64, fd: i64, offset: u64,
 ) -> i64 {
+    let s = ms();
+    if length == 0 { return EINVAL; }
+    let len = (length + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+
+    let is_fixed = (flags & MAP_FIXED) != 0;
+    let is_anon = (flags & MAP_ANONYMOUS) != 0;
+
+    let start = if is_fixed {
+        if addr & (PAGE_SIZE - 1) != 0 { return EINVAL; }
+        remove_overlap(s, addr, addr + len);
+        addr
+    } else if addr != 0 && !overlaps(s, addr, addr + len) {
+        addr
+    } else {
+        let hole = find_hole(s, len);
+        if hole == 0 { return ENOMEM; }
+        hole
+    };
+
+    // Ensure WASM memory covers the mapped region
     unsafe {
-        if length == 0 { return EINVAL; }
-        let len = (length + PAGE_SIZE - 1) & !(PAGE_SIZE - 1); // page-align
-
-        let is_fixed = (flags & MAP_FIXED) != 0;
-        let is_anon = (flags & MAP_ANONYMOUS) != 0;
-
-        // Find or assign address
-        let start = if is_fixed {
-            if addr & (PAGE_SIZE - 1) != 0 { return EINVAL; }
-            // Remove overlapping VMAs
-            remove_overlap(addr, addr + len);
-            addr
-        } else if addr != 0 && !overlaps(addr, addr + len) {
-            addr
-        } else {
-            let s = find_hole(len);
-            if s == 0 { return ENOMEM; }
-            s
-        };
-
-        // Ensure WASM memory covers the mapped region
         let needed = (start + len) as u32;
         let mem_size = core::arch::wasm32::memory_size(0) as u32 * 65536;
         if needed > mem_size {
@@ -122,30 +137,29 @@ pub fn sys_mmap(
                 return ENOMEM;
             }
         }
-
-        // Zero anonymous mapping
-        if is_anon {
-            guest_mem::zero_mem(0, start, len as usize);
-        }
-
-        // Insert VMA
-        if VMA_COUNT >= MAX_VMAS { return ENOMEM; }
-        VMA_TABLE[VMA_COUNT] = Vma {
-            start,
-            end: start + len,
-            prot: prot as i32,
-            flags: flags as i32,
-            fd: if is_anon { -1 } else { fd as i32 },
-            _pad: 0,
-            offset,
-        };
-        VMA_COUNT += 1;
-        sort_vmas();
-
-        if prot as i32 == PROT_NONE { HAS_PROT_NONE = true; }
-
-        start as i64
     }
+
+    if is_anon {
+        unsafe { guest_mem::zero_mem(0, start, len as usize); }
+    }
+
+    let count = s.vma_count as usize;
+    if count >= MAX_VMAS { return ENOMEM; }
+    s.vma_table[count] = Vma {
+        start,
+        end: start + len,
+        prot: prot as i32,
+        flags: flags as i32,
+        fd: if is_anon { -1 } else { fd as i32 },
+        _pad: 0,
+        offset,
+    };
+    s.vma_count += 1;
+    sort_vmas(s);
+
+    if prot as i32 == PROT_NONE { s.has_prot_none = 1; }
+
+    start as i64
 }
 
 // =========================================================================
@@ -153,13 +167,12 @@ pub fn sys_mmap(
 // =========================================================================
 
 pub fn sys_munmap(_vm: &mut ThreadState, _base: u32, addr: u64, length: u64) -> i64 {
-    unsafe {
-        if addr & (PAGE_SIZE - 1) != 0 { return EINVAL; }
-        let len = (length + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
-        remove_overlap(addr, addr + len);
-        recompute_prot_none();
-        0
-    }
+    if addr & (PAGE_SIZE - 1) != 0 { return EINVAL; }
+    let len = (length + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+    let s = ms();
+    remove_overlap(s, addr, addr + len);
+    recompute_prot_none(s);
+    0
 }
 
 // =========================================================================
@@ -170,26 +183,23 @@ pub fn sys_mremap(
     _vm: &mut ThreadState, _base: u32,
     old_addr: u64, old_size: u64, new_size: u64, _flags: u64, _new_addr: u64,
 ) -> i64 {
-    unsafe {
-        let old_len = (old_size + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
-        let new_len = (new_size + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+    let s = ms();
+    let old_len = (old_size + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+    let new_len = (new_size + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
 
-        // Find the VMA
-        let idx = match find_vma_containing(old_addr) {
-            Some(i) => i,
-            None => return EINVAL,
-        };
+    let idx = match find_vma_containing(s, old_addr) {
+        Some(i) => i,
+        None => return EINVAL,
+    };
 
-        if new_len <= old_len {
-            // Shrink: just update end
-            VMA_TABLE[idx].end = old_addr + new_len;
-            return old_addr as i64;
-        }
+    if new_len <= old_len {
+        s.vma_table[idx].end = old_addr + new_len;
+        return old_addr as i64;
+    }
 
-        // Grow: check if space after is free
-        let grow_end = old_addr + new_len;
-        if !overlaps_except(old_addr + old_len, grow_end, idx) {
-            // Ensure memory
+    let grow_end = old_addr + new_len;
+    if !overlaps_except(s, old_addr + old_len, grow_end, idx) {
+        unsafe {
             let needed = grow_end as u32;
             let mem_size = core::arch::wasm32::memory_size(0) as u32 * 65536;
             if needed > mem_size {
@@ -199,14 +209,15 @@ pub fn sys_mremap(
                 }
             }
             guest_mem::zero_mem(0, old_addr + old_len, (new_len - old_len) as usize);
-            VMA_TABLE[idx].end = grow_end;
-            return old_addr as i64;
         }
+        s.vma_table[idx].end = grow_end;
+        return old_addr as i64;
+    }
 
-        // Need to move: allocate new region, copy, unmap old
-        let new_start = find_hole(new_len);
-        if new_start == 0 { return ENOMEM; }
+    let new_start = find_hole(s, new_len);
+    if new_start == 0 { return ENOMEM; }
 
+    unsafe {
         let needed = (new_start + new_len) as u32;
         let mem_size = core::arch::wasm32::memory_size(0) as u32 * 65536;
         if needed > mem_size {
@@ -215,20 +226,16 @@ pub fn sys_mremap(
                 return ENOMEM;
             }
         }
-
-        // Copy old data
         let src = old_addr as u32 as *const u8;
         let dst = new_start as u32 as *mut u8;
         core::ptr::copy_nonoverlapping(src, dst, old_len as usize);
         guest_mem::zero_mem(0, new_start + old_len, (new_len - old_len) as usize);
-
-        // Update VMA
-        VMA_TABLE[idx].start = new_start;
-        VMA_TABLE[idx].end = new_start + new_len;
-        sort_vmas();
-
-        new_start as i64
     }
+
+    s.vma_table[idx].start = new_start;
+    s.vma_table[idx].end = new_start + new_len;
+    sort_vmas(s);
+    new_start as i64
 }
 
 // =========================================================================
@@ -236,57 +243,54 @@ pub fn sys_mremap(
 // =========================================================================
 
 pub fn sys_mprotect(_vm: &mut ThreadState, _base: u32, addr: u64, length: u64, prot: u64) -> i64 {
-    unsafe {
-        if addr & (PAGE_SIZE - 1) != 0 { return EINVAL; }
-        let len = (length + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
-        let end = addr + len;
+    if addr & (PAGE_SIZE - 1) != 0 { return EINVAL; }
+    let len = (length + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+    let end = addr + len;
+    let s = ms();
 
-        // Update prot for all overlapping VMAs (split if needed)
-        let mut i = 0;
-        while i < VMA_COUNT {
-            let v = VMA_TABLE[i];
-            if v.end <= addr || v.start >= end { i += 1; continue; }
+    let mut i = 0;
+    while i < s.vma_count as usize {
+        let v = s.vma_table[i];
+        if v.end <= addr || v.start >= end { i += 1; continue; }
 
-            if v.start < addr {
-                // Split: left part keeps old prot
-                if VMA_COUNT >= MAX_VMAS { return ENOMEM; }
-                VMA_TABLE[VMA_COUNT] = Vma { start: v.start, end: addr, ..v };
-                VMA_COUNT += 1;
-                VMA_TABLE[i].start = addr;
-            }
-            if v.end > end {
-                // Split: right part keeps old prot
-                if VMA_COUNT >= MAX_VMAS { return ENOMEM; }
-                VMA_TABLE[VMA_COUNT] = Vma { start: end, end: v.end, ..VMA_TABLE[i] };
-                VMA_COUNT += 1;
-                VMA_TABLE[i].end = end;
-            }
-            VMA_TABLE[i].prot = prot as i32;
-            i += 1;
+        if v.start < addr {
+            let count = s.vma_count as usize;
+            if count >= MAX_VMAS { return ENOMEM; }
+            s.vma_table[count] = Vma { start: v.start, end: addr, ..v };
+            s.vma_count += 1;
+            s.vma_table[i].start = addr;
         }
-
-        sort_vmas();
-        recompute_prot_none();
-        0
+        if v.end > end {
+            let count = s.vma_count as usize;
+            if count >= MAX_VMAS { return ENOMEM; }
+            s.vma_table[count] = Vma { start: end, end: v.end, ..s.vma_table[i] };
+            s.vma_count += 1;
+            s.vma_table[i].end = end;
+        }
+        s.vma_table[i].prot = prot as i32;
+        i += 1;
     }
+
+    sort_vmas(s);
+    recompute_prot_none(s);
+    0
 }
 
 // =========================================================================
 // VMA table helpers
 // =========================================================================
 
-unsafe fn find_hole(len: u64) -> u64 {
-    let mut candidate = MMAP_NEXT;
-    // Simple linear scan for a gap
+fn find_hole(s: &mut MemState, len: u64) -> u64 {
+    let mut candidate = s.mmap_next;
     loop {
-        if candidate + len > 0x8000_0000 { return 0; } // 2GB limit
-        if !overlaps(candidate, candidate + len) {
-            MMAP_NEXT = candidate + len;
+        if candidate + len > 0x8000_0000 { return 0; }
+        if !overlaps(s, candidate, candidate + len) {
+            s.mmap_next = candidate + len;
             return candidate;
         }
-        // Skip past the overlapping VMA
-        for i in 0..VMA_COUNT {
-            let v = &VMA_TABLE[i];
+        let count = s.vma_count as usize;
+        for i in 0..count {
+            let v = &s.vma_table[i];
             if v.start < candidate + len && v.end > candidate {
                 candidate = (v.end + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
                 break;
@@ -295,81 +299,85 @@ unsafe fn find_hole(len: u64) -> u64 {
     }
 }
 
-unsafe fn overlaps(start: u64, end: u64) -> bool {
-    for i in 0..VMA_COUNT {
-        let v = &VMA_TABLE[i];
+fn overlaps(s: &MemState, start: u64, end: u64) -> bool {
+    let count = s.vma_count as usize;
+    for i in 0..count {
+        let v = &s.vma_table[i];
         if v.start < end && v.end > start { return true; }
     }
     false
 }
 
-unsafe fn overlaps_except(start: u64, end: u64, except: usize) -> bool {
-    for i in 0..VMA_COUNT {
+fn overlaps_except(s: &MemState, start: u64, end: u64, except: usize) -> bool {
+    let count = s.vma_count as usize;
+    for i in 0..count {
         if i == except { continue; }
-        let v = &VMA_TABLE[i];
+        let v = &s.vma_table[i];
         if v.start < end && v.end > start { return true; }
     }
     false
 }
 
-unsafe fn remove_overlap(start: u64, end: u64) {
+fn remove_overlap(s: &mut MemState, start: u64, end: u64) {
     let mut i = 0;
-    while i < VMA_COUNT {
-        let v = VMA_TABLE[i];
+    while i < s.vma_count as usize {
+        let v = s.vma_table[i];
         if v.start >= end || v.end <= start { i += 1; continue; }
 
         if v.start >= start && v.end <= end {
-            // Fully contained: remove
-            VMA_TABLE[i] = VMA_TABLE[VMA_COUNT - 1];
-            VMA_COUNT -= 1;
-            continue; // don't increment, re-check swapped entry
+            let last = s.vma_count as usize - 1;
+            s.vma_table[i] = s.vma_table[last];
+            s.vma_count -= 1;
+            continue;
         }
         if v.start < start && v.end > end {
-            // Hole punch: split into two
-            if VMA_COUNT < MAX_VMAS {
-                VMA_TABLE[VMA_COUNT] = Vma { start: end, end: v.end, ..v };
-                VMA_COUNT += 1;
+            let count = s.vma_count as usize;
+            if count < MAX_VMAS {
+                s.vma_table[count] = Vma { start: end, end: v.end, ..v };
+                s.vma_count += 1;
             }
-            VMA_TABLE[i].end = start;
+            s.vma_table[i].end = start;
             i += 1;
             continue;
         }
         if v.start < start {
-            VMA_TABLE[i].end = start; // Trim right
+            s.vma_table[i].end = start;
         } else {
-            VMA_TABLE[i].start = end; // Trim left
+            s.vma_table[i].start = end;
         }
         i += 1;
     }
-    sort_vmas();
+    sort_vmas(s);
 }
 
-unsafe fn find_vma_containing(addr: u64) -> Option<usize> {
-    for i in 0..VMA_COUNT {
-        let v = &VMA_TABLE[i];
+fn find_vma_containing(s: &MemState, addr: u64) -> Option<usize> {
+    let count = s.vma_count as usize;
+    for i in 0..count {
+        let v = &s.vma_table[i];
         if addr >= v.start && addr < v.end { return Some(i); }
     }
     None
 }
 
-unsafe fn sort_vmas() {
-    // Insertion sort (small array, mostly sorted)
-    for i in 1..VMA_COUNT {
-        let key = VMA_TABLE[i];
+fn sort_vmas(s: &mut MemState) {
+    let count = s.vma_count as usize;
+    for i in 1..count {
+        let key = s.vma_table[i];
         let mut j = i;
-        while j > 0 && VMA_TABLE[j - 1].start > key.start {
-            VMA_TABLE[j] = VMA_TABLE[j - 1];
+        while j > 0 && s.vma_table[j - 1].start > key.start {
+            s.vma_table[j] = s.vma_table[j - 1];
             j -= 1;
         }
-        VMA_TABLE[j] = key;
+        s.vma_table[j] = key;
     }
 }
 
-unsafe fn recompute_prot_none() {
-    HAS_PROT_NONE = false;
-    for i in 0..VMA_COUNT {
-        if VMA_TABLE[i].prot == PROT_NONE {
-            HAS_PROT_NONE = true;
+fn recompute_prot_none(s: &mut MemState) {
+    s.has_prot_none = 0;
+    let count = s.vma_count as usize;
+    for i in 0..count {
+        if s.vma_table[i].prot == PROT_NONE {
+            s.has_prot_none = 1;
             return;
         }
     }
