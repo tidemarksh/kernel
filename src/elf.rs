@@ -9,7 +9,7 @@
 use crate::guest_mem;
 
 // =============================================================================
-// ELF constants (from ELF spec §1)
+// ELF constants (ELF spec v1.2, Chapter 1 — see module doc for URL)
 // =============================================================================
 
 const EI_MAG0: u8 = 0x7F;

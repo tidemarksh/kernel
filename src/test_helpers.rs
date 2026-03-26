@@ -17,7 +17,7 @@ impl MemfsHelper {
     }
 }
 
-/// Test VM state per internal design note test strategy.
+/// Minimal VM state for syscall and integration tests.
 ///
 /// Usage:
 /// ```ignore

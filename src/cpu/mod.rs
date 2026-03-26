@@ -1,7 +1,11 @@
 //! CPU execution engine: interpreter + block cache + JIT integration.
 //!
+//! Reference: RISC-V ISA spec V20191213
+//!   https://github.com/riscv/riscv-isa-manual/releases/tag/Ratified-IMAFDQC
+//!   RV64I (§5), M (§7), A (§8), F (§11), D (§12), C (§16)
+//!
 //! exec() is the main interpreter loop. It runs `budget` instructions,
-//! then returns to JS. Block cache amortizes decode cost.
+//! then returns to the caller. Block cache amortizes decode cost.
 //! JIT hooks (trace recording, JIT_READY handoff) are integrated
 //! but disabled until the JIT compiler.
 
@@ -637,7 +641,7 @@ fn exec_branch(x: &[u64; 32], raw: u32) -> bool {
 // FP helpers: fflags, NaN-boxing, FMIN/FMAX, FCLASS, FCVT
 // =============================================================================
 
-// fcsr.fflags exception bits (§11.2)
+// fcsr.fflags exception bits (RISC-V ISA spec §11.2)
 const NV: u32 = 1 << 4; // Invalid Operation
 const DZ: u32 = 1 << 3; // Divide by Zero
 const OF: u32 = 1 << 2; // Overflow
@@ -770,11 +774,11 @@ fn sqrt_flags_f32(a: f32, result: f32) -> u32 {
     flags
 }
 
-/// Canonical NaN constants (§11.3)
+/// Canonical NaN constants (RISC-V ISA spec §11.3)
 const CANONICAL_NAN_F64: u64 = 0x7FF8_0000_0000_0000;
 const CANONICAL_NAN_F32: u32 = 0x7FC0_0000;
 
-/// Canonicalize f64 NaN result (§11.3: if result is NaN, use canonical NaN)
+/// Canonicalize f64 NaN result (RISC-V ISA spec §11.3)
 #[inline(always)]
 fn canon_f64(v: f64) -> f64 {
     if v.is_nan() { f64::from_bits(CANONICAL_NAN_F64) } else { v }
@@ -994,14 +998,14 @@ unsafe fn exec_op_fp(x: &mut [u64; 32], f: &mut [u64; 32], raw: u32, pc: &mut u6
                 0 => fmin_f64(a, b).to_bits(),
                 1 | _ => fmax_f64(a, b).to_bits(),
             };
-            // §11.6: signaling NaN inputs set NV, even when result is not NaN
+            // RISC-V ISA spec §11.6: signaling NaN inputs set NV, even when result is not NaN
             if is_snan_f64(a) || is_snan_f64(b) { set_flags(fcsr, NV); }
         }
         (0x14, 1) => { // FEQ.D / FLT.D / FLE.D → x[rd]
             let a = f64::from_bits(f[rs1]); let b = f64::from_bits(f[rs2]);
             let r = match f3 { 2 => a == b, 1 => a < b, 0 => a <= b, _ => false };
             if rd != 0 { x[rd] = r as u64; }
-            // §11.8: FLT/FLE set NV if either is NaN; FEQ sets NV only for sNaN
+            // RISC-V ISA spec §11.8: FLT/FLE set NV if either is NaN; FEQ sets NV only for sNaN
             match f3 {
                 1 | 0 => { if a.is_nan() || b.is_nan() { set_flags(fcsr, NV); } }
                 2 => { if is_snan_f64(a) || is_snan_f64(b) { set_flags(fcsr, NV); } }
@@ -1018,7 +1022,7 @@ unsafe fn exec_op_fp(x: &mut [u64; 32], f: &mut [u64; 32], raw: u32, pc: &mut u6
                 _ => 0,
             };
             if rd != 0 { x[rd] = r; }
-            // §11.7: NV if NaN/Inf/out-of-range AFTER rounding (RTZ = truncation).
+            // RISC-V ISA spec §11.7 Table 11.4: NV if NaN/Inf/out-of-range after rounding.
             // Use truncated value for range check to handle cases like -0.9 → 0 (in range for unsigned).
             let trunc = if v.is_nan() || v.is_infinite() { None } else { Some(v as i64) };
             let out_of_range = trunc.is_none() || match rs2 {
@@ -1106,7 +1110,7 @@ unsafe fn exec_op_fp(x: &mut [u64; 32], f: &mut [u64; 32], raw: u32, pc: &mut u6
                 _ => 0,
             };
             if rd != 0 { x[rd] = r; }
-            // §11.7: NV if NaN/Inf/out-of-range AFTER rounding. Use truncated i64 for range check.
+            // RISC-V ISA spec §11.7 Table 11.4: NV if NaN/Inf/out-of-range after rounding.
             let trunc = if v.is_nan() || v.is_infinite() { None } else { Some(vd as i64) };
             let out_of_range = trunc.is_none() || match rs2 {
                 0 => trunc.unwrap() < (i32::MIN as i64) || trunc.unwrap() > (i32::MAX as i64),
@@ -1296,7 +1300,7 @@ unsafe fn exec_amo(x: &mut [u64; 32], raw: u32, base: u32, pc: &mut u64, step: u
         _ => {
             // AMO: read-modify-write
             // For .W: read 32-bit sign-extended, operate on 32-bit values,
-            // write back 32-bit, return sign-extended old value (§8.4).
+            // write back 32-bit, return sign-extended old value (RISC-V ISA spec §8.4).
             let old = if is_word { guest_mem::read_i32(base, addr) as i64 as u64 }
                       else { guest_mem::read_u64(base, addr) };
             let src = if is_word { x[rs2] as i32 as i64 as u64 } else { x[rs2] };
@@ -1319,7 +1323,7 @@ unsafe fn exec_amo(x: &mut [u64; 32], raw: u32, base: u32, pc: &mut u64, step: u
             if is_word { guest_mem::write_u32(base, addr, new_val as u32); }
             else { guest_mem::write_u64(base, addr, new_val); }
             if rd != 0 { x[rd] = old; }
-            // AMO store invalidates any reservation (§8.4)
+            // AMO store invalidates any reservation (RISC-V ISA spec §8.4)
             RESV_VALID = false;
         }
     }

@@ -88,7 +88,7 @@ pub fn imm_j(insn: u32) -> i64 {
 }
 
 // =============================================================================
-// Opcode constants (bits 6:2 of opcode field, §2.2 Table 24.1)
+// Opcode constants (bits 6:2 of opcode field, RISC-V ISA spec §2.2 Table 24.1)
 // =============================================================================
 
 pub const OP_LOAD: u32 = 0x03;
@@ -114,7 +114,7 @@ pub const OP_JAL: u32 = 0x6F;
 pub const OP_SYSTEM: u32 = 0x73;
 
 // =============================================================================
-// RVC (Compressed) instruction expansion — §12
+// RVC (Compressed) instruction expansion — RISC-V ISA spec §16 (C extension)
 // =============================================================================
 
 /// Check if a 16-bit halfword is a compressed instruction (bits 1:0 != 0b11).
@@ -126,7 +126,7 @@ pub fn is_compressed(halfword: u16) -> bool {
 /// Expand a 16-bit compressed instruction to its 32-bit equivalent.
 /// Returns 0 if the instruction is not recognized or not expandable.
 ///
-/// Reference: RISC-V spec §12 (C extension), Table 12.1-12.6
+/// Reference: RISC-V ISA spec §16 (C extension), Table 16.1-16.6
 pub fn expand_compressed(insn: u16) -> u32 {
     let op = insn & 0x03;
     let f3 = (insn >> 13) & 0x07;
