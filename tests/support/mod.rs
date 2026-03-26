@@ -68,14 +68,16 @@ fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> Result<(i32, u64), String
         vm.status = STATUS_OK;
         vm.tid = 1;
 
-        // Allocate ProcessState via alloc (above host binary data).
-        let ps_addr = tidemark_kernel::alloc::alloc_zeroed(
-            core::mem::size_of::<ProcessState>() as u32,
-            core::mem::align_of::<ProcessState>() as u32,
-        ) as u64;
-        if ps_addr == 0 {
-            return Err("ProcessState allocation failed".into());
+        // Allocate ProcessState in guest Memory via brk (not alloc.rs).
+        let ps_size = core::mem::size_of::<ProcessState>() as u64;
+        let ps_align = core::mem::align_of::<ProcessState>() as u64;
+        let brk = tidemark_kernel::syscall::memory::current_brk();
+        let ps_addr = (brk + ps_align - 1) & !(ps_align - 1);
+        let brk_ret = tidemark_kernel::syscall::memory::grow_brk(base, ps_addr + ps_size);
+        if brk_ret < (ps_addr + ps_size) as i64 {
+            return Err("ProcessState brk allocation failed".into());
         }
+        tidemark_kernel::guest_mem::zero_mem(base, ps_addr, ps_size as usize);
         vm.process_ptr = ps_addr as u32;
 
         let pid_off = core::mem::offset_of!(ProcessState, pid) as u64;

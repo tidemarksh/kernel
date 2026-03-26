@@ -69,9 +69,14 @@ pub unsafe fn exec(
             // Compressed (RVC)
             let expanded = decode::expand_compressed(raw16);
             if expanded == 0 {
-                vm.status = abi::STATUS_FAULT;
-                vm.fault_pc = pc;
-                break;
+                // Invalid compressed instruction → SIGILL
+                vm.x = x; vm.f = f; vm.pc = pc; vm.fcsr = fcsr;
+                crate::syscall::signal::send_signal(vm, abi::SIGILL);
+                crate::syscall::signal::check_pending(vm, base);
+                x = vm.x; f = vm.f; pc = vm.pc; fcsr = vm.fcsr;
+                if vm.status != abi::STATUS_OK { return remaining; }
+                // If handler returned, skip the instruction
+                continue;
             }
             (expanded, 2)
         } else {
@@ -247,10 +252,14 @@ pub unsafe fn exec(
                 exec_fma(&mut f, raw, opcode, &mut pc, step, &mut fcsr);
             }
             _ => {
-                // Unknown opcode → fault
-                vm.status = abi::STATUS_FAULT;
-                vm.fault_pc = pc;
-                break;
+                // Unknown opcode → SIGILL
+                vm.x = x; vm.f = f; vm.pc = pc; vm.fcsr = fcsr;
+                crate::syscall::signal::send_signal(vm, abi::SIGILL);
+                crate::syscall::signal::check_pending(vm, base);
+                x = vm.x; f = vm.f; pc = vm.pc; fcsr = vm.fcsr;
+                if vm.status != abi::STATUS_OK { return remaining; }
+                pc += step; // skip if handler returned
+                continue;
             }
         }
 
@@ -1447,21 +1456,29 @@ mod tests {
 
         // Write an invalid 32-bit instruction: 0x00000000 has opcode bits [6:0] = 0b0000000.
         // The two low bits are not 0b11, so the interpreter first tries compressed decode.
-        // The compressed halfword 0x0000 expands to 0 → STATUS_FAULT.
+        // The compressed halfword 0x0000 expands to 0 → SIGILL queued → STATUS_FAULT (SIG_DFL).
+        // https://man7.org/linux/man-pages/man7/signal.7.html
         unsafe {
             crate::guest_mem::write_u32(t.base, code_addr, 0x0000_0000);
         }
 
         t.vm.pc = code_addr;
         t.vm.status = crate::abi::STATUS_OK;
+        t.vm.sig_mask = 0;
+        t.vm.sig_pending = 0;
 
         unsafe {
             crate::cpu::exec(&mut t.vm, 10, None, None, None, None);
         }
 
+        // SIGILL with SIG_DFL terminates: exit_code = 128 + SIGILL(4)
         assert_eq!(
             t.vm.status, STATUS_FAULT,
-            "executing an invalid instruction should set STATUS_FAULT"
+            "invalid instruction should set STATUS_FAULT via SIGILL"
+        );
+        assert_eq!(
+            t.vm.exit_code, 128 + crate::abi::SIGILL,
+            "exit_code should be 128 + SIGILL"
         );
     }
 }

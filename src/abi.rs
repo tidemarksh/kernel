@@ -494,11 +494,18 @@ pub extern "C" fn process_create(
 
         crate::syscall::memory::init(elf_result.brk_start);
 
-        let ps_ptr = crate::alloc::alloc_zeroed(
-            core::mem::size_of::<crate::types::ProcessState>() as u32,
-            core::mem::align_of::<crate::types::ProcessState>() as u32,
-        );
-        if ps_ptr == 0 { return 0; }
+        // ProcessState lives in guest Memory (shared WebAssembly.Memory),
+        // not in kernel Worker private memory (alloc.rs).
+        // Allocate via brk in the guest address space.
+        let ps_size = core::mem::size_of::<crate::types::ProcessState>() as u64;
+        let ps_align = core::mem::align_of::<crate::types::ProcessState>() as u64;
+        let brk = crate::syscall::memory::current_brk();
+        let ps_addr = (brk + ps_align - 1) & !(ps_align - 1);
+        let new_brk = ps_addr + ps_size;
+        let brk_ret = crate::syscall::memory::grow_brk(base, new_brk);
+        if brk_ret < new_brk as i64 { return 0; }
+        crate::guest_mem::zero_mem(base, ps_addr, ps_size as usize);
+        let ps_ptr = (base as u64 + ps_addr) as u32;
         let ps = &mut *(ps_ptr as *mut crate::types::ProcessState);
         ps.pid = 1;
 

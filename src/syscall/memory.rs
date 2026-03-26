@@ -23,7 +23,7 @@ use crate::fs::{memfs, fd_table};
 use crate::guest_mem;
 use crate::types::{ThreadState, Vma};
 
-/// Memory management state.
+/// Memory management state, allocated in kernel Worker linear memory via alloc.rs.
 /// VMA table is a sorted Vec<Vma> (sorted by start address).
 /// https://man7.org/linux/man-pages/man2/mmap.2.html
 struct MemState {
@@ -34,37 +34,44 @@ struct MemState {
     has_prot_none: u32,
 }
 
-static mut MEM_STATE_INIT: bool = false;
-static mut MEM_STATE: core::mem::MaybeUninit<MemState> = core::mem::MaybeUninit::uninit();
+/// Pointer to MemState in kernel Worker linear memory (allocated via alloc.rs).
+static mut MEM_STATE: *mut MemState = core::ptr::null_mut();
 
 fn ms() -> &'static mut MemState {
-    unsafe { &mut *core::ptr::addr_of_mut!(MEM_STATE).cast::<MemState>() }
+    unsafe {
+        let p = core::ptr::read(core::ptr::addr_of!(MEM_STATE));
+        &mut *p
+    }
 }
 
-/// Initialize memory state.
+/// Initialize memory state. Allocates MemState via alloc.rs.
 pub fn init(brk_start: u64) {
     let heap_end = unsafe { crate::alloc::heap_ptr() };
     let mmap_start = ((heap_end as u64 + 0x10_0000) & !0xF_FFFF).max(0x4000_0000);
     unsafe {
-        let init_ptr = core::ptr::addr_of_mut!(MEM_STATE_INIT);
-        if core::ptr::read(init_ptr) {
+        let p = core::ptr::read(core::ptr::addr_of!(MEM_STATE));
+        if !p.is_null() {
             // Re-init: reset existing state
-            let s = ms();
+            let s = &mut *p;
             s.vmas.clear();
             s.brk_base = brk_start;
             s.brk_current = brk_start;
             s.mmap_next = mmap_start;
             s.has_prot_none = 0;
         } else {
-            let p = core::ptr::addr_of_mut!(MEM_STATE).cast::<MemState>();
-            core::ptr::write(p, MemState {
+            let ptr = crate::alloc::alloc(
+                core::mem::size_of::<MemState>() as u32,
+                core::mem::align_of::<MemState>() as u32,
+            );
+            if ptr == 0 { core::arch::wasm32::unreachable(); }
+            core::ptr::write(ptr as *mut MemState, MemState {
                 vmas: Vec::new(),
                 brk_base: brk_start,
                 brk_current: brk_start,
                 mmap_next: mmap_start,
                 has_prot_none: 0,
             });
-            core::ptr::write(init_ptr, true);
+            core::ptr::write(core::ptr::addr_of_mut!(MEM_STATE), ptr as *mut MemState);
         }
     }
 }
@@ -86,6 +93,30 @@ pub fn is_prot_none(addr: u64) -> bool {
 // =========================================================================
 // brk
 // =========================================================================
+
+/// Return current brk address (for ProcessState allocation in guest Memory).
+pub fn current_brk() -> u64 { ms().brk_current }
+
+/// Grow brk to `new_brk`, return new brk as i64. Used by process_create to
+/// allocate ProcessState in guest Memory address space.
+pub fn grow_brk(base: u32, new_brk: u64) -> i64 {
+    let s = ms();
+    if new_brk <= s.brk_current { return s.brk_current as i64; }
+    if new_brk > 0x8000_0000 { return s.brk_current as i64; }
+    unsafe {
+        let needed = (base as u64 + new_brk) as u32;
+        let mem_size = core::arch::wasm32::memory_size(0) as u32 * 65536;
+        if needed > mem_size {
+            let pages = ((needed - mem_size) + 65535) / 65536;
+            if core::arch::wasm32::memory_grow(0, pages as usize) == usize::MAX {
+                return s.brk_current as i64;
+            }
+        }
+        guest_mem::zero_mem(base, s.brk_current, (new_brk - s.brk_current) as usize);
+    }
+    s.brk_current = new_brk;
+    new_brk as i64
+}
 
 /// brk: adjust program break. addr=0 returns current break.
 /// Grows WASM memory via memory.grow if needed, zero-fills new region.

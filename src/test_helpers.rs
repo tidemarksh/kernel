@@ -65,13 +65,15 @@ impl TestVm {
             vm.tid = 1;
             vm.status = STATUS_OK;
 
-            // Allocate ProcessState via alloc (above shadow stack and static data).
-            // __stack_pointer starts at 0x100000 and grows down, so anything
-            // below 0x100000 risks overlapping the WASM compiler stack.
-            let ps_addr = crate::alloc::alloc_zeroed(
-                core::mem::size_of::<ProcessState>() as u32,
-                core::mem::align_of::<ProcessState>() as u32,
-            ) as u64;
+            // Allocate ProcessState in guest Memory via brk (not alloc.rs which is
+            // kernel Worker private memory). Guest Memory is the shared address space
+            // that thread-workers access directly.
+            let ps_size = core::mem::size_of::<ProcessState>() as u64;
+            let ps_align = core::mem::align_of::<ProcessState>() as u64;
+            let brk = crate::syscall::memory::current_brk();
+            let ps_addr = (brk + ps_align - 1) & !(ps_align - 1);
+            crate::syscall::memory::grow_brk(base, ps_addr + ps_size);
+            crate::guest_mem::zero_mem(base, ps_addr, ps_size as usize);
             vm.process_ptr = ps_addr as u32;
 
             let pid_off = core::mem::offset_of!(ProcessState, pid) as u64;
