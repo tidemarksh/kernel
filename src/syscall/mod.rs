@@ -115,23 +115,25 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             0
         }
 
-        // process (stubs — real impl with kernel Worker)
-        SYS_SET_TID_ADDRESS => {
-            vm.clear_child_tid = a0;
-            vm.tid as i64
+        // thread lifecycle
+        SYS_SET_TID_ADDRESS => thread::sys_set_tid_address(vm, a0),
+        SYS_SET_ROBUST_LIST => thread::sys_set_robust_list(vm, a0, a1),
+        SYS_CLONE => {
+            let ret = thread::sys_clone(vm, base, a0, a1, a2, a3, a4);
+            if vm.status == abi::STATUS_CLONE_SPAWN { return abi::STATUS_CLONE_SPAWN; }
+            ret
         }
-        SYS_SET_ROBUST_LIST => 0,
+        SYS_FUTEX => {
+            let ret = thread::sys_futex(vm, base, a0, a1, a2, a3, a4, vm.x[15]);
+            if vm.status == abi::STATUS_FUTEX_WAIT { return abi::STATUS_FUTEX_WAIT; }
+            ret
+        }
+        SYS_EXIT => return thread::sys_exit(vm, base, a0),
+        SYS_EXIT_GROUP => return thread::sys_exit_group(vm, base, a0),
         SYS_PRCTL => 0,
         SYS_UMASK => 0o022, // return previous umask
         SYS_RSEQ => EINVAL,
         261 => 0,            // prlimit64: stub success
-
-        // exit
-        SYS_EXIT | SYS_EXIT_GROUP => {
-            vm.exit_code = a0 as i32;
-            vm.status = abi::STATUS_FAULT;
-            return abi::STATUS_FAULT;
-        }
 
         // not yet implemented
         _ => ENOSYS,

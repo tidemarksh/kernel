@@ -207,6 +207,11 @@ pub const MAX_EPOLL_ENTRIES: usize = 64;
 pub const MAX_EVENTFDS: usize = 16;
 pub const MAX_TIMERFDS: usize = 8;
 pub const MAX_PIPES: usize = 64;
+
+// Futex operations (https://man7.org/linux/man-pages/man2/futex.2.html)
+pub const FUTEX_WAIT: u32 = 0;
+pub const FUTEX_WAKE: u32 = 1;
+pub const FUTEX_CMP_REQUEUE: u32 = 4;
 pub const PAGE_SIZE: u64 = 4096;
 
 // =============================================================================
