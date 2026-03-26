@@ -1,5 +1,9 @@
 //! Pipe and eventfd syscalls.
 //!
+//! Semantics: https://man7.org/linux/man-pages/man2/pipe.2.html
+//!            https://man7.org/linux/man-pages/man7/pipe.7.html
+//!
+//! Data structure is implementation-specific (not based on Linux kernel internals).
 //! Pipe slots are allocated on the SAB page cache (shared memory).
 //! thread-workers access data plane directly via Atomics.
 //! kernel Worker manages control plane (refcount changes).
