@@ -133,11 +133,31 @@ pub unsafe fn write_u64(base: u32, addr: u64, val: u64) {
 pub unsafe fn write_bytes(base: u32, addr: u64, data: &[u8]) {
     let dst = (base + addr as u32) as *mut u8;
     unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len()) };
+    if unsafe { is_multi_threaded() } && !data.is_empty() {
+        let start_slot = ((addr >> 3) & 63) as usize;
+        let end_slot = (((addr + data.len() as u64 - 1) >> 3) & 63) as usize;
+        if start_slot <= end_slot {
+            for s in start_slot..=end_slot { unsafe { bump_gen(s) }; }
+        } else {
+            for s in start_slot..64 { unsafe { bump_gen(s) }; }
+            for s in 0..=end_slot { unsafe { bump_gen(s) }; }
+        }
+    }
 }
 
 pub unsafe fn zero_mem(base: u32, addr: u64, len: usize) {
     let dst = (base + addr as u32) as *mut u8;
     unsafe { core::ptr::write_bytes(dst, 0, len) };
+    if unsafe { is_multi_threaded() } && len > 0 {
+        let start_slot = ((addr >> 3) & 63) as usize;
+        let end_slot = (((addr + len as u64 - 1) >> 3) & 63) as usize;
+        if start_slot <= end_slot {
+            for s in start_slot..=end_slot { unsafe { bump_gen(s) }; }
+        } else {
+            for s in start_slot..64 { unsafe { bump_gen(s) }; }
+            for s in 0..=end_slot { unsafe { bump_gen(s) }; }
+        }
+    }
 }
 
 /// Read null-terminated string from guest memory. Returns length (excluding null).

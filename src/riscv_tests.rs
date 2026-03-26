@@ -1,7 +1,10 @@
 //! RISC-V ISA test suite (riscv-tests ELF integration tests).
+//!
+//! Two sets: baseline (no block cache) and block-cache-enabled.
 
-use crate::test_helpers::assert_elf_pass;
+use crate::test_helpers::{assert_elf_pass, assert_elf_pass_no_cache};
 
+// Block cache enabled (primary)
 macro_rules! riscv_test {
     ($name:ident, $suite:expr, $test:expr) => {
         #[test]
@@ -16,7 +19,29 @@ macro_rules! riscv_test {
     };
 }
 
-// rv64ui
+// Baseline: no block cache (interpreter only)
+macro_rules! riscv_test_no_cache {
+    ($name:ident, $suite:expr, $test:expr) => {
+        #[test]
+        fn $name() {
+            let path = concat!(env!("OUT_DIR"), "/", $suite, "/", $test, ".elf");
+            let bytes = match std::fs::read(path) {
+                Ok(b) => b,
+                Err(_) => { eprintln!("skip: {} not built", path); return; }
+            };
+            assert_elf_pass_no_cache(stringify!($name), &bytes);
+        }
+    };
+}
+
+// Baseline verification (interpreter without block cache, one per suite)
+riscv_test_no_cache!(baseline_rv64ui_add,    "rv64ui", "add");
+riscv_test_no_cache!(baseline_rv64um_mul,    "rv64um", "mul");
+riscv_test_no_cache!(baseline_rv64ua_amoadd_w, "rv64ua", "amoadd_w");
+riscv_test_no_cache!(baseline_rv64uf_fadd,   "rv64uf", "fadd");
+riscv_test_no_cache!(baseline_rv64ud_fadd,   "rv64ud", "fadd");
+
+// rv64ui (with block cache)
 riscv_test!(rv64ui_add,    "rv64ui", "add");
 riscv_test!(rv64ui_addi,   "rv64ui", "addi");
 riscv_test!(rv64ui_addiw,  "rv64ui", "addiw");

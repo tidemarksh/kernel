@@ -257,6 +257,105 @@ export_const!(abi_status_sleep, STATUS_SLEEP);
 export_const!(abi_status_jit_ready, STATUS_JIT_READY);
 export_const!(abi_page_size, PAGE_SIZE as i32);
 export_const!(abi_max_fds, MAX_FDS as i32);
+export_const!(abi_max_threads, MAX_THREADS as i32);
+export_const!(abi_max_pipes, MAX_PIPES as i32);
+
+// FD types
+export_const!(abi_fd_type_none, FD_TYPE_NONE);
+export_const!(abi_fd_type_stdout, FD_TYPE_STDOUT);
+export_const!(abi_fd_type_stderr, FD_TYPE_STDERR);
+export_const!(abi_fd_type_file, FD_TYPE_FILE);
+export_const!(abi_fd_type_dir, FD_TYPE_DIR);
+export_const!(abi_fd_type_devnull, FD_TYPE_DEVNULL);
+export_const!(abi_fd_type_pipe, FD_TYPE_PIPE);
+export_const!(abi_fd_type_epoll, FD_TYPE_EPOLL);
+export_const!(abi_fd_type_socket, FD_TYPE_SOCKET);
+export_const!(abi_fd_type_eventfd, FD_TYPE_EVENTFD);
+export_const!(abi_fd_type_timerfd, FD_TYPE_TIMERFD);
+export_const!(abi_fd_type_pty_master, FD_TYPE_PTY_MASTER);
+export_const!(abi_fd_type_pty_slave, FD_TYPE_PTY_SLAVE);
+export_const!(abi_fd_type_inotify, FD_TYPE_INOTIFY);
+
+// Syscall numbers
+macro_rules! export_const_u64 {
+    ($name:ident, $val:expr) => {
+        #[unsafe(no_mangle)]
+        pub extern "C" fn $name() -> u64 { $val }
+    };
+}
+
+export_const_u64!(abi_sys_openat, SYS_OPENAT);
+export_const_u64!(abi_sys_close, SYS_CLOSE);
+export_const_u64!(abi_sys_read, SYS_READ);
+export_const_u64!(abi_sys_write, SYS_WRITE);
+export_const_u64!(abi_sys_mmap, SYS_MMAP);
+export_const_u64!(abi_sys_munmap, SYS_MUNMAP);
+export_const_u64!(abi_sys_brk, SYS_BRK);
+export_const_u64!(abi_sys_clone, SYS_CLONE);
+export_const_u64!(abi_sys_execve, SYS_EXECVE);
+export_const_u64!(abi_sys_exit, SYS_EXIT);
+export_const_u64!(abi_sys_exit_group, SYS_EXIT_GROUP);
+export_const_u64!(abi_sys_futex, SYS_FUTEX);
+export_const_u64!(abi_sys_pipe2, SYS_PIPE2);
+export_const_u64!(abi_sys_epoll_create1, SYS_EPOLL_CREATE1);
+export_const_u64!(abi_sys_epoll_ctl, SYS_EPOLL_CTL);
+export_const_u64!(abi_sys_epoll_pwait, SYS_EPOLL_PWAIT);
+export_const_u64!(abi_sys_rt_sigaction, SYS_RT_SIGACTION);
+export_const_u64!(abi_sys_rt_sigprocmask, SYS_RT_SIGPROCMASK);
+export_const_u64!(abi_sys_wait4, SYS_WAIT4);
+export_const_u64!(abi_sys_getpid, SYS_GETPID);
+export_const_u64!(abi_sys_gettid, SYS_GETTID);
+export_const_u64!(abi_sys_nanosleep, SYS_NANOSLEEP);
+export_const_u64!(abi_sys_clock_gettime, SYS_CLOCK_GETTIME);
+
+// Clone flags
+export_const_u64!(abi_clone_vm, CLONE_VM);
+export_const_u64!(abi_clone_thread, CLONE_THREAD);
+export_const_u64!(abi_clone_vfork, CLONE_VFORK);
+export_const_u64!(abi_clone_files, CLONE_FILES);
+export_const_u64!(abi_clone_sighand, CLONE_SIGHAND);
+export_const_u64!(abi_clone_settls, CLONE_SETTLS);
+export_const_u64!(abi_clone_child_cleartid, CLONE_CHILD_CLEARTID);
+
+// Signal numbers
+export_const!(abi_sigkill, SIGKILL);
+export_const!(abi_sigterm, SIGTERM);
+export_const!(abi_sigchld, SIGCHLD);
+export_const!(abi_sigpipe, SIGPIPE);
+export_const!(abi_sigsegv, SIGSEGV);
+export_const!(abi_sigill, SIGILL);
+export_const!(abi_sigbus, SIGBUS);
+export_const!(abi_sigstop, SIGSTOP);
+
+// mmap/mprotect flags
+export_const!(abi_prot_none, PROT_NONE);
+export_const!(abi_prot_read, PROT_READ);
+export_const!(abi_prot_write, PROT_WRITE);
+export_const!(abi_prot_exec, PROT_EXEC);
+export_const_u64!(abi_map_private, MAP_PRIVATE);
+export_const_u64!(abi_map_anonymous, MAP_ANONYMOUS);
+export_const_u64!(abi_map_fixed, MAP_FIXED);
+
+// Open flags
+export_const!(abi_o_rdonly, O_RDONLY);
+export_const!(abi_o_wronly, O_WRONLY);
+export_const!(abi_o_rdwr, O_RDWR);
+export_const!(abi_o_creat, O_CREAT);
+export_const!(abi_o_trunc, O_TRUNC);
+export_const!(abi_o_append, O_APPEND);
+export_const!(abi_o_cloexec, O_CLOEXEC);
+
+// Error codes
+export_const!(abi_enoent, ENOENT as i32);
+export_const!(abi_ebadf, EBADF as i32);
+export_const!(abi_einval, EINVAL as i32);
+export_const!(abi_enomem, ENOMEM as i32);
+export_const!(abi_enosys, ENOSYS as i32);
+export_const!(abi_eagain, EAGAIN as i32);
+export_const!(abi_epipe, EPIPE as i32);
+export_const!(abi_eperm, EPERM as i32);
+export_const!(abi_eexist, EEXIST as i32);
+export_const!(abi_eacces, EACCES as i32);
 
 // =============================================================================
 // WASM exports — runtime calls these to manage processes and threads

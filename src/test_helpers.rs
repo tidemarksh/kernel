@@ -201,8 +201,17 @@ impl TestVm {
 
 extern crate alloc;
 
-/// Load an ELF, run the interpreter, return (exit_code, last_pc).
+/// Load an ELF, run the interpreter with block cache, return (exit_code, last_pc).
 pub fn run_elf(elf_bytes: &[u8]) -> (i32, u64) {
+    run_elf_inner(elf_bytes, true)
+}
+
+/// Load an ELF, run the interpreter without block cache (baseline), return (exit_code, last_pc).
+pub fn run_elf_no_cache(elf_bytes: &[u8]) -> (i32, u64) {
+    run_elf_inner(elf_bytes, false)
+}
+
+fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> (i32, u64) {
     unsafe {
         let base: u32 = 0;
 
@@ -267,19 +276,23 @@ pub fn run_elf(elf_bytes: &[u8]) -> (i32, u64) {
         crate::guest_mem::write_u32(base, ps_addr + fd_off + 8, 2);  // fd 1 ofd_id=2
         crate::guest_mem::write_u32(base, ps_addr + fd_off + 16, 3); // fd 2 ofd_id=3
 
-        // Allocate block cache in WASM linear memory via alloc.rs
+        // Allocate block cache if requested
         let cache_size = crate::cpu::block_cache::BlockCache::allocation_size() as u32;
         crate::alloc::init((ps_addr as u32) + core::mem::size_of::<ProcessState>() as u32 + 16);
-        let cache_ptr = crate::alloc::alloc_zeroed(cache_size, 8);
-        let mut cache = crate::cpu::block_cache::BlockCache::from_ptr(
-            cache_ptr as *mut crate::cpu::block_cache::BlockEntry
-        );
+        let cache_ptr = if use_cache {
+            crate::alloc::alloc_zeroed(cache_size, 8)
+        } else { 0 };
+        let mut cache = if use_cache {
+            Some(crate::cpu::block_cache::BlockCache::from_ptr(
+                cache_ptr as *mut crate::cpu::block_cache::BlockEntry
+            ))
+        } else { None };
 
         let mut total = 0i64;
         loop {
             let budget = 500_000i32;
             vm.status = STATUS_OK;
-            let rem = crate::cpu::exec(&mut vm, budget, Some(&mut cache), None, None, None);
+            let rem = crate::cpu::exec(&mut vm, budget, cache.as_mut(), None, None, None);
             total += (budget - rem) as i64;
 
             match vm.status {
@@ -297,4 +310,9 @@ pub fn run_elf(elf_bytes: &[u8]) -> (i32, u64) {
 pub fn assert_elf_pass(name: &str, elf_bytes: &[u8]) {
     let (code, pc) = run_elf(elf_bytes);
     assert_eq!(code, 0, "{} failed: exit_code={}, last_pc=0x{:x}", name, code, pc);
+}
+
+pub fn assert_elf_pass_no_cache(name: &str, elf_bytes: &[u8]) {
+    let (code, pc) = run_elf_no_cache(elf_bytes);
+    assert_eq!(code, 0, "{} (no cache) failed: exit_code={}, last_pc=0x{:x}", name, code, pc);
 }
