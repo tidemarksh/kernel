@@ -1002,8 +1002,15 @@ unsafe fn exec_op_fp(x: &mut [u64; 32], f: &mut [u64; 32], raw: u32, pc: &mut u6
                 _ => 0,
             };
             if rd != 0 { x[rd] = r; }
-            // §11.7: NV for NaN or out-of-range; NX for inexact
-            if v.is_nan() || v.is_infinite() { set_flags(fcsr, NV); }
+            // §11.7 Table 11.4: NV for NaN/Inf/out-of-range (exclusive with NX)
+            let out_of_range = v.is_nan() || v.is_infinite() || match rs2 {
+                0 => v < (i32::MIN as f64) || v > (i32::MAX as f64),
+                1 => v < 0.0 || v > (u32::MAX as f64),
+                2 => v < (i64::MIN as f64) || v > (i64::MAX as f64),
+                3 => v < 0.0 || v > (u64::MAX as f64),
+                _ => false,
+            };
+            if out_of_range { set_flags(fcsr, NV); }
             else {
                 let exact = match rs2 {
                     0 => v == (r as i32 as f64),
@@ -1013,14 +1020,6 @@ unsafe fn exec_op_fp(x: &mut [u64; 32], f: &mut [u64; 32], raw: u32, pc: &mut u6
                     _ => true,
                 };
                 if !exact { set_flags(fcsr, NX); }
-                // Out-of-range (saturated) → NV
-                match rs2 {
-                    0 => { if v < (i32::MIN as f64) || v > (i32::MAX as f64) { set_flags(fcsr, NV); } }
-                    1 => { if v < 0.0 || v > (u32::MAX as f64) { set_flags(fcsr, NV); } }
-                    2 => { if v < (i64::MIN as f64) || v > (i64::MAX as f64) { set_flags(fcsr, NV); } }
-                    3 => { if v < 0.0 || v > (u64::MAX as f64) { set_flags(fcsr, NV); } }
-                    _ => {}
-                }
             }
         }
         (0x1A, 1) => { // FCVT.D.W[U] / FCVT.D.L[U] → f[rd]
@@ -1080,6 +1079,7 @@ unsafe fn exec_op_fp(x: &mut [u64; 32], f: &mut [u64; 32], raw: u32, pc: &mut u6
         }
         (0x18, 0) => { // FCVT.W[U].S / FCVT.L[U].S → x[rd]
             let v = unbox_f32(f[rs1]);
+            let vd = v as f64;
             let r = match rs2 {
                 0 => fcvt_w_f32(v) as i64 as u64,
                 1 => (fcvt_wu_f32(v) as i32 as i64) as u64,
@@ -1088,23 +1088,23 @@ unsafe fn exec_op_fp(x: &mut [u64; 32], f: &mut [u64; 32], raw: u32, pc: &mut u6
                 _ => 0,
             };
             if rd != 0 { x[rd] = r; }
-            if v.is_nan() || v.is_infinite() { set_flags(fcsr, NV); }
+            let out_of_range = v.is_nan() || v.is_infinite() || match rs2 {
+                0 => vd < (i32::MIN as f64) || vd > (i32::MAX as f64),
+                1 => v < 0.0 || vd > (u32::MAX as f64),
+                2 => vd < (i64::MIN as f64) || vd > (i64::MAX as f64),
+                3 => v < 0.0 || vd > (u64::MAX as f64),
+                _ => false,
+            };
+            if out_of_range { set_flags(fcsr, NV); }
             else {
                 let exact = match rs2 {
-                    0 => (v as f64) == (r as i32 as f64),
-                    1 => (v as f64) == (r as u32 as f64),
-                    2 => (v as f64) == (r as i64 as f64),
-                    3 => (v as f64) == (r as u64 as f64),
+                    0 => vd == (r as i32 as f64),
+                    1 => vd == (r as u32 as f64),
+                    2 => vd == (r as i64 as f64),
+                    3 => vd == (r as u64 as f64),
                     _ => true,
                 };
                 if !exact { set_flags(fcsr, NX); }
-                match rs2 {
-                    0 => { if (v as f64) < (i32::MIN as f64) || (v as f64) > (i32::MAX as f64) { set_flags(fcsr, NV); } }
-                    1 => { if v < 0.0 || (v as f64) > (u32::MAX as f64) { set_flags(fcsr, NV); } }
-                    2 => { if (v as f64) < (i64::MIN as f64) || (v as f64) > (i64::MAX as f64) { set_flags(fcsr, NV); } }
-                    3 => { if v < 0.0 || (v as f64) > (u64::MAX as f64) { set_flags(fcsr, NV); } }
-                    _ => {}
-                }
             }
         }
         (0x1A, 0) => { // FCVT.S.W[U] / FCVT.S.L[U] → f[rd]
@@ -1204,22 +1204,28 @@ unsafe fn exec_fma(f: &mut [u64; 32], raw: u32, opcode: u32, pc: &mut u64, step:
             if r.is_nan() && (a.is_nan() || b.is_nan() || c.is_nan()) { fl |= NV; }
             if r.is_infinite() && !a.is_infinite() && !b.is_infinite() && !c.is_infinite() { fl |= OF | NX; }
             if !r.is_nan() && !r.is_infinite() {
-                // For f64 FMA, no wider type available. Use error-free transformation:
-                // fma(a,b,c) is the correctly-rounded result. The residual is fma(a,b,c-r)+r-r=0
-                // unless the operation lost precision. Check via a*b exactly then add c.
-                // Practical: check if a*b is exact (fma(a,b,0)==a*b is always true for fma)
-                // then check if adding c is exact.
-                let prod = a * b; // rounded product
-                let prod_err = libm::fma(a, b, -prod); // exact error of a*b
+                // fma(a,b,c) = r is the correctly-rounded result from libm::fma.
+                // Inexact iff the mathematical result a*b+c differs from r.
+                // Use error-free transformation: prod = a*b, prod_err = fma(a,b,-prod)
+                // Then mathematical a*b = prod + prod_err exactly.
+                // mathematical a*b+c_eff = prod + c_eff + prod_err
+                // The sum (prod + c_eff) may round, giving sum + sum_err = prod + c_eff exactly.
+                // Total error = sum_err + prod_err. If nonzero, result is inexact.
                 let c_eff = match opcode {
                     decode::OP_FMSUB | decode::OP_FNMADD => -c, _ => c,
                 };
+                let prod = a * b;
+                let prod_err = libm::fma(a, b, -prod);
+                // Two-sum: sum + sum_err = prod + c_eff exactly
                 let sum = prod + c_eff;
-                let sum_err = (prod - sum) + c_eff + prod_err;
-                let result_sign = match opcode {
-                    decode::OP_FNMSUB | decode::OP_FNMADD => -1.0, _ => 1.0,
+                let sum_err = if prod.abs() >= c_eff.abs() {
+                    (prod - sum) + c_eff
+                } else {
+                    (c_eff - sum) + prod
                 };
-                if sum_err != 0.0 || sum * result_sign != r { fl |= NX; }
+                let total_err = sum_err + prod_err;
+                // Apply negation for FNMSUB/FNMADD (doesn't change whether it's inexact)
+                if total_err != 0.0 { fl |= NX; }
             }
             set_flags(fcsr, fl);
         }
