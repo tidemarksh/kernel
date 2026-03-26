@@ -554,16 +554,16 @@ fn staged_args() -> &'static mut StagedArgs {
 /// Push an argv string address (guest memory pointer to null-terminated string).
 /// Call before process_create. Strings must already be in guest memory.
 #[unsafe(no_mangle)]
-pub extern "C" fn process_push_arg(addr: u64) {
+pub extern "C" fn process_push_arg(addr: u32) {
     let s = staged_args();
-    if s.argc < MAX_ARGS { s.argv[s.argc] = addr; s.argc += 1; }
+    if s.argc < MAX_ARGS { s.argv[s.argc] = addr as u64; s.argc += 1; }
 }
 
 /// Push an envp string address (guest memory pointer to null-terminated string).
 #[unsafe(no_mangle)]
-pub extern "C" fn process_push_env(addr: u64) {
+pub extern "C" fn process_push_env(addr: u32) {
     let s = staged_args();
-    if s.envc < MAX_ARGS { s.envp[s.envc] = addr; s.envc += 1; }
+    if s.envc < MAX_ARGS { s.envp[s.envc] = addr as u64; s.envc += 1; }
 }
 
 /// Clear staged argv/envp.
