@@ -1,31 +1,38 @@
 //! ELF test helpers for integration tests.
 //! Runs in a separate wasm instance from unit tests, so base=0 is safe.
+//!
+//! Uses Result<(), String> to avoid panics (wasm32-wasip1 uses panic=abort,
+//! so any panic causes a WASM trap that terminates the entire test binary).
 
 use tidemark_kernel::abi::*;
 use tidemark_kernel::types::*;
 
 /// Load an ELF, run the interpreter with block cache, return (exit_code, last_pc).
-pub fn run_elf(elf_bytes: &[u8]) -> (i32, u64) {
+pub fn run_elf(elf_bytes: &[u8]) -> Result<(i32, u64), String> {
     run_elf_inner(elf_bytes, true)
 }
 
 /// Load an ELF, run the interpreter without block cache (baseline).
-pub fn run_elf_no_cache(elf_bytes: &[u8]) -> (i32, u64) {
+pub fn run_elf_no_cache(elf_bytes: &[u8]) -> Result<(i32, u64), String> {
     run_elf_inner(elf_bytes, false)
 }
 
-fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> (i32, u64) {
+fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> Result<(i32, u64), String> {
     unsafe {
         let base: u32 = 0;
 
         tidemark_kernel::guest_mem::init(core::ptr::null(), core::ptr::null());
 
         let current_pages = core::arch::wasm32::memory_size(0);
-        let target_pages = 256;
+        let target_pages = 256; // 16MB
         if current_pages < target_pages {
-            core::arch::wasm32::memory_grow(0, target_pages - current_pages);
+            let grown = core::arch::wasm32::memory_grow(0, target_pages - current_pages);
+            if grown == usize::MAX {
+                return Err("memory_grow failed".into());
+            }
         }
 
+        // Copy ELF to a staging area above the host binary's data.
         let elf_load_addr: u64 = 0xC0_0000;
         tidemark_kernel::guest_mem::write_bytes(base, elf_load_addr, elf_bytes);
 
@@ -33,9 +40,11 @@ fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> (i32, u64) {
             base, 0x100_0000,
             (base as u64 + elf_load_addr) as u32,
             elf_bytes.len() as u32,
-        ).expect("ELF load failed");
+        ).map_err(|e| format!("ELF load failed: {}", e))?;
 
-        tidemark_kernel::alloc::init((elf_result.brk_start as u32 + 0x2000) & !0xF);
+        // Heap at 0x200000 (2MB) — above WASM host's stack (~0x100000)
+        // and static data (~0x11D000), matching test_helpers.rs layout.
+        tidemark_kernel::alloc::init(0x20_0000);
         tidemark_kernel::syscall::memory::init(elf_result.brk_start);
         tidemark_kernel::syscall::signal::init();
         tidemark_kernel::syscall::epoll::init();
@@ -59,8 +68,14 @@ fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> (i32, u64) {
         vm.status = STATUS_OK;
         vm.tid = 1;
 
-        let ps_addr = (elf_result.brk_start + 0x1000) & !0xF;
-        tidemark_kernel::guest_mem::zero_mem(base, ps_addr, core::mem::size_of::<ProcessState>());
+        // Allocate ProcessState via alloc (above host binary data).
+        let ps_addr = tidemark_kernel::alloc::alloc_zeroed(
+            core::mem::size_of::<ProcessState>() as u32,
+            core::mem::align_of::<ProcessState>() as u32,
+        ) as u64;
+        if ps_addr == 0 {
+            return Err("ProcessState allocation failed".into());
+        }
         vm.process_ptr = ps_addr as u32;
 
         let pid_off = core::mem::offset_of!(ProcessState, pid) as u64;
@@ -72,7 +87,6 @@ fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> (i32, u64) {
         tidemark_kernel::guest_mem::write_u32(base, ps_addr + fd_off + 16, 3);
 
         let cache_size = tidemark_kernel::cpu::block_cache::BlockCache::allocation_size() as u32;
-        tidemark_kernel::alloc::init((ps_addr as u32) + core::mem::size_of::<ProcessState>() as u32 + 16);
         let cache_ptr = if use_cache {
             tidemark_kernel::alloc::alloc_zeroed(cache_size, 8)
         } else { 0 };
@@ -91,22 +105,30 @@ fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> (i32, u64) {
 
             match vm.status {
                 STATUS_OK => {
-                    if total > 50_000_000 { return (-999, vm.pc); }
+                    if total > 50_000_000 { return Ok((-999, vm.pc)); }
                 }
-                STATUS_FAULT => return (vm.exit_code, vm.pc),
+                STATUS_FAULT => return Ok((vm.exit_code, vm.pc)),
                 STATUS_SLEEP => {}
-                _ => return (-vm.status, vm.pc),
+                _ => return Ok((-vm.status, vm.pc)),
             }
         }
     }
 }
 
-pub fn assert_elf_pass(name: &str, elf_bytes: &[u8]) {
-    let (code, pc) = run_elf(elf_bytes);
-    assert_eq!(code, 0, "{} failed: exit_code={}, last_pc=0x{:x}", name, code, pc);
+pub fn assert_elf_pass(name: &str, elf_bytes: &[u8]) -> Result<(), String> {
+    let (code, pc) = run_elf(elf_bytes)?;
+    if code == 0 {
+        Ok(())
+    } else {
+        Err(format!("{} failed: exit_code={}, last_pc=0x{:x}", name, code, pc))
+    }
 }
 
-pub fn assert_elf_pass_no_cache(name: &str, elf_bytes: &[u8]) {
-    let (code, pc) = run_elf_no_cache(elf_bytes);
-    assert_eq!(code, 0, "{} (no cache) failed: exit_code={}, last_pc=0x{:x}", name, code, pc);
+pub fn assert_elf_pass_no_cache(name: &str, elf_bytes: &[u8]) -> Result<(), String> {
+    let (code, pc) = run_elf_no_cache(elf_bytes)?;
+    if code == 0 {
+        Ok(())
+    } else {
+        Err(format!("{} (no cache) failed: exit_code={}, last_pc=0x{:x}", name, code, pc))
+    }
 }

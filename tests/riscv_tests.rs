@@ -11,13 +11,11 @@ use support::{assert_elf_pass, assert_elf_pass_no_cache};
 macro_rules! riscv_test {
     ($name:ident, $suite:expr, $test:expr) => {
         #[test]
-        fn $name() {
+        fn $name() -> Result<(), String> {
             let path = concat!(env!("OUT_DIR"), "/", $suite, "/", $test, ".elf");
-            let bytes = match std::fs::read(path) {
-                Ok(b) => b,
-                Err(_) => { eprintln!("skip: {} not built", path); return; }
-            };
-            assert_elf_pass(stringify!($name), &bytes);
+            let bytes = std::fs::read(path)
+                .map_err(|e| format!("{} not built: {}", path, e))?;
+            assert_elf_pass(stringify!($name), &bytes)
         }
     };
 }
@@ -25,13 +23,11 @@ macro_rules! riscv_test {
 macro_rules! riscv_test_no_cache {
     ($name:ident, $suite:expr, $test:expr) => {
         #[test]
-        fn $name() {
+        fn $name() -> Result<(), String> {
             let path = concat!(env!("OUT_DIR"), "/", $suite, "/", $test, ".elf");
-            let bytes = match std::fs::read(path) {
-                Ok(b) => b,
-                Err(_) => { eprintln!("skip: {} not built", path); return; }
-            };
-            assert_elf_pass_no_cache(stringify!($name), &bytes);
+            let bytes = std::fs::read(path)
+                .map_err(|e| format!("{} not built: {}", path, e))?;
+            assert_elf_pass_no_cache(stringify!($name), &bytes)
         }
     };
 }
