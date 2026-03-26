@@ -265,6 +265,41 @@ fn remove_dir_entry(parent_ino: u32, name: &[u8]) -> u32 {
 }
 
 // =========================================================================
+// Symlink operations
+// =========================================================================
+
+/// Create a symbolic link under `parent_ino` with `name` pointing to `target`.
+/// Returns the new inode number, or 0 on failure.
+/// https://man7.org/linux/man-pages/man2/symlinkat.2.html
+pub fn create_symlink(parent_ino: u32, name: &[u8], target: &[u8]) -> u32 {
+    if lookup(parent_ino, name) != 0 { return 0; } // already exists
+    let ino = alloc_inode(S_IFLNK | 0o777);
+    if ino == 0 { return 0; }
+    // Store target as the inode's data
+    let off = alloc_data(target.len() as u32);
+    if off == u32::MAX { return 0; }
+    data_slice_mut()[off as usize..off as usize + target.len()].copy_from_slice(target);
+    inodes()[ino as usize].data_offset = off;
+    inodes()[ino as usize].data_cap = target.len() as u32;
+    inodes()[ino as usize].size = target.len() as u64;
+    if !add_dir_entry(parent_ino, name, ino) { return 0; }
+    ino
+}
+
+/// Read the target of a symbolic link. Returns bytes written to `buf`.
+pub fn read_link(ino: u32, buf: &mut [u8]) -> usize {
+    let ins = inodes();
+    if ino as usize >= ins.len() { return 0; }
+    let inode = &ins[ino as usize];
+    if inode.mode & S_IFMT != S_IFLNK { return 0; }
+    let len = inode.size as usize;
+    let n = len.min(buf.len());
+    let off = inode.data_offset as usize;
+    buf[..n].copy_from_slice(&data_slice()[off..off + n]);
+    n
+}
+
+// =========================================================================
 // File/directory CRUD
 // =========================================================================
 
@@ -484,5 +519,43 @@ mod tests {
         let mut buf = [0u8; 4];
         read_file(ino, 100, &mut buf);
         assert_eq!(&buf, b"data");
+    }
+
+    #[test]
+    fn symlink_create_and_read() {
+        let _ = TestVm::new();
+        let ino = create_symlink(1, b"mylink", b"/target/path");
+        assert!(ino > 0);
+
+        // Stat should show S_IFLNK
+        let st = stat(ino).unwrap();
+        assert_eq!(st.mode & S_IFMT, S_IFLNK);
+        assert_eq!(st.size, 12); // "/target/path".len()
+
+        // read_link returns the target
+        let mut buf = [0u8; 64];
+        let n = read_link(ino, &mut buf);
+        assert_eq!(n, 12);
+        assert_eq!(&buf[..12], b"/target/path");
+    }
+
+    #[test]
+    fn symlink_resolve_and_readlinkat() {
+        let _ = TestVm::new();
+        // Create /proc/self/exe → /init (mimics process_create behavior)
+        let proc_dir = create_dir(1, b"proc", 0o755);
+        assert!(proc_dir > 0);
+        let self_dir = create_dir(proc_dir, b"self", 0o755);
+        assert!(self_dir > 0);
+        let exe_ino = create_symlink(self_dir, b"exe", b"/init");
+        assert!(exe_ino > 0);
+
+        // resolve_path should find the symlink inode
+        assert_eq!(resolve_path(b"/proc/self/exe"), exe_ino);
+
+        // read_link on the inode
+        let mut buf = [0u8; 64];
+        let n = read_link(exe_ino, &mut buf);
+        assert_eq!(&buf[..n], b"/init");
     }
 }

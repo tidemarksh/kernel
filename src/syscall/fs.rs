@@ -545,28 +545,20 @@ pub fn sys_faccessat(vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64
     if ino == 0 { ENOENT } else { 0 }
 }
 
-/// readlinkat: read symbolic link. Handles /proc/self/exe.
-/// Returns EINVAL for paths that exist but are not symlinks,
-/// ENOENT for paths that don't exist.
+/// readlinkat: read symbolic link.
+/// https://man7.org/linux/man-pages/man2/readlinkat.2.html
 pub fn sys_readlinkat(vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, buf: u64, bufsiz: u64) -> i64 {
-    let mut path_buf = [0u8; 512];
-    let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf) };
-    let path = &path_buf[..len];
-
-    // Handle /proc/self/exe — many runtimes read this to find their own binary.
-    if path == b"/proc/self/exe" {
-        let result = b"/init";
-        let n = (result.len()).min(bufsiz as usize);
-        unsafe { guest_mem::write_bytes(base, buf, &result[..n]); }
-        return n as i64;
-    }
-
-    // For all other paths: check if the path exists.
-    // MemFS has no symlink support, so any existing path is not a symlink → EINVAL.
-    // Non-existent paths → ENOENT.
     let ino = resolve_at(vm, dirfd, path_addr, base);
     if ino == 0 { return ENOENT; }
-    EINVAL
+
+    // Read symlink target via memfs
+    let mut link_buf = [0u8; 512];
+    let n = memfs::read_link(ino, &mut link_buf);
+    if n == 0 { return EINVAL; } // not a symlink
+
+    let out = n.min(bufsiz as usize);
+    unsafe { guest_mem::write_bytes(base, buf, &link_buf[..out]); }
+    out as i64
 }
 
 /// ftruncate: truncate file to specified length.

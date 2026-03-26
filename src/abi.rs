@@ -645,6 +645,28 @@ pub extern "C" fn process_create(
         staged.argc = 0;
         staged.envc = 0;
 
+        // Create /proc/self/exe symlink pointing to argv[0]
+        let proc_ino = crate::fs::memfs::resolve_path(b"/proc");
+        let proc_ino = if proc_ino == 0 {
+            crate::fs::memfs::create_dir(1, b"proc", 0o555)
+        } else { proc_ino };
+        if proc_ino > 0 {
+            let self_ino = crate::fs::memfs::resolve_path(b"/proc/self");
+            let self_ino = if self_ino == 0 {
+                crate::fs::memfs::create_dir(proc_ino, b"self", 0o555)
+            } else { self_ino };
+            if self_ino > 0 {
+                // Use argv[0] as the exe path; fall back to "/init"
+                let mut exe_target = [0u8; 256];
+                let exe_len = if staged.argc > 0 {
+                    // argv[0] was already written to guest memory; read it back
+                    crate::guest_mem::read_cstr(base, argv_addrs[0], &mut exe_target)
+                } else { 0 };
+                let target = if exe_len > 0 { &exe_target[..exe_len] } else { b"/init" as &[u8] };
+                crate::fs::memfs::create_symlink(self_ino, b"exe", target);
+            }
+        }
+
         ts.pc = elf_result.entry;
         ts.x[2] = sp;
         ts.status = STATUS_OK;
