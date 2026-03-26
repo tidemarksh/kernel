@@ -139,8 +139,9 @@ pub fn sys_mmap(
     let is_anon = (flags & MAP_ANONYMOUS) != 0;
 
     // Validate fd for file-backed mmap
-    if !is_anon && fd >= 0 {
-        if fd_table::get_ofd(vm, fd as u64).is_none() {
+    // https://man7.org/linux/man-pages/man2/mmap.2.html
+    if !is_anon {
+        if fd < 0 || fd_table::get_ofd(vm, fd as u64).is_none() {
             return EBADF;
         }
     }
