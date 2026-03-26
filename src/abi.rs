@@ -527,6 +527,53 @@ pub extern "C" fn kernel_init(heap_base: u32) {
     crate::fs::memfs::init();
 }
 
+// =========================================================================
+// Staged argv/envp for process_create
+// =========================================================================
+
+const MAX_ARGS: usize = 64;
+
+struct StagedArgs {
+    argv: [u64; MAX_ARGS],
+    envp: [u64; MAX_ARGS],
+    argc: usize,
+    envc: usize,
+}
+
+static mut STAGED: StagedArgs = StagedArgs {
+    argv: [0; MAX_ARGS],
+    envp: [0; MAX_ARGS],
+    argc: 0,
+    envc: 0,
+};
+
+fn staged_args() -> &'static mut StagedArgs {
+    unsafe { &mut *core::ptr::addr_of_mut!(STAGED) }
+}
+
+/// Push an argv string address (guest memory pointer to null-terminated string).
+/// Call before process_create. Strings must already be in guest memory.
+#[unsafe(no_mangle)]
+pub extern "C" fn process_push_arg(addr: u64) {
+    let s = staged_args();
+    if s.argc < MAX_ARGS { s.argv[s.argc] = addr; s.argc += 1; }
+}
+
+/// Push an envp string address (guest memory pointer to null-terminated string).
+#[unsafe(no_mangle)]
+pub extern "C" fn process_push_env(addr: u64) {
+    let s = staged_args();
+    if s.envc < MAX_ARGS { s.envp[s.envc] = addr; s.envc += 1; }
+}
+
+/// Clear staged argv/envp.
+#[unsafe(no_mangle)]
+pub extern "C" fn process_clear_args() {
+    let s = staged_args();
+    s.argc = 0;
+    s.envc = 0;
+}
+
 /// Create a new process. Loads ELF from `elf_ptr` in WASM memory.
 /// Returns pointer to ThreadState, or 0 on failure.
 #[unsafe(no_mangle)]
@@ -576,12 +623,27 @@ pub extern "C" fn process_create(
         let stack_top = (ram_size - 4096) as u64;
         let random_addr = stack_top - 16;
         crate::guest_mem::write_bytes(base, random_addr, &[0x42u8; 16]);
-        let argv0_addr = stack_top - 64;
-        crate::guest_mem::write_bytes(base, argv0_addr, b"init\0");
+
+        // Read argv/envp from staged area in guest memory (set by TS via process_push_arg/env)
+        let staged = staged_args();
+        let argv_addrs: &[u64] = if staged.argc > 0 {
+            &staged.argv[..staged.argc]
+        } else {
+            // Default: argv = ["init"]
+            let argv0_addr = stack_top - 64;
+            crate::guest_mem::write_bytes(base, argv0_addr, b"init\0");
+            staged.argv[0] = argv0_addr;
+            &staged.argv[..1]
+        };
+        let envp_addrs: &[u64] = &staged.envp[..staged.envc];
 
         let sp = crate::elf::setup_stack(
-            base, stack_top - 128, &[argv0_addr], &[], &elf_result, random_addr,
+            base, stack_top - 128 - (staged.argc as u64 + staged.envc as u64) * 16,
+            argv_addrs, envp_addrs, &elf_result, random_addr,
         );
+        // Clear staged args for next process
+        staged.argc = 0;
+        staged.envc = 0;
 
         ts.pc = elf_result.entry;
         ts.x[2] = sp;
