@@ -119,10 +119,28 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_SET_TID_ADDRESS => thread::sys_set_tid_address(vm, a0),
         SYS_SET_ROBUST_LIST => thread::sys_set_robust_list(vm, a0, a1),
         SYS_CLONE => {
-            let ret = thread::sys_clone(vm, base, a0, a1, a2, a3, a4);
-            if vm.status == abi::STATUS_CLONE_SPAWN { return abi::STATUS_CLONE_SPAWN; }
+            // Dispatch based on clone flags:
+            // CLONE_VFORK → vfork (process.rs)
+            // CLONE_VM | CLONE_THREAD → new thread (thread.rs)
+            // neither → plain fork (process.rs)
+            if a0 & CLONE_VFORK != 0 {
+                return process::sys_vfork(vm, base);
+            } else if a0 & CLONE_VM != 0 && a0 & CLONE_THREAD != 0 {
+                let ret = thread::sys_clone(vm, base, a0, a1, a2, a3, a4);
+                if vm.status == abi::STATUS_CLONE_SPAWN { return abi::STATUS_CLONE_SPAWN; }
+                ret
+            } else {
+                let ret = process::sys_fork(vm, base);
+                if vm.status == abi::STATUS_EXECVE_SPAWN { return abi::STATUS_EXECVE_SPAWN; }
+                ret
+            }
+        }
+        SYS_EXECVE => {
+            let ret = process::sys_execve(vm, base, a0, a1, a2);
+            if vm.status == abi::STATUS_EXECVE_SPAWN { return abi::STATUS_EXECVE_SPAWN; }
             ret
         }
+        SYS_WAIT4 => process::sys_wait4(vm, base, a0 as i64, a1, a2, a3),
         SYS_FUTEX => {
             let ret = thread::sys_futex(vm, base, a0, a1, a2, a3, a4, vm.x[15]);
             if vm.status == abi::STATUS_FUTEX_WAIT { return abi::STATUS_FUTEX_WAIT; }
