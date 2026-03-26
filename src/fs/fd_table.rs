@@ -321,8 +321,12 @@ pub fn sys_close(vm: &mut ThreadState, _base: u32, fd: u64) -> i64 {
         ofd.refcount -= 1;
 
         if ofd.refcount <= 0 {
-            // Last reference: release OFD.
-            // In the kernel Worker model, this would send STATUS_FS to kernel Worker for cleanup.
+            // Last reference: backend-specific cleanup before releasing OFD.
+            if ofd.fd_type == FD_TYPE_PIPE {
+                let pipe_idx = ofd.ino;
+                let is_read = ofd.host_fd >= 0;
+                crate::syscall::pipe::pipe_close(pipe_idx, is_read);
+            }
             ofd.fd_type = 0;
             ofd.refcount = 0;
         }

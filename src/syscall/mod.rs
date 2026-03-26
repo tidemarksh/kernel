@@ -37,7 +37,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_GETPID => identity::sys_getpid(vm),
         SYS_GETPPID => identity::sys_getppid(vm),
         SYS_GETTID => identity::sys_gettid(vm),
-        SYS_GETUID | SYS_GETEUID | SYS_GETGID | SYS_GETEGID => 0, // root
+        SYS_GETUID | SYS_GETEUID | SYS_GETGID | SYS_GETEGID => identity::sys_getuid(),
         SYS_UNAME => identity::sys_uname(vm, base, a0),
         SYS_SYSINFO => identity::sys_sysinfo(vm, base, a0),
         SYS_GETRANDOM => identity::sys_getrandom(vm, base, a0, a1, a2),
@@ -46,7 +46,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_CLOCK_GETTIME => time::sys_clock_gettime(vm, base, a0, a1),
         114 => time::sys_clock_getres(vm, base, a0, a1), // clock_getres
         SYS_NANOSLEEP => return time::sys_nanosleep(vm, base, a0, a1),
-        SYS_SCHED_YIELD => 0, // no-op, return success
+        SYS_SCHED_YIELD => identity::sys_sched_yield(),
         SYS_TIMES => 0,      // stub: return 0 clock ticks
 
         // memory
@@ -130,5 +130,9 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
     };
 
     vm.x[10] = result as u64;
+
+    // Check and deliver pending signals at syscall return boundary
+    signal::check_pending(vm, base);
+
     abi::STATUS_OK
 }

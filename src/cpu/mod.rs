@@ -80,8 +80,32 @@ pub unsafe fn exec(
             decode::OP_OP_IMM_32 => exec_op_imm_32(&mut x, raw, &mut pc, step),
             decode::OP_OP => exec_op(&mut x, raw, &mut pc, step),
             decode::OP_OP_32 => exec_op_32(&mut x, raw, &mut pc, step),
-            decode::OP_LOAD => exec_load(&mut x, raw, base, &mut pc, step),
-            decode::OP_STORE => exec_store(&x, raw, base, &mut pc, step),
+            decode::OP_LOAD => {
+                if crate::syscall::memory::has_prot_none() {
+                    let addr = (x[decode::rs1(raw)] as i64 + decode::imm_i(raw)) as u64;
+                    if crate::syscall::memory::is_prot_none(addr) {
+                        crate::syscall::signal::send_signal(vm, crate::abi::SIGSEGV);
+                        vm.status = abi::STATUS_FAULT;
+                        vm.fault_pc = pc;
+                        vm.fault_addr = addr;
+                        break;
+                    }
+                }
+                exec_load(&mut x, raw, base, &mut pc, step);
+            }
+            decode::OP_STORE => {
+                if crate::syscall::memory::has_prot_none() {
+                    let addr = (x[decode::rs1(raw)] as i64 + decode::imm_s(raw)) as u64;
+                    if crate::syscall::memory::is_prot_none(addr) {
+                        crate::syscall::signal::send_signal(vm, crate::abi::SIGSEGV);
+                        vm.status = abi::STATUS_FAULT;
+                        vm.fault_pc = pc;
+                        vm.fault_addr = addr;
+                        break;
+                    }
+                }
+                exec_store(&x, raw, base, &mut pc, step);
+            }
             decode::OP_LUI => {
                 let rd = decode::rd(raw);
                 if rd != 0 { x[rd] = decode::imm_u(raw) as u64; }

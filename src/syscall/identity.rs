@@ -118,6 +118,12 @@ pub fn sys_getrandom(vm: &ThreadState, base: u32, buf: u64, len: u64, _flags: u6
     count as i64
 }
 
+/// getuid/geteuid/getgid/getegid: always return 0 (root).
+pub fn sys_getuid() -> i64 { 0 }
+
+/// sched_yield: no-op, return success.
+pub fn sys_sched_yield() -> i64 { 0 }
+
 #[cfg(test)]
 mod tests {
     use crate::test_helpers::TestVm;

@@ -128,7 +128,7 @@ pub fn sys_brk(_vm: &mut ThreadState, _base: u32, addr: u64) -> i64 {
 /// Supports MAP_ANONYMOUS and MAP_PRIVATE file-backed (eager populate).
 /// MAP_FIXED removes overlapping VMAs. WASM memory.grow on demand.
 pub fn sys_mmap(
-    _vm: &mut ThreadState, _base: u32,
+    vm: &mut ThreadState, _base: u32,
     addr: u64, length: u64, prot: u64, flags: u64, fd: i64, offset: u64,
 ) -> i64 {
     let s = ms();
@@ -169,7 +169,7 @@ pub fn sys_mmap(
         // Read file content into guest memory, zero-fill beyond EOF.
         // WASM has no page fault / demand paging, so populate eagerly.
         unsafe { guest_mem::zero_mem(0, start, len as usize); }
-        let ofd = fd_table::get_ofd_by_id(fd as u32);
+        let ofd = fd_table::get_ofd(vm, fd as u64);
         if let Some(ofd) = ofd {
             let st = memfs::stat(ofd.ino as u32);
             if let Some(st) = st {
