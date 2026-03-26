@@ -337,18 +337,22 @@ fn write_stat(base: u32, stat_buf: u64, ino: u32) -> i64 {
 // mkdir / unlink / rename
 // =========================================================================
 
-/// mkdirat: create a directory. Absolute paths only for now.
+/// mkdirat: create a directory.
 pub fn sys_mkdirat(_vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, mode: u64) -> i64 {
-    let mut path_buf = [0u8; 512];
-    let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf) };
-    let path = &path_buf[..len];
-    let (parent_ino, name) = split_parent_name(if path[0] == b'/' {
-        path
+    let mut path_buf = [0u8; 513];
+    let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf[1..]) };
+    let path = &path_buf[1..1 + len];
+    if path.is_empty() { return ENOENT; }
+
+    let abs_path = if path[0] == b'/' {
+        &path_buf[1..1 + len]
+    } else if dirfd as i32 == AT_FDCWD {
+        path_buf[0] = b'/';
+        &path_buf[..1 + len]
     } else {
-        // relative to root for now
-        let _ = dirfd;
-        return EINVAL; // TODO
-    });
+        return EINVAL;
+    };
+    let (parent_ino, name) = split_parent_name(abs_path);
     if parent_ino == 0 { return ENOENT; }
     let ino = memfs::create_dir(parent_ino, name, mode as u32 & 0o7777);
     if ino == 0 { return EEXIST; }
