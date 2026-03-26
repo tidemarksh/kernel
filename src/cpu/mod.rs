@@ -770,6 +770,22 @@ fn sqrt_flags_f32(a: f32, result: f32) -> u32 {
     flags
 }
 
+/// Canonical NaN constants (§11.3)
+const CANONICAL_NAN_F64: u64 = 0x7FF8_0000_0000_0000;
+const CANONICAL_NAN_F32: u32 = 0x7FC0_0000;
+
+/// Canonicalize f64 NaN result (§11.3: if result is NaN, use canonical NaN)
+#[inline(always)]
+fn canon_f64(v: f64) -> f64 {
+    if v.is_nan() { f64::from_bits(CANONICAL_NAN_F64) } else { v }
+}
+
+/// Canonicalize f32 NaN result
+#[inline(always)]
+fn canon_f32(v: f32) -> f32 {
+    if v.is_nan() { f32::from_bits(CANONICAL_NAN_F32) } else { v }
+}
+
 /// NaN-box a single-precision value for storage in f register (FLEN=64, ).
 #[inline(always)]
 fn box_f32(val: f32) -> u64 {
@@ -941,27 +957,27 @@ unsafe fn exec_op_fp(x: &mut [u64; 32], f: &mut [u64; 32], raw: u32, pc: &mut u6
         // ========================= Double-precision (fmt=1) =========================
         (0x00, 1) => { // FADD.D
             let a = f64::from_bits(f[rs1]); let b = f64::from_bits(f[rs2]);
-            let r = a + b; f[rd] = r.to_bits();
+            let r = canon_f64(a + b); f[rd] = r.to_bits();
             set_flags(fcsr, add_flags_f64(a, b, r));
         }
         (0x01, 1) => { // FSUB.D
             let a = f64::from_bits(f[rs1]); let b = f64::from_bits(f[rs2]);
-            let r = a - b; f[rd] = r.to_bits();
+            let r = canon_f64(a - b); f[rd] = r.to_bits();
             set_flags(fcsr, add_flags_f64(a, -b, r));
         }
         (0x02, 1) => { // FMUL.D
             let a = f64::from_bits(f[rs1]); let b = f64::from_bits(f[rs2]);
-            let r = a * b; f[rd] = r.to_bits();
+            let r = canon_f64(a * b); f[rd] = r.to_bits();
             set_flags(fcsr, mul_flags_f64(a, b, r));
         }
         (0x03, 1) => { // FDIV.D
             let a = f64::from_bits(f[rs1]); let b = f64::from_bits(f[rs2]);
-            let r = a / b; f[rd] = r.to_bits();
+            let r = canon_f64(a / b); f[rd] = r.to_bits();
             set_flags(fcsr, div_flags_f64(a, b, r));
         }
         (0x0B, 1) => { // FSQRT.D
             let a = f64::from_bits(f[rs1]);
-            let r = libm::sqrt(a); f[rd] = r.to_bits();
+            let r = canon_f64(libm::sqrt(a)); f[rd] = r.to_bits();
             set_flags(fcsr, sqrt_flags_f64(a, r));
         }
         (0x04, 1) => { // FSGNJ.D / FSGNJN.D / FSGNJX.D
@@ -1002,12 +1018,14 @@ unsafe fn exec_op_fp(x: &mut [u64; 32], f: &mut [u64; 32], raw: u32, pc: &mut u6
                 _ => 0,
             };
             if rd != 0 { x[rd] = r; }
-            // §11.7 Table 11.4: NV for NaN/Inf/out-of-range (exclusive with NX)
-            let out_of_range = v.is_nan() || v.is_infinite() || match rs2 {
-                0 => v < (i32::MIN as f64) || v > (i32::MAX as f64),
-                1 => v < 0.0 || v > (u32::MAX as f64),
-                2 => v < (i64::MIN as f64) || v > (i64::MAX as f64),
-                3 => v < 0.0 || v > (u64::MAX as f64),
+            // §11.7: NV if NaN/Inf/out-of-range AFTER rounding (RTZ = truncation).
+            // Use truncated value for range check to handle cases like -0.9 → 0 (in range for unsigned).
+            let trunc = if v.is_nan() || v.is_infinite() { None } else { Some(v as i64) };
+            let out_of_range = trunc.is_none() || match rs2 {
+                0 => trunc.unwrap() < (i32::MIN as i64) || trunc.unwrap() > (i32::MAX as i64),
+                1 => v < -1.0 + f64::EPSILON || v > (u32::MAX as f64) + 1.0 - f64::EPSILON,
+                2 => v <= (i64::MIN as f64) - 1.0 || v >= (i64::MAX as f64) + 1.0,
+                3 => v < -1.0 + f64::EPSILON || v > (u64::MAX as f64),
                 _ => false,
             };
             if out_of_range { set_flags(fcsr, NV); }
@@ -1040,15 +1058,15 @@ unsafe fn exec_op_fp(x: &mut [u64; 32], f: &mut [u64; 32], raw: u32, pc: &mut u6
 
         // ========================= Single-precision (fmt=0) =========================
         (0x00, 0) => { let a = unbox_f32(f[rs1]); let b = unbox_f32(f[rs2]);
-            let r = a + b; f[rd] = box_f32(r); set_flags(fcsr, add_flags_f32(a, b, r)); }
+            let r = canon_f32(a + b); f[rd] = box_f32(r); set_flags(fcsr, add_flags_f32(a, b, r)); }
         (0x01, 0) => { let a = unbox_f32(f[rs1]); let b = unbox_f32(f[rs2]);
-            let r = a - b; f[rd] = box_f32(r); set_flags(fcsr, add_flags_f32(a, -b, r)); }
+            let r = canon_f32(a - b); f[rd] = box_f32(r); set_flags(fcsr, add_flags_f32(a, -b, r)); }
         (0x02, 0) => { let a = unbox_f32(f[rs1]); let b = unbox_f32(f[rs2]);
-            let r = a * b; f[rd] = box_f32(r); set_flags(fcsr, mul_flags_f32(a, b, r)); }
+            let r = canon_f32(a * b); f[rd] = box_f32(r); set_flags(fcsr, mul_flags_f32(a, b, r)); }
         (0x03, 0) => { let a = unbox_f32(f[rs1]); let b = unbox_f32(f[rs2]);
-            let r = a / b; f[rd] = box_f32(r); set_flags(fcsr, div_flags_f32(a, b, r)); }
+            let r = canon_f32(a / b); f[rd] = box_f32(r); set_flags(fcsr, div_flags_f32(a, b, r)); }
         (0x0B, 0) => { let a = unbox_f32(f[rs1]);
-            let r = libm::sqrtf(a); f[rd] = box_f32(r); set_flags(fcsr, sqrt_flags_f32(a, r)); }
+            let r = canon_f32(libm::sqrtf(a)); f[rd] = box_f32(r); set_flags(fcsr, sqrt_flags_f32(a, r)); }
         (0x04, 0) => { // FSGNJ.S / FSGNJN.S / FSGNJX.S
             let a = unbox_f32(f[rs1]).to_bits();
             let b = unbox_f32(f[rs2]).to_bits();
@@ -1088,11 +1106,13 @@ unsafe fn exec_op_fp(x: &mut [u64; 32], f: &mut [u64; 32], raw: u32, pc: &mut u6
                 _ => 0,
             };
             if rd != 0 { x[rd] = r; }
-            let out_of_range = v.is_nan() || v.is_infinite() || match rs2 {
-                0 => vd < (i32::MIN as f64) || vd > (i32::MAX as f64),
-                1 => v < 0.0 || vd > (u32::MAX as f64),
-                2 => vd < (i64::MIN as f64) || vd > (i64::MAX as f64),
-                3 => v < 0.0 || vd > (u64::MAX as f64),
+            // §11.7: NV if NaN/Inf/out-of-range AFTER rounding. Use truncated i64 for range check.
+            let trunc = if v.is_nan() || v.is_infinite() { None } else { Some(vd as i64) };
+            let out_of_range = trunc.is_none() || match rs2 {
+                0 => trunc.unwrap() < (i32::MIN as i64) || trunc.unwrap() > (i32::MAX as i64),
+                1 => trunc.unwrap() < 0 || trunc.unwrap() > (u32::MAX as i64),
+                2 => vd <= (i64::MIN as f64) - 1.0 || vd >= (i64::MAX as f64) + 1.0,
+                3 => vd < 0.0 && trunc.unwrap() < 0 || vd > (u64::MAX as f64),
                 _ => false,
             };
             if out_of_range { set_flags(fcsr, NV); }
@@ -1131,10 +1151,18 @@ unsafe fn exec_op_fp(x: &mut [u64; 32], f: &mut [u64; 32], raw: u32, pc: &mut u6
 
         // ========================= S↔D conversion (funct5=0x08) =========================
         (0x08, 0) => { // FCVT.S.D: double → single
-            f[rd] = box_f32(f64::from_bits(f[rs1]) as f32);
+            let a = f64::from_bits(f[rs1]);
+            let r = canon_f32(a as f32);
+            f[rd] = box_f32(r);
+            // NX if precision lost, NV if sNaN input
+            if is_snan_f64(a) { set_flags(fcsr, NV); }
+            else if !a.is_nan() && !a.is_infinite() && (r as f64).to_bits() != a.to_bits() { set_flags(fcsr, NX); }
         }
-        (0x08, 1) => { // FCVT.D.S: single → double
-            f[rd] = (unbox_f32(f[rs1]) as f64).to_bits();
+        (0x08, 1) => { // FCVT.D.S: single → double (always exact, but canonicalize NaN)
+            let a = unbox_f32(f[rs1]);
+            let r = if a.is_nan() { f64::from_bits(CANONICAL_NAN_F64) } else { a as f64 };
+            f[rd] = r.to_bits();
+            if is_snan_f32(a) { set_flags(fcsr, NV); }
         }
 
         _ => {} // Q/H not supported
@@ -1160,13 +1188,13 @@ unsafe fn exec_fma(f: &mut [u64; 32], raw: u32, opcode: u32, pc: &mut u64, step:
             let a = unbox_f32(f[rs1]);
             let b = unbox_f32(f[rs2]);
             let c = unbox_f32(f[rs3]);
-            let r = match opcode {
+            let r = canon_f32(match opcode {
                 decode::OP_FMADD  => libm::fmaf(a, b, c),
                 decode::OP_FMSUB  => libm::fmaf(a, b, -c),
                 decode::OP_FNMSUB => libm::fmaf(-a, b, c),
                 decode::OP_FNMADD => libm::fmaf(-a, b, -c),
                 _ => 0.0,
-            };
+            });
             f[rd] = box_f32(r);
             let mut fl = 0u32;
             if (a.is_infinite() && b == 0.0) || (a == 0.0 && b.is_infinite()) { fl |= NV; }
@@ -1190,13 +1218,13 @@ unsafe fn exec_fma(f: &mut [u64; 32], raw: u32, opcode: u32, pc: &mut u64, step:
             let a = f64::from_bits(f[rs1]);
             let b = f64::from_bits(f[rs2]);
             let c = f64::from_bits(f[rs3]);
-            let r = match opcode {
+            let r = canon_f64(match opcode {
                 decode::OP_FMADD  => libm::fma(a, b, c),
                 decode::OP_FMSUB  => libm::fma(a, b, -c),
                 decode::OP_FNMSUB => libm::fma(-a, b, c),
                 decode::OP_FNMADD => libm::fma(-a, b, -c),
                 _ => 0.0,
-            };
+            });
             f[rd] = r.to_bits();
             let mut fl = 0u32;
             if (a.is_infinite() && b == 0.0) || (a == 0.0 && b.is_infinite()) { fl |= NV; }
