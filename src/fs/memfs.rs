@@ -33,11 +33,11 @@
 use crate::abi::*;
 use crate::alloc;
 
-pub const S_IFMT: u32   = 0o170000;
-pub const S_IFDIR: u32  = 0o040000;
-pub const S_IFREG: u32  = 0o100000;
-pub const S_IFLNK: u32  = 0o120000;
-pub const S_IFCHR: u32  = 0o020000;
+pub const S_IFMT: u32 = 0o170000;
+pub const S_IFDIR: u32 = 0o040000;
+pub const S_IFREG: u32 = 0o100000;
+pub const S_IFLNK: u32 = 0o120000;
+pub const S_IFCHR: u32 = 0o020000;
 
 const MAX_INODES: usize = 4096;
 const MAX_NAME_LEN: usize = 255;
@@ -48,6 +48,8 @@ const INITIAL_DATA_SIZE: u32 = 256 * 1024;
 struct Inode {
     mode: u32,
     nlink: u32,
+    uid: u32,
+    gid: u32,
     size: u64,
     data_offset: u32,
     data_cap: u32,
@@ -121,19 +123,19 @@ pub fn init() {
             core::mem::size_of::<MemFsHeader>() as u32,
             core::mem::align_of::<MemFsHeader>() as u32,
         );
-        let inodes_ptr = alloc::alloc_zeroed(
-            (MAX_INODES * core::mem::size_of::<Inode>()) as u32, 8,
-        );
-        let first_child_ptr = alloc::alloc_zeroed(
-            (MAX_INODES * 4) as u32, 4,
-        );
-        let dir_entries_ptr = alloc::alloc_zeroed(
-            (MAX_INODES * core::mem::size_of::<DirEntry>()) as u32, 4,
-        );
+        let inodes_ptr =
+            alloc::alloc_zeroed((MAX_INODES * core::mem::size_of::<Inode>()) as u32, 8);
+        let first_child_ptr = alloc::alloc_zeroed((MAX_INODES * 4) as u32, 4);
+        let dir_entries_ptr =
+            alloc::alloc_zeroed((MAX_INODES * core::mem::size_of::<DirEntry>()) as u32, 4);
         let data_ptr = alloc::alloc_zeroed(INITIAL_DATA_SIZE, 8);
 
-        if header_ptr == 0 || inodes_ptr == 0 || first_child_ptr == 0
-            || dir_entries_ptr == 0 || data_ptr == 0 {
+        if header_ptr == 0
+            || inodes_ptr == 0
+            || first_child_ptr == 0
+            || dir_entries_ptr == 0
+            || data_ptr == 0
+        {
             core::arch::wasm32::unreachable();
         }
 
@@ -152,7 +154,10 @@ pub fn init() {
         root.mode = S_IFDIR | 0o755;
         root.nlink = 2;
 
-        core::ptr::write(core::ptr::addr_of_mut!(MEMFS_PTR), header_ptr as *mut MemFsHeader);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(MEMFS_PTR),
+            header_ptr as *mut MemFsHeader,
+        );
     }
 }
 
@@ -163,8 +168,18 @@ pub fn init() {
 fn alloc_inode(mode: u32) -> u32 {
     let h = fs();
     let ino = h.inode_count as usize;
-    if ino >= MAX_INODES { return 0; }
-    inodes()[ino] = Inode { mode, nlink: 1, size: 0, data_offset: 0, data_cap: 0 };
+    if ino >= MAX_INODES {
+        return 0;
+    }
+    inodes()[ino] = Inode {
+        mode,
+        nlink: 1,
+        uid: 0,
+        gid: 0,
+        size: 0,
+        data_offset: 0,
+        data_cap: 0,
+    };
     h.inode_count += 1;
     ino as u32
 }
@@ -172,7 +187,9 @@ fn alloc_inode(mode: u32) -> u32 {
 fn alloc_data(size: u32) -> u32 {
     let h = fs();
     let aligned = (size + 7) & !7;
-    if h.data_used + aligned > h.data_cap { return u32::MAX; }
+    if h.data_used + aligned > h.data_cap {
+        return u32::MAX;
+    }
     let off = h.data_used;
     h.data_used += aligned;
     off
@@ -197,12 +214,18 @@ pub fn lookup(parent_ino: u32, name: &[u8]) -> u32 {
 }
 
 pub fn resolve_path(path: &[u8]) -> u32 {
-    if path.is_empty() || path[0] != b'/' { return 0; }
+    if path.is_empty() || path[0] != b'/' {
+        return 0;
+    }
     let mut ino = 1u32;
     for component in path[1..].split(|&b| b == b'/') {
-        if component.is_empty() || component == b"." { continue; }
+        if component.is_empty() || component == b"." {
+            continue;
+        }
         ino = lookup(ino, component);
-        if ino == 0 { return 0; }
+        if ino == 0 {
+            return 0;
+        }
     }
     ino
 }
@@ -211,14 +234,22 @@ pub fn resolve_path(path: &[u8]) -> u32 {
 /// The path must NOT start with '/'. Each component is looked up
 /// via `lookup` starting from `start_ino`.
 pub fn resolve_path_from(start_ino: u32, path: &[u8]) -> u32 {
-    if path.is_empty() { return start_ino; }
+    if path.is_empty() {
+        return start_ino;
+    }
     // Absolute paths should not be passed here
-    if path[0] == b'/' { return 0; }
+    if path[0] == b'/' {
+        return 0;
+    }
     let mut ino = start_ino;
     for component in path.split(|&b| b == b'/') {
-        if component.is_empty() || component == b"." { continue; }
+        if component.is_empty() || component == b"." {
+            continue;
+        }
         ino = lookup(ino, component);
-        if ino == 0 { return 0; }
+        if ino == 0 {
+            return 0;
+        }
     }
     ino
 }
@@ -226,7 +257,9 @@ pub fn resolve_path_from(start_ino: u32, path: &[u8]) -> u32 {
 fn add_dir_entry(parent_ino: u32, name: &[u8], ino: u32) -> bool {
     let h = fs();
     let idx = h.dir_entry_count as usize;
-    if idx >= MAX_INODES || name.len() > MAX_NAME_LEN { return false; }
+    if idx >= MAX_INODES || name.len() > MAX_NAME_LEN {
+        return false;
+    }
 
     let des = dir_entries();
     des[idx].name[..name.len()].copy_from_slice(name);
@@ -264,6 +297,56 @@ fn remove_dir_entry(parent_ino: u32, name: &[u8]) -> u32 {
     0
 }
 
+fn find_parent_name(child_ino: u32, name_buf: &mut [u8; MAX_NAME_LEN + 1]) -> Option<(u32, usize)> {
+    let h = fs();
+    let des = dir_entries();
+    let fc = first_child();
+
+    for parent_ino in 1..h.inode_count {
+        let mut idx = fc[parent_ino as usize];
+        while idx != 0 {
+            let de = &des[idx as usize];
+            if de.ino == child_ino {
+                let name_len = de.name_len as usize;
+                name_buf[..name_len].copy_from_slice(&de.name[..name_len]);
+                return Some((parent_ino, name_len));
+            }
+            idx = de.next_sibling;
+        }
+    }
+
+    None
+}
+
+fn write_path_inner(ino: u32, buf: &mut [u8]) -> Option<usize> {
+    if ino == 1 {
+        if buf.is_empty() {
+            return None;
+        }
+        buf[0] = b'/';
+        return Some(1);
+    }
+
+    let mut name_buf = [0u8; MAX_NAME_LEN + 1];
+    let (parent_ino, name_len) = find_parent_name(ino, &mut name_buf)?;
+    let prefix_len = write_path_inner(parent_ino, buf)?;
+    let sep_len = usize::from(prefix_len > 1);
+    let total_len = prefix_len + sep_len + name_len;
+    if total_len > buf.len() {
+        return None;
+    }
+    if sep_len != 0 {
+        buf[prefix_len] = b'/';
+    }
+    let name_start = prefix_len + sep_len;
+    buf[name_start..name_start + name_len].copy_from_slice(&name_buf[..name_len]);
+    Some(total_len)
+}
+
+pub fn write_path(ino: u32, buf: &mut [u8]) -> usize {
+    write_path_inner(ino, buf).unwrap_or_default()
+}
+
 // =========================================================================
 // Symlink operations
 // =========================================================================
@@ -272,26 +355,38 @@ fn remove_dir_entry(parent_ino: u32, name: &[u8]) -> u32 {
 /// Returns the new inode number, or 0 on failure.
 /// https://man7.org/linux/man-pages/man2/symlinkat.2.html
 pub fn create_symlink(parent_ino: u32, name: &[u8], target: &[u8]) -> u32 {
-    if lookup(parent_ino, name) != 0 { return 0; } // already exists
+    if lookup(parent_ino, name) != 0 {
+        return 0;
+    } // already exists
     let ino = alloc_inode(S_IFLNK | 0o777);
-    if ino == 0 { return 0; }
+    if ino == 0 {
+        return 0;
+    }
     // Store target as the inode's data
     let off = alloc_data(target.len() as u32);
-    if off == u32::MAX { return 0; }
+    if off == u32::MAX {
+        return 0;
+    }
     data_slice_mut()[off as usize..off as usize + target.len()].copy_from_slice(target);
     inodes()[ino as usize].data_offset = off;
     inodes()[ino as usize].data_cap = target.len() as u32;
     inodes()[ino as usize].size = target.len() as u64;
-    if !add_dir_entry(parent_ino, name, ino) { return 0; }
+    if !add_dir_entry(parent_ino, name, ino) {
+        return 0;
+    }
     ino
 }
 
 /// Read the target of a symbolic link. Returns bytes written to `buf`.
 pub fn read_link(ino: u32, buf: &mut [u8]) -> usize {
     let ins = inodes();
-    if ino as usize >= ins.len() { return 0; }
+    if ino as usize >= ins.len() {
+        return 0;
+    }
     let inode = &ins[ino as usize];
-    if inode.mode & S_IFMT != S_IFLNK { return 0; }
+    if inode.mode & S_IFMT != S_IFLNK {
+        return 0;
+    }
     let len = inode.size as usize;
     let n = len.min(buf.len());
     let off = inode.data_offset as usize;
@@ -304,30 +399,63 @@ pub fn read_link(ino: u32, buf: &mut [u8]) -> usize {
 // =========================================================================
 
 pub fn create_file(parent_ino: u32, name: &[u8], mode: u32) -> u32 {
-    if lookup(parent_ino, name) != 0 { return 0; }
+    if lookup(parent_ino, name) != 0 {
+        return 0;
+    }
     let ino = alloc_inode(S_IFREG | (mode & 0o7777));
-    if ino == 0 { return 0; }
-    if !add_dir_entry(parent_ino, name, ino) { return 0; }
+    if ino == 0 {
+        return 0;
+    }
+    if !add_dir_entry(parent_ino, name, ino) {
+        return 0;
+    }
     inodes()[parent_ino as usize].nlink += 1;
     ino
 }
 
 pub fn create_dir(parent_ino: u32, name: &[u8], mode: u32) -> u32 {
-    if lookup(parent_ino, name) != 0 { return 0; }
+    if lookup(parent_ino, name) != 0 {
+        return 0;
+    }
     let ino = alloc_inode(S_IFDIR | (mode & 0o7777));
-    if ino == 0 { return 0; }
+    if ino == 0 {
+        return 0;
+    }
     inodes()[ino as usize].nlink = 2;
-    if !add_dir_entry(parent_ino, name, ino) { return 0; }
+    if !add_dir_entry(parent_ino, name, ino) {
+        return 0;
+    }
     inodes()[parent_ino as usize].nlink += 1;
     ino
 }
 
 pub fn unlink(parent_ino: u32, name: &[u8]) -> i64 {
     let ino = lookup(parent_ino, name);
-    if ino == 0 { return ENOENT; }
-    if inodes()[ino as usize].mode & S_IFMT == S_IFDIR { return EISDIR; }
+    if ino == 0 {
+        return ENOENT;
+    }
+    if inodes()[ino as usize].mode & S_IFMT == S_IFDIR {
+        return EISDIR;
+    }
     remove_dir_entry(parent_ino, name);
     inodes()[ino as usize].nlink -= 1;
+    inodes()[parent_ino as usize].nlink -= 1;
+    0
+}
+
+pub fn rmdir(parent_ino: u32, name: &[u8]) -> i64 {
+    let ino = lookup(parent_ino, name);
+    if ino == 0 {
+        return ENOENT;
+    }
+    if inodes()[ino as usize].mode & S_IFMT != S_IFDIR {
+        return ENOTDIR;
+    }
+    if first_child()[ino as usize] != 0 {
+        return ENOTEMPTY;
+    }
+    remove_dir_entry(parent_ino, name);
+    inodes()[ino as usize].nlink = 0;
     inodes()[parent_ino as usize].nlink -= 1;
     0
 }
@@ -339,14 +467,18 @@ pub fn unlink(parent_ino: u32, name: &[u8]) -> i64 {
 pub fn write_file(ino: u32, offset: u64, data: &[u8]) -> i64 {
     let idx = ino as usize;
     let ins = inodes();
-    if ins[idx].mode & S_IFMT != S_IFREG { return EBADF; }
+    if ins[idx].mode & S_IFMT != S_IFREG {
+        return EBADF;
+    }
 
     let end = offset as u32 + data.len() as u32;
 
     if ins[idx].data_cap == 0 {
         let cap = end.max(4096);
         let off = alloc_data(cap);
-        if off == u32::MAX { return ENOSPC; }
+        if off == u32::MAX {
+            return ENOSPC;
+        }
         inodes()[idx].data_offset = off;
         inodes()[idx].data_cap = cap;
     } else if end > ins[idx].data_cap {
@@ -354,7 +486,9 @@ pub fn write_file(ino: u32, offset: u64, data: &[u8]) -> i64 {
         let old_size = ins[idx].size as usize;
         let new_cap = (end * 2).max(ins[idx].data_cap * 2);
         let new_off = alloc_data(new_cap);
-        if new_off == u32::MAX { return ENOSPC; }
+        if new_off == u32::MAX {
+            return ENOSPC;
+        }
         data_slice_mut().copy_within(old_off..old_off + old_size, new_off as usize);
         inodes()[idx].data_offset = new_off;
         inodes()[idx].data_cap = new_cap;
@@ -371,8 +505,12 @@ pub fn write_file(ino: u32, offset: u64, data: &[u8]) -> i64 {
 pub fn read_file(ino: u32, offset: u64, buf: &mut [u8]) -> i64 {
     let ins = inodes();
     let inode = &ins[ino as usize];
-    if inode.mode & S_IFMT != S_IFREG { return EBADF; }
-    if offset >= inode.size { return 0; }
+    if inode.mode & S_IFMT != S_IFREG {
+        return EBADF;
+    }
+    if offset >= inode.size {
+        return 0;
+    }
     let avail = (inode.size - offset) as usize;
     let n = buf.len().min(avail);
     let base = inode.data_offset as usize + offset as usize;
@@ -383,7 +521,9 @@ pub fn read_file(ino: u32, offset: u64, buf: &mut [u8]) -> i64 {
 pub fn truncate(ino: u32, size: u64) -> i64 {
     let idx = ino as usize;
     let ins = inodes();
-    if ins[idx].mode & S_IFMT != S_IFREG { return EINVAL; }
+    if ins[idx].mode & S_IFMT != S_IFREG {
+        return EINVAL;
+    }
     if size < ins[idx].size {
         let base = ins[idx].data_offset as usize + size as usize;
         let end = ins[idx].data_offset as usize + ins[idx].size as usize;
@@ -393,23 +533,62 @@ pub fn truncate(ino: u32, size: u64) -> i64 {
     0
 }
 
+pub fn set_mode(ino: u32, mode: u32) -> i64 {
+    let idx = ino as usize;
+    let ins = inodes();
+    if idx >= ins.len() || ino == 0 {
+        return ENOENT;
+    }
+    let file_type = ins[idx].mode & S_IFMT;
+    inodes()[idx].mode = file_type | (mode & 0o7777);
+    0
+}
+
+pub fn set_owner(ino: u32, uid: Option<u32>, gid: Option<u32>) -> i64 {
+    let idx = ino as usize;
+    let ins = inodes();
+    if idx >= ins.len() || ino == 0 {
+        return ENOENT;
+    }
+    if let Some(uid) = uid {
+        inodes()[idx].uid = uid;
+    }
+    if let Some(gid) = gid {
+        inodes()[idx].gid = gid;
+    }
+    0
+}
+
 /// Subset of inode metadata returned by stat.
 pub struct InodeStat {
     pub ino: u64,
     pub mode: u32,
     pub nlink: u32,
+    pub uid: u32,
+    pub gid: u32,
     pub size: u64,
 }
 
 pub fn stat(ino: u32) -> Option<InodeStat> {
     let h = fs();
-    if ino == 0 || ino as usize >= h.inode_count as usize { return None; }
+    if ino == 0 || ino as usize >= h.inode_count as usize {
+        return None;
+    }
     let inode = &inodes()[ino as usize];
-    Some(InodeStat { ino: ino as u64, mode: inode.mode, nlink: inode.nlink, size: inode.size })
+    Some(InodeStat {
+        ino: ino as u64,
+        mode: inode.mode,
+        nlink: inode.nlink,
+        uid: inode.uid,
+        gid: inode.gid,
+        size: inode.size,
+    })
 }
 
 pub fn readdir<F: FnMut(&[u8], u32)>(dir_ino: u32, mut cb: F) -> i64 {
-    if inodes()[dir_ino as usize].mode & S_IFMT != S_IFDIR { return ENOTDIR; }
+    if inodes()[dir_ino as usize].mode & S_IFMT != S_IFDIR {
+        return ENOTDIR;
+    }
     let fc = first_child();
     let des = dir_entries();
     let mut count = 0i64;
@@ -425,7 +604,9 @@ pub fn readdir<F: FnMut(&[u8], u32)>(dir_ino: u32, mut cb: F) -> i64 {
 
 pub fn create_file_with_data(parent_ino: u32, name: &[u8], data: &[u8]) -> u32 {
     let ino = create_file(parent_ino, name, 0o644);
-    if ino == 0 { return 0; }
+    if ino == 0 {
+        return 0;
+    }
     write_file(ino, 0, data);
     ino
 }
@@ -492,7 +673,9 @@ mod tests {
         create_file(1, b"b.txt", 0o644);
         create_dir(1, b"sub", 0o755);
         let mut count = 0;
-        readdir(1, |_name, _ino| { count += 1; });
+        readdir(1, |_name, _ino| {
+            count += 1;
+        });
         assert_eq!(count, 3);
     }
 

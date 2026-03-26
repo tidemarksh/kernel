@@ -127,7 +127,7 @@ fn build_ltp_tests(out_dir: &Path) {
 
     let tests = [("read01", Path::new("testcases/kernel/syscalls/read"))];
     let ltp_lib_dir = ltp_work.join("lib");
-    let ltp_ldflags = format!("-L{} -static -no-pie", ltp_lib_dir.display());
+    let ltp_wldflags = format!("-L{} -static -no-pie", ltp_lib_dir.display());
 
     for (name, rel_dir) in tests {
         let test_dir = ltp_work.join(rel_dir);
@@ -135,7 +135,7 @@ fn build_ltp_tests(out_dir: &Path) {
             Command::new("make")
                 .current_dir(&test_dir)
                 .env("CC", "riscv64-linux-gnu-gcc")
-                .env("LDFLAGS", &ltp_ldflags)
+                .arg(format!("WLDFLAGS={}", ltp_wldflags))
                 .arg(name),
             &format!("build ltp test {}", name),
         ) {

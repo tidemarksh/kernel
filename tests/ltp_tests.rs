@@ -8,7 +8,7 @@
 mod support;
 
 fn run_ltp(name: &str, elf_bytes: &[u8]) -> Result<(), String> {
-    let (code, pc) = support::run_elf(elf_bytes)?;
+    let (code, pc) = support::run_elf_no_cache(elf_bytes)?;
     if code == 0 {
         Ok(())
     } else if code == 32 {

@@ -16,6 +16,8 @@ pub mod fs;
 pub mod guest_mem;
 pub mod jit;
 pub mod net;
+#[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
+pub mod runtime_test_support;
 pub mod syscall;
 pub mod types;
 

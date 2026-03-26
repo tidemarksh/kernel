@@ -56,9 +56,13 @@ pub const SYS_IOCTL: u64 = 29;
 pub const SYS_FCNTL: u64 = 25;
 pub const SYS_MKDIRAT: u64 = 34;
 pub const SYS_UNLINKAT: u64 = 35;
+pub const SYS_STATFS: u64 = 43;
 pub const SYS_RENAMEAT2: u64 = 276;
 pub const SYS_STATX: u64 = 291;
 pub const SYS_FACCESSAT: u64 = 48;
+pub const SYS_CHDIR: u64 = 49;
+pub const SYS_FCHMODAT: u64 = 53;
+pub const SYS_FCHOWNAT: u64 = 54;
 pub const SYS_OPENAT: u64 = 56;
 pub const SYS_CLOSE: u64 = 57;
 pub const SYS_PIPE2: u64 = 59;
@@ -72,6 +76,7 @@ pub const SYS_PREAD64: u64 = 67;
 pub const SYS_PWRITE64: u64 = 68;
 pub const SYS_PREADV: u64 = 69;
 pub const SYS_PWRITEV: u64 = 70;
+pub const SYS_MSYNC: u64 = 227;
 pub const SYS_READLINKAT: u64 = 78;
 pub const SYS_NEWFSTATAT: u64 = 79;
 pub const SYS_FSTAT: u64 = 80;
@@ -84,7 +89,10 @@ pub const SYS_SET_TID_ADDRESS: u64 = 96;
 pub const SYS_SET_ROBUST_LIST: u64 = 99;
 pub const SYS_FUTEX: u64 = 98;
 pub const SYS_NANOSLEEP: u64 = 101;
+pub const SYS_GETITIMER: u64 = 102;
+pub const SYS_SETITIMER: u64 = 103;
 pub const SYS_CLOCK_GETTIME: u64 = 113;
+pub const SYS_SCHED_GETAFFINITY: u64 = 123;
 pub const SYS_SCHED_YIELD: u64 = 124;
 pub const SYS_KILL: u64 = 129;
 pub const SYS_TKILL: u64 = 130;
@@ -94,6 +102,8 @@ pub const SYS_RT_SIGPROCMASK: u64 = 135;
 pub const SYS_RT_SIGRETURN: u64 = 139;
 pub const SYS_SIGALTSTACK: u64 = 132;
 pub const SYS_TIMES: u64 = 153;
+pub const SYS_SETPGID: u64 = 154;
+pub const SYS_GETPGID: u64 = 155;
 pub const SYS_GETPID: u64 = 172;
 pub const SYS_GETPPID: u64 = 173;
 pub const SYS_GETUID: u64 = 174;
@@ -111,6 +121,7 @@ pub const SYS_MMAP: u64 = 222;
 pub const SYS_MPROTECT: u64 = 226;
 pub const SYS_WAIT4: u64 = 260;
 pub const SYS_PRCTL: u64 = 167;
+pub const SYS_SETSID: u64 = 157;
 pub const SYS_GETRANDOM: u64 = 278;
 pub const SYS_RSEQ: u64 = 293;
 pub const SYS_CLONE3: u64 = 435;
@@ -236,6 +247,7 @@ pub const EEXIST: i64 = -17;
 pub const ENOTDIR: i64 = -20;
 pub const EISDIR: i64 = -21;
 pub const EINVAL: i64 = -22;
+pub const ERANGE: i64 = -34;
 pub const EMFILE: i64 = -24;
 pub const ENOSPC: i64 = -28;
 pub const EPIPE: i64 = -32;
@@ -276,7 +288,9 @@ pub const SOCK_CLOEXEC: u32 = 0x80000;
 macro_rules! export_const {
     ($name:ident, $val:expr) => {
         #[unsafe(no_mangle)]
-        pub extern "C" fn $name() -> i32 { $val }
+        pub extern "C" fn $name() -> i32 {
+            $val
+        }
     };
 }
 
@@ -319,7 +333,9 @@ export_const!(abi_fd_type_inotify, FD_TYPE_INOTIFY);
 macro_rules! export_const_u64 {
     ($name:ident, $val:expr) => {
         #[unsafe(no_mangle)]
-        pub extern "C" fn $name() -> u64 { $val }
+        pub extern "C" fn $name() -> u64 {
+            $val
+        }
     };
 }
 
@@ -329,6 +345,7 @@ export_const_u64!(abi_sys_read, SYS_READ);
 export_const_u64!(abi_sys_write, SYS_WRITE);
 export_const_u64!(abi_sys_mmap, SYS_MMAP);
 export_const_u64!(abi_sys_munmap, SYS_MUNMAP);
+export_const_u64!(abi_sys_msync, SYS_MSYNC);
 export_const_u64!(abi_sys_brk, SYS_BRK);
 export_const_u64!(abi_sys_clone, SYS_CLONE);
 export_const_u64!(abi_sys_execve, SYS_EXECVE);
@@ -357,9 +374,13 @@ export_const_u64!(abi_sys_ioctl, SYS_IOCTL);
 export_const_u64!(abi_sys_fcntl, SYS_FCNTL);
 export_const_u64!(abi_sys_mkdirat, SYS_MKDIRAT);
 export_const_u64!(abi_sys_unlinkat, SYS_UNLINKAT);
+export_const_u64!(abi_sys_statfs, SYS_STATFS);
 export_const_u64!(abi_sys_renameat2, SYS_RENAMEAT2);
 export_const_u64!(abi_sys_statx, SYS_STATX);
 export_const_u64!(abi_sys_faccessat, SYS_FACCESSAT);
+export_const_u64!(abi_sys_chdir, SYS_CHDIR);
+export_const_u64!(abi_sys_fchmodat, SYS_FCHMODAT);
+export_const_u64!(abi_sys_fchownat, SYS_FCHOWNAT);
 export_const_u64!(abi_sys_getdents64, SYS_GETDENTS64);
 export_const_u64!(abi_sys_lseek, SYS_LSEEK);
 export_const_u64!(abi_sys_readv, SYS_READV);
@@ -563,14 +584,20 @@ fn staged_args() -> &'static mut StagedArgs {
 #[unsafe(no_mangle)]
 pub extern "C" fn process_push_arg(addr: u32) {
     let s = staged_args();
-    if s.argc < MAX_ARGS { s.argv[s.argc] = addr as u64; s.argc += 1; }
+    if s.argc < MAX_ARGS {
+        s.argv[s.argc] = addr as u64;
+        s.argc += 1;
+    }
 }
 
 /// Push an envp string address (guest memory pointer to null-terminated string).
 #[unsafe(no_mangle)]
 pub extern "C" fn process_push_env(addr: u32) {
     let s = staged_args();
-    if s.envc < MAX_ARGS { s.envp[s.envc] = addr as u64; s.envc += 1; }
+    if s.envc < MAX_ARGS {
+        s.envp[s.envc] = addr as u64;
+        s.envc += 1;
+    }
 }
 
 /// Clear staged argv/envp.
@@ -585,7 +612,10 @@ pub extern "C" fn process_clear_args() {
 /// Returns pointer to ThreadState, or 0 on failure.
 #[unsafe(no_mangle)]
 pub extern "C" fn process_create(
-    elf_ptr: u32, elf_len: u32, ram_size: u32, _stack_size: u32,
+    elf_ptr: u32,
+    elf_len: u32,
+    ram_size: u32,
+    _stack_size: u32,
 ) -> u32 {
     unsafe {
         let base: u32 = 0;
@@ -605,12 +635,16 @@ pub extern "C" fn process_create(
         let ps_addr = (brk + ps_align - 1) & !(ps_align - 1);
         let new_brk = ps_addr + ps_size;
         let brk_ret = crate::syscall::memory::grow_brk(base, new_brk);
-        if brk_ret < new_brk as i64 { return 0; }
+        if brk_ret < new_brk as i64 {
+            return 0;
+        }
         crate::guest_mem::zero_mem(base, ps_addr, ps_size as usize);
         let ps_ptr = (base as u64 + ps_addr) as u32;
         let ps = &mut *(ps_ptr as *mut crate::types::ProcessState);
-        ps.pid = 1;
-        crate::syscall::signal::init_for_process(1);
+        ps.pid = 2;
+        ps.ppid = 1;
+        ps.cwd_ino = 1;
+        crate::syscall::signal::init_for_process(2);
 
         // Wire guest_mem to ProcessState's thread_count for seqlock
         let tc_ptr = core::ptr::addr_of!(ps.thread_count);
@@ -624,7 +658,9 @@ pub extern "C" fn process_create(
             core::mem::size_of::<crate::types::ThreadState>() as u32,
             core::mem::align_of::<crate::types::ThreadState>() as u32,
         );
-        if ts_ptr == 0 { return 0; }
+        if ts_ptr == 0 {
+            return 0;
+        }
         let ts = &mut *(ts_ptr as *mut crate::types::ThreadState);
 
         let stack_top = (ram_size - 4096) as u64;
@@ -645,8 +681,12 @@ pub extern "C" fn process_create(
         let envp_addrs: &[u64] = &staged.envp[..staged.envc];
 
         let sp = crate::elf::setup_stack(
-            base, stack_top - 128 - (staged.argc as u64 + staged.envc as u64) * 16,
-            argv_addrs, envp_addrs, &elf_result, random_addr,
+            base,
+            stack_top - 128 - (staged.argc as u64 + staged.envc as u64) * 16,
+            argv_addrs,
+            envp_addrs,
+            &elf_result,
+            random_addr,
         );
         // Clear staged args for next process
         staged.argc = 0;
@@ -656,20 +696,30 @@ pub extern "C" fn process_create(
         let proc_ino = crate::fs::memfs::resolve_path(b"/proc");
         let proc_ino = if proc_ino == 0 {
             crate::fs::memfs::create_dir(1, b"proc", 0o555)
-        } else { proc_ino };
+        } else {
+            proc_ino
+        };
         if proc_ino > 0 {
             let self_ino = crate::fs::memfs::resolve_path(b"/proc/self");
             let self_ino = if self_ino == 0 {
                 crate::fs::memfs::create_dir(proc_ino, b"self", 0o555)
-            } else { self_ino };
+            } else {
+                self_ino
+            };
             if self_ino > 0 {
                 // Use argv[0] as the exe path; fall back to "/init"
                 let mut exe_target = [0u8; 256];
                 let exe_len = if staged.argc > 0 {
                     // argv[0] was already written to guest memory; read it back
                     crate::guest_mem::read_cstr(base, argv_addrs[0], &mut exe_target)
-                } else { 0 };
-                let target = if exe_len > 0 { &exe_target[..exe_len] } else { b"/init" as &[u8] };
+                } else {
+                    0
+                };
+                let target = if exe_len > 0 {
+                    &exe_target[..exe_len]
+                } else {
+                    b"/init" as &[u8]
+                };
                 crate::fs::memfs::create_symlink(self_ino, b"exe", target);
             }
         }
@@ -720,10 +770,20 @@ mod tests {
     #[test]
     fn status_codes_are_distinct() {
         let codes = [
-            STATUS_OK, STATUS_FAULT, STATUS_FS, STATUS_FUTEX_WAIT,
-            STATUS_PIPE_WAIT, STATUS_EPOLL_WAIT, STATUS_VFORK_WAIT,
-            STATUS_EXECVE_SPAWN, STATUS_CLONE_SPAWN, STATUS_SLEEP, STATUS_JIT_READY,
-            STATUS_CONNECT, STATUS_SOCKET_SEND, STATUS_SOCKET_RECV,
+            STATUS_OK,
+            STATUS_FAULT,
+            STATUS_FS,
+            STATUS_FUTEX_WAIT,
+            STATUS_PIPE_WAIT,
+            STATUS_EPOLL_WAIT,
+            STATUS_VFORK_WAIT,
+            STATUS_EXECVE_SPAWN,
+            STATUS_CLONE_SPAWN,
+            STATUS_SLEEP,
+            STATUS_JIT_READY,
+            STATUS_CONNECT,
+            STATUS_SOCKET_SEND,
+            STATUS_SOCKET_RECV,
         ];
         for i in 0..codes.len() {
             for j in (i + 1)..codes.len() {
@@ -735,10 +795,20 @@ mod tests {
     #[test]
     fn fd_types_are_distinct() {
         let types = [
-            FD_TYPE_NONE, FD_TYPE_STDOUT, FD_TYPE_STDERR, FD_TYPE_FILE,
-            FD_TYPE_DIR, FD_TYPE_DEVNULL, FD_TYPE_PIPE, FD_TYPE_EPOLL,
-            FD_TYPE_SOCKET, FD_TYPE_EVENTFD, FD_TYPE_TIMERFD,
-            FD_TYPE_PTY_MASTER, FD_TYPE_PTY_SLAVE, FD_TYPE_INOTIFY,
+            FD_TYPE_NONE,
+            FD_TYPE_STDOUT,
+            FD_TYPE_STDERR,
+            FD_TYPE_FILE,
+            FD_TYPE_DIR,
+            FD_TYPE_DEVNULL,
+            FD_TYPE_PIPE,
+            FD_TYPE_EPOLL,
+            FD_TYPE_SOCKET,
+            FD_TYPE_EVENTFD,
+            FD_TYPE_TIMERFD,
+            FD_TYPE_PTY_MASTER,
+            FD_TYPE_PTY_SLAVE,
+            FD_TYPE_INOTIFY,
         ];
         for i in 0..types.len() {
             for j in (i + 1)..types.len() {
