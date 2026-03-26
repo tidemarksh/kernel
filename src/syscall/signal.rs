@@ -21,7 +21,7 @@
 
 use crate::abi::*;
 use crate::guest_mem;
-use crate::types::{ThreadState, SigAction, SIG_DFL, MAX_SIGNALS};
+use crate::types::{ThreadState, SigAction, SIG_DFL, SIG_IGN, MAX_SIGNALS};
 
 // SA flags (https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/signal-defs.h)
 const SA_NOCLDSTOP: u64 = 0x00000001;
@@ -41,38 +41,94 @@ const SIG_SETMASK: u64 = 2;
 const SS_ONSTACK: i32 = 1;
 const SS_DISABLE: i32 = 2;
 
-/// Per-process signal disposition table, allocated in kernel Worker linear memory.
-/// Currently supports a single process. Multi-process requires per-PID tables.
+/// Per-process signal disposition tables, allocated in kernel Worker linear memory.
+/// Each process gets its own [SigAction; MAX_SIGNALS] table, indexed by PID.
+///
+/// Signal dispositions are process-wide (shared by all threads in a process).
+/// On execve, caught signals (handler != SIG_DFL and != SIG_IGN) are reset to SIG_DFL.
 ///
 /// Semantics: https://man7.org/linux/man-pages/man2/rt_sigaction.2.html
-/// Signal dispositions are process-wide (shared by all threads in a process).
-/// On execve, caught signals are reset to SIG_DFL.
-static mut SIGACTIONS_PTR: *mut [SigAction; MAX_SIGNALS] = core::ptr::null_mut();
+/// execve reset: https://man7.org/linux/man-pages/man2/execve.2.html
+///
+/// SIGACTIONS_PTR points to a heap-allocated [SigAction; MAX_SIGNALS] for the
+/// currently active process. Multi-process uses SIG_SLOTS_PTR (array of
+/// MAX_PROCESSES pointers, each pointing to a per-process table).
+static mut SIG_SLOTS_PTR: *mut [*mut [SigAction; MAX_SIGNALS]; MAX_PROCESSES] = core::ptr::null_mut();
 
-fn sigactions() -> &'static mut [SigAction; MAX_SIGNALS] {
+#[inline(always)]
+fn sig_slots() -> &'static mut [*mut [SigAction; MAX_SIGNALS]; MAX_PROCESSES] {
     unsafe {
-        let p = core::ptr::read(core::ptr::addr_of!(SIGACTIONS_PTR));
+        let p = core::ptr::read(core::ptr::addr_of!(SIG_SLOTS_PTR));
         &mut *p
     }
 }
 
-/// Initialize signal dispositions for a process. Allocates via alloc.rs in kernel Worker memory.
+#[inline(always)]
+fn sigactions_for(pid: i32) -> &'static mut [SigAction; MAX_SIGNALS] {
+    let idx = (pid - 1) as usize;
+    unsafe { &mut *sig_slots()[idx] }
+}
+
+/// Read PID from ProcessState in guest Memory via ThreadState.process_ptr.
+#[inline(always)]
+pub fn pid_from_vm(vm: &ThreadState, base: u32) -> i32 {
+    let ps_ptr = vm.process_ptr;
+    if ps_ptr == 0 { return 1; }
+    unsafe {
+        let pid_offset = core::mem::offset_of!(crate::types::ProcessState, pid);
+        guest_mem::read_i32(base, ps_ptr as u64 + pid_offset as u64)
+    }
+}
+
+/// Initialize signal subsystem. Must be called once at kernel init.
 pub fn init() {
     unsafe {
-        core::ptr::write(core::ptr::addr_of_mut!(SIGACTIONS_PTR), core::ptr::null_mut());
+        core::ptr::write(core::ptr::addr_of_mut!(SIG_SLOTS_PTR), core::ptr::null_mut());
 
+        let size = core::mem::size_of::<[*mut [SigAction; MAX_SIGNALS]; MAX_PROCESSES]>() as u32;
+        let align = core::mem::align_of::<*mut [SigAction; MAX_SIGNALS]>() as u32;
+        let ptr = crate::alloc::alloc_zeroed(size, align);
+        if ptr == 0 { core::arch::wasm32::unreachable(); }
+        core::ptr::write(core::ptr::addr_of_mut!(SIG_SLOTS_PTR),
+            ptr as *mut [*mut [SigAction; MAX_SIGNALS]; MAX_PROCESSES]);
+    }
+}
+
+/// Allocate a new signal disposition table for a process.
+pub fn init_for_process(pid: i32) {
+    let idx = (pid - 1) as usize;
+    if idx >= MAX_PROCESSES { return; }
+    unsafe {
         let size = core::mem::size_of::<[SigAction; MAX_SIGNALS]>() as u32;
         let align = core::mem::align_of::<SigAction>() as u32;
         let ptr = crate::alloc::alloc_zeroed(size, align);
         if ptr == 0 { core::arch::wasm32::unreachable(); }
-        core::ptr::write(core::ptr::addr_of_mut!(SIGACTIONS_PTR), ptr as *mut [SigAction; MAX_SIGNALS]);
+        sig_slots()[idx] = ptr as *mut [SigAction; MAX_SIGNALS];
+    }
+}
+
+/// Reset signal dispositions on execve: caught signals (handler != SIG_DFL
+/// and handler != SIG_IGN) are reset to SIG_DFL.
+///
+/// https://man7.org/linux/man-pages/man2/execve.2.html
+/// "POSIX.1 specifies that the dispositions of any signals that are being
+///  caught are reset to the default."
+pub fn reset_on_execve(pid: i32) {
+    let idx = (pid - 1) as usize;
+    if idx >= MAX_PROCESSES { return; }
+    let table = sigactions_for(pid);
+    for sig in 1..MAX_SIGNALS {
+        let action = &mut table[sig];
+        if action.handler != SIG_DFL && action.handler != SIG_IGN {
+            *action = SigAction { handler: SIG_DFL, flags: 0, mask: 0 };
+        }
     }
 }
 
 /// rt_sigaction: get/set signal disposition.
 /// signum in a0, act in a1, oldact in a2, sigsetsize in a3.
 pub fn sys_rt_sigaction(
-    _vm: &mut ThreadState, base: u32,
+    vm: &mut ThreadState, base: u32,
     signum: u64, act_addr: u64, oldact_addr: u64, sigsetsize: u64,
 ) -> i64 {
     if sigsetsize != 8 { return EINVAL; }
@@ -80,10 +136,13 @@ pub fn sys_rt_sigaction(
     if sig == 0 || sig >= MAX_SIGNALS { return EINVAL; }
     if sig == SIGKILL as usize || sig == SIGSTOP as usize { return EINVAL; }
 
+    let pid = pid_from_vm(vm, base);
+    let table = sigactions_for(pid);
+
     unsafe {
         // Write old action
         if oldact_addr != 0 {
-            let old = &sigactions()[sig];
+            let old = &table[sig];
             guest_mem::write_u64(base, oldact_addr, old.handler);
             guest_mem::write_u64(base, oldact_addr + 8, old.flags);
             guest_mem::write_u64(base, oldact_addr + 16, old.mask);
@@ -91,7 +150,7 @@ pub fn sys_rt_sigaction(
 
         // Read new action
         if act_addr != 0 {
-            sigactions()[sig] = SigAction {
+            table[sig] = SigAction {
                 handler: guest_mem::read_u64(base, act_addr),
                 flags: guest_mem::read_u64(base, act_addr + 8),
                 mask: guest_mem::read_u64(base, act_addr + 16),
@@ -248,7 +307,8 @@ fn push_signal_frame(vm: &mut ThreadState, base: u32, sig: usize, action: &SigAc
 
     // If SA_RESETHAND, reset disposition to SIG_DFL
     if action.flags & SA_RESETHAND != 0 {
-        sigactions()[sig] = SigAction { handler: SIG_DFL, flags: 0, mask: 0 };
+        let pid = pid_from_vm(vm, base);
+        sigactions_for(pid)[sig] = SigAction { handler: SIG_DFL, flags: 0, mask: 0 };
     }
 
     // Set up registers for handler entry
@@ -294,7 +354,8 @@ pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
     // Clear from pending
     vm.sig_pending &= !(1u64 << (sig - 1));
 
-    let action = sigactions()[sig];
+    let pid = pid_from_vm(vm, base);
+    let action = sigactions_for(pid)[sig];
 
     match action.handler {
         0 => {
@@ -329,6 +390,9 @@ pub fn send_signal(vm: &mut ThreadState, sig: i32) {
 mod tests {
     use crate::test_helpers::TestVm;
 
+    /// Signal syscalls: rt_sigprocmask, rt_sigaction, sigaltstack,
+    /// plus per-process init_for_process, rt_sigaction per-process write,
+    /// and pending signal delivery.
     #[test]
     fn signal_syscalls() {
         let mut t = TestVm::new();
@@ -368,10 +432,31 @@ mod tests {
         assert_eq!(ret3, 0);
         assert_eq!(t.vm.sigaltstack_sp, 0x50000);
         assert_eq!(t.vm.sigaltstack_size, 8192);
+
+        // --- Per-process signal disposition tests ---
+
+        // init_for_process: table is zero-initialized (all SIG_DFL)
+        let table = super::sigactions_for(42);
+        // Skip slot 10 which was set above; check the rest
+        assert_eq!(table[0].handler, crate::types::SIG_DFL);
+        assert_eq!(table[1].handler, crate::types::SIG_DFL);
+        assert_eq!(table[15].handler, crate::types::SIG_DFL);
+
+        // rt_sigaction writes to per-process table via pid_from_vm
+        let act_addr2 = t.scratch + 0x600;
+        unsafe {
+            crate::guest_mem::write_u64(t.base, act_addr2, 0xABCD);
+            crate::guest_mem::write_u64(t.base, act_addr2 + 8, 0);
+            crate::guest_mem::write_u64(t.base, act_addr2 + 16, 0);
+        }
+        let ret4 = super::sys_rt_sigaction(&mut t.vm, t.base, 14, act_addr2, 0, 8);
+        assert_eq!(ret4, 0);
+        assert_eq!(super::sigactions_for(42)[14].handler, 0xABCD);
     }
 
-    /// Test that setting a pending signal and calling check_pending delivers it.
-    /// SIGTERM (15) has SIG_DFL which terminates the process (exit_code = 128 + sig).
+    /// Pending signal delivery and reset_on_execve semantics.
+    /// SIGTERM (15) with SIG_DFL terminates (exit_code = 128 + sig).
+    /// reset_on_execve resets caught signals to SIG_DFL, preserves SIG_IGN.
     #[test]
     fn pending_signal_delivery() {
         let mut t = TestVm::new();
@@ -409,5 +494,25 @@ mod tests {
             0,
             "SIGTERM should no longer be pending after delivery"
         );
+
+        // --- reset_on_execve ---
+        // Re-init VM for clean state
+        let _t2 = TestVm::new();
+        let tbl = super::sigactions_for(42);
+        // Set signal 10 to a user handler (caught)
+        tbl[10] = crate::types::SigAction { handler: 0x12345, flags: 0, mask: 0 };
+        // Set signal 15 to SIG_IGN
+        tbl[15] = crate::types::SigAction { handler: crate::types::SIG_IGN, flags: 0, mask: 0 };
+        // Set signal 2 to SIG_DFL (already default)
+        tbl[2] = crate::types::SigAction { handler: crate::types::SIG_DFL, flags: 0, mask: 0 };
+
+        super::reset_on_execve(42);
+
+        // Caught signal 10 should be reset to SIG_DFL
+        assert_eq!(tbl[10].handler, crate::types::SIG_DFL);
+        // SIG_IGN should be preserved
+        assert_eq!(tbl[15].handler, crate::types::SIG_IGN);
+        // SIG_DFL should remain SIG_DFL
+        assert_eq!(tbl[2].handler, crate::types::SIG_DFL);
     }
 }

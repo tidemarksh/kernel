@@ -16,3 +16,6 @@ opt-level = 3
 lto = "fat"
 codegen-units = 1
 strip = "symbols"
+
+[profile.test]
+opt-level = 1

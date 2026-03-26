@@ -146,7 +146,9 @@ pub fn sys_execve(
         }
     }
 
-    // Signal dispositions: caught → SIG_DFL (handled by TS runtime for new process)
+    // Signal dispositions: caught → SIG_DFL (POSIX execve semantics)
+    let pid = crate::syscall::signal::pid_from_vm(vm, base);
+    crate::syscall::signal::reset_on_execve(pid);
     // Signal mask: preserved (already in ThreadState)
     // Alt stack: not preserved
     vm.sigaltstack_sp = 0;

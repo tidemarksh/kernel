@@ -210,6 +210,7 @@ pub const MAX_EPOLL_ENTRIES: usize = 64;
 pub const MAX_EVENTFDS: usize = 16;
 pub const MAX_TIMERFDS: usize = 8;
 pub const MAX_PIPES: usize = 64;
+pub const MAX_PROCESSES: usize = 64;
 
 // Futex operations (https://man7.org/linux/man-pages/man2/futex.2.html)
 pub const FUTEX_WAIT: u32 = 0;
@@ -555,6 +556,7 @@ pub extern "C" fn process_create(
         let ps_ptr = (base as u64 + ps_addr) as u32;
         let ps = &mut *(ps_ptr as *mut crate::types::ProcessState);
         ps.pid = 1;
+        crate::syscall::signal::init_for_process(1);
 
         // Wire guest_mem to ProcessState's thread_count for seqlock
         let tc_ptr = core::ptr::addr_of!(ps.thread_count);

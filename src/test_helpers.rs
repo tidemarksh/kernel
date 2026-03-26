@@ -82,6 +82,9 @@ impl TestVm {
             let ppid_off = core::mem::offset_of!(ProcessState, ppid) as u64;
             crate::guest_mem::write_u32(base, ps_addr + ppid_off, 1);
 
+            // Allocate per-process signal disposition table for PID 42.
+            crate::syscall::signal::init_for_process(42);
+
             // FD 0/1/2
             crate::guest_mem::write_u32(base, ps_addr + 0, 1);
             crate::guest_mem::write_u32(base, ps_addr + 8, 2);
