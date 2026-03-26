@@ -50,7 +50,7 @@ const DT_REG: u8 = 8;
 // Path resolution helper
 // =========================================================================
 
-fn resolve_at(dirfd: u64, path_addr: u64, base: u32) -> u32 {
+fn resolve_at(vm: &ThreadState, dirfd: u64, path_addr: u64, base: u32) -> u32 {
     let mut path_buf = [0u8; 512];
     let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf) };
     let path = &path_buf[..len];
@@ -66,7 +66,14 @@ fn resolve_at(dirfd: u64, path_addr: u64, base: u32) -> u32 {
         full[1..1 + len].copy_from_slice(path);
         memfs::resolve_path(&full[..1 + len])
     } else {
-        0 // dirfd-relative: not yet supported
+        // dirfd-relative: resolve path relative to the directory that dirfd refers to
+        let ofd = match fd_table::get_ofd(vm, dirfd) {
+            Some(o) => o,
+            None => return 0,
+        };
+        let dir_ino = ofd.ino as u32;
+        if dir_ino == 0 { return 0; }
+        memfs::resolve_path_from(dir_ino, path)
     }
 }
 
@@ -75,7 +82,7 @@ fn resolve_at(dirfd: u64, path_addr: u64, base: u32) -> u32 {
 // =========================================================================
 
 /// openat: open or create a file. Supports O_CREAT, O_TRUNC.
-/// Path resolution via MemFS (absolute or AT_FDCWD-relative).
+/// Path resolution via MemFS (absolute, AT_FDCWD-relative, or dirfd-relative).
 pub fn sys_openat(vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, flags: u64, mode: u64) -> i64 {
     let oflags = flags as i32;
     let mut path_buf = [0u8; 513];
@@ -84,23 +91,49 @@ pub fn sys_openat(vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, f
 
     if path.is_empty() { return ENOENT; }
 
-    // Make absolute
-    let (abs_path, abs_len) = if path[0] == b'/' {
-        (&path_buf[1..1 + len], len)
-    } else if dirfd as i32 == AT_FDCWD {
-        path_buf[0] = b'/';
-        (&path_buf[..1 + len], 1 + len)
+    if path[0] == b'/' {
+        // Absolute path
+        let (parent_ino, name) = split_parent_name(path);
+        if parent_ino == 0 && name.is_empty() {
+            return fd_table::open_file(vm, base, 1, oflags);
+        }
+        if parent_ino == 0 { return ENOENT; }
+        openat_with_parent(vm, base, parent_ino, name, oflags, mode)
     } else {
-        return EINVAL;
-    };
+        // Relative path: determine base directory inode
+        let base_ino = if dirfd as i32 == AT_FDCWD {
+            1u32 // CWD = root for now
+        } else {
+            let ofd = match fd_table::get_ofd(vm, dirfd) {
+                Some(o) => o,
+                None => return EBADF,
+            };
+            ofd.ino as u32
+        };
 
-    let (parent_ino, name) = split_parent_name(&abs_path[..abs_len]);
+        let (parent_rel, name) = split_relative_parent_name(path);
+        if name.is_empty() {
+            // Path like "mydir/" — open the directory itself
+            let ino = if parent_rel.is_empty() {
+                base_ino
+            } else {
+                memfs::resolve_path_from(base_ino, parent_rel)
+            };
+            if ino == 0 { return ENOENT; }
+            return fd_table::open_file(vm, base, ino, oflags);
+        }
 
-    if parent_ino == 0 && name.is_empty() {
-        return fd_table::open_file(vm, base, 1, oflags);
+        let parent_ino = if parent_rel.is_empty() {
+            base_ino
+        } else {
+            memfs::resolve_path_from(base_ino, parent_rel)
+        };
+        if parent_ino == 0 { return ENOENT; }
+        openat_with_parent(vm, base, parent_ino, name, oflags, mode)
     }
-    if parent_ino == 0 { return ENOENT; }
+}
 
+fn openat_with_parent(vm: &mut ThreadState, base: u32, parent_ino: u32, name: &[u8], oflags: i32, mode: u64) -> i64 {
     let mut ino = memfs::lookup(parent_ino, name);
 
     if ino == 0 {
@@ -133,6 +166,22 @@ fn split_parent_name(path: &[u8]) -> (u32, &[u8]) {
 
     let parent_ino = memfs::resolve_path(parent_path);
     (parent_ino, name)
+}
+
+/// Split a relative path into (parent_relative_path, leaf_name).
+/// For "a/b/c.txt" returns ("a/b", "c.txt").
+/// For "c.txt" returns ("", "c.txt").
+fn split_relative_parent_name(path: &[u8]) -> (&[u8], &[u8]) {
+    if path.is_empty() { return (&[], &[]); }
+
+    // Find last '/'
+    for i in (0..path.len()).rev() {
+        if path[i] == b'/' {
+            return (&path[..i], &path[i + 1..]);
+        }
+    }
+    // No slash: parent is empty, name is the whole path
+    (&[], path)
 }
 
 // =========================================================================
@@ -306,8 +355,8 @@ pub fn sys_fstat(vm: &mut ThreadState, base: u32, fd: u64, stat_buf: u64) -> i64
 }
 
 /// newfstatat: get file status by path. Writes 128-byte struct stat to guest memory.
-pub fn sys_newfstatat(_vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, stat_buf: u64, _flags: u64) -> i64 {
-    let ino = resolve_at(dirfd, path_addr, base);
+pub fn sys_newfstatat(vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, stat_buf: u64, _flags: u64) -> i64 {
+    let ino = resolve_at(vm, dirfd, path_addr, base);
     if ino == 0 { return ENOENT; }
     write_stat(base, stat_buf, ino)
 }
@@ -338,38 +387,81 @@ fn write_stat(base: u32, stat_buf: u64, ino: u32) -> i64 {
 // =========================================================================
 
 /// mkdirat: create a directory.
-pub fn sys_mkdirat(_vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, mode: u64) -> i64 {
+pub fn sys_mkdirat(vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, mode: u64) -> i64 {
     let mut path_buf = [0u8; 513];
     let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf[1..]) };
     let path = &path_buf[1..1 + len];
     if path.is_empty() { return ENOENT; }
 
-    let abs_path = if path[0] == b'/' {
-        &path_buf[1..1 + len]
-    } else if dirfd as i32 == AT_FDCWD {
-        path_buf[0] = b'/';
-        &path_buf[..1 + len]
+    if path[0] == b'/' {
+        // Absolute path
+        let (parent_ino, name) = split_parent_name(path);
+        if parent_ino == 0 || name.is_empty() { return ENOENT; }
+        let ino = memfs::create_dir(parent_ino, name, mode as u32 & 0o7777);
+        if ino == 0 { return EEXIST; }
+        0
     } else {
-        return EINVAL;
-    };
-    let (parent_ino, name) = split_parent_name(abs_path);
-    if parent_ino == 0 { return ENOENT; }
-    let ino = memfs::create_dir(parent_ino, name, mode as u32 & 0o7777);
-    if ino == 0 { return EEXIST; }
-    0
+        // Relative path
+        let base_ino = if dirfd as i32 == AT_FDCWD {
+            1u32 // CWD = root for now
+        } else {
+            let ofd = match fd_table::get_ofd(vm, dirfd) {
+                Some(o) => o,
+                None => return EBADF,
+            };
+            ofd.ino as u32
+        };
+
+        let (parent_rel, name) = split_relative_parent_name(path);
+        if name.is_empty() { return ENOENT; }
+
+        let parent_ino = if parent_rel.is_empty() {
+            base_ino
+        } else {
+            memfs::resolve_path_from(base_ino, parent_rel)
+        };
+        if parent_ino == 0 { return ENOENT; }
+        let ino = memfs::create_dir(parent_ino, name, mode as u32 & 0o7777);
+        if ino == 0 { return EEXIST; }
+        0
+    }
 }
 
 /// unlinkat: remove a file entry from its parent directory.
-pub fn sys_unlinkat(_vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, _flags: u64) -> i64 {
-    let ino = resolve_at(dirfd, path_addr, base);
-    if ino == 0 { return ENOENT; }
+pub fn sys_unlinkat(vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, _flags: u64) -> i64 {
+    let mut path_buf = [0u8; 513];
+    let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf[1..]) };
+    let path = &path_buf[1..1 + len];
+    if path.is_empty() { return ENOENT; }
 
-    let mut path_buf = [0u8; 512];
-    let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf) };
-    let path = &path_buf[..len];
-    let (parent_ino, name) = split_parent_name(if path[0] == b'/' { path } else { return EINVAL; });
-    if parent_ino == 0 { return ENOENT; }
-    memfs::unlink(parent_ino, name)
+    if path[0] == b'/' {
+        // Absolute path
+        let (parent_ino, name) = split_parent_name(path);
+        if parent_ino == 0 || name.is_empty() { return ENOENT; }
+        memfs::unlink(parent_ino, name)
+    } else {
+        // Relative path: find parent and leaf name
+        let (parent_rel, name) = split_relative_parent_name(path);
+        if name.is_empty() { return ENOENT; }
+
+        let base_ino = if dirfd as i32 == AT_FDCWD {
+            1u32 // CWD = root for now
+        } else {
+            let ofd = match fd_table::get_ofd(vm, dirfd) {
+                Some(o) => o,
+                None => return EBADF,
+            };
+            ofd.ino as u32
+        };
+
+        let parent_ino = if parent_rel.is_empty() {
+            base_ino
+        } else {
+            memfs::resolve_path_from(base_ino, parent_rel)
+        };
+        if parent_ino == 0 { return ENOENT; }
+        memfs::unlink(parent_ino, name)
+    }
 }
 
 // =========================================================================
@@ -448,15 +540,15 @@ pub fn sys_lseek(vm: &mut ThreadState, _base: u32, fd: u64, offset: i64, whence:
 // =========================================================================
 
 /// faccessat: check file accessibility (existence check only).
-pub fn sys_faccessat(_vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, _mode: u64) -> i64 {
-    let ino = resolve_at(dirfd, path_addr, base);
+pub fn sys_faccessat(vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, _mode: u64) -> i64 {
+    let ino = resolve_at(vm, dirfd, path_addr, base);
     if ino == 0 { ENOENT } else { 0 }
 }
 
 /// readlinkat: read symbolic link. Handles /proc/self/exe for Go runtime.
 /// Returns EINVAL for paths that exist but are not symlinks,
 /// ENOENT for paths that don't exist.
-pub fn sys_readlinkat(_vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, buf: u64, bufsiz: u64) -> i64 {
+pub fn sys_readlinkat(vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, buf: u64, bufsiz: u64) -> i64 {
     let mut path_buf = [0u8; 512];
     let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf) };
     let path = &path_buf[..len];
@@ -472,7 +564,7 @@ pub fn sys_readlinkat(_vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u
     // For all other paths: check if the path exists.
     // MemFS has no symlink support, so any existing path is not a symlink → EINVAL.
     // Non-existent paths → ENOENT.
-    let ino = resolve_at(dirfd, path_addr, base);
+    let ino = resolve_at(vm, dirfd, path_addr, base);
     if ino == 0 { return ENOENT; }
     EINVAL
 }

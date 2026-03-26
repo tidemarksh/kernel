@@ -205,6 +205,22 @@ pub fn resolve_path(path: &[u8]) -> u32 {
     ino
 }
 
+/// Resolve a relative path starting from a given directory inode.
+/// The path must NOT start with '/'. Each component is looked up
+/// via `lookup` starting from `start_ino`.
+pub fn resolve_path_from(start_ino: u32, path: &[u8]) -> u32 {
+    if path.is_empty() { return start_ino; }
+    // Absolute paths should not be passed here
+    if path[0] == b'/' { return 0; }
+    let mut ino = start_ino;
+    for component in path.split(|&b| b == b'/') {
+        if component.is_empty() || component == b"." { continue; }
+        ino = lookup(ino, component);
+        if ino == 0 { return 0; }
+    }
+    ino
+}
+
 fn add_dir_entry(parent_ino: u32, name: &[u8], ino: u32) -> bool {
     let h = fs();
     let idx = h.dir_entry_count as usize;

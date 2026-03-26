@@ -131,73 +131,119 @@ unsafe fn bump_gen(slot: usize) {
 
 #[inline(always)]
 pub unsafe fn write_u8(base: u32, addr: u64, val: u8) {
-    unsafe { *((base + addr as u32) as *mut u8) = val };
     if unsafe { is_multi_threaded() } {
-        unsafe { bump_gen(((addr >> 3) & 63) as usize) };
+        let slot = ((addr >> 3) & 63) as usize;
+        unsafe { bump_gen(slot) };  // odd  → write-in-progress
+        unsafe { *((base + addr as u32) as *mut u8) = val };
+        unsafe { bump_gen(slot) };  // even → write-complete
+    } else {
+        unsafe { *((base + addr as u32) as *mut u8) = val };
     }
 }
 
 #[inline(always)]
 pub unsafe fn write_u16(base: u32, addr: u64, val: u16) {
-    unsafe { ((base + addr as u32) as *mut u16).write_unaligned(val) };
     if unsafe { is_multi_threaded() } {
-        unsafe { bump_gen(((addr >> 3) & 63) as usize) };
+        let slot = ((addr >> 3) & 63) as usize;
+        unsafe { bump_gen(slot) };  // odd  → write-in-progress
+        unsafe { ((base + addr as u32) as *mut u16).write_unaligned(val) };
+        unsafe { bump_gen(slot) };  // even → write-complete
+    } else {
+        unsafe { ((base + addr as u32) as *mut u16).write_unaligned(val) };
     }
 }
 
 #[inline(always)]
 pub unsafe fn write_u32(base: u32, addr: u64, val: u32) {
     let ptr = (base + addr as u32) as usize;
-    if (ptr & 3) == 0 {
-        unsafe { (*(ptr as *const AtomicU32)).store(val, Ordering::Relaxed) };
-    } else {
-        unsafe { (ptr as *mut u32).write_unaligned(val) };
-    }
     if unsafe { is_multi_threaded() } {
-        unsafe { bump_gen(((addr >> 3) & 63) as usize) };
+        let slot = ((addr >> 3) & 63) as usize;
+        unsafe { bump_gen(slot) };  // odd  → write-in-progress
+        if (ptr & 3) == 0 {
+            unsafe { (*(ptr as *const AtomicU32)).store(val, Ordering::Relaxed) };
+        } else {
+            unsafe { (ptr as *mut u32).write_unaligned(val) };
+        }
+        unsafe { bump_gen(slot) };  // even → write-complete
+    } else {
+        if (ptr & 3) == 0 {
+            unsafe { (*(ptr as *const AtomicU32)).store(val, Ordering::Relaxed) };
+        } else {
+            unsafe { (ptr as *mut u32).write_unaligned(val) };
+        }
     }
 }
 
 #[inline(always)]
 pub unsafe fn write_u64(base: u32, addr: u64, val: u64) {
     let ptr = (base + addr as u32) as usize;
-    if (ptr & 7) == 0 {
-        unsafe { (*(ptr as *const core::sync::atomic::AtomicU64)).store(val, Ordering::Relaxed) };
-    } else {
-        unsafe { (ptr as *mut u64).write_unaligned(val) };
-    }
     if unsafe { is_multi_threaded() } {
-        unsafe { bump_gen(((addr >> 3) & 63) as usize) };
+        let slot = ((addr >> 3) & 63) as usize;
+        unsafe { bump_gen(slot) };  // odd  → write-in-progress
+        if (ptr & 7) == 0 {
+            unsafe { (*(ptr as *const core::sync::atomic::AtomicU64)).store(val, Ordering::Relaxed) };
+        } else {
+            unsafe { (ptr as *mut u64).write_unaligned(val) };
+        }
+        unsafe { bump_gen(slot) };  // even → write-complete
+    } else {
+        if (ptr & 7) == 0 {
+            unsafe { (*(ptr as *const core::sync::atomic::AtomicU64)).store(val, Ordering::Relaxed) };
+        } else {
+            unsafe { (ptr as *mut u64).write_unaligned(val) };
+        }
     }
 }
 
 pub unsafe fn write_bytes(base: u32, addr: u64, data: &[u8]) {
-    let dst = (base + addr as u32) as *mut u8;
-    unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len()) };
     if unsafe { is_multi_threaded() } && !data.is_empty() {
         let start_slot = ((addr >> 3) & 63) as usize;
         let end_slot = (((addr + data.len() as u64 - 1) >> 3) & 63) as usize;
+        // bump all slots to odd → write-in-progress
         if start_slot <= end_slot {
             for s in start_slot..=end_slot { unsafe { bump_gen(s) }; }
         } else {
             for s in start_slot..64 { unsafe { bump_gen(s) }; }
             for s in 0..=end_slot { unsafe { bump_gen(s) }; }
         }
+        let dst = (base + addr as u32) as *mut u8;
+        unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len()) };
+        // bump all slots to even → write-complete
+        if start_slot <= end_slot {
+            for s in start_slot..=end_slot { unsafe { bump_gen(s) }; }
+        } else {
+            for s in start_slot..64 { unsafe { bump_gen(s) }; }
+            for s in 0..=end_slot { unsafe { bump_gen(s) }; }
+        }
+    } else {
+        let dst = (base + addr as u32) as *mut u8;
+        unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len()) };
     }
 }
 
 pub unsafe fn zero_mem(base: u32, addr: u64, len: usize) {
-    let dst = (base + addr as u32) as *mut u8;
-    unsafe { core::ptr::write_bytes(dst, 0, len) };
     if unsafe { is_multi_threaded() } && len > 0 {
         let start_slot = ((addr >> 3) & 63) as usize;
         let end_slot = (((addr + len as u64 - 1) >> 3) & 63) as usize;
+        // bump all slots to odd → write-in-progress
         if start_slot <= end_slot {
             for s in start_slot..=end_slot { unsafe { bump_gen(s) }; }
         } else {
             for s in start_slot..64 { unsafe { bump_gen(s) }; }
             for s in 0..=end_slot { unsafe { bump_gen(s) }; }
         }
+        let dst = (base + addr as u32) as *mut u8;
+        unsafe { core::ptr::write_bytes(dst, 0, len) };
+        // bump all slots to even → write-complete
+        if start_slot <= end_slot {
+            for s in start_slot..=end_slot { unsafe { bump_gen(s) }; }
+        } else {
+            for s in start_slot..64 { unsafe { bump_gen(s) }; }
+            for s in 0..=end_slot { unsafe { bump_gen(s) }; }
+        }
+    } else {
+        let dst = (base + addr as u32) as *mut u8;
+        unsafe { core::ptr::write_bytes(dst, 0, len) };
     }
 }
 

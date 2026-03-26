@@ -98,6 +98,10 @@ pub fn sys_brk(_vm: &mut ThreadState, _base: u32, addr: u64) -> i64 {
     if addr < s.brk_base {
         return s.brk_current as i64;
     }
+    // 2GB address space ceiling
+    if addr > 0x8000_0000 {
+        return s.brk_current as i64;
+    }
 
     // Ensure WASM memory is large enough
     unsafe {
@@ -152,7 +156,7 @@ pub fn sys_mmap(
         if addr + len > 0x8000_0000 { return ENOMEM; }
         remove_overlap(s, addr, addr + len);
         addr
-    } else if addr != 0 && !overlaps(s, addr, addr + len) {
+    } else if addr != 0 && addr + len <= 0x8000_0000 && !overlaps(s, addr, addr + len) {
         addr
     } else {
         let hole = find_hole(s, len);
