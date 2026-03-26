@@ -545,7 +545,7 @@ pub fn sys_faccessat(vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64
     if ino == 0 { ENOENT } else { 0 }
 }
 
-/// readlinkat: read symbolic link. Handles /proc/self/exe for Go runtime.
+/// readlinkat: read symbolic link. Handles /proc/self/exe.
 /// Returns EINVAL for paths that exist but are not symlinks,
 /// ENOENT for paths that don't exist.
 pub fn sys_readlinkat(vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, buf: u64, bufsiz: u64) -> i64 {
@@ -553,7 +553,7 @@ pub fn sys_readlinkat(vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u6
     let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf) };
     let path = &path_buf[..len];
 
-    // Handle /proc/self/exe — Go runtime reads this to find its own binary.
+    // Handle /proc/self/exe — many runtimes read this to find their own binary.
     if path == b"/proc/self/exe" {
         let result = b"/init";
         let n = (result.len()).min(bufsiz as usize);
