@@ -1,5 +1,7 @@
 #![cfg_attr(all(target_arch = "wasm32", target_os = "unknown"), no_std)]
 
+extern crate alloc as alloc_crate;
+
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {

@@ -1,10 +1,30 @@
 //! Bump allocator for kernel Worker's WASM linear memory.
 //!
-//! Used to allocate ProcessState, ThreadState, OFD table, etc.
+//! Used to allocate ProcessState, ThreadState, OFD table, Vec<Vma>, etc.
 //! Free is a no-op (kernel objects are long-lived).
+//! Implements GlobalAlloc to enable `extern crate alloc` (Vec, etc.).
+
+use core::alloc::{GlobalAlloc, Layout};
 
 static mut HEAP_BASE: u32 = 0;
 static mut HEAP_PTR: u32 = 0;
+
+/// Global allocator backed by the bump allocator.
+struct BumpAlloc;
+
+unsafe impl GlobalAlloc for BumpAlloc {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let ptr = unsafe { alloc(layout.size() as u32, layout.align() as u32) };
+        if ptr == 0 { core::ptr::null_mut() } else { ptr as *mut u8 }
+    }
+    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
+        // No-op: bump allocator does not free.
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[global_allocator]
+static ALLOCATOR: BumpAlloc = BumpAlloc;
 
 /// Initialize the allocator. `base` is the first usable byte after WASM data segments.
 ///

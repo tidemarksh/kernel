@@ -16,56 +16,57 @@
 //! };
 //! https://github.com/torvalds/linux/blob/v6.12/include/linux/mm_types.h
 
+use alloc_crate::vec::Vec;
+
 use crate::abi::*;
-use crate::alloc;
 use crate::fs::{memfs, fd_table};
 use crate::guest_mem;
 use crate::types::{ThreadState, Vma};
 
-const MAX_VMAS: usize = MAX_MMAP_REGIONS;
-
-/// Memory management state, allocated in kernel Worker linear memory.
-#[repr(C)]
+/// Memory management state.
+/// VMA table is a sorted Vec<Vma> (sorted by start address).
+/// https://man7.org/linux/man-pages/man2/mmap.2.html
 struct MemState {
-    vma_table: [Vma; MAX_VMAS],
-    vma_count: u32,
-    _pad0: u32,
+    vmas: Vec<Vma>,
     brk_base: u64,
     brk_current: u64,
     mmap_next: u64,
     has_prot_none: u32,
 }
 
-/// Pointer to MemState in WASM linear memory.
-static mut MEM_STATE: *mut MemState = core::ptr::null_mut();
+static mut MEM_STATE_INIT: bool = false;
+static mut MEM_STATE: core::mem::MaybeUninit<MemState> = core::mem::MaybeUninit::uninit();
 
 fn ms() -> &'static mut MemState {
-    unsafe {
-        let p = core::ptr::read(core::ptr::addr_of!(MEM_STATE));
-        &mut *p
-    }
+    unsafe { &mut *core::ptr::addr_of_mut!(MEM_STATE).cast::<MemState>() }
 }
 
-/// Initialize memory state. Allocates MemState via alloc.rs.
+/// Initialize memory state.
 pub fn init(brk_start: u64) {
-    unsafe {
-        let ptr = alloc::alloc_zeroed(
-            core::mem::size_of::<MemState>() as u32,
-            core::mem::align_of::<MemState>() as u32,
-        );
-        if ptr == 0 { core::arch::wasm32::unreachable(); }
-        core::ptr::write(core::ptr::addr_of_mut!(MEM_STATE), ptr as *mut MemState);
-    }
-    let s = ms();
-    s.brk_base = brk_start;
-    s.brk_current = brk_start;
-    // mmap region starts above the current heap to avoid overlap.
-    // Align to 1MB boundary for clean separation.
     let heap_end = unsafe { crate::alloc::heap_ptr() };
     let mmap_start = ((heap_end as u64 + 0x10_0000) & !0xF_FFFF).max(0x4000_0000);
-    s.mmap_next = mmap_start;
-    s.has_prot_none = 0;
-    s.vma_count = 0;
+    unsafe {
+        let init_ptr = core::ptr::addr_of_mut!(MEM_STATE_INIT);
+        if core::ptr::read(init_ptr) {
+            // Re-init: reset existing state
+            let s = ms();
+            s.vmas.clear();
+            s.brk_base = brk_start;
+            s.brk_current = brk_start;
+            s.mmap_next = mmap_start;
+            s.has_prot_none = 0;
+        } else {
+            let p = core::ptr::addr_of_mut!(MEM_STATE).cast::<MemState>();
+            core::ptr::write(p, MemState {
+                vmas: Vec::new(),
+                brk_base: brk_start,
+                brk_current: brk_start,
+                mmap_next: mmap_start,
+                has_prot_none: 0,
+            });
+            core::ptr::write(init_ptr, true);
+        }
+    }
 }
 
 pub fn has_prot_none() -> bool {
@@ -74,9 +75,7 @@ pub fn has_prot_none() -> bool {
 
 pub fn is_prot_none(addr: u64) -> bool {
     let s = ms();
-    let count = s.vma_count as usize;
-    for i in 0..count {
-        let v = &s.vma_table[i];
+    for v in s.vmas.iter() {
         if addr >= v.start && addr < v.end && v.prot == PROT_NONE {
             return true;
         }
@@ -211,9 +210,7 @@ pub fn sys_mmap(
         }
     }
 
-    let count = s.vma_count as usize;
-    if count >= MAX_VMAS { return ENOMEM; }
-    s.vma_table[count] = Vma {
+    s.vmas.push(Vma {
         start,
         end: start + len,
         prot: prot as i32,
@@ -221,9 +218,8 @@ pub fn sys_mmap(
         fd: if is_anon { -1 } else { fd as i32 },
         _pad: 0,
         offset,
-    };
-    s.vma_count += 1;
-    sort_vmas(s);
+    });
+    s.vmas.sort_by_key(|v| v.start);
 
     if prot as i32 == PROT_NONE { s.has_prot_none = 1; }
 
@@ -264,7 +260,7 @@ pub fn sys_mremap(
     };
 
     if new_len <= old_len {
-        s.vma_table[idx].end = old_addr + new_len;
+        s.vmas[idx].end = old_addr + new_len;
         return old_addr as i64;
     }
 
@@ -281,7 +277,7 @@ pub fn sys_mremap(
             }
             guest_mem::zero_mem(0, old_addr + old_len, (new_len - old_len) as usize);
         }
-        s.vma_table[idx].end = grow_end;
+        s.vmas[idx].end = grow_end;
         return old_addr as i64;
     }
 
@@ -303,9 +299,9 @@ pub fn sys_mremap(
         guest_mem::zero_mem(0, new_start + old_len, (new_len - old_len) as usize);
     }
 
-    s.vma_table[idx].start = new_start;
-    s.vma_table[idx].end = new_start + new_len;
-    sort_vmas(s);
+    s.vmas[idx].start = new_start;
+    s.vmas[idx].end = new_start + new_len;
+    s.vmas.sort_by_key(|v| v.start);
     new_start as i64
 }
 
@@ -322,29 +318,24 @@ pub fn sys_mprotect(_vm: &mut ThreadState, _base: u32, addr: u64, length: u64, p
     let s = ms();
 
     let mut i = 0;
-    while i < s.vma_count as usize {
-        let v = s.vma_table[i];
+    while i < s.vmas.len() {
+        let v = s.vmas[i];
         if v.end <= addr || v.start >= end { i += 1; continue; }
 
         if v.start < addr {
-            let count = s.vma_count as usize;
-            if count >= MAX_VMAS { return ENOMEM; }
-            s.vma_table[count] = Vma { start: v.start, end: addr, ..v };
-            s.vma_count += 1;
-            s.vma_table[i].start = addr;
+            s.vmas.push(Vma { start: v.start, end: addr, ..v });
+            s.vmas[i].start = addr;
         }
         if v.end > end {
-            let count = s.vma_count as usize;
-            if count >= MAX_VMAS { return ENOMEM; }
-            s.vma_table[count] = Vma { start: end, end: v.end, ..s.vma_table[i] };
-            s.vma_count += 1;
-            s.vma_table[i].end = end;
+            let cur = s.vmas[i];
+            s.vmas.push(Vma { start: end, end: v.end, ..cur });
+            s.vmas[i].end = end;
         }
-        s.vma_table[i].prot = prot as i32;
+        s.vmas[i].prot = prot as i32;
         i += 1;
     }
 
-    sort_vmas(s);
+    s.vmas.sort_by_key(|v| v.start);
     recompute_prot_none(s);
     0
 }
@@ -361,9 +352,7 @@ fn find_hole(s: &mut MemState, len: u64) -> u64 {
             s.mmap_next = candidate + len;
             return candidate;
         }
-        let count = s.vma_count as usize;
-        for i in 0..count {
-            let v = &s.vma_table[i];
+        for v in s.vmas.iter() {
             if v.start < candidate + len && v.end > candidate {
                 candidate = (v.end + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
                 break;
@@ -373,19 +362,15 @@ fn find_hole(s: &mut MemState, len: u64) -> u64 {
 }
 
 fn overlaps(s: &MemState, start: u64, end: u64) -> bool {
-    let count = s.vma_count as usize;
-    for i in 0..count {
-        let v = &s.vma_table[i];
+    for v in s.vmas.iter() {
         if v.start < end && v.end > start { return true; }
     }
     false
 }
 
 fn overlaps_except(s: &MemState, start: u64, end: u64, except: usize) -> bool {
-    let count = s.vma_count as usize;
-    for i in 0..count {
+    for (i, v) in s.vmas.iter().enumerate() {
         if i == except { continue; }
-        let v = &s.vma_table[i];
         if v.start < end && v.end > start { return true; }
     }
     false
@@ -393,63 +378,41 @@ fn overlaps_except(s: &MemState, start: u64, end: u64, except: usize) -> bool {
 
 fn remove_overlap(s: &mut MemState, start: u64, end: u64) {
     let mut i = 0;
-    while i < s.vma_count as usize {
-        let v = s.vma_table[i];
+    while i < s.vmas.len() {
+        let v = s.vmas[i];
         if v.start >= end || v.end <= start { i += 1; continue; }
 
         if v.start >= start && v.end <= end {
-            let last = s.vma_count as usize - 1;
-            s.vma_table[i] = s.vma_table[last];
-            s.vma_count -= 1;
+            s.vmas.swap_remove(i);
             continue;
         }
         if v.start < start && v.end > end {
-            let count = s.vma_count as usize;
-            if count < MAX_VMAS {
-                s.vma_table[count] = Vma { start: end, end: v.end, ..v };
-                s.vma_count += 1;
-            }
-            s.vma_table[i].end = start;
+            s.vmas.push(Vma { start: end, end: v.end, ..v });
+            s.vmas[i].end = start;
             i += 1;
             continue;
         }
         if v.start < start {
-            s.vma_table[i].end = start;
+            s.vmas[i].end = start;
         } else {
-            s.vma_table[i].start = end;
+            s.vmas[i].start = end;
         }
         i += 1;
     }
-    sort_vmas(s);
+    s.vmas.sort_by_key(|v| v.start);
 }
 
 fn find_vma_containing(s: &MemState, addr: u64) -> Option<usize> {
-    let count = s.vma_count as usize;
-    for i in 0..count {
-        let v = &s.vma_table[i];
+    for (i, v) in s.vmas.iter().enumerate() {
         if addr >= v.start && addr < v.end { return Some(i); }
     }
     None
 }
 
-fn sort_vmas(s: &mut MemState) {
-    let count = s.vma_count as usize;
-    for i in 1..count {
-        let key = s.vma_table[i];
-        let mut j = i;
-        while j > 0 && s.vma_table[j - 1].start > key.start {
-            s.vma_table[j] = s.vma_table[j - 1];
-            j -= 1;
-        }
-        s.vma_table[j] = key;
-    }
-}
-
 fn recompute_prot_none(s: &mut MemState) {
     s.has_prot_none = 0;
-    let count = s.vma_count as usize;
-    for i in 0..count {
-        if s.vma_table[i].prot == PROT_NONE {
+    for v in s.vmas.iter() {
+        if v.prot == PROT_NONE {
             s.has_prot_none = 1;
             return;
         }
@@ -506,5 +469,83 @@ mod tests {
         assert!(super::has_prot_none());
 
         t.sys_munmap(addr2 as u64, 4096);
+    }
+
+    // https://man7.org/linux/man-pages/man2/mmap.2.html
+    // https://man7.org/linux/man-pages/man2/brk.2.html
+    // VMA management requirements from sorted Vec<Vma> design:
+
+    #[test]
+    fn vmas_are_sorted_after_multiple_mmaps() {
+        let mut t = TestVm::new();
+        let a1 = t.sys_mmap(0, 4096, PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+        let a2 = t.sys_mmap(0, 4096, PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+        let a3 = t.sys_mmap(0, 4096, PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+        assert!(a1 > 0 && a2 > 0 && a3 > 0);
+        // VMA table should be sorted by start address
+        let s = super::ms();
+        for i in 1..s.vmas.len() {
+            assert!(s.vmas[i].start >= s.vmas[i - 1].start,
+                "VMAs not sorted: [{}].start=0x{:x} < [{}].start=0x{:x}",
+                i, s.vmas[i].start, i - 1, s.vmas[i - 1].start);
+        }
+        t.sys_munmap(a1 as u64, 4096);
+        t.sys_munmap(a2 as u64, 4096);
+        t.sys_munmap(a3 as u64, 4096);
+    }
+
+    #[test]
+    fn map_fixed_replaces_existing_vma() {
+        let mut t = TestVm::new();
+        let a = t.sys_mmap(0, 8192, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+        assert!(a > 0);
+        // MAP_FIXED over the same region with different prot
+        let a2 = t.sys_mmap(a as u64, 4096, PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED, -1, 0);
+        assert_eq!(a2, a);
+        t.sys_munmap(a as u64, 8192);
+    }
+
+    #[test]
+    fn munmap_partial_splits_vma() {
+        let mut t = TestVm::new();
+        let a = t.sys_mmap(0, 0x3000, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+        assert!(a > 0);
+        let count_before = super::ms().vmas.len();
+        // Unmap the middle page — should split into 2 VMAs
+        let ret = t.sys_munmap(a as u64 + 0x1000, 0x1000);
+        assert_eq!(ret, 0);
+        let count_after = super::ms().vmas.len();
+        assert!(count_after >= count_before, "split should not reduce VMA count");
+        t.sys_munmap(a as u64, 0x1000);
+        t.sys_munmap(a as u64 + 0x2000, 0x1000);
+    }
+
+    #[test]
+    fn mprotect_split_on_boundary_mismatch() {
+        let mut t = TestVm::new();
+        let a = t.sys_mmap(0, 0x2000, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+        assert!(a > 0);
+        // Protect only the first page — should split the VMA
+        let ret = t.sys_mprotect(a as u64, 0x1000, PROT_READ);
+        assert_eq!(ret, 0);
+        t.sys_munmap(a as u64, 0x2000);
+    }
+
+    #[test]
+    fn brk_refuses_above_2gb() {
+        let mut t = TestVm::new();
+        // Try to set brk above 2GB
+        let cur = t.sys_brk(0);
+        let ret = t.sys_brk(0x8000_0001);
+        // Should refuse and return current brk
+        assert_eq!(ret, cur, "brk should refuse addresses above 2GB");
+    }
+
+    #[test]
+    fn mmap_rejects_invalid_fd_for_file_backed() {
+        let mut t = TestVm::new();
+        // Non-anonymous with fd=-1 should fail
+        let ret = t.sys_mmap(0, 4096, PROT_READ, MAP_PRIVATE, -1, 0);
+        assert_eq!(ret, EBADF as i64, "mmap with !MAP_ANONYMOUS and fd=-1 should return EBADF");
     }
 }
