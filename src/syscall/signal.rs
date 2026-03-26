@@ -59,6 +59,8 @@ fn sigactions() -> &'static mut [SigAction; MAX_SIGNALS] {
 /// Initialize signal dispositions for a process. Allocates via alloc.rs in kernel Worker memory.
 pub fn init() {
     unsafe {
+        core::ptr::write(core::ptr::addr_of_mut!(SIGACTIONS_PTR), core::ptr::null_mut());
+
         let size = core::mem::size_of::<[SigAction; MAX_SIGNALS]>() as u32;
         let align = core::mem::align_of::<SigAction>() as u32;
         let ptr = crate::alloc::alloc_zeroed(size, align);

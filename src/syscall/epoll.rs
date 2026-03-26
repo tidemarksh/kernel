@@ -45,6 +45,8 @@ static mut EPOLL_TABLE_PTR: *mut *mut EpollInstance = core::ptr::null_mut();
 /// Initialize epoll table. Allocates via alloc.rs.
 pub fn init() {
     unsafe {
+        core::ptr::write(core::ptr::addr_of_mut!(EPOLL_TABLE_PTR), core::ptr::null_mut());
+
         let size = (MAX_EPOLL_ENTRIES * core::mem::size_of::<*mut EpollInstance>()) as u32;
         let ptr = alloc::alloc_zeroed(size, core::mem::align_of::<*mut EpollInstance>() as u32);
         if ptr == 0 { core::arch::wasm32::unreachable(); }

@@ -42,6 +42,16 @@ pub unsafe fn init(base: u32) {
     }
 }
 
+/// Reset the allocator to a fixed base. Only for test use — allows tests to
+/// reclaim memory between test cases in a shared WASM instance.
+#[cfg(test)]
+pub unsafe fn reset(base: u32) {
+    unsafe {
+        HEAP_BASE = base;
+        HEAP_PTR = base;
+    }
+}
+
 
 
 /// Allocate `size` bytes aligned to `align`. Returns 0 on failure.

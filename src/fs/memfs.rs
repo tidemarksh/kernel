@@ -115,6 +115,8 @@ fn data_slice_mut() -> &'static mut [u8] {
 /// Initialize MemFS. Allocates all data structures via alloc.rs.
 pub fn init() {
     unsafe {
+        core::ptr::write(core::ptr::addr_of_mut!(MEMFS_PTR), core::ptr::null_mut());
+
         let header_ptr = alloc::alloc_zeroed(
             core::mem::size_of::<MemFsHeader>() as u32,
             core::mem::align_of::<MemFsHeader>() as u32,

@@ -60,6 +60,8 @@ fn ofd_table() -> &'static mut [OpenFileDesc; MAX_FDS] {
 /// Initialize OFD table. Allocates via alloc.rs.
 pub fn init() {
     unsafe {
+        core::ptr::write(core::ptr::addr_of_mut!(OFD_TABLE_PTR), core::ptr::null_mut());
+
         let size = core::mem::size_of::<[OpenFileDesc; MAX_FDS]>() as u32;
         let align = core::mem::align_of::<OpenFileDesc>() as u32;
         let ptr = crate::alloc::alloc_zeroed(size, align);

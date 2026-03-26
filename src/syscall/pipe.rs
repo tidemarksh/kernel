@@ -50,13 +50,15 @@ static mut PIPE_USED: u64 = 0;
 /// Initialize pipe subsystem. Allocates pipe slot region on shared memory.
 pub fn init() {
     unsafe {
+        core::ptr::write(core::ptr::addr_of_mut!(SAB_PIPE_BASE), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(PIPE_USED), 0);
+
         let total = MAX_PIPES as u32 * PIPE_SLOT_SIZE;
         // Allocate from shared memory (in production, this is SAB;
         // in single-instance, alloc.rs allocates from the same shared WASM Memory)
         let base = alloc::alloc_zeroed(total, 8);
         if base == 0 { core::arch::wasm32::unreachable(); }
         core::ptr::write(core::ptr::addr_of_mut!(SAB_PIPE_BASE), base);
-        core::ptr::write(core::ptr::addr_of_mut!(PIPE_USED), 0);
     }
 }
 

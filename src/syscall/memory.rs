@@ -49,30 +49,26 @@ pub fn init(brk_start: u64) {
     let heap_end = unsafe { crate::alloc::heap_ptr() };
     let mmap_start = ((heap_end as u64 + 0x10_0000) & !0xF_FFFF).max(0x4000_0000);
     unsafe {
-        let p = core::ptr::read(core::ptr::addr_of!(MEM_STATE));
-        if !p.is_null() {
-            // Re-init: reset existing state
-            let s = &mut *p;
-            s.vmas.clear();
-            s.brk_base = brk_start;
-            s.brk_current = brk_start;
-            s.mmap_next = mmap_start;
-            s.has_prot_none = 0;
-        } else {
-            let ptr = crate::alloc::alloc(
-                core::mem::size_of::<MemState>() as u32,
-                core::mem::align_of::<MemState>() as u32,
-            );
-            if ptr == 0 { core::arch::wasm32::unreachable(); }
-            core::ptr::write(ptr as *mut MemState, MemState {
-                vmas: Vec::new(),
-                brk_base: brk_start,
-                brk_current: brk_start,
-                mmap_next: mmap_start,
-                has_prot_none: 0,
-            });
-            core::ptr::write(core::ptr::addr_of_mut!(MEM_STATE), ptr as *mut MemState);
-        }
+        // Null the pointer so we always take the fresh allocation path.
+        // After alloc::reset() the old MemState occupies bump-allocated memory
+        // that will be reused by other subsystem inits. The old Vec<Vma>'s
+        // system-allocator buffer (if any) is leaked; this is acceptable
+        // because alloc::reset() reclaims the bump region anyway.
+        core::ptr::write(core::ptr::addr_of_mut!(MEM_STATE), core::ptr::null_mut());
+
+        let ptr = crate::alloc::alloc(
+            core::mem::size_of::<MemState>() as u32,
+            core::mem::align_of::<MemState>() as u32,
+        );
+        if ptr == 0 { core::arch::wasm32::unreachable(); }
+        core::ptr::write(ptr as *mut MemState, MemState {
+            vmas: Vec::new(),
+            brk_base: brk_start,
+            brk_current: brk_start,
+            mmap_next: mmap_start,
+            has_prot_none: 0,
+        });
+        core::ptr::write(core::ptr::addr_of_mut!(MEM_STATE), ptr as *mut MemState);
     }
 }
 
