@@ -4,4 +4,4 @@
 //! futex(WAIT/WAKE) uses guest Memory Atomics directly.
 //! futex(CMP_REQUEUE) requires kernel Worker.
 //!
-//! Stub — implementation in Phase 5.
+//! Stub — not yet implemented.

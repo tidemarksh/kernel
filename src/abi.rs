@@ -72,6 +72,7 @@ pub const SYS_PWRITEV: u64 = 70;
 pub const SYS_READLINKAT: u64 = 78;
 pub const SYS_NEWFSTATAT: u64 = 79;
 pub const SYS_FSTAT: u64 = 80;
+pub const SYS_TRUNCATE: u64 = 45;
 pub const SYS_FTRUNCATE: u64 = 46;
 pub const SYS_UTIMENSAT: u64 = 88;
 pub const SYS_EXIT: u64 = 93;
@@ -307,6 +308,73 @@ export_const_u64!(abi_sys_getpid, SYS_GETPID);
 export_const_u64!(abi_sys_gettid, SYS_GETTID);
 export_const_u64!(abi_sys_nanosleep, SYS_NANOSLEEP);
 export_const_u64!(abi_sys_clock_gettime, SYS_CLOCK_GETTIME);
+export_const_u64!(abi_sys_getcwd, SYS_GETCWD);
+export_const_u64!(abi_sys_eventfd2, SYS_EVENTFD2);
+export_const_u64!(abi_sys_dup, SYS_DUP);
+export_const_u64!(abi_sys_dup3, SYS_DUP3);
+export_const_u64!(abi_sys_inotify_init1, SYS_INOTIFY_INIT1);
+export_const_u64!(abi_sys_inotify_add_watch, SYS_INOTIFY_ADD_WATCH);
+export_const_u64!(abi_sys_inotify_rm_watch, SYS_INOTIFY_RM_WATCH);
+export_const_u64!(abi_sys_ioctl, SYS_IOCTL);
+export_const_u64!(abi_sys_fcntl, SYS_FCNTL);
+export_const_u64!(abi_sys_mkdirat, SYS_MKDIRAT);
+export_const_u64!(abi_sys_unlinkat, SYS_UNLINKAT);
+export_const_u64!(abi_sys_renameat2, SYS_RENAMEAT2);
+export_const_u64!(abi_sys_statx, SYS_STATX);
+export_const_u64!(abi_sys_faccessat, SYS_FACCESSAT);
+export_const_u64!(abi_sys_getdents64, SYS_GETDENTS64);
+export_const_u64!(abi_sys_lseek, SYS_LSEEK);
+export_const_u64!(abi_sys_readv, SYS_READV);
+export_const_u64!(abi_sys_writev, SYS_WRITEV);
+export_const_u64!(abi_sys_pread64, SYS_PREAD64);
+export_const_u64!(abi_sys_pwrite64, SYS_PWRITE64);
+export_const_u64!(abi_sys_preadv, SYS_PREADV);
+export_const_u64!(abi_sys_pwritev, SYS_PWRITEV);
+export_const_u64!(abi_sys_readlinkat, SYS_READLINKAT);
+export_const_u64!(abi_sys_newfstatat, SYS_NEWFSTATAT);
+export_const_u64!(abi_sys_fstat, SYS_FSTAT);
+export_const_u64!(abi_sys_truncate, SYS_TRUNCATE);
+export_const_u64!(abi_sys_ftruncate, SYS_FTRUNCATE);
+export_const_u64!(abi_sys_utimensat, SYS_UTIMENSAT);
+export_const_u64!(abi_sys_set_tid_address, SYS_SET_TID_ADDRESS);
+export_const_u64!(abi_sys_set_robust_list, SYS_SET_ROBUST_LIST);
+export_const_u64!(abi_sys_sched_yield, SYS_SCHED_YIELD);
+export_const_u64!(abi_sys_kill, SYS_KILL);
+export_const_u64!(abi_sys_tkill, SYS_TKILL);
+export_const_u64!(abi_sys_tgkill, SYS_TGKILL);
+export_const_u64!(abi_sys_rt_sigreturn, SYS_RT_SIGRETURN);
+export_const_u64!(abi_sys_sigaltstack, SYS_SIGALTSTACK);
+export_const_u64!(abi_sys_times, SYS_TIMES);
+export_const_u64!(abi_sys_getppid, SYS_GETPPID);
+export_const_u64!(abi_sys_getuid, SYS_GETUID);
+export_const_u64!(abi_sys_geteuid, SYS_GETEUID);
+export_const_u64!(abi_sys_getgid, SYS_GETGID);
+export_const_u64!(abi_sys_getegid, SYS_GETEGID);
+export_const_u64!(abi_sys_sysinfo, SYS_SYSINFO);
+export_const_u64!(abi_sys_mremap, SYS_MREMAP);
+export_const_u64!(abi_sys_mprotect, SYS_MPROTECT);
+export_const_u64!(abi_sys_prctl, SYS_PRCTL);
+export_const_u64!(abi_sys_getrandom, SYS_GETRANDOM);
+export_const_u64!(abi_sys_rseq, SYS_RSEQ);
+export_const_u64!(abi_sys_clone3, SYS_CLONE3);
+export_const_u64!(abi_sys_socket, SYS_SOCKET);
+export_const_u64!(abi_sys_bind, SYS_BIND);
+export_const_u64!(abi_sys_listen, SYS_LISTEN);
+export_const_u64!(abi_sys_accept4, SYS_ACCEPT4);
+export_const_u64!(abi_sys_connect, SYS_CONNECT);
+export_const_u64!(abi_sys_sendto, SYS_SENDTO);
+export_const_u64!(abi_sys_recvfrom, SYS_RECVFROM);
+export_const_u64!(abi_sys_setsockopt, SYS_SETSOCKOPT);
+export_const_u64!(abi_sys_getsockopt, SYS_GETSOCKOPT);
+export_const_u64!(abi_sys_getsockname, SYS_GETSOCKNAME);
+export_const_u64!(abi_sys_getpeername, SYS_GETPEERNAME);
+export_const_u64!(abi_sys_ppoll, SYS_PPOLL);
+export_const_u64!(abi_sys_timerfd_create, SYS_TIMERFD_CREATE);
+export_const_u64!(abi_sys_timerfd_settime, SYS_TIMERFD_SETTIME);
+export_const_u64!(abi_sys_uname, SYS_UNAME);
+export_const_u64!(abi_sys_madvise, SYS_MADVISE);
+export_const_u64!(abi_sys_flock, SYS_FLOCK);
+export_const_u64!(abi_sys_umask, SYS_UMASK);
 
 // Clone flags
 export_const_u64!(abi_clone_vm, CLONE_VM);
@@ -316,6 +384,9 @@ export_const_u64!(abi_clone_files, CLONE_FILES);
 export_const_u64!(abi_clone_sighand, CLONE_SIGHAND);
 export_const_u64!(abi_clone_settls, CLONE_SETTLS);
 export_const_u64!(abi_clone_child_cleartid, CLONE_CHILD_CLEARTID);
+export_const_u64!(abi_clone_fs, CLONE_FS);
+export_const_u64!(abi_clone_parent_settid, CLONE_PARENT_SETTID);
+export_const_u64!(abi_clone_child_settid, CLONE_CHILD_SETTID);
 
 // Signal numbers
 export_const!(abi_sigkill, SIGKILL);
@@ -326,6 +397,16 @@ export_const!(abi_sigsegv, SIGSEGV);
 export_const!(abi_sigill, SIGILL);
 export_const!(abi_sigbus, SIGBUS);
 export_const!(abi_sigstop, SIGSTOP);
+export_const!(abi_sighup, SIGHUP);
+export_const!(abi_sigint, SIGINT);
+export_const!(abi_sigquit, SIGQUIT);
+export_const!(abi_sigtrap, SIGTRAP);
+export_const!(abi_sigabrt, SIGABRT);
+export_const!(abi_sigfpe, SIGFPE);
+export_const!(abi_sigalrm, SIGALRM);
+export_const!(abi_sigcont, SIGCONT);
+export_const!(abi_sigurg, SIGURG);
+export_const!(abi_sigwinch, SIGWINCH);
 
 // mmap/mprotect flags
 export_const!(abi_prot_none, PROT_NONE);
@@ -335,6 +416,7 @@ export_const!(abi_prot_exec, PROT_EXEC);
 export_const_u64!(abi_map_private, MAP_PRIVATE);
 export_const_u64!(abi_map_anonymous, MAP_ANONYMOUS);
 export_const_u64!(abi_map_fixed, MAP_FIXED);
+export_const_u64!(abi_map_shared, MAP_SHARED);
 
 // Open flags
 export_const!(abi_o_rdonly, O_RDONLY);
@@ -344,6 +426,8 @@ export_const!(abi_o_creat, O_CREAT);
 export_const!(abi_o_trunc, O_TRUNC);
 export_const!(abi_o_append, O_APPEND);
 export_const!(abi_o_cloexec, O_CLOEXEC);
+export_const!(abi_o_nonblock, O_NONBLOCK);
+export_const!(abi_o_directory, O_DIRECTORY);
 
 // Error codes
 export_const!(abi_enoent, ENOENT as i32);
@@ -356,6 +440,25 @@ export_const!(abi_epipe, EPIPE as i32);
 export_const!(abi_eperm, EPERM as i32);
 export_const!(abi_eexist, EEXIST as i32);
 export_const!(abi_eacces, EACCES as i32);
+export_const!(abi_esrch, ESRCH as i32);
+export_const!(abi_eintr, EINTR as i32);
+export_const!(abi_eio, EIO as i32);
+export_const!(abi_enxio, ENXIO as i32);
+export_const!(abi_efault, EFAULT as i32);
+export_const!(abi_enotdir, ENOTDIR as i32);
+export_const!(abi_eisdir, EISDIR as i32);
+export_const!(abi_emfile, EMFILE as i32);
+export_const!(abi_enospc, ENOSPC as i32);
+export_const!(abi_enotempty, ENOTEMPTY as i32);
+export_const!(abi_enotsock, ENOTSOCK as i32);
+export_const!(abi_econnrefused, ECONNREFUSED as i32);
+
+// Limits (remaining)
+export_const!(abi_max_mmap_regions, MAX_MMAP_REGIONS as i32);
+export_const!(abi_max_sockets, MAX_SOCKETS as i32);
+export_const!(abi_max_epoll_entries, MAX_EPOLL_ENTRIES as i32);
+export_const!(abi_max_eventfds, MAX_EVENTFDS as i32);
+export_const!(abi_max_timerfds, MAX_TIMERFDS as i32);
 
 // =============================================================================
 // WASM exports — runtime calls these to manage processes and threads

@@ -2,4 +2,4 @@
 //!
 //! All require kernel Worker (ProcessState updates + TS handoff for Worker spawn).
 //!
-//! Stub — implementation in Phase 5.
+//! Stub — not yet implemented.

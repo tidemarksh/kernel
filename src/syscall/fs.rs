@@ -454,8 +454,9 @@ pub fn sys_faccessat(_vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u6
 }
 
 /// readlinkat: read symbolic link. Handles /proc/self/exe for Go runtime.
-/// No general symlink support in MemFS yet.
-pub fn sys_readlinkat(_vm: &mut ThreadState, base: u32, _dirfd: u64, path_addr: u64, buf: u64, bufsiz: u64) -> i64 {
+/// Returns EINVAL for paths that exist but are not symlinks,
+/// ENOENT for paths that don't exist.
+pub fn sys_readlinkat(_vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, buf: u64, bufsiz: u64) -> i64 {
     let mut path_buf = [0u8; 512];
     let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf) };
     let path = &path_buf[..len];
@@ -468,7 +469,12 @@ pub fn sys_readlinkat(_vm: &mut ThreadState, base: u32, _dirfd: u64, path_addr: 
         return n as i64;
     }
 
-    EINVAL // no symlinks in memfs
+    // For all other paths: check if the path exists.
+    // MemFS has no symlink support, so any existing path is not a symlink → EINVAL.
+    // Non-existent paths → ENOENT.
+    let ino = resolve_at(dirfd, path_addr, base);
+    if ino == 0 { return ENOENT; }
+    EINVAL
 }
 
 /// ftruncate: truncate file to specified length.
@@ -478,6 +484,38 @@ pub fn sys_ftruncate(vm: &mut ThreadState, _base: u32, fd: u64, length: u64) -> 
         None => return EBADF,
     };
     memfs::truncate(ofd.ino as u32, length)
+}
+
+/// truncate: truncate file at path to specified length.
+/// Signature: truncate(const char *path, off_t length)
+///   a0 = path pointer, a1 = length
+/// https://man7.org/linux/man-pages/man2/truncate.2.html
+pub fn sys_truncate(_vm: &mut ThreadState, base: u32, path_addr: u64, length: u64) -> i64 {
+    let mut path_buf = [0u8; 513];
+    let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf[1..]) };
+    let path = &path_buf[1..1 + len];
+
+    if path.is_empty() { return ENOENT; }
+
+    // Make absolute
+    let abs_path = if path[0] == b'/' {
+        &path_buf[1..1 + len]
+    } else {
+        path_buf[0] = b'/';
+        &path_buf[..1 + len]
+    };
+
+    let ino = memfs::resolve_path(abs_path);
+    if ino == 0 { return ENOENT; }
+
+    // Check that the target is a regular file (not a directory)
+    match memfs::stat(ino) {
+        Some(st) if st.mode & memfs::S_IFMT == memfs::S_IFDIR => return EISDIR,
+        Some(_) => {}
+        None => return ENOENT,
+    }
+
+    memfs::truncate(ino, length)
 }
 
 #[cfg(test)]

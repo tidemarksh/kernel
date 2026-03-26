@@ -162,21 +162,99 @@ pub fn process_requests(ring_base: u32, vm_ptr: u32) {
             let fd = *(p.add(4) as *const i32);
             let offset = *(p.add(8) as *const u64);
             let len = *(p.add(16) as *const u64);
-            let _buf_ptr = *(p.add(24) as *const u64);
-            let _path_ptr = *(p.add(32) as *const u64);
-            let _flags = *(p.add(40) as *const u32);
-            let _mode = *(p.add(44) as *const u32);
+            let buf_ptr = *(p.add(24) as *const u64);
+            let path_ptr = *(p.add(32) as *const u64);
+            let flags = *(p.add(40) as *const u32);
+            let mode = *(p.add(44) as *const u32);
 
-            // Dispatch (simplified — full dispatch will use vm_ptr for syscall context)
+            let base: u32 = 0;
+            let vm = &mut *(vm_ptr as *mut crate::types::ThreadState);
+
             let result: i64 = match opcode {
                 FS_OP_READ => {
                     let mut tmp = [0u8; 4096];
                     let n = len.min(4096) as usize;
-                    crate::fs::memfs::read_file(fd as u32, offset, &mut tmp[..n])
+                    let nread = crate::fs::memfs::read_file(fd as u32, offset, &mut tmp[..n]);
+                    if nread > 0 {
+                        crate::guest_mem::write_bytes(base, buf_ptr, &tmp[..nread as usize]);
+                    }
+                    nread
                 }
                 FS_OP_WRITE => {
-                    // Data is at buf_ptr in guest memory — would read from there
-                    len as i64 // stub
+                    let mut tmp = [0u8; 4096];
+                    let n = len.min(4096) as usize;
+                    crate::guest_mem::read_bytes(base, buf_ptr, &mut tmp[..n]);
+                    crate::fs::memfs::write_file(fd as u32, offset, &tmp[..n])
+                }
+                FS_OP_OPENAT => {
+                    if path_ptr == 0 {
+                        EINVAL
+                    } else {
+                        crate::syscall::fs::sys_openat(
+                            vm, base,
+                            fd as u64,     // dirfd
+                            path_ptr,      // path address in guest memory
+                            flags as u64,
+                            mode as u64,
+                        )
+                    }
+                }
+                FS_OP_CLOSE => {
+                    crate::fs::fd_table::sys_close(vm, base, fd as u64)
+                }
+                FS_OP_FSTAT => {
+                    if buf_ptr == 0 {
+                        EINVAL
+                    } else {
+                        crate::syscall::fs::sys_fstat(vm, base, fd as u64, buf_ptr)
+                    }
+                }
+                FS_OP_MKDIR => {
+                    if path_ptr == 0 {
+                        EINVAL
+                    } else {
+                        crate::syscall::fs::sys_mkdirat(
+                            vm, base,
+                            -100i32 as u64, // AT_FDCWD
+                            path_ptr,
+                            mode as u64,
+                        )
+                    }
+                }
+                FS_OP_UNLINK => {
+                    if path_ptr == 0 {
+                        EINVAL
+                    } else {
+                        crate::syscall::fs::sys_unlinkat(
+                            vm, base,
+                            -100i32 as u64, // AT_FDCWD
+                            path_ptr,
+                            flags as u64,
+                        )
+                    }
+                }
+                FS_OP_RENAME => {
+                    // ENOSYS: rename requires two path strings (old_path and new_path)
+                    // but the ring buffer FsRequest format only has a single path_ptr field.
+                    ENOSYS
+                }
+                FS_OP_GETDENTS => {
+                    if buf_ptr == 0 {
+                        EINVAL
+                    } else {
+                        crate::syscall::fs::sys_getdents64(vm, base, fd as u64, buf_ptr, len)
+                    }
+                }
+                FS_OP_TRUNCATE => {
+                    crate::fs::memfs::truncate(fd as u32, offset)
+                }
+                FS_OP_LSEEK => {
+                    crate::syscall::fs::sys_lseek(
+                        vm, base,
+                        fd as u64,
+                        offset as i64,
+                        flags as u64, // whence
+                    )
                 }
                 _ => ENOSYS,
             };

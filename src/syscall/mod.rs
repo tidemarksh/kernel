@@ -78,6 +78,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_UNLINKAT => fs::sys_unlinkat(vm, base, a0, a1, a2),
         SYS_FACCESSAT => fs::sys_faccessat(vm, base, a0, a1, a2),
         SYS_READLINKAT => fs::sys_readlinkat(vm, base, a0, a1, a2, a3),
+        SYS_TRUNCATE => fs::sys_truncate(vm, base, a0, a1),
         SYS_FTRUNCATE => fs::sys_ftruncate(vm, base, a0, a1),
         SYS_IOCTL => 0,
         SYS_GETCWD => {

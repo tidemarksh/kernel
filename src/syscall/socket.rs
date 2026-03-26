@@ -2,4 +2,4 @@
 //!
 //! All require kernel Worker (socket state is cross-process shared state).
 //!
-//! Stub — implementation in Phase 5.
+//! Stub — not yet implemented.

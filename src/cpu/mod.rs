@@ -50,7 +50,17 @@ pub unsafe fn exec(
     let mut remaining = budget;
 
     loop {
-        if remaining <= 0 { break; }
+        if remaining <= 0 {
+            // Budget boundary: check pending signals (RISC-V ISA spec + Linux semantics)
+            // WASM has no async interrupts, so check at budget boundaries in addition
+            // to syscall return boundaries.
+            vm.x = x; vm.f = f; vm.pc = pc; vm.fcsr = fcsr;
+            if crate::syscall::signal::check_pending(vm, base) {
+                x = vm.x; f = vm.f; pc = vm.pc; fcsr = vm.fcsr;
+                if vm.status != abi::STATUS_OK { return remaining; }
+            }
+            break;
+        }
         remaining -= 1;
 
         // Fetch instruction

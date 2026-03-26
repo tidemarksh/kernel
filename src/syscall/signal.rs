@@ -41,7 +41,12 @@ const SIG_SETMASK: u64 = 2;
 const SS_ONSTACK: i32 = 1;
 const SS_DISABLE: i32 = 2;
 
-/// Pointer to signal disposition table in kernel Worker linear memory.
+/// Per-process signal disposition table, allocated in kernel Worker linear memory.
+/// Currently supports a single process. Multi-process requires per-PID tables.
+///
+/// Semantics: https://man7.org/linux/man-pages/man2/rt_sigaction.2.html
+/// Signal dispositions are process-wide (shared by all threads in a process).
+/// On execve, caught signals are reset to SIG_DFL.
 static mut SIGACTIONS_PTR: *mut [SigAction; MAX_SIGNALS] = core::ptr::null_mut();
 
 fn sigactions() -> &'static mut [SigAction; MAX_SIGNALS] {
@@ -51,7 +56,7 @@ fn sigactions() -> &'static mut [SigAction; MAX_SIGNALS] {
     }
 }
 
-/// Initialize signal state. Allocates via alloc.rs.
+/// Initialize signal dispositions for a process. Allocates via alloc.rs in kernel Worker memory.
 pub fn init() {
     unsafe {
         let size = core::mem::size_of::<[SigAction; MAX_SIGNALS]>() as u32;

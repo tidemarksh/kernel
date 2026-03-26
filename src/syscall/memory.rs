@@ -138,8 +138,17 @@ pub fn sys_mmap(
     let is_fixed = (flags & MAP_FIXED) != 0;
     let is_anon = (flags & MAP_ANONYMOUS) != 0;
 
+    // Validate fd for file-backed mmap
+    if !is_anon && fd >= 0 {
+        if fd_table::get_ofd(vm, fd as u64).is_none() {
+            return EBADF;
+        }
+    }
+
     let start = if is_fixed {
         if addr & (PAGE_SIZE - 1) != 0 { return EINVAL; }
+        // 2GB address space ceiling
+        if addr + len > 0x8000_0000 { return ENOMEM; }
         remove_overlap(s, addr, addr + len);
         addr
     } else if addr != 0 && !overlaps(s, addr, addr + len) {

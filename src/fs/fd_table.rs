@@ -211,12 +211,26 @@ pub fn sys_dup3(vm: &mut ThreadState, _base: u32, oldfd: u64, newfd: u64, flags:
 
         let ps = get_process_state(vm);
 
-        // Close newfd if it's open
-        let old_new = &(*ps).fd_table[newfd as usize];
+        // POSIX dup3: silently close newfd if it's already open
+        let old_new = &mut (*ps).fd_table[newfd as usize];
         if old_new.ofd_id != 0 {
-            let ofd = &mut ofd_table()[old_new.ofd_id as usize];
+            let old_ofd_id = old_new.ofd_id as usize;
+            old_new.ofd_id = 0;
+            old_new.fd_flags = 0;
+
+            let ofd = &mut ofd_table()[old_ofd_id];
             ofd.refcount -= 1;
-            // If refcount reaches 0, the kernel Worker model would send to kernel Worker for cleanup
+
+            if ofd.refcount <= 0 {
+                // Last reference: backend-specific cleanup before releasing OFD.
+                if ofd.fd_type == FD_TYPE_PIPE {
+                    let pipe_idx = ofd.ino;
+                    let is_read = ofd.host_fd >= 0;
+                    crate::syscall::pipe::pipe_close(pipe_idx, is_read);
+                }
+                ofd.fd_type = 0;
+                ofd.refcount = 0;
+            }
         }
 
         let cloexec = if (flags as i32 & O_CLOEXEC) != 0 { FD_CLOEXEC } else { 0 };

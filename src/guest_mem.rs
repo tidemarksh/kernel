@@ -29,8 +29,49 @@ unsafe fn is_multi_threaded() -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Reads — no locking needed
+// Reads — plain reads for single-threaded, seqlock-guarded reads available
 // ---------------------------------------------------------------------------
+
+/// Read a u32 with seqlock protection. Checks generation slot before and after
+/// the read; retries if the slot was bumped (indicates concurrent write).
+/// Returns the read value. For single-threaded execution, skips the check.
+#[inline(always)]
+pub unsafe fn read_u32_seqlock(base: u32, addr: u64) -> u32 {
+    if !unsafe { is_multi_threaded() } {
+        return unsafe { read_u32(base, addr) };
+    }
+    let slot = ((addr >> 3) & 63) as usize;
+    loop {
+        let gen_before = unsafe { read_gen(slot) };
+        if gen_before & 1 != 0 { core::hint::spin_loop(); continue; } // odd = write in progress
+        let val = unsafe { read_u32(base, addr) };
+        let gen_after = unsafe { read_gen(slot) };
+        if gen_before == gen_after { return val; }
+    }
+}
+
+/// Read a u64 with seqlock protection.
+#[inline(always)]
+pub unsafe fn read_u64_seqlock(base: u32, addr: u64) -> u64 {
+    if !unsafe { is_multi_threaded() } {
+        return unsafe { read_u64(base, addr) };
+    }
+    let slot = ((addr >> 3) & 63) as usize;
+    loop {
+        let gen_before = unsafe { read_gen(slot) };
+        if gen_before & 1 != 0 { core::hint::spin_loop(); continue; }
+        let val = unsafe { read_u64(base, addr) };
+        let gen_after = unsafe { read_gen(slot) };
+        if gen_before == gen_after { return val; }
+    }
+}
+
+#[inline(always)]
+unsafe fn read_gen(slot: usize) -> u32 {
+    let p = unsafe { RESERVATION_GEN };
+    if p.is_null() { return 0; }
+    unsafe { (*p.add(slot)).load(Ordering::Acquire) }
+}
 
 #[inline(always)]
 pub unsafe fn read_u8(base: u32, addr: u64) -> u8 {
