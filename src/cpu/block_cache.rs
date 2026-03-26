@@ -236,4 +236,62 @@ mod tests {
         assert!(size > 0);
         assert!(size < 4 * 1024 * 1024); // < 4MB
     }
+
+    /// Test that build_block populates the cache for a small instruction sequence
+    /// (ADDI x1, x0, 42; ECALL) and that get() returns the cached entry.
+    #[test]
+    fn block_cache_populate_and_get() {
+        use crate::test_helpers::TestVm;
+
+        let t = TestVm::new();
+        let code_addr: u64 = t.scratch;
+
+        // ADDI x1, x0, 42 → imm=42(0x02A), rs1=x0(0), rd=x1(1), funct3=0, opcode=0x13
+        // Encoding: imm[11:0] | rs1 | funct3 | rd  | opcode
+        //           0x02A     | 00000|  000   |00001| 0010011
+        // = 0x02A_00_0_01_13  →  0x02A00093
+        let addi_x1_x0_42: u32 = 0x02A00093;
+
+        // ECALL → 0x00000073
+        let ecall: u32 = 0x00000073;
+
+        unsafe {
+            crate::guest_mem::write_u32(t.base, code_addr, addi_x1_x0_42);
+            crate::guest_mem::write_u32(t.base, code_addr + 4, ecall);
+        }
+
+        // Allocate a block cache.
+        let alloc_size = BlockCache::allocation_size();
+        let cache_ptr = unsafe {
+            crate::alloc::alloc_zeroed(alloc_size as u32, 8)
+        };
+        assert!(cache_ptr != 0, "cache allocation should succeed");
+
+        let mut cache = unsafe { BlockCache::from_ptr(cache_ptr as *mut BlockEntry) };
+
+        // Before building, get() should return None.
+        assert!(cache.get(code_addr).is_none(), "cache should be empty initially");
+
+        // Build a block starting at code_addr.
+        let block = unsafe { cache.build_block(code_addr, t.base) };
+        assert!(block.is_some(), "build_block should succeed for valid instructions");
+
+        let blk = block.unwrap();
+        assert_eq!(blk.start_pc, code_addr, "block start_pc should match");
+        // ADDI + ECALL = 2 ops (ECALL is a terminator, stops the block).
+        assert_eq!(blk.len, 2, "block should contain 2 ops (ADDI + ECALL)");
+
+        // Verify the first op is the ADDI (op_id == 1 for OP_OP_IMM).
+        let op0 = blk.ops[0];
+        assert_eq!(op0.op_id(), 1, "first op should be OP_OP_IMM (id=1)");
+        assert_eq!(op0.rd(), 1, "ADDI rd should be x1");
+        assert_eq!(op0.rs1(), 0, "ADDI rs1 should be x0");
+        assert_eq!(op0.imm(), 42, "ADDI immediate should be 42");
+
+        // Drop the borrow from build_block, then verify get() returns the cached entry.
+        let cached = cache.get(code_addr);
+        assert!(cached.is_some(), "cache should have an entry for the PC after build_block");
+        assert_eq!(cached.unwrap().start_pc, code_addr);
+        assert_eq!(cached.unwrap().len, 2);
+    }
 }

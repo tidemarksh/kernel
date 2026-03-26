@@ -674,4 +674,84 @@ mod tests {
         let n = t.sys_getdents64(dir_fd, dents_buf, 4096);
         assert!(n > 0, "getdents64 should return > 0 bytes, got {}", n);
     }
+
+    /// Test sys_truncate: create a file with data, truncate it, verify size.
+    #[test]
+    fn truncate_reduces_file_size() {
+        let mut t = TestVm::new();
+
+        // Create a file with some data.
+        let fd = t.sys_openat(b"/trunc_test.txt", O_CREAT | O_RDWR);
+        assert!(fd >= 3, "openat should succeed, got {}", fd);
+
+        let data = b"Hello, truncate test data!";
+        let written = t.sys_write_data(fd, data);
+        assert_eq!(written, data.len() as i64);
+        t.sys_close(fd);
+
+        // Truncate via sys_truncate (path-based).
+        let path_addr = t.write_path(0xF000, b"/trunc_test.txt");
+        let ret = super::sys_truncate(&mut t.vm, t.base, path_addr, 5);
+        assert_eq!(ret, 0, "sys_truncate should return 0 on success, got {}", ret);
+
+        // Verify the file size is now 5 bytes.
+        let fd2 = t.sys_openat(b"/trunc_test.txt", O_RDONLY);
+        assert!(fd2 >= 3);
+        let stat_addr = t.scratch + 0x3000;
+        let ret2 = t.sys_fstat(fd2, stat_addr);
+        assert_eq!(ret2, 0);
+        let size = unsafe { crate::guest_mem::read_u64(t.base, stat_addr + 48) };
+        assert_eq!(size, 5, "file size should be 5 after truncate, got {}", size);
+
+        // Read the truncated content.
+        let mut buf = [0u8; 16];
+        let nread = t.sys_read(fd2, &mut buf);
+        assert_eq!(nread, 5, "should read exactly 5 bytes");
+        assert_eq!(&buf[..5], b"Hello");
+        t.sys_close(fd2);
+    }
+
+    /// Test dirfd-relative openat: open a directory, then open a file relative to that dirfd.
+    #[test]
+    fn dirfd_relative_openat() {
+        let mut t = TestVm::new();
+
+        // Create /subdir and /subdir/nested.txt
+        let ret = t.sys_mkdirat(b"/subdir");
+        assert_eq!(ret, 0, "mkdir /subdir should succeed");
+
+        let fd_file = t.sys_openat(b"/subdir/nested.txt", O_CREAT | O_RDWR);
+        assert!(fd_file >= 3, "creating /subdir/nested.txt should succeed");
+        let written = t.sys_write_data(fd_file, b"nested content");
+        assert_eq!(written, 14);
+        t.sys_close(fd_file);
+
+        // Open /subdir as a directory FD.
+        let dir_fd = t.sys_openat(b"/subdir", O_RDONLY);
+        assert!(dir_fd >= 3, "opening /subdir should succeed, got {}", dir_fd);
+
+        // Open nested.txt relative to dir_fd.
+        // We need to call sys_openat directly with the dir_fd instead of AT_FDCWD.
+        let path_addr = t.write_path(0xF000, b"nested.txt");
+        let rel_fd = super::sys_openat(
+            &mut t.vm, t.base,
+            dir_fd as u64,   // dirfd = the opened directory
+            path_addr,       // relative path
+            O_RDONLY as u64,
+            0,
+        );
+        assert!(rel_fd >= 3, "dirfd-relative openat should succeed, got {}", rel_fd);
+
+        // Read the content.
+        let buf_addr = t.scratch + 0xE000;
+        let nread = super::sys_read(
+            &mut t.vm, t.base,
+            rel_fd as u64, buf_addr, 32,
+        );
+        assert_eq!(nread, 14, "should read 14 bytes from nested.txt");
+        let data = t.guest_mem(buf_addr, 14);
+        assert_eq!(&data[..], b"nested content");
+
+        t.sys_close(dir_fd);
+    }
 }

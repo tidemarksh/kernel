@@ -94,3 +94,64 @@ pub fn heap_used() -> u32 {
 pub fn heap_ptr() -> u32 {
     unsafe { HEAP_PTR }
 }
+
+#[cfg(test)]
+mod tests {
+    /// Test that alloc returns a non-zero pointer.
+    #[test]
+    fn alloc_returns_nonzero() {
+        unsafe {
+            // Ensure sufficient WASM pages are available.
+            let current_pages = core::arch::wasm32::memory_size(0);
+            if current_pages < 256 {
+                core::arch::wasm32::memory_grow(0, 256 - current_pages);
+            }
+            super::init(0x20_0000);
+
+            let ptr = super::alloc(64, 8);
+            assert!(ptr != 0, "alloc should return a non-zero pointer");
+        }
+    }
+
+    /// Test that sequential allocations return non-overlapping regions.
+    #[test]
+    fn sequential_allocs_non_overlapping() {
+        unsafe {
+            let current_pages = core::arch::wasm32::memory_size(0);
+            if current_pages < 256 {
+                core::arch::wasm32::memory_grow(0, 256 - current_pages);
+            }
+            super::init(0x20_0000);
+
+            let p1 = super::alloc(128, 8);
+            let p2 = super::alloc(128, 8);
+            assert!(p1 != 0, "first alloc should succeed");
+            assert!(p2 != 0, "second alloc should succeed");
+            // The second allocation must start at or after p1 + 128 (no overlap).
+            assert!(
+                p2 >= p1 + 128,
+                "allocations should not overlap: p1={:#x}, p2={:#x}", p1, p2
+            );
+        }
+    }
+
+    /// Test that alloc_zeroed returns memory filled with zeroes.
+    #[test]
+    fn alloc_zeroed_is_zeroed() {
+        unsafe {
+            let current_pages = core::arch::wasm32::memory_size(0);
+            if current_pages < 256 {
+                core::arch::wasm32::memory_grow(0, 256 - current_pages);
+            }
+            super::init(0x20_0000);
+
+            let ptr = super::alloc_zeroed(256, 8);
+            assert!(ptr != 0, "alloc_zeroed should return a non-zero pointer");
+
+            let slice = core::slice::from_raw_parts(ptr as *const u8, 256);
+            for (i, &byte) in slice.iter().enumerate() {
+                assert_eq!(byte, 0, "byte at offset {} should be zero, got {}", i, byte);
+            }
+        }
+    }
+}

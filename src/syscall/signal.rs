@@ -367,4 +367,45 @@ mod tests {
         assert_eq!(t.vm.sigaltstack_sp, 0x50000);
         assert_eq!(t.vm.sigaltstack_size, 8192);
     }
+
+    /// Test that setting a pending signal and calling check_pending delivers it.
+    /// SIGTERM (15) has SIG_DFL which terminates the process (exit_code = 128 + sig).
+    #[test]
+    fn pending_signal_delivery() {
+        let mut t = TestVm::new();
+
+        // Ensure SIGTERM is not blocked.
+        t.vm.sig_mask = 0;
+        t.vm.sig_pending = 0;
+
+        // Queue SIGTERM via direct manipulation.
+        super::send_signal(&mut t.vm, crate::abi::SIGTERM);
+        assert!(
+            t.vm.sig_pending & (1u64 << (crate::abi::SIGTERM - 1)) != 0,
+            "SIGTERM should be pending after send_signal"
+        );
+
+        // check_pending should deliver the signal and return true.
+        let delivered = super::check_pending(&mut t.vm, t.base);
+        assert!(delivered, "check_pending should return true when a signal is deliverable");
+
+        // SIGTERM with SIG_DFL terminates: exit_code = 128 + 15 = 143
+        assert_eq!(
+            t.vm.status,
+            crate::abi::STATUS_FAULT,
+            "SIGTERM with SIG_DFL should set STATUS_FAULT"
+        );
+        assert_eq!(
+            t.vm.exit_code,
+            128 + crate::abi::SIGTERM,
+            "exit_code should be 128 + SIGTERM"
+        );
+
+        // The pending bit should be cleared.
+        assert_eq!(
+            t.vm.sig_pending & (1u64 << (crate::abi::SIGTERM - 1)),
+            0,
+            "SIGTERM should no longer be pending after delivery"
+        );
+    }
 }

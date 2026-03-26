@@ -1428,3 +1428,40 @@ fn mulhsu(a: i64, b: u64) -> i64 {
 fn mulhu(a: u64, b: u64) -> u64 {
     ((a as u128 * b as u128) >> 64) as u64
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::abi::STATUS_FAULT;
+    use crate::test_helpers::TestVm;
+
+    /// Test that executing an invalid instruction (all zeros) causes STATUS_FAULT.
+    ///
+    /// Currently the interpreter sets STATUS_FAULT for unknown opcodes.
+    /// TODO: Once SIGILL delivery is implemented, this test should verify
+    /// that SIGILL (signal 4) is queued and delivered to the guest handler.
+    /// For now we just check the current behavior: status == STATUS_FAULT.
+    #[test]
+    fn sigill_on_invalid_instruction() {
+        let mut t = TestVm::new();
+        let code_addr: u64 = t.scratch;
+
+        // Write an invalid 32-bit instruction: 0x00000000 has opcode bits [6:0] = 0b0000000.
+        // The two low bits are not 0b11, so the interpreter first tries compressed decode.
+        // The compressed halfword 0x0000 expands to 0 → STATUS_FAULT.
+        unsafe {
+            crate::guest_mem::write_u32(t.base, code_addr, 0x0000_0000);
+        }
+
+        t.vm.pc = code_addr;
+        t.vm.status = crate::abi::STATUS_OK;
+
+        unsafe {
+            crate::cpu::exec(&mut t.vm, 10, None, None, None, None);
+        }
+
+        assert_eq!(
+            t.vm.status, STATUS_FAULT,
+            "executing an invalid instruction should set STATUS_FAULT"
+        );
+    }
+}

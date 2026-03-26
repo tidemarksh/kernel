@@ -288,4 +288,101 @@ mod tests {
         assert_eq!(RESP_SIZE, 16);
         assert_eq!(RING_BUFFER_SIZE, 32 + 64 * 64 + 64 * 16); // 5152 bytes
     }
+
+    /// Test that process_requests dispatches FS_OP_WRITE correctly.
+    /// Writes data via the ring buffer and reads it back via memfs.
+    ///
+    /// Note: FS_OP_WRITE in process_requests passes `fd` directly as an inode number
+    /// to memfs::write_file (not as a file descriptor). So the test submits
+    /// the inode number in the `fd` field.
+    #[test]
+    fn ring_buffer_dispatch_write() {
+        use crate::test_helpers::TestVm;
+
+        let mut t = TestVm::new();
+
+        // Create a file to write to. ino is the inode number.
+        let ino = t.memfs.create_file(b"ring_write.txt", b"");
+        assert!(ino > 0, "file creation should succeed");
+
+        // Allocate a ring buffer.
+        let ring_base = unsafe { crate::alloc::alloc_zeroed(RING_BUFFER_SIZE as u32, 16) };
+        assert!(ring_base != 0, "ring buffer allocation should succeed");
+
+        // Write data to guest memory that the ring buffer write will read from.
+        let data = b"Hello ring!";
+        let data_addr: u64 = t.scratch + 0xA000;
+        unsafe { crate::guest_mem::write_bytes(t.base, data_addr, data); }
+
+        // Submit a WRITE request via the ring buffer.
+        // FS_OP_WRITE uses `fd` as the inode number (see process_requests).
+        let idx = submit_request(
+            ring_base,
+            FS_OP_WRITE,
+            ino as i32,          // inode, not FD
+            0,                   // offset
+            data.len() as u64,   // len
+            data_addr,           // buf_ptr
+            0,                   // path_ptr (not used for write)
+            0,                   // flags
+            0,                   // mode
+        );
+        assert!(idx >= 0, "submit_request should succeed, got {}", idx);
+
+        // Process the request.
+        let vm_ptr = &mut t.vm as *mut crate::types::ThreadState as u32;
+        process_requests(ring_base, vm_ptr);
+
+        // Read the completion.
+        let result = read_completion(ring_base);
+        assert_eq!(result, data.len() as i64, "write result should be the number of bytes written");
+
+        // Verify the data was actually written to memfs.
+        let mut read_buf = [0u8; 32];
+        let nread = crate::fs::memfs::read_file(ino, 0, &mut read_buf);
+        assert_eq!(nread, data.len() as i64, "memfs should contain the written data");
+        assert_eq!(&read_buf[..data.len()], data);
+    }
+
+    /// Test that FS_OP_MKDIR via process_requests creates a directory.
+    #[test]
+    fn ring_buffer_dispatch_mkdir() {
+        use crate::test_helpers::TestVm;
+
+        let mut t = TestVm::new();
+
+        // Allocate a ring buffer.
+        let ring_base = unsafe { crate::alloc::alloc_zeroed(RING_BUFFER_SIZE as u32, 16) };
+        assert!(ring_base != 0, "ring buffer allocation should succeed");
+
+        // Write the directory path to guest memory.
+        let path = b"/ringdir";
+        let path_addr = t.write_path(0xB000, path);
+
+        // Submit a MKDIR request.
+        let idx = submit_request(
+            ring_base,
+            FS_OP_MKDIR,
+            -100,                // AT_FDCWD
+            0,                   // offset (unused)
+            0,                   // len (unused)
+            0,                   // buf_ptr (unused)
+            path_addr,           // path_ptr
+            0,                   // flags
+            0o755,               // mode
+        );
+        assert!(idx >= 0, "submit_request should succeed");
+
+        // Process the request.
+        let vm_ptr = &mut t.vm as *mut crate::types::ThreadState as u32;
+        process_requests(ring_base, vm_ptr);
+
+        // Read the completion.
+        let result = read_completion(ring_base);
+        assert_eq!(result, 0, "mkdir should return 0 on success, got {}", result);
+
+        // Verify the directory was created.
+        let dir_ino = crate::fs::memfs::resolve_path(b"/ringdir");
+        assert!(dir_ino > 0, "/ringdir should exist after mkdir");
+    }
 }

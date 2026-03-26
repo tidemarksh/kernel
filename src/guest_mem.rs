@@ -264,3 +264,46 @@ pub unsafe fn read_cstr(base: u32, addr: u64, buf: &mut [u8]) -> usize {
 
 // Note: Atomics.wait/notify are handled by the JS runtime layer (thread-worker.ts),
 // not by Rust. Futex wake/wait go through STATUS codes.
+
+#[cfg(test)]
+mod tests {
+    use core::sync::atomic::{AtomicU32, Ordering};
+
+    /// Test that write_u32 in multi-threaded mode bumps the generation counter
+    /// twice (odd then even), and that read_u32_seqlock returns the correct value.
+    #[test]
+    fn seqlock_write_bumps_generation_twice() {
+        unsafe {
+            // Allocate a generation table (64 AtomicU32 slots) and a thread_count.
+            let gen_table: [AtomicU32; 64] = core::array::from_fn(|_| AtomicU32::new(0));
+            let thread_count = AtomicU32::new(2); // >1 enables multi-threaded path
+
+            // Initialize guest_mem with our reservation table and thread count.
+            super::init(gen_table.as_ptr(), &thread_count as *const AtomicU32);
+
+            let base: u32 = 0;
+            // Pick an address that maps to a known slot.
+            // slot = (addr >> 3) & 63
+            let addr: u64 = 0x1000;
+            let slot = ((addr >> 3) & 63) as usize;
+
+            let gen_before = gen_table[slot].load(Ordering::SeqCst);
+            assert_eq!(gen_before, 0, "generation should start at 0");
+
+            // Write a value in multi-threaded mode.
+            super::write_u32(base, addr, 0xDEAD_BEEF);
+
+            // Generation should have been bumped twice (odd then even).
+            let gen_after = gen_table[slot].load(Ordering::SeqCst);
+            assert_eq!(gen_after, 2, "generation should be bumped by 2 after one write");
+            assert_eq!(gen_after & 1, 0, "generation should be even (write complete)");
+
+            // Verify read_u32_seqlock returns the correct value.
+            let val = super::read_u32_seqlock(base, addr);
+            assert_eq!(val, 0xDEAD_BEEF, "seqlock read should return the written value");
+
+            // Reset to single-threaded so subsequent tests are not affected.
+            super::init(core::ptr::null(), core::ptr::null());
+        }
+    }
+}
