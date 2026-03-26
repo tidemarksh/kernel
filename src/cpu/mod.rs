@@ -15,6 +15,10 @@ use crate::types::ThreadState;
 use self::block_cache::BlockCache;
 use self::trace::{HotCounts, JitBitmap, TraceBuffer};
 
+// LR/SC reservation state (per-hart, single-threaded).
+static mut RESV_ADDR: u64 = 0;
+static mut RESV_VALID: bool = false;
+
 /// Execute up to `budget` guest instructions.
 /// Returns remaining budget (negative = overrun).
 ///
@@ -224,9 +228,9 @@ pub unsafe fn exec(
             }
             decode::OP_LOAD_FP => exec_load_fp(&mut f, &x, raw, base, &mut pc, step),
             decode::OP_STORE_FP => exec_store_fp(&f, &x, raw, base, &mut pc, step),
-            decode::OP_OP_FP => exec_op_fp(&mut x, &mut f, raw, &mut pc, step),
+            decode::OP_OP_FP => exec_op_fp(&mut x, &mut f, raw, &mut pc, step, &mut fcsr),
             decode::OP_FMADD | decode::OP_FMSUB | decode::OP_FNMSUB | decode::OP_FNMADD => {
-                exec_fma(&mut f, raw, opcode, &mut pc, step);
+                exec_fma(&mut f, raw, opcode, &mut pc, step, &mut fcsr);
             }
             _ => {
                 // Unknown opcode → fault
@@ -630,8 +634,141 @@ fn exec_branch(x: &[u64; 32], raw: u32) -> bool {
 }
 
 // =============================================================================
-// FP helpers: NaN-boxing (), FMIN/FMAX, FCLASS, FCVT
+// FP helpers: fflags, NaN-boxing, FMIN/FMAX, FCLASS, FCVT
 // =============================================================================
+
+// fcsr.fflags exception bits (§11.2)
+const NV: u32 = 1 << 4; // Invalid Operation
+const DZ: u32 = 1 << 3; // Divide by Zero
+const OF: u32 = 1 << 2; // Overflow
+const UF: u32 = 1 << 1; // Underflow
+const NX: u32 = 1 << 0; // Inexact
+
+#[inline(always)]
+fn set_flags(fcsr: &mut u32, flags: u32) { *fcsr |= flags; }
+
+/// Detect signaling NaN for f64 (exponent all-1, fraction nonzero, quiet bit clear)
+#[inline(always)]
+fn is_snan_f64(v: f64) -> bool {
+    let b = v.to_bits();
+    let exp = (b >> 52) & 0x7FF;
+    let frac = b & 0x000F_FFFF_FFFF_FFFF;
+    exp == 0x7FF && frac != 0 && (frac & (1 << 51)) == 0
+}
+
+/// Detect signaling NaN for f32 (exponent all-1, fraction nonzero, quiet bit clear)
+#[inline(always)]
+fn is_snan_f32(v: f32) -> bool {
+    let b = v.to_bits();
+    let exp = (b >> 23) & 0xFF;
+    let frac = b & 0x007F_FFFF;
+    exp == 0xFF && frac != 0 && (frac & (1 << 22)) == 0
+}
+
+/// Classify fflags for f64: sNaN→NV, overflow→OF|NX, subnormal result→UF|NX
+#[inline(always)]
+fn classify_flags_f64(a: f64, b: f64, result: f64) -> u32 {
+    let mut flags = 0u32;
+    if is_snan_f64(a) || is_snan_f64(b) { flags |= NV; }
+    if result.is_nan() { if a.is_nan() || b.is_nan() { return flags | NV; } return flags | NV; }
+    if result.is_infinite() && !a.is_infinite() && !b.is_infinite() { flags |= OF | NX; }
+    let rb = result.to_bits();
+    let exp = (rb >> 52) & 0x7FF;
+    if exp == 0 && (rb & 0x000F_FFFF_FFFF_FFFF) != 0 { flags |= UF | NX; }
+    flags
+}
+
+/// Classify fflags for f32
+#[inline(always)]
+fn classify_flags_f32(a: f32, b: f32, result: f32) -> u32 {
+    let mut flags = 0u32;
+    if is_snan_f32(a) || is_snan_f32(b) { flags |= NV; }
+    if result.is_nan() { if a.is_nan() || b.is_nan() { return flags | NV; } return flags | NV; }
+    if result.is_infinite() && !a.is_infinite() && !b.is_infinite() { flags |= OF | NX; }
+    let rb = result.to_bits();
+    let exp = (rb >> 23) & 0xFF;
+    if exp == 0 && (rb & 0x007F_FFFF) != 0 { flags |= UF | NX; }
+    flags
+}
+
+/// Check if f64 addition was inexact: (a+b) is inexact iff (result - a) != b
+#[inline(always)]
+fn add_flags_f64(a: f64, b: f64, result: f64) -> u32 {
+    let mut flags = classify_flags_f64(a, b, result);
+    if !result.is_nan() && !result.is_infinite() && (result - a != b || result - b != a) { flags |= NX; }
+    flags
+}
+#[inline(always)]
+fn add_flags_f32(a: f32, b: f32, result: f32) -> u32 {
+    let mut flags = classify_flags_f32(a, b, result);
+    if !result.is_nan() && !result.is_infinite() {
+        let wide = (a as f64) + (b as f64);
+        if wide != result as f64 { flags |= NX; }
+    }
+    flags
+}
+
+/// Check if f64 multiplication was inexact: a*b is inexact iff fma(a,b,-result) != 0
+#[inline(always)]
+fn mul_flags_f64(a: f64, b: f64, result: f64) -> u32 {
+    let mut flags = classify_flags_f64(a, b, result);
+    if !result.is_nan() && !result.is_infinite() && libm::fma(a, b, -result) != 0.0 { flags |= NX; }
+    // ∞ × 0 = NV
+    if (a.is_infinite() && b == 0.0) || (a == 0.0 && b.is_infinite()) { flags |= NV; }
+    flags
+}
+#[inline(always)]
+fn mul_flags_f32(a: f32, b: f32, result: f32) -> u32 {
+    let mut flags = classify_flags_f32(a, b, result);
+    if !result.is_nan() && !result.is_infinite() {
+        let wide = (a as f64) * (b as f64);
+        if wide != result as f64 { flags |= NX; }
+    }
+    if (a.is_infinite() && b == 0.0) || (a == 0.0 && b.is_infinite()) { flags |= NV; }
+    flags
+}
+
+/// Check if f64 division was inexact: a/b is inexact iff result*b != a
+#[inline(always)]
+fn div_flags_f64(a: f64, b: f64, result: f64) -> u32 {
+    let mut flags = classify_flags_f64(a, b, result);
+    if !a.is_nan() && !b.is_nan() && b == 0.0 && a != 0.0 { flags |= DZ; }
+    if !a.is_nan() && !b.is_nan() && b == 0.0 && a == 0.0 { flags |= NV; }
+    if !result.is_nan() && !result.is_infinite() && b != 0.0 && libm::fma(result, b, -a) != 0.0 { flags |= NX; }
+    flags
+}
+#[inline(always)]
+fn div_flags_f32(a: f32, b: f32, result: f32) -> u32 {
+    let mut flags = classify_flags_f32(a, b, result);
+    if !a.is_nan() && !b.is_nan() && b == 0.0 && a != 0.0 { flags |= DZ; }
+    if !a.is_nan() && !b.is_nan() && b == 0.0 && a == 0.0 { flags |= NV; }
+    if !result.is_nan() && !result.is_infinite() && b != 0.0 {
+        let wide = (a as f64) / (b as f64);
+        if wide != result as f64 { flags |= NX; }
+    }
+    flags
+}
+
+/// fflags for sqrt: NV if negative, NX if inexact (result*result != a)
+#[inline(always)]
+fn sqrt_flags_f64(a: f64, result: f64) -> u32 {
+    let mut flags = 0u32;
+    if is_snan_f64(a) { flags |= NV; }
+    if a < 0.0 { flags |= NV; }
+    if !result.is_nan() && !result.is_infinite() && libm::fma(result, result, -a) != 0.0 { flags |= NX; }
+    flags
+}
+#[inline(always)]
+fn sqrt_flags_f32(a: f32, result: f32) -> u32 {
+    let mut flags = 0u32;
+    if is_snan_f32(a) { flags |= NV; }
+    if a < 0.0 { flags |= NV; }
+    if !result.is_nan() && !result.is_infinite() {
+        let wide = libm::sqrt(a as f64);
+        if wide != result as f64 { flags |= NX; }
+    }
+    flags
+}
 
 /// NaN-box a single-precision value for storage in f register (FLEN=64, ).
 #[inline(always)]
@@ -790,7 +927,7 @@ unsafe fn exec_store_fp(f: &[u64; 32], x: &[u64; 32], raw: u32, base: u32, pc: &
 /// RV64F + RV64D: all OP-FP instructions.
 /// Dispatch on funct5 (bits 31:27) and fmt (bits 26:25, 0=S, 1=D).
 #[inline(always)]
-unsafe fn exec_op_fp(x: &mut [u64; 32], f: &mut [u64; 32], raw: u32, pc: &mut u64, step: u64) {
+unsafe fn exec_op_fp(x: &mut [u64; 32], f: &mut [u64; 32], raw: u32, pc: &mut u64, step: u64, fcsr: &mut u32) {
     unsafe {
     let rd = decode::rd(raw);
     let rs1 = decode::rs1(raw);
@@ -802,11 +939,31 @@ unsafe fn exec_op_fp(x: &mut [u64; 32], f: &mut [u64; 32], raw: u32, pc: &mut u6
 
     match (funct5, fmt) {
         // ========================= Double-precision (fmt=1) =========================
-        (0x00, 1) => f[rd] = (f64::from_bits(f[rs1]) + f64::from_bits(f[rs2])).to_bits(),
-        (0x01, 1) => f[rd] = (f64::from_bits(f[rs1]) - f64::from_bits(f[rs2])).to_bits(),
-        (0x02, 1) => f[rd] = (f64::from_bits(f[rs1]) * f64::from_bits(f[rs2])).to_bits(),
-        (0x03, 1) => f[rd] = (f64::from_bits(f[rs1]) / f64::from_bits(f[rs2])).to_bits(),
-        (0x0B, 1) => f[rd] = libm::sqrt(f64::from_bits(f[rs1])).to_bits(),
+        (0x00, 1) => { // FADD.D
+            let a = f64::from_bits(f[rs1]); let b = f64::from_bits(f[rs2]);
+            let r = a + b; f[rd] = r.to_bits();
+            set_flags(fcsr, add_flags_f64(a, b, r));
+        }
+        (0x01, 1) => { // FSUB.D
+            let a = f64::from_bits(f[rs1]); let b = f64::from_bits(f[rs2]);
+            let r = a - b; f[rd] = r.to_bits();
+            set_flags(fcsr, add_flags_f64(a, -b, r));
+        }
+        (0x02, 1) => { // FMUL.D
+            let a = f64::from_bits(f[rs1]); let b = f64::from_bits(f[rs2]);
+            let r = a * b; f[rd] = r.to_bits();
+            set_flags(fcsr, mul_flags_f64(a, b, r));
+        }
+        (0x03, 1) => { // FDIV.D
+            let a = f64::from_bits(f[rs1]); let b = f64::from_bits(f[rs2]);
+            let r = a / b; f[rd] = r.to_bits();
+            set_flags(fcsr, div_flags_f64(a, b, r));
+        }
+        (0x0B, 1) => { // FSQRT.D
+            let a = f64::from_bits(f[rs1]);
+            let r = libm::sqrt(a); f[rd] = r.to_bits();
+            set_flags(fcsr, sqrt_flags_f64(a, r));
+        }
         (0x04, 1) => { // FSGNJ.D / FSGNJN.D / FSGNJX.D
             let a = f[rs1]; let b = f[rs2];
             f[rd] = match f3 {
@@ -821,22 +978,50 @@ unsafe fn exec_op_fp(x: &mut [u64; 32], f: &mut [u64; 32], raw: u32, pc: &mut u6
                 0 => fmin_f64(a, b).to_bits(),
                 1 | _ => fmax_f64(a, b).to_bits(),
             };
+            // §11.6: signaling NaN inputs set NV, even when result is not NaN
+            if is_snan_f64(a) || is_snan_f64(b) { set_flags(fcsr, NV); }
         }
         (0x14, 1) => { // FEQ.D / FLT.D / FLE.D → x[rd]
             let a = f64::from_bits(f[rs1]); let b = f64::from_bits(f[rs2]);
             let r = match f3 { 2 => a == b, 1 => a < b, 0 => a <= b, _ => false };
             if rd != 0 { x[rd] = r as u64; }
+            // §11.8: FLT/FLE set NV if either is NaN; FEQ sets NV only for sNaN
+            match f3 {
+                1 | 0 => { if a.is_nan() || b.is_nan() { set_flags(fcsr, NV); } }
+                2 => { if is_snan_f64(a) || is_snan_f64(b) { set_flags(fcsr, NV); } }
+                _ => {}
+            }
         }
         (0x18, 1) => { // FCVT.W[U].D / FCVT.L[U].D → x[rd]
             let v = f64::from_bits(f[rs1]);
             let r = match rs2 {
-                0 => fcvt_w_f64(v) as i64 as u64,                // FCVT.W.D (sign-extend 32→64)
-                1 => (fcvt_wu_f64(v) as i32 as i64) as u64,      // FCVT.WU.D (sign-extend 32→64)
-                2 => fcvt_l_f64(v) as u64,                        // FCVT.L.D
-                3 => fcvt_lu_f64(v),                               // FCVT.LU.D
+                0 => fcvt_w_f64(v) as i64 as u64,
+                1 => (fcvt_wu_f64(v) as i32 as i64) as u64,
+                2 => fcvt_l_f64(v) as u64,
+                3 => fcvt_lu_f64(v),
                 _ => 0,
             };
             if rd != 0 { x[rd] = r; }
+            // §11.7: NV for NaN or out-of-range; NX for inexact
+            if v.is_nan() || v.is_infinite() { set_flags(fcsr, NV); }
+            else {
+                let exact = match rs2 {
+                    0 => v == (r as i32 as f64),
+                    1 => v == (r as u32 as f64),
+                    2 => v == (r as i64 as f64),
+                    3 => v == (r as u64 as f64),
+                    _ => true,
+                };
+                if !exact { set_flags(fcsr, NX); }
+                // Out-of-range (saturated) → NV
+                match rs2 {
+                    0 => { if v < (i32::MIN as f64) || v > (i32::MAX as f64) { set_flags(fcsr, NV); } }
+                    1 => { if v < 0.0 || v > (u32::MAX as f64) { set_flags(fcsr, NV); } }
+                    2 => { if v < (i64::MIN as f64) || v > (i64::MAX as f64) { set_flags(fcsr, NV); } }
+                    3 => { if v < 0.0 || v > (u64::MAX as f64) { set_flags(fcsr, NV); } }
+                    _ => {}
+                }
+            }
         }
         (0x1A, 1) => { // FCVT.D.W[U] / FCVT.D.L[U] → f[rd]
             f[rd] = match rs2 {
@@ -855,11 +1040,16 @@ unsafe fn exec_op_fp(x: &mut [u64; 32], f: &mut [u64; 32], raw: u32, pc: &mut u6
         (0x1E, 1) => f[rd] = x[rs1], // FMV.D.X
 
         // ========================= Single-precision (fmt=0) =========================
-        (0x00, 0) => f[rd] = box_f32(unbox_f32(f[rs1]) + unbox_f32(f[rs2])),
-        (0x01, 0) => f[rd] = box_f32(unbox_f32(f[rs1]) - unbox_f32(f[rs2])),
-        (0x02, 0) => f[rd] = box_f32(unbox_f32(f[rs1]) * unbox_f32(f[rs2])),
-        (0x03, 0) => f[rd] = box_f32(unbox_f32(f[rs1]) / unbox_f32(f[rs2])),
-        (0x0B, 0) => f[rd] = box_f32(libm::sqrtf(unbox_f32(f[rs1]))),
+        (0x00, 0) => { let a = unbox_f32(f[rs1]); let b = unbox_f32(f[rs2]);
+            let r = a + b; f[rd] = box_f32(r); set_flags(fcsr, add_flags_f32(a, b, r)); }
+        (0x01, 0) => { let a = unbox_f32(f[rs1]); let b = unbox_f32(f[rs2]);
+            let r = a - b; f[rd] = box_f32(r); set_flags(fcsr, add_flags_f32(a, -b, r)); }
+        (0x02, 0) => { let a = unbox_f32(f[rs1]); let b = unbox_f32(f[rs2]);
+            let r = a * b; f[rd] = box_f32(r); set_flags(fcsr, mul_flags_f32(a, b, r)); }
+        (0x03, 0) => { let a = unbox_f32(f[rs1]); let b = unbox_f32(f[rs2]);
+            let r = a / b; f[rd] = box_f32(r); set_flags(fcsr, div_flags_f32(a, b, r)); }
+        (0x0B, 0) => { let a = unbox_f32(f[rs1]);
+            let r = libm::sqrtf(a); f[rd] = box_f32(r); set_flags(fcsr, sqrt_flags_f32(a, r)); }
         (0x04, 0) => { // FSGNJ.S / FSGNJN.S / FSGNJX.S
             let a = unbox_f32(f[rs1]).to_bits();
             let b = unbox_f32(f[rs2]).to_bits();
@@ -876,11 +1066,17 @@ unsafe fn exec_op_fp(x: &mut [u64; 32], f: &mut [u64; 32], raw: u32, pc: &mut u6
                 0 => box_f32(fmin_f32(a, b)),
                 1 | _ => box_f32(fmax_f32(a, b)),
             };
+            if is_snan_f32(a) || is_snan_f32(b) { set_flags(fcsr, NV); }
         }
         (0x14, 0) => { // FEQ.S / FLT.S / FLE.S → x[rd]
             let a = unbox_f32(f[rs1]); let b = unbox_f32(f[rs2]);
             let r = match f3 { 2 => a == b, 1 => a < b, 0 => a <= b, _ => false };
             if rd != 0 { x[rd] = r as u64; }
+            match f3 {
+                1 | 0 => { if a.is_nan() || b.is_nan() { set_flags(fcsr, NV); } }
+                2 => { if is_snan_f32(a) || is_snan_f32(b) { set_flags(fcsr, NV); } }
+                _ => {}
+            }
         }
         (0x18, 0) => { // FCVT.W[U].S / FCVT.L[U].S → x[rd]
             let v = unbox_f32(f[rs1]);
@@ -892,6 +1088,24 @@ unsafe fn exec_op_fp(x: &mut [u64; 32], f: &mut [u64; 32], raw: u32, pc: &mut u6
                 _ => 0,
             };
             if rd != 0 { x[rd] = r; }
+            if v.is_nan() || v.is_infinite() { set_flags(fcsr, NV); }
+            else {
+                let exact = match rs2 {
+                    0 => (v as f64) == (r as i32 as f64),
+                    1 => (v as f64) == (r as u32 as f64),
+                    2 => (v as f64) == (r as i64 as f64),
+                    3 => (v as f64) == (r as u64 as f64),
+                    _ => true,
+                };
+                if !exact { set_flags(fcsr, NX); }
+                match rs2 {
+                    0 => { if (v as f64) < (i32::MIN as f64) || (v as f64) > (i32::MAX as f64) { set_flags(fcsr, NV); } }
+                    1 => { if v < 0.0 || (v as f64) > (u32::MAX as f64) { set_flags(fcsr, NV); } }
+                    2 => { if (v as f64) < (i64::MIN as f64) || (v as f64) > (i64::MAX as f64) { set_flags(fcsr, NV); } }
+                    3 => { if v < 0.0 || (v as f64) > (u64::MAX as f64) { set_flags(fcsr, NV); } }
+                    _ => {}
+                }
+            }
         }
         (0x1A, 0) => { // FCVT.S.W[U] / FCVT.S.L[U] → f[rd]
             f[rd] = match rs2 {
@@ -933,7 +1147,7 @@ unsafe fn exec_op_fp(x: &mut [u64; 32], f: &mut [u64; 32], raw: u32, pc: &mut u6
 /// fmt (bits 26:25) selects S (0) or D (1).
 /// Uses libm::fma/fmaf for correct fused operation (single rounding).
 #[inline(always)]
-unsafe fn exec_fma(f: &mut [u64; 32], raw: u32, opcode: u32, pc: &mut u64, step: u64) {
+unsafe fn exec_fma(f: &mut [u64; 32], raw: u32, opcode: u32, pc: &mut u64, step: u64, fcsr: &mut u32) {
     unsafe {
     let rd = decode::rd(raw);
     let rs1 = decode::rs1(raw);
@@ -954,6 +1168,23 @@ unsafe fn exec_fma(f: &mut [u64; 32], raw: u32, opcode: u32, pc: &mut u64, step:
                 _ => 0.0,
             };
             f[rd] = box_f32(r);
+            let mut fl = 0u32;
+            if (a.is_infinite() && b == 0.0) || (a == 0.0 && b.is_infinite()) { fl |= NV; }
+            if is_snan_f32(a) || is_snan_f32(b) || is_snan_f32(c) { fl |= NV; }
+            if r.is_nan() && (a.is_nan() || b.is_nan() || c.is_nan()) { fl |= NV; }
+            if r.is_infinite() && !a.is_infinite() && !b.is_infinite() && !c.is_infinite() { fl |= OF | NX; }
+            if !r.is_nan() && !r.is_infinite() {
+                // Compute same operation in f64 and compare to detect inexact
+                let wide = match opcode {
+                    decode::OP_FMADD  => libm::fma(a as f64, b as f64, c as f64),
+                    decode::OP_FMSUB  => libm::fma(a as f64, b as f64, -(c as f64)),
+                    decode::OP_FNMSUB => -libm::fma(a as f64, b as f64, -(c as f64)),
+                    decode::OP_FNMADD => -libm::fma(a as f64, b as f64, c as f64),
+                    _ => r as f64,
+                };
+                if wide != r as f64 { fl |= NX; }
+            }
+            set_flags(fcsr, fl);
         }
         1 => { // Double-precision
             let a = f64::from_bits(f[rs1]);
@@ -967,6 +1198,30 @@ unsafe fn exec_fma(f: &mut [u64; 32], raw: u32, opcode: u32, pc: &mut u64, step:
                 _ => 0.0,
             };
             f[rd] = r.to_bits();
+            let mut fl = 0u32;
+            if (a.is_infinite() && b == 0.0) || (a == 0.0 && b.is_infinite()) { fl |= NV; }
+            if is_snan_f64(a) || is_snan_f64(b) || is_snan_f64(c) { fl |= NV; }
+            if r.is_nan() && (a.is_nan() || b.is_nan() || c.is_nan()) { fl |= NV; }
+            if r.is_infinite() && !a.is_infinite() && !b.is_infinite() && !c.is_infinite() { fl |= OF | NX; }
+            if !r.is_nan() && !r.is_infinite() {
+                // For f64 FMA, no wider type available. Use error-free transformation:
+                // fma(a,b,c) is the correctly-rounded result. The residual is fma(a,b,c-r)+r-r=0
+                // unless the operation lost precision. Check via a*b exactly then add c.
+                // Practical: check if a*b is exact (fma(a,b,0)==a*b is always true for fma)
+                // then check if adding c is exact.
+                let prod = a * b; // rounded product
+                let prod_err = libm::fma(a, b, -prod); // exact error of a*b
+                let c_eff = match opcode {
+                    decode::OP_FMSUB | decode::OP_FNMADD => -c, _ => c,
+                };
+                let sum = prod + c_eff;
+                let sum_err = (prod - sum) + c_eff + prod_err;
+                let result_sign = match opcode {
+                    decode::OP_FNMSUB | decode::OP_FNMADD => -1.0, _ => 1.0,
+                };
+                if sum_err != 0.0 || sum * result_sign != r { fl |= NX; }
+            }
+            set_flags(fcsr, fl);
         }
         _ => {} // Q/H not supported
     }
@@ -986,35 +1241,52 @@ unsafe fn exec_amo(x: &mut [u64; 32], raw: u32, base: u32, pc: &mut u64, step: u
     let addr = x[rs1];
 
     match funct5 {
-        0x02 => { // LR
-            let old = if is_word { guest_mem::read_i32(base, addr) as u64 }
+        0x02 => { // LR — load reserved, set reservation
+            let old = if is_word { guest_mem::read_i32(base, addr) as i64 as u64 }
                       else { guest_mem::read_u64(base, addr) };
             if rd != 0 { x[rd] = old; }
+            // Set reservation: addr and size
+            RESV_ADDR = addr;
+            RESV_VALID = true;
         }
-        0x03 => { // SC — always succeeds in single-threaded
-            if is_word { guest_mem::write_u32(base, addr, x[rs2] as u32); }
-            else { guest_mem::write_u64(base, addr, x[rs2]); }
-            if rd != 0 { x[rd] = 0; } // success
+        0x03 => { // SC — store conditional, check reservation
+            if RESV_VALID && RESV_ADDR == addr {
+                if is_word { guest_mem::write_u32(base, addr, x[rs2] as u32); }
+                else { guest_mem::write_u64(base, addr, x[rs2]); }
+                if rd != 0 { x[rd] = 0; } // success
+            } else {
+                if rd != 0 { x[rd] = 1; } // failure
+            }
+            RESV_VALID = false;
         }
         _ => {
             // AMO: read-modify-write
+            // For .W: read 32-bit sign-extended, operate on 32-bit values,
+            // write back 32-bit, return sign-extended old value (§8.4).
             let old = if is_word { guest_mem::read_i32(base, addr) as i64 as u64 }
                       else { guest_mem::read_u64(base, addr) };
+            let src = if is_word { x[rs2] as i32 as i64 as u64 } else { x[rs2] };
             let new_val = match funct5 {
-                0x01 => x[rs2],                                  // AMOSWAP
-                0x00 => old.wrapping_add(x[rs2]),                // AMOADD
-                0x04 => old ^ x[rs2],                            // AMOXOR
-                0x0C => old & x[rs2],                            // AMOAND
-                0x08 => old | x[rs2],                            // AMOOR
-                0x10 => core::cmp::min(old as i64, x[rs2] as i64) as u64, // AMOMIN
-                0x14 => core::cmp::max(old as i64, x[rs2] as i64) as u64, // AMOMAX
-                0x18 => core::cmp::min(old, x[rs2]),             // AMOMINU
-                0x1C => core::cmp::max(old, x[rs2]),             // AMOMAXU
+                0x01 => src,                                               // AMOSWAP
+                0x00 => old.wrapping_add(src),                             // AMOADD
+                0x04 => old ^ src,                                         // AMOXOR
+                0x0C => old & src,                                         // AMOAND
+                0x08 => old | src,                                         // AMOOR
+                0x10 => core::cmp::min(old as i64, src as i64) as u64,    // AMOMIN
+                0x14 => core::cmp::max(old as i64, src as i64) as u64,    // AMOMAX
+                0x18 => if is_word {                                       // AMOMINU
+                    core::cmp::min(old as u32, src as u32) as i32 as i64 as u64
+                } else { core::cmp::min(old, src) },
+                0x1C => if is_word {                                       // AMOMAXU
+                    core::cmp::max(old as u32, src as u32) as i32 as i64 as u64
+                } else { core::cmp::max(old, src) },
                 _ => old,
             };
             if is_word { guest_mem::write_u32(base, addr, new_val as u32); }
             else { guest_mem::write_u64(base, addr, new_val); }
             if rd != 0 { x[rd] = old; }
+            // AMO store invalidates any reservation (§8.4)
+            RESV_VALID = false;
         }
     }
     *pc += step;
