@@ -271,6 +271,9 @@ pub unsafe fn exec(
     vm.f = f;
     vm.pc = pc;
     vm.fcsr = fcsr;
+    // Advance monotonic clock by instructions executed
+    let executed = (budget - remaining) as u64;
+    crate::syscall::time::advance_monotonic(executed);
     remaining
     }
 }

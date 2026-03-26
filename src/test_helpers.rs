@@ -54,6 +54,7 @@ impl TestVm {
             // Heap and brk must be above WASM static data (~0x11D000 for wasip1 test binary).
             // __stack_pointer = 0x100000, static data = 0x100000..0x11D000.
             crate::alloc::reset(0x20_0000);
+            crate::syscall::time::init();
             crate::syscall::memory::init(0x12_0000); // brk above static data
             crate::syscall::signal::init();
             crate::syscall::epoll::init();

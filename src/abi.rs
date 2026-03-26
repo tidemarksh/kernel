@@ -511,6 +511,13 @@ export_const!(abi_max_timerfds, MAX_TIMERFDS as i32);
 // WASM exports — runtime calls these to manage processes and threads
 // =============================================================================
 
+/// Set the base wall-clock time for clock_gettime(CLOCK_REALTIME).
+/// Called by runtime before process_create. sec/nsec are Unix epoch time.
+#[unsafe(no_mangle)]
+pub extern "C" fn set_base_time(sec: u64, nsec: u64) {
+    crate::syscall::time::set_base_time(sec, nsec);
+}
+
 /// Initialize kernel state. Must be called once after WASM instantiation.
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_init(heap_base: u32) {
