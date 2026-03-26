@@ -154,6 +154,28 @@ pub fn is_pipe_write(ofd: &OpenFileDesc) -> bool {
 }
 
 // =========================================================================
+// Socket FD creation
+// =========================================================================
+
+/// Open a socket FD. `socket_idx` is the index into the socket table.
+pub fn open_socket(vm: &mut ThreadState, _base: u32, socket_idx: u32, flags: i32) -> i64 {
+    unsafe {
+        let ofd_id = alloc_ofd(FD_TYPE_SOCKET, flags & O_NONBLOCK);
+        if ofd_id == 0 { return EMFILE; }
+        ofd_table()[ofd_id as usize].ino = socket_idx;
+
+        let cloexec = if flags & O_CLOEXEC != 0 { FD_CLOEXEC } else { 0 };
+        let newfd = match find_free_fd(vm, 0) {
+            Some(fd) => fd,
+            None => return EMFILE,
+        };
+        let ps = get_process_state(vm);
+        (*ps).fd_table[newfd] = FdEntry { ofd_id, fd_flags: cloexec };
+        newfd as i64
+    }
+}
+
+// =========================================================================
 // Epoll FD creation
 // =========================================================================
 
@@ -229,6 +251,8 @@ pub fn sys_dup3(vm: &mut ThreadState, _base: u32, oldfd: u64, newfd: u64, flags:
                     let pipe_idx = ofd.ino;
                     let is_read = ofd.host_fd >= 0;
                     crate::syscall::pipe::pipe_close(pipe_idx, is_read);
+                } else if ofd.fd_type == FD_TYPE_SOCKET {
+                    crate::syscall::socket::socket_close(ofd.ino);
                 }
                 ofd.fd_type = 0;
                 ofd.refcount = 0;
@@ -342,6 +366,8 @@ pub fn sys_close(vm: &mut ThreadState, _base: u32, fd: u64) -> i64 {
                 let pipe_idx = ofd.ino;
                 let is_read = ofd.host_fd >= 0;
                 crate::syscall::pipe::pipe_close(pipe_idx, is_read);
+            } else if ofd.fd_type == FD_TYPE_SOCKET {
+                crate::syscall::socket::socket_close(ofd.ino);
             }
             ofd.fd_type = 0;
             ofd.refcount = 0;

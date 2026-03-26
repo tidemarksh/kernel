@@ -16,6 +16,9 @@ pub const STATUS_EXECVE_SPAWN: i32 = 24;
 pub const STATUS_CLONE_SPAWN: i32 = 25;
 pub const STATUS_SLEEP: i32 = 26;
 pub const STATUS_JIT_READY: i32 = 27;
+pub const STATUS_CONNECT: i32 = 28;
+pub const STATUS_SOCKET_SEND: i32 = 29;
+pub const STATUS_SOCKET_RECV: i32 = 30;
 
 // =============================================================================
 // FD types (internal, not Linux ABI)
@@ -238,7 +241,33 @@ pub const EPIPE: i64 = -32;
 pub const ENOSYS: i64 = -38;
 pub const ENOTEMPTY: i64 = -39;
 pub const ENOTSOCK: i64 = -88;
+pub const EDESTADDRREQ: i64 = -89;
+pub const EPROTOTYPE: i64 = -91;
+pub const ENOPROTOOPT: i64 = -92;
+pub const EPROTONOSUPPORT: i64 = -93;
+pub const EAFNOSUPPORT: i64 = -97;
+pub const EADDRINUSE: i64 = -98;
+pub const EADDRNOTAVAIL: i64 = -99;
+pub const ENOTCONN: i64 = -107;
+pub const EISCONN: i64 = -106;
 pub const ECONNREFUSED: i64 = -111;
+
+// =============================================================================
+// Socket address families
+// https://github.com/torvalds/linux/blob/v6.12/include/linux/socket.h
+// =============================================================================
+pub const AF_UNIX: u32 = 1;
+pub const AF_INET: u32 = 2;
+pub const AF_INET6: u32 = 10;
+
+// =============================================================================
+// Socket types
+// https://github.com/torvalds/linux/blob/v6.12/include/linux/net.h
+// =============================================================================
+pub const SOCK_STREAM: u32 = 1;
+pub const SOCK_DGRAM: u32 = 2;
+pub const SOCK_NONBLOCK: u32 = 0x800;
+pub const SOCK_CLOEXEC: u32 = 0x80000;
 
 // =============================================================================
 // WASM exports — runtime reads these, no hand-written constants in TS
@@ -261,6 +290,9 @@ export_const!(abi_status_execve_spawn, STATUS_EXECVE_SPAWN);
 export_const!(abi_status_clone_spawn, STATUS_CLONE_SPAWN);
 export_const!(abi_status_sleep, STATUS_SLEEP);
 export_const!(abi_status_jit_ready, STATUS_JIT_READY);
+export_const!(abi_status_connect, STATUS_CONNECT);
+export_const!(abi_status_socket_send, STATUS_SOCKET_SEND);
+export_const!(abi_status_socket_recv, STATUS_SOCKET_RECV);
 export_const!(abi_page_size, PAGE_SIZE as i32);
 export_const!(abi_max_fds, MAX_FDS as i32);
 export_const!(abi_max_threads, MAX_THREADS as i32);
@@ -456,6 +488,15 @@ export_const!(abi_emfile, EMFILE as i32);
 export_const!(abi_enospc, ENOSPC as i32);
 export_const!(abi_enotempty, ENOTEMPTY as i32);
 export_const!(abi_enotsock, ENOTSOCK as i32);
+export_const!(abi_edestaddrreq, EDESTADDRREQ as i32);
+export_const!(abi_eprototype, EPROTOTYPE as i32);
+export_const!(abi_enoprotoopt, ENOPROTOOPT as i32);
+export_const!(abi_eprotonosupport, EPROTONOSUPPORT as i32);
+export_const!(abi_eafnosupport, EAFNOSUPPORT as i32);
+export_const!(abi_eaddrinuse, EADDRINUSE as i32);
+export_const!(abi_eaddrnotavail, EADDRNOTAVAIL as i32);
+export_const!(abi_enotconn, ENOTCONN as i32);
+export_const!(abi_eisconn, EISCONN as i32);
 export_const!(abi_econnrefused, ECONNREFUSED as i32);
 
 // Limits (remaining)
@@ -480,6 +521,7 @@ pub extern "C" fn kernel_init(heap_base: u32) {
     crate::syscall::signal::init();
     crate::syscall::epoll::init();
     crate::syscall::pipe::init();
+    crate::syscall::socket::init();
     crate::fs::fd_table::init();
     crate::fs::memfs::init();
 }
@@ -588,6 +630,7 @@ mod tests {
             STATUS_OK, STATUS_FAULT, STATUS_FS, STATUS_FUTEX_WAIT,
             STATUS_PIPE_WAIT, STATUS_EPOLL_WAIT, STATUS_VFORK_WAIT,
             STATUS_EXECVE_SPAWN, STATUS_CLONE_SPAWN, STATUS_SLEEP, STATUS_JIT_READY,
+            STATUS_CONNECT, STATUS_SOCKET_SEND, STATUS_SOCKET_RECV,
         ];
         for i in 0..codes.len() {
             for j in (i + 1)..codes.len() {

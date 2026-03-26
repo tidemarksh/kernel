@@ -30,7 +30,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
     let a2 = vm.x[12];
     let a3 = vm.x[13];
     let a4 = vm.x[14];
-    let _a5 = vm.x[15];
+    let a5 = vm.x[15];
 
     let result: i64 = match nr {
         // identity
@@ -97,6 +97,31 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
 
         // pipe
         SYS_PIPE2 => pipe::sys_pipe2(vm, base, a0, a1),
+
+        // socket
+        SYS_SOCKET => socket::sys_socket(vm, base, a0, a1, a2),
+        SYS_BIND => socket::sys_bind(vm, base, a0, a1, a2),
+        SYS_LISTEN => socket::sys_listen(vm, base, a0, a1),
+        SYS_CONNECT => {
+            let r = socket::sys_connect(vm, base, a0, a1, a2);
+            if vm.status == abi::STATUS_CONNECT { return abi::STATUS_CONNECT; }
+            r
+        }
+        SYS_ACCEPT4 => socket::sys_accept4(vm, base, a0, a1, a2, a3),
+        SYS_SENDTO => {
+            let r = socket::sys_sendto(vm, base, a0, a1, a2, a3, a4, a5);
+            if vm.status == abi::STATUS_SOCKET_SEND { return abi::STATUS_SOCKET_SEND; }
+            r
+        }
+        SYS_RECVFROM => {
+            let r = socket::sys_recvfrom(vm, base, a0, a1, a2, a3, a4, a5);
+            if vm.status == abi::STATUS_SOCKET_RECV { return abi::STATUS_SOCKET_RECV; }
+            r
+        }
+        SYS_SETSOCKOPT => socket::sys_setsockopt(vm, base, a0, a1, a2, a3, a4),
+        SYS_GETSOCKOPT => socket::sys_getsockopt(vm, base, a0, a1, a2, a3, a4),
+        SYS_GETSOCKNAME => socket::sys_getsockname(vm, base, a0, a1, a2),
+        SYS_GETPEERNAME => socket::sys_getpeername(vm, base, a0, a1, a2),
 
         // epoll
         SYS_EPOLL_CREATE1 => epoll::sys_epoll_create1(vm, base, a0),

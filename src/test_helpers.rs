@@ -58,6 +58,7 @@ impl TestVm {
             crate::syscall::signal::init();
             crate::syscall::epoll::init();
             crate::syscall::pipe::init();
+            crate::syscall::socket::init();
             crate::fs::fd_table::init();
             crate::fs::memfs::init();
 
