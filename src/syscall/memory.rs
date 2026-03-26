@@ -451,18 +451,17 @@ mod tests {
         let mut t = TestVm::new();
 
         // brk: query current brk
-        let cur = super::sys_brk(&mut t.vm, t.base, 0);
+        let cur = t.sys_brk(0);
         assert!(cur > 0);
 
         // brk: extend
         let new_brk = cur as u64 + 4096;
-        let ret = super::sys_brk(&mut t.vm, t.base, new_brk);
+        let ret = t.sys_brk(new_brk);
         assert_eq!(ret, new_brk as i64);
 
         // mmap: anonymous
-        let addr = super::sys_mmap(
-            &mut t.vm, t.base,
-            0, 4096, (PROT_READ | PROT_WRITE) as u64, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0,
+        let addr = t.sys_mmap(
+            0, 4096, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0,
         );
         assert!(addr > 0, "mmap should return positive address, got {}", addr);
 
@@ -473,29 +472,24 @@ mod tests {
         }
 
         // munmap
-        let ret = super::sys_munmap(&mut t.vm, t.base, addr as u64, 4096);
+        let ret = t.sys_munmap(addr as u64, 4096);
         assert_eq!(ret, 0);
 
         // mprotect
-        let addr2 = super::sys_mmap(
-            &mut t.vm, t.base,
-            0, 4096, (PROT_READ | PROT_WRITE) as u64, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0,
+        let addr2 = t.sys_mmap(
+            0, 4096, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0,
         );
         assert!(addr2 > 0);
 
         // Change to read-only
-        let ret = super::sys_mprotect(
-            &mut t.vm, t.base, addr2 as u64, 4096, PROT_READ as u64,
-        );
+        let ret = t.sys_mprotect(addr2 as u64, 4096, PROT_READ);
         assert_eq!(ret, 0);
 
         // Change to PROT_NONE should set the flag
-        let ret2 = super::sys_mprotect(
-            &mut t.vm, t.base, addr2 as u64, 4096, PROT_NONE as u64,
-        );
+        let ret2 = t.sys_mprotect(addr2 as u64, 4096, PROT_NONE);
         assert_eq!(ret2, 0);
         assert!(super::has_prot_none());
 
-        super::sys_munmap(&mut t.vm, t.base, addr2 as u64, 4096);
+        t.sys_munmap(addr2 as u64, 4096);
     }
 }

@@ -412,29 +412,29 @@ mod tests {
         let mut t = TestVm::new();
 
         // dup(1) -> should return 3 (next free fd)
-        let newfd = super::sys_dup(&mut t.vm, t.base, 1);
+        let newfd = t.sys_dup(1);
         assert_eq!(newfd, 3);
 
         // fcntl F_GETFD on new fd -> should be 0 (no CLOEXEC)
-        let flags = super::sys_fcntl(&mut t.vm, t.base, 3, 1, 0); // F_GETFD=1
+        let flags = t.sys_fcntl(3, 1, 0); // F_GETFD=1
         assert_eq!(flags, 0);
 
         // fcntl F_SETFD to set CLOEXEC
-        let ret = super::sys_fcntl(&mut t.vm, t.base, 3, 2, 1); // F_SETFD=2, FD_CLOEXEC=1
+        let ret = t.sys_fcntl(3, 2, 1); // F_SETFD=2, FD_CLOEXEC=1
         assert_eq!(ret, 0);
-        let flags2 = super::sys_fcntl(&mut t.vm, t.base, 3, 1, 0);
+        let flags2 = t.sys_fcntl(3, 1, 0);
         assert_eq!(flags2, 1);
 
         // close(3)
-        let ret2 = super::sys_close(&mut t.vm, t.base, 3);
+        let ret2 = t.sys_close(3);
         assert_eq!(ret2, 0);
 
         // close again -> EBADF
-        let ret3 = super::sys_close(&mut t.vm, t.base, 3);
+        let ret3 = t.sys_close(3);
         assert_eq!(ret3, EBADF);
 
         // dup3(1, 10, O_CLOEXEC)
-        let ret4 = super::sys_dup3(&mut t.vm, t.base, 1, 10, O_CLOEXEC as u64);
+        let ret4 = t.sys_dup3(1, 10, O_CLOEXEC as u64);
         assert_eq!(ret4, 10);
     }
 }

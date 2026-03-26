@@ -487,85 +487,57 @@ mod tests {
 
         // --- openat / read / write ---
 
-        // Write path string to guest memory
-        let path_addr = t.scratch;
-        unsafe { crate::guest_mem::write_bytes(t.base, path_addr, b"/test.txt\0"); }
-
         // openat with O_CREAT | O_RDWR
-        let fd = super::sys_openat(
-            &mut t.vm, t.base, (-100i64) as u64, path_addr, (O_CREAT | O_RDWR) as u64, 0o644,
-        );
+        let fd = t.sys_openat(b"/test.txt", O_CREAT | O_RDWR);
         assert!(fd >= 3, "openat should return fd >= 3, got {}", fd);
 
         // write
-        let data_addr = t.scratch + 0x1000;
-        unsafe { crate::guest_mem::write_bytes(t.base, data_addr, b"Hello FS!"); }
-        let written = super::sys_write(
-            &mut t.vm, t.base, fd as u64, data_addr, 9, SYS_WRITE,
-        );
+        let written = t.sys_write_data(fd, b"Hello FS!");
         assert_eq!(written, 9);
 
         // lseek to beginning
-        let pos = super::sys_lseek(&mut t.vm, t.base, fd as u64, 0, 0);
+        let pos = t.sys_lseek(fd, 0, 0);
         assert_eq!(pos, 0);
 
         // read
-        let read_addr = t.scratch + 0x2000;
-        unsafe { crate::guest_mem::zero_mem(t.base, read_addr, 16); }
-        let nread = super::sys_read(&mut t.vm, t.base, fd as u64, read_addr, 16);
+        let mut buf = [0u8; 16];
+        let nread = t.sys_read(fd, &mut buf);
         assert_eq!(nread, 9);
-        let mut buf = [0u8; 9];
-        unsafe { crate::guest_mem::read_bytes(t.base, read_addr, &mut buf); }
-        assert_eq!(&buf, b"Hello FS!");
+        assert_eq!(&buf[..9], b"Hello FS!");
 
         // fstat
         let stat_addr = t.scratch + 0x3000;
-        let ret = super::sys_fstat(&mut t.vm, t.base, fd as u64, stat_addr);
+        let ret = t.sys_fstat(fd, stat_addr);
         assert_eq!(ret, 0);
         let size = unsafe { crate::guest_mem::read_u64(t.base, stat_addr + 48) };
         assert_eq!(size, 9);
 
         // close
-        let ret2 = crate::fs::fd_table::sys_close(&mut t.vm, t.base, fd as u64);
+        let ret2 = t.sys_close(fd);
         assert_eq!(ret2, 0);
 
         // --- mkdir / getdents ---
 
         // Create /mydir
-        let path_addr = t.scratch;
-        unsafe { crate::guest_mem::write_bytes(t.base, path_addr, b"/mydir\0"); }
-        let ret = super::sys_mkdirat(
-            &mut t.vm, t.base, (-100i64) as u64, path_addr, 0o755,
-        );
+        let ret = t.sys_mkdirat(b"/mydir");
         assert_eq!(ret, 0);
 
         // Create files in /mydir
-        unsafe { crate::guest_mem::write_bytes(t.base, path_addr, b"/mydir/a.txt\0"); }
-        let fd_a = super::sys_openat(
-            &mut t.vm, t.base, (-100i64) as u64, path_addr, (O_CREAT | O_RDWR) as u64, 0o644,
-        );
+        let fd_a = t.sys_openat(b"/mydir/a.txt", O_CREAT | O_RDWR);
         assert!(fd_a >= 3);
-        crate::fs::fd_table::sys_close(&mut t.vm, t.base, fd_a as u64);
+        t.sys_close(fd_a);
 
-        unsafe { crate::guest_mem::write_bytes(t.base, path_addr, b"/mydir/b.txt\0"); }
-        let fd_b = super::sys_openat(
-            &mut t.vm, t.base, (-100i64) as u64, path_addr, (O_CREAT | O_RDWR) as u64, 0o644,
-        );
+        let fd_b = t.sys_openat(b"/mydir/b.txt", O_CREAT | O_RDWR);
         assert!(fd_b >= 3);
-        crate::fs::fd_table::sys_close(&mut t.vm, t.base, fd_b as u64);
+        t.sys_close(fd_b);
 
         // Open /mydir as directory
-        unsafe { crate::guest_mem::write_bytes(t.base, path_addr, b"/mydir\0"); }
-        let dir_fd = super::sys_openat(
-            &mut t.vm, t.base, (-100i64) as u64, path_addr, O_RDONLY as u64, 0,
-        );
+        let dir_fd = t.sys_openat(b"/mydir", O_RDONLY);
         assert!(dir_fd >= 3);
 
         // getdents64
         let dents_buf = t.scratch + 0x4000;
-        let n = super::sys_getdents64(
-            &mut t.vm, t.base, dir_fd as u64, dents_buf, 4096,
-        );
+        let n = t.sys_getdents64(dir_fd, dents_buf, 4096);
         assert!(n > 0, "getdents64 should return > 0 bytes, got {}", n);
     }
 }
