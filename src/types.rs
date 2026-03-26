@@ -177,3 +177,32 @@ pub const SIG_DFL: u64 = 0;
 pub const SIG_IGN: u64 = 1;
 pub const MAX_SIGNALS: usize = 64;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::abi::*;
+
+    #[test]
+    fn thread_state_layout() {
+        let size = core::mem::size_of::<ThreadState>();
+        assert!(size > 0);
+        assert_eq!(size % 8, 0, "ThreadState should be 8-byte aligned");
+    }
+
+    #[test]
+    fn process_state_has_fd_table() {
+        let size = core::mem::size_of::<ProcessState>();
+        assert!(size >= MAX_FDS * core::mem::size_of::<FdEntry>());
+    }
+
+    #[test]
+    fn vma_is_copy() {
+        let v = Vma {
+            start: 0x1000, end: 0x2000, prot: PROT_READ | PROT_WRITE,
+            flags: 0, fd: -1, _pad: 0, offset: 0,
+        };
+        let v2 = v;
+        assert_eq!(v2.start, 0x1000);
+    }
+}
+

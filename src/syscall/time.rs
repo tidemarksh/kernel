@@ -52,3 +52,22 @@ pub fn sys_nanosleep(vm: &mut ThreadState, base: u32, req: u64, _rem: u64) -> i3
     vm.status = abi::STATUS_SLEEP;
     abi::STATUS_SLEEP
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::test_helpers::TestVm;
+
+    #[test]
+    fn time_syscalls() {
+        let mut t = TestVm::new();
+        let tp = t.scratch;
+        assert_eq!(super::sys_clock_gettime(&t.vm, t.base, 0, tp), 0);
+        let sec = unsafe { crate::guest_mem::read_u64(t.base, tp) };
+        assert!(sec > 0, "clock_gettime should return non-zero seconds");
+
+        let res = t.scratch + 0x100;
+        assert_eq!(super::sys_clock_getres(&t.vm, t.base, 0, res), 0);
+        let nsec = unsafe { crate::guest_mem::read_u64(t.base, res + 8) };
+        assert_eq!(nsec, 1);
+    }
+}

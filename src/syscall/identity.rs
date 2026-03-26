@@ -117,3 +117,38 @@ pub fn sys_getrandom(vm: &ThreadState, base: u32, buf: u64, len: u64, _flags: u6
     }
     count as i64
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::test_helpers::TestVm;
+
+    #[test]
+    fn identity_syscalls() {
+        let mut t = TestVm::new();
+        assert_eq!(super::sys_getpid(&t.vm), 42);
+        assert_eq!(super::sys_getppid(&t.vm), 1);
+        assert_eq!(super::sys_gettid(&t.vm), 1);
+
+        // uname
+        let buf = t.scratch;
+        assert_eq!(super::sys_uname(&t.vm, t.base, buf), 0);
+        let mut sysname = [0u8; 6];
+        unsafe { crate::guest_mem::read_bytes(t.base, buf, &mut sysname); }
+        assert_eq!(&sysname, b"Linux\0");
+
+        // sysinfo
+        let buf2 = t.scratch + 0x1000;
+        assert_eq!(super::sys_sysinfo(&t.vm, t.base, buf2), 0);
+        let totalram = unsafe { crate::guest_mem::read_u64(t.base, buf2 + 32) };
+        assert!(totalram > 0);
+
+        // getrandom
+        let buf3 = t.scratch + 0x2000;
+        unsafe { crate::guest_mem::zero_mem(t.base, buf3, 16); }
+        let ret = super::sys_getrandom(&t.vm, t.base, buf3, 16, 0);
+        assert_eq!(ret, 16);
+        let mut bytes = [0u8; 16];
+        unsafe { crate::guest_mem::read_bytes(t.base, buf3, &mut bytes); }
+        assert!(bytes.iter().any(|&b| b != 0), "getrandom should produce non-zero bytes");
+    }
+}

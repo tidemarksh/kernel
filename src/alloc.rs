@@ -8,12 +8,17 @@ static mut HEAP_PTR: u32 = 0;
 
 /// Initialize the allocator. `base` is the first usable byte after WASM data segments.
 ///
+/// Monotonic: heap pointer never rewinds. If it has already advanced past `base`,
+/// the heap continues from the current position. This prevents overlapping
+/// allocations when subsystems are re-initialized (test environment).
+///
 /// # Safety
-/// Must be called once before any allocation.
+/// Must be called before any allocation.
 pub unsafe fn init(base: u32) {
     unsafe {
-        HEAP_BASE = base;
-        HEAP_PTR = base;
+        let effective = if HEAP_PTR > base { HEAP_PTR } else { base };
+        HEAP_BASE = effective;
+        HEAP_PTR = effective;
     }
 }
 
@@ -61,4 +66,9 @@ pub unsafe fn alloc_type<T>() -> u32 {
 /// Return current heap usage in bytes.
 pub fn heap_used() -> u32 {
     unsafe { HEAP_PTR - HEAP_BASE }
+}
+
+/// Return current heap pointer (first unallocated byte).
+pub fn heap_ptr() -> u32 {
+    unsafe { HEAP_PTR }
 }

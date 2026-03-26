@@ -1,0 +1,166 @@
+//! Shared test helpers: VM setup, ELF runner.
+
+use crate::abi::*;
+use crate::types::*;
+
+/// Minimal VM state for syscall tests.
+pub struct TestVm {
+    pub vm: ThreadState,
+    pub base: u32,
+    /// Guest scratch area (above shadow stack). Use for test data writes.
+    pub scratch: u64,
+}
+
+impl TestVm {
+    /// Set up minimal VM state for syscall tests.
+    pub fn new() -> Self {
+        unsafe {
+            let base: u32 = 0;
+            crate::guest_mem::init(core::ptr::null(), core::ptr::null());
+
+            let current_pages = core::arch::wasm32::memory_size(0);
+            let target_pages = 256;
+            if current_pages < target_pages {
+                core::arch::wasm32::memory_grow(0, target_pages - current_pages);
+            }
+
+            // Initialize alloc.rs and kernel state.
+            // Heap starts at 2MB to leave room for guest data below.
+            // Heap and brk must be above WASM static data (~0x11D000 for wasip1 test binary).
+            // __stack_pointer = 0x100000, static data = 0x100000..0x11D000.
+            crate::alloc::init(0x20_0000);
+            crate::syscall::memory::init(0x12_0000); // brk above static data
+            crate::syscall::signal::init();
+            crate::syscall::epoll::init();
+            crate::syscall::pipe::init();
+            crate::fs::fd_table::init();
+            crate::fs::memfs::init();
+
+            let mut vm: ThreadState = core::mem::zeroed();
+            vm.tid = 1;
+            vm.status = STATUS_OK;
+
+            // Allocate ProcessState via alloc (above shadow stack and static data).
+            // __stack_pointer starts at 0x100000 and grows down, so anything
+            // below 0x100000 risks overlapping the WASM compiler stack.
+            let ps_addr = crate::alloc::alloc_zeroed(
+                core::mem::size_of::<ProcessState>() as u32,
+                core::mem::align_of::<ProcessState>() as u32,
+            ) as u64;
+            vm.process_ptr = ps_addr as u32;
+
+            let pid_off = core::mem::offset_of!(ProcessState, pid) as u64;
+            crate::guest_mem::write_u32(base, ps_addr + pid_off, 42);
+            let ppid_off = core::mem::offset_of!(ProcessState, ppid) as u64;
+            crate::guest_mem::write_u32(base, ps_addr + ppid_off, 1);
+
+            // FD 0/1/2
+            crate::guest_mem::write_u32(base, ps_addr + 0, 1);
+            crate::guest_mem::write_u32(base, ps_addr + 8, 2);
+            crate::guest_mem::write_u32(base, ps_addr + 16, 3);
+
+            // Scratch area for test data (64KB, above shadow stack)
+            let scratch = crate::alloc::alloc_zeroed(0x10000, 16) as u64;
+
+            TestVm { vm, base, scratch }
+        }
+    }
+}
+
+/// Load an ELF, run the interpreter, return (exit_code, last_pc).
+pub fn run_elf(elf_bytes: &[u8]) -> (i32, u64) {
+    unsafe {
+        let base: u32 = 0;
+
+        crate::guest_mem::init(core::ptr::null(), core::ptr::null());
+
+        // Grow WASM memory to 16 MB
+        let current_pages = core::arch::wasm32::memory_size(0);
+        let target_pages = 256; // 256 * 64KB = 16 MB
+        if current_pages < target_pages {
+            core::arch::wasm32::memory_grow(0, target_pages - current_pages);
+        }
+
+        // Copy ELF to a high address to avoid overlap with load segments
+        let elf_load_addr: u64 = 0xC0_0000; // 12 MB
+        crate::guest_mem::write_bytes(base, elf_load_addr, elf_bytes);
+
+        let elf_result = crate::elf::load_elf(
+            base, 0x100_0000, // 16 MB RAM
+            (base as u64 + elf_load_addr) as u32,
+            elf_bytes.len() as u32,
+        ).expect("ELF load failed");
+
+        // Initialize kernel state in WASM linear memory
+        crate::alloc::init((elf_result.brk_start as u32 + 0x2000) & !0xF);
+        crate::syscall::memory::init(elf_result.brk_start);
+        crate::syscall::signal::init();
+        crate::syscall::epoll::init();
+        crate::syscall::pipe::init();
+        crate::fs::fd_table::init();
+        crate::fs::memfs::init();
+
+        // AT_RANDOM: 16 bytes
+        let random_addr = 0xBF_FF00u64;
+        crate::guest_mem::write_bytes(base, random_addr, &[0x42u8; 16]);
+
+        // argv[0] string
+        let argv0_addr = 0xBF_FE00u64;
+        crate::guest_mem::write_bytes(base, argv0_addr, b"test\0");
+
+        let sp = crate::elf::setup_stack(
+            base, 0xBF_FD00, &[argv0_addr], &[], &elf_result, random_addr,
+        );
+
+        let mut vm: ThreadState = core::mem::zeroed();
+        vm.pc = elf_result.entry;
+        vm.x[2] = sp;
+        vm.status = STATUS_OK;
+        vm.tid = 1;
+
+        // ProcessState in guest memory
+        let ps_addr = (elf_result.brk_start + 0x1000) & !0xF;
+        crate::guest_mem::zero_mem(base, ps_addr, core::mem::size_of::<ProcessState>());
+        vm.process_ptr = ps_addr as u32;
+
+        // Write pid = 1
+        let pid_off = core::mem::offset_of!(ProcessState, pid) as u64;
+        crate::guest_mem::write_u32(base, ps_addr + pid_off, 1);
+
+        // Set up FD 0/1/2 (ofd_id != 0 so close doesn't fail)
+        let fd_off = 0u64; // fd_table is first field
+        crate::guest_mem::write_u32(base, ps_addr + fd_off + 0, 1);  // fd 0 ofd_id=1
+        crate::guest_mem::write_u32(base, ps_addr + fd_off + 8, 2);  // fd 1 ofd_id=2
+        crate::guest_mem::write_u32(base, ps_addr + fd_off + 16, 3); // fd 2 ofd_id=3
+
+        // Allocate block cache in WASM linear memory via alloc.rs
+        let cache_size = crate::cpu::block_cache::BlockCache::allocation_size() as u32;
+        crate::alloc::init((ps_addr as u32) + core::mem::size_of::<ProcessState>() as u32 + 16);
+        let cache_ptr = crate::alloc::alloc_zeroed(cache_size, 8);
+        let mut cache = crate::cpu::block_cache::BlockCache::from_ptr(
+            cache_ptr as *mut crate::cpu::block_cache::BlockEntry
+        );
+
+        let mut total = 0i64;
+        loop {
+            let budget = 500_000i32;
+            vm.status = STATUS_OK;
+            let rem = crate::cpu::exec(&mut vm, budget, Some(&mut cache), None, None, None);
+            total += (budget - rem) as i64;
+
+            match vm.status {
+                STATUS_OK => {
+                    if total > 50_000_000 { return (-999, vm.pc); }
+                }
+                STATUS_FAULT => return (vm.exit_code, vm.pc),
+                STATUS_SLEEP => {}
+                _ => return (-vm.status, vm.pc),
+            }
+        }
+    }
+}
+
+pub fn assert_elf_pass(name: &str, elf_bytes: &[u8]) {
+    let (code, pc) = run_elf(elf_bytes);
+    assert_eq!(code, 0, "{} failed: exit_code={}, last_pc=0x{:x}", name, code, pc);
+}

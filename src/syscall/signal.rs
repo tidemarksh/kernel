@@ -317,3 +317,49 @@ pub fn send_signal(vm: &mut ThreadState, sig: i32) {
     if sig <= 0 || sig as usize >= MAX_SIGNALS { return; }
     vm.sig_pending |= 1u64 << (sig - 1);
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::test_helpers::TestVm;
+
+    #[test]
+    fn signal_syscalls() {
+        let mut t = TestVm::new();
+
+        // rt_sigprocmask: block SIGUSR1 (signal 10)
+        let set_addr = t.scratch;
+        let oldset_addr = t.scratch + 0x100;
+        unsafe { crate::guest_mem::write_u64(t.base, set_addr, 1 << 9); } // bit 9 = signal 10
+        let ret = super::sys_rt_sigprocmask(
+            &mut t.vm, t.base, 0, set_addr, oldset_addr, 8, // SIG_BLOCK=0
+        );
+        assert_eq!(ret, 0);
+        assert_eq!(t.vm.sig_mask & (1 << 9), 1 << 9);
+
+        // rt_sigaction: set handler for SIGUSR1
+        let act_addr = t.scratch + 0x200;
+        let oldact_addr = t.scratch + 0x300;
+        unsafe {
+            crate::guest_mem::write_u64(t.base, act_addr, 0x12345); // handler
+            crate::guest_mem::write_u64(t.base, act_addr + 8, 0);   // flags
+            crate::guest_mem::write_u64(t.base, act_addr + 16, 0);  // mask
+        }
+        let ret2 = super::sys_rt_sigaction(
+            &mut t.vm, t.base, 10, act_addr, oldact_addr, 8,
+        );
+        assert_eq!(ret2, 0);
+
+        // sigaltstack
+        let ss_addr = t.scratch + 0x400;
+        let old_ss_addr = t.scratch + 0x500;
+        unsafe {
+            crate::guest_mem::write_u64(t.base, ss_addr, 0x50000); // sp
+            crate::guest_mem::write_u32(t.base, ss_addr + 8, 0);   // flags
+            crate::guest_mem::write_u64(t.base, ss_addr + 16, 8192); // size
+        }
+        let ret3 = super::sys_sigaltstack(&mut t.vm, t.base, ss_addr, old_ss_addr);
+        assert_eq!(ret3, 0);
+        assert_eq!(t.vm.sigaltstack_sp, 0x50000);
+        assert_eq!(t.vm.sigaltstack_size, 8192);
+    }
+}

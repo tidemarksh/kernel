@@ -267,21 +267,11 @@ pub fn sys_eventfd2(_vm: &mut ThreadState, _base: u32, _initval: u64, _flags: u6
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn setup() {
-        unsafe {
-            let current_pages = core::arch::wasm32::memory_size(0);
-            if current_pages < 256 {
-                core::arch::wasm32::memory_grow(0, 256 - current_pages);
-            }
-            crate::alloc::init(0x80_0000);
-        }
-        init();
-    }
+    use crate::test_helpers::TestVm;
 
     #[test]
     fn write_read_roundtrip() {
-        setup();
+        let _ = TestVm::new();
         let idx = alloc_pipe_slot().unwrap();
         assert_eq!(pipe_write(idx, b"hello pipe"), 10);
         let mut buf = [0u8; 32];
@@ -291,7 +281,7 @@ mod tests {
 
     #[test]
     fn eof_on_writer_close() {
-        setup();
+        let _ = TestVm::new();
         let idx = alloc_pipe_slot().unwrap();
         pipe_close(idx, false); // close write end
         let mut buf = [0u8; 16];
@@ -300,7 +290,7 @@ mod tests {
 
     #[test]
     fn epipe_on_reader_close() {
-        setup();
+        let _ = TestVm::new();
         let idx = alloc_pipe_slot().unwrap();
         pipe_close(idx, true); // close read end
         assert_eq!(pipe_write(idx, b"data"), EPIPE);
@@ -308,7 +298,7 @@ mod tests {
 
     #[test]
     fn circular_wrap() {
-        setup();
+        let _ = TestVm::new();
         let idx = alloc_pipe_slot().unwrap();
         let big = [0xABu8; 4000];
         assert_eq!(pipe_write(idx, &big), 4000);

@@ -384,21 +384,11 @@ pub fn create_file_with_data(parent_ino: u32, name: &[u8], data: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn init_test_fs() {
-        unsafe {
-            let current_pages = core::arch::wasm32::memory_size(0);
-            if current_pages < 256 {
-                core::arch::wasm32::memory_grow(0, 256 - current_pages);
-            }
-            crate::alloc::init(0x80_0000); // 8 MB
-        }
-        init();
-    }
+    use crate::test_helpers::TestVm;
 
     #[test]
     fn create_and_read() {
-        init_test_fs();
+        let _ = TestVm::new();
         let ino = create_file(1, b"hello.txt", 0o644);
         assert!(ino > 0);
         assert_eq!(write_file(ino, 0, b"Hello, world!"), 13);
@@ -411,7 +401,7 @@ mod tests {
 
     #[test]
     fn directory_tree() {
-        init_test_fs();
+        let _ = TestVm::new();
         let dir = create_dir(1, b"src", 0o755);
         assert!(dir > 0);
         let file = create_file(dir, b"main.rs", 0o644);
@@ -424,7 +414,7 @@ mod tests {
 
     #[test]
     fn unlink_file() {
-        init_test_fs();
+        let _ = TestVm::new();
         let ino = create_file(1, b"tmp.txt", 0o644);
         assert!(ino > 0);
         assert_eq!(resolve_path(b"/tmp.txt"), ino);
@@ -434,7 +424,7 @@ mod tests {
 
     #[test]
     fn stat_file() {
-        init_test_fs();
+        let _ = TestVm::new();
         let ino = create_file(1, b"data.bin", 0o644);
         write_file(ino, 0, &[0u8; 1024]);
         let st = stat(ino).unwrap();
@@ -444,7 +434,7 @@ mod tests {
 
     #[test]
     fn readdir_entries() {
-        init_test_fs();
+        let _ = TestVm::new();
         create_file(1, b"a.txt", 0o644);
         create_file(1, b"b.txt", 0o644);
         create_dir(1, b"sub", 0o755);
@@ -455,7 +445,7 @@ mod tests {
 
     #[test]
     fn truncate_file() {
-        init_test_fs();
+        let _ = TestVm::new();
         let ino = create_file(1, b"f.txt", 0o644);
         write_file(ino, 0, b"Hello, world!");
         assert_eq!(stat(ino).unwrap().size, 13);
@@ -469,7 +459,7 @@ mod tests {
 
     #[test]
     fn write_at_offset() {
-        init_test_fs();
+        let _ = TestVm::new();
         let ino = create_file(1, b"sparse.bin", 0o644);
         write_file(ino, 100, b"data");
         assert_eq!(stat(ino).unwrap().size, 104);

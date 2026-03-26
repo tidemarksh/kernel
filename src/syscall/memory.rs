@@ -59,7 +59,11 @@ pub fn init(brk_start: u64) {
     let s = ms();
     s.brk_base = brk_start;
     s.brk_current = brk_start;
-    s.mmap_next = 0x4000_0000;
+    // mmap region starts above the current heap to avoid overlap.
+    // Align to 1MB boundary for clean separation.
+    let heap_end = unsafe { crate::alloc::heap_ptr() };
+    let mmap_start = ((heap_end as u64 + 0x10_0000) & !0xF_FFFF).max(0x4000_0000);
+    s.mmap_next = mmap_start;
     s.has_prot_none = 0;
     s.vma_count = 0;
 }
@@ -434,5 +438,64 @@ fn recompute_prot_none(s: &mut MemState) {
             s.has_prot_none = 1;
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::abi::*;
+    use crate::test_helpers::TestVm;
+
+    #[test]
+    fn memory_syscalls() {
+        let mut t = TestVm::new();
+
+        // brk: query current brk
+        let cur = super::sys_brk(&mut t.vm, t.base, 0);
+        assert!(cur > 0);
+
+        // brk: extend
+        let new_brk = cur as u64 + 4096;
+        let ret = super::sys_brk(&mut t.vm, t.base, new_brk);
+        assert_eq!(ret, new_brk as i64);
+
+        // mmap: anonymous
+        let addr = super::sys_mmap(
+            &mut t.vm, t.base,
+            0, 4096, (PROT_READ | PROT_WRITE) as u64, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0,
+        );
+        assert!(addr > 0, "mmap should return positive address, got {}", addr);
+
+        // Write and read back
+        unsafe {
+            crate::guest_mem::write_u64(t.base, addr as u64, 0xDEADBEEF);
+            assert_eq!(crate::guest_mem::read_u64(t.base, addr as u64), 0xDEADBEEF);
+        }
+
+        // munmap
+        let ret = super::sys_munmap(&mut t.vm, t.base, addr as u64, 4096);
+        assert_eq!(ret, 0);
+
+        // mprotect
+        let addr2 = super::sys_mmap(
+            &mut t.vm, t.base,
+            0, 4096, (PROT_READ | PROT_WRITE) as u64, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0,
+        );
+        assert!(addr2 > 0);
+
+        // Change to read-only
+        let ret = super::sys_mprotect(
+            &mut t.vm, t.base, addr2 as u64, 4096, PROT_READ as u64,
+        );
+        assert_eq!(ret, 0);
+
+        // Change to PROT_NONE should set the flag
+        let ret2 = super::sys_mprotect(
+            &mut t.vm, t.base, addr2 as u64, 4096, PROT_NONE as u64,
+        );
+        assert_eq!(ret2, 0);
+        assert!(super::has_prot_none());
+
+        super::sys_munmap(&mut t.vm, t.base, addr2 as u64, 4096);
     }
 }

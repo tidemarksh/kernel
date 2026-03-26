@@ -239,17 +239,11 @@ fn poll_fd(vm: &ThreadState, fd: u64, interest: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_helpers::TestVm;
 
     #[test]
     fn epoll_instance_lifecycle() {
-        unsafe {
-            let current_pages = core::arch::wasm32::memory_size(0);
-            if current_pages < 256 {
-                core::arch::wasm32::memory_grow(0, 256 - current_pages);
-            }
-            crate::alloc::init(0x80_0000);
-        }
-        init();
+        let _ = TestVm::new();
 
         // Allocate an instance
         let size = core::mem::size_of::<EpollInstance>() as u32;
