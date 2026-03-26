@@ -399,6 +399,10 @@ pub extern "C" fn process_create(
         let ps = &mut *(ps_ptr as *mut crate::types::ProcessState);
         ps.pid = 1;
 
+        // Wire guest_mem to ProcessState's thread_count for seqlock
+        let tc_ptr = core::ptr::addr_of!(ps.thread_count);
+        crate::guest_mem::init(core::ptr::null(), tc_ptr);
+
         crate::guest_mem::write_u32(base, ps_ptr as u64, 1);
         crate::guest_mem::write_u32(base, ps_ptr as u64 + 8, 2);
         crate::guest_mem::write_u32(base, ps_ptr as u64 + 16, 3);

@@ -165,8 +165,9 @@ pub fn sys_mmap(
     if is_anon {
         unsafe { guest_mem::zero_mem(0, start, len as usize); }
     } else if fd >= 0 {
-        // File-backed mmap (MAP_PRIVATE): eager populate from MemFS.
-        // Read file content into guest memory, zero-fill beyond EOF.
+        // File-backed mmap: only MAP_PRIVATE is supported.
+        if flags & MAP_PRIVATE == 0 { return EINVAL; }
+        // Eager populate from MemFS — zero-fill beyond EOF.
         // WASM has no page fault / demand paging, so populate eagerly.
         unsafe { guest_mem::zero_mem(0, start, len as usize); }
         let ofd = fd_table::get_ofd(vm, fd as u64);

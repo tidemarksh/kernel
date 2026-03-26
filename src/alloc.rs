@@ -22,6 +22,8 @@ pub unsafe fn init(base: u32) {
     }
 }
 
+
+
 /// Allocate `size` bytes aligned to `align`. Returns 0 on failure.
 ///
 /// # Safety

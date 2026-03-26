@@ -46,7 +46,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_CLOCK_GETTIME => time::sys_clock_gettime(vm, base, a0, a1),
         114 => time::sys_clock_getres(vm, base, a0, a1), // clock_getres
         SYS_NANOSLEEP => return time::sys_nanosleep(vm, base, a0, a1),
-        SYS_SCHED_YIELD => identity::sys_sched_yield(),
+        SYS_SCHED_YIELD => time::sys_sched_yield(),
         SYS_TIMES => 0,      // stub: return 0 clock ticks
 
         // memory
@@ -106,6 +106,13 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             r
         }
         SYS_EVENTFD2 => pipe::sys_eventfd2(vm, base, a0, a1),
+
+        // signal delivery
+        SYS_KILL | SYS_TKILL | SYS_TGKILL => {
+            let sig = if nr == SYS_KILL { a1 } else { a2 };
+            signal::send_signal(vm, sig as i32);
+            0
+        }
 
         // process (stubs — real impl with kernel Worker)
         SYS_SET_TID_ADDRESS => {

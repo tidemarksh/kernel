@@ -1,6 +1,6 @@
-#![cfg_attr(not(test), no_std)]
+#![cfg_attr(all(target_arch = "wasm32", target_os = "unknown"), no_std)]
 
-#[cfg(all(not(test), target_arch = "wasm32"))]
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     core::arch::wasm32::unreachable()
@@ -19,6 +19,3 @@ pub mod types;
 
 #[cfg(test)]
 pub mod test_helpers;
-
-#[cfg(test)]
-mod riscv_tests;

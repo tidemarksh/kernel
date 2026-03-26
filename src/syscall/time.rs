@@ -53,6 +53,9 @@ pub fn sys_nanosleep(vm: &mut ThreadState, base: u32, req: u64, _rem: u64) -> i3
     abi::STATUS_SLEEP
 }
 
+/// sched_yield: no-op, return success.
+pub fn sys_sched_yield() -> i64 { 0 }
+
 #[cfg(test)]
 mod tests {
     use crate::test_helpers::TestVm;
