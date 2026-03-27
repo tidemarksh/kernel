@@ -13,7 +13,7 @@
 
 use crate::abi::*;
 use crate::guest_mem;
-use crate::types::{ThreadState, ProcessState, FdEntry};
+use crate::types::{FdEntry, ProcessState, ThreadState};
 
 // =========================================================================
 // Process table — tracks child processes for wait4
@@ -28,11 +28,122 @@ struct ChildEntry {
     exit_code: i32,
 }
 
-static mut CHILDREN: [ChildEntry; MAX_CHILDREN] = [ChildEntry { pid: 0, exited: false, exit_code: 0 }; MAX_CHILDREN];
-static mut NEXT_PID: i32 = 2; // PID 1 is the init process
+static mut CHILDREN: [ChildEntry; MAX_CHILDREN] = [ChildEntry {
+    pid: 0,
+    exited: false,
+    exit_code: 0,
+}; MAX_CHILDREN];
+static mut NEXT_PID: i32 = 3; // PID 1 is init, PID 2 is the first user process
 
 fn children() -> &'static mut [ChildEntry; MAX_CHILDREN] {
     unsafe { &mut *core::ptr::addr_of_mut!(CHILDREN) }
+}
+
+#[derive(Clone, Copy)]
+struct ProcessEntry {
+    pid: i32,
+    ppid: i32,
+    pgid: i32,
+    sid: i32,
+    did_exec: bool,
+}
+
+static mut PROCESS_TABLE: [ProcessEntry; MAX_PROCESSES] = [ProcessEntry {
+    pid: 0,
+    ppid: 0,
+    pgid: 0,
+    sid: 0,
+    did_exec: false,
+}; MAX_PROCESSES];
+
+fn processes() -> &'static mut [ProcessEntry; MAX_PROCESSES] {
+    unsafe { &mut *core::ptr::addr_of_mut!(PROCESS_TABLE) }
+}
+
+fn process_idx(pid: i32) -> Option<usize> {
+    if (1..=MAX_PROCESSES as i32).contains(&pid) {
+        Some((pid - 1) as usize)
+    } else {
+        None
+    }
+}
+
+fn process_entry(pid: i32) -> Option<&'static mut ProcessEntry> {
+    let idx = process_idx(pid)?;
+    let slot = &mut processes()[idx];
+    if slot.pid == pid {
+        Some(slot)
+    } else {
+        None
+    }
+}
+
+fn inherit_group_from_parent(ppid: i32) -> (i32, i32) {
+    match process_entry(ppid) {
+        Some(parent) => (parent.pgid, parent.sid),
+        None => (0, 0),
+    }
+}
+
+fn ensure_process(pid: i32, ppid: i32) -> Option<&'static mut ProcessEntry> {
+    let idx = process_idx(pid)?;
+    reserve_pid(pid);
+    if processes()[idx].pid == 0 {
+        let (parent_pgid, parent_sid) = inherit_group_from_parent(ppid);
+        processes()[idx] = ProcessEntry {
+            pid,
+            ppid,
+            pgid: if parent_pgid != 0 { parent_pgid } else { pid },
+            sid: if parent_sid != 0 { parent_sid } else { pid },
+            did_exec: false,
+        };
+    } else {
+        processes()[idx].ppid = ppid;
+    }
+    Some(&mut processes()[idx])
+}
+
+fn ensure_current_process(vm: &ThreadState, base: u32) -> Option<&'static mut ProcessEntry> {
+    let pid = crate::syscall::signal::pid_from_vm(vm, base);
+    if pid <= 0 {
+        return None;
+    }
+    let ppid_offset = core::mem::offset_of!(ProcessState, ppid) as u64;
+    let ppid = unsafe { guest_mem::read_i32(base, vm.process_ptr as u64 + ppid_offset) };
+    ensure_process(pid, ppid)
+}
+
+fn inherit_process(parent_pid: i32, child_pid: i32, did_exec: bool) {
+    let (parent_pgid, parent_sid) = inherit_group_from_parent(parent_pid);
+    if let Some(slot) = process_idx(child_pid).map(|idx| &mut processes()[idx]) {
+        *slot = ProcessEntry {
+            pid: child_pid,
+            ppid: parent_pid,
+            pgid: if parent_pgid != 0 {
+                parent_pgid
+            } else {
+                child_pid
+            },
+            sid: if parent_sid != 0 { parent_sid } else { child_pid },
+            did_exec,
+        };
+    }
+}
+
+fn group_exists_in_session(pgid: i32, sid: i32) -> bool {
+    processes()
+        .iter()
+        .any(|slot| slot.pid != 0 && slot.pgid == pgid && slot.sid == sid)
+}
+
+fn reserve_pid(pid: i32) {
+    unsafe {
+        let p = core::ptr::addr_of_mut!(NEXT_PID);
+        let next = core::ptr::read(p);
+        if pid >= next {
+            core::ptr::write(p, pid + 1);
+        }
+    }
 }
 
 fn alloc_pid() -> i32 {
@@ -47,7 +158,11 @@ fn alloc_pid() -> i32 {
 fn record_child(pid: i32) {
     for c in children().iter_mut() {
         if c.pid == 0 {
-            *c = ChildEntry { pid, exited: false, exit_code: 0 };
+            *c = ChildEntry {
+                pid,
+                exited: false,
+                exit_code: 0,
+            };
             return;
         }
     }
@@ -62,6 +177,100 @@ pub fn record_child_exit(pid: i32, exit_code: i32) {
             return;
         }
     }
+}
+
+/// getpgid: return the process group ID for `pid`, or the caller when `pid == 0`.
+/// A child inherits its parent's PGID across fork and PGID is preserved across execve.
+/// https://man7.org/linux/man-pages/man2/setpgid.2.html
+pub fn sys_getpgid(vm: &ThreadState, base: u32, pid: i64) -> i64 {
+    let caller = match ensure_current_process(vm, base) {
+        Some(slot) => *slot,
+        None => return ESRCH,
+    };
+    let target_pid = if pid == 0 { caller.pid } else { pid as i32 };
+    match process_entry(target_pid) {
+        Some(slot) => slot.pgid as i64,
+        None => ESRCH,
+    }
+}
+
+/// setpgid: update the caller's or a direct child's process group membership.
+/// This keeps the Linux/POSIX rules we rely on for LTP:
+/// - pid == 0 targets the caller
+/// - pgid == 0 makes PGID equal to the target PID
+/// - only the caller or its direct child may be targeted
+/// - session leaders cannot change PGID
+/// - joining a different group requires an existing group in the same session
+/// https://man7.org/linux/man-pages/man2/setpgid.2.html
+pub fn sys_setpgid(vm: &ThreadState, base: u32, pid: i64, pgid: i64) -> i64 {
+    if pgid < 0 {
+        return EINVAL;
+    }
+
+    let caller = match ensure_current_process(vm, base) {
+        Some(slot) => *slot,
+        None => return ESRCH,
+    };
+    let target_pid = if pid == 0 { caller.pid } else { pid as i32 };
+    let target_pgid = if pgid == 0 { target_pid } else { pgid as i32 };
+
+    let target = match process_entry(target_pid) {
+        Some(slot) => slot,
+        None if target_pid == caller.pid => match ensure_current_process(vm, base) {
+            Some(slot) => slot,
+            None => return ESRCH,
+        },
+        None => return ESRCH,
+    };
+
+    if target_pid != caller.pid {
+        if target.ppid != caller.pid {
+            return ESRCH;
+        }
+        if target.did_exec {
+            return EACCES;
+        }
+    }
+
+    if target.sid == 0 {
+        target.sid = caller.sid.max(caller.pid);
+    }
+    if target.sid != caller.sid {
+        return EPERM;
+    }
+    if target.pid == target.sid {
+        return EPERM;
+    }
+
+    if target_pgid != target.pid {
+        if !group_exists_in_session(target_pgid, target.sid) {
+            return EPERM;
+        }
+    }
+
+    target.pgid = target_pgid;
+    0
+}
+
+/// setsid: create a new session if the caller is not already a process group leader.
+/// https://man7.org/linux/man-pages/man2/setsid.2.html
+pub fn sys_setsid(vm: &ThreadState, base: u32) -> i64 {
+    let caller = match ensure_current_process(vm, base) {
+        Some(slot) => slot,
+        None => return ESRCH,
+    };
+    let caller_pid = caller.pid;
+
+    if processes()
+        .iter()
+        .any(|slot| slot.pid != 0 && slot.pgid == caller_pid)
+    {
+        return EPERM;
+    }
+
+    caller.sid = caller_pid;
+    caller.pgid = caller_pid;
+    caller_pid as i64
 }
 
 // =========================================================================
@@ -125,11 +334,19 @@ pub fn vfork_parent_resume(vm: &mut ThreadState, child_pid: i32) {
 /// returns STATUS_EXECVE_SPAWN for TS to create child Worker.
 /// https://man7.org/linux/man-pages/man2/execve.2.html
 pub fn sys_execve(
-    vm: &mut ThreadState, base: u32,
-    path_addr: u64, argv_addr: u64, envp_addr: u64,
+    vm: &mut ThreadState,
+    base: u32,
+    path_addr: u64,
+    argv_addr: u64,
+    envp_addr: u64,
 ) -> i64 {
+    let parent_pid = match ensure_current_process(vm, base) {
+        Some(slot) => slot.pid,
+        None => return ESRCH,
+    };
     let child_pid = alloc_pid();
     record_child(child_pid);
+    inherit_process(parent_pid, child_pid, true);
 
     // Build FD list: close CLOEXEC, keep the rest
     // The TS runtime reads the surviving FD entries from ProcessState.
@@ -175,21 +392,33 @@ pub fn sys_execve(
 /// wait4: wait for child process state change.
 /// https://man7.org/linux/man-pages/man2/wait4.2.html
 pub fn sys_wait4(
-    vm: &mut ThreadState, base: u32,
-    pid: i64, wstatus_addr: u64, options: u64, _rusage_addr: u64,
+    vm: &mut ThreadState,
+    base: u32,
+    pid: i64,
+    wstatus_addr: u64,
+    options: u64,
+    _rusage_addr: u64,
 ) -> i64 {
     let wnohang = (options & WNOHANG) != 0;
 
     for c in children().iter_mut() {
-        if c.pid == 0 { continue; }
+        if c.pid == 0 {
+            continue;
+        }
 
         let matches = pid == -1 || pid == c.pid as i64;
-        if !matches { continue; }
+        if !matches {
+            continue;
+        }
 
         if c.exited {
             let child_pid = c.pid;
             let code = c.exit_code;
-            *c = ChildEntry { pid: 0, exited: false, exit_code: 0 };
+            *c = ChildEntry {
+                pid: 0,
+                exited: false,
+                exit_code: 0,
+            };
 
             if wstatus_addr != 0 {
                 let wstatus = (code as u32) << 8;
@@ -204,9 +433,9 @@ pub fn sys_wait4(
         return 0;
     }
 
-    let has_children = children().iter().any(|c| {
-        c.pid != 0 && (pid == -1 || pid == c.pid as i64)
-    });
+    let has_children = children()
+        .iter()
+        .any(|c| c.pid != 0 && (pid == -1 || pid == c.pid as i64));
     if !has_children {
         return ECHILD;
     }
@@ -221,9 +450,14 @@ pub fn sys_wait4(
 
 /// Plain fork: guest Memory full copy → STATUS_EXECVE_SPAWN.
 /// TS creates new Worker with copied Memory.
-pub fn sys_fork(vm: &mut ThreadState, _base: u32) -> i64 {
+pub fn sys_fork(vm: &mut ThreadState, base: u32) -> i64 {
+    let parent_pid = match ensure_current_process(vm, base) {
+        Some(slot) => slot.pid,
+        None => return ESRCH,
+    };
     let child_pid = alloc_pid();
     record_child(child_pid);
+    inherit_process(parent_pid, child_pid, false);
 
     // TS reads: a0 = child_pid, status = STATUS_EXECVE_SPAWN
     // TS copies guest Memory, creates new Worker
@@ -295,7 +529,7 @@ mod tests {
         let ps_ptr = t.vm.process_ptr as u64;
         let fd3_off = ps_ptr + 3 * core::mem::size_of::<crate::types::FdEntry>() as u64;
         unsafe {
-            crate::guest_mem::write_u32(t.base, fd3_off, 5);     // ofd_id = 5
+            crate::guest_mem::write_u32(t.base, fd3_off, 5); // ofd_id = 5
             crate::guest_mem::write_u32(t.base, fd3_off + 4, O_CLOEXEC as u32); // fd_flags
         }
 
@@ -318,7 +552,10 @@ mod tests {
         t.write_mem(path_addr, b"/bin/test\0");
         super::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
 
-        assert_eq!(t.vm.sigaltstack_sp, 0, "alt stack should be cleared by execve");
+        assert_eq!(
+            t.vm.sigaltstack_sp, 0,
+            "alt stack should be cleared by execve"
+        );
         assert_eq!(t.vm.sigaltstack_size, 0);
     }
 

@@ -48,7 +48,9 @@ pub fn init() {
 
         let total = MAX_NET_BUFFERS as u32 * NET_BUF_SIZE;
         let base = alloc::alloc_zeroed(total, 8);
-        if base == 0 { core::arch::wasm32::unreachable(); }
+        if base == 0 {
+            core::arch::wasm32::unreachable();
+        }
         core::ptr::write(core::ptr::addr_of_mut!(NET_BUF_BASE), base);
     }
 }
@@ -67,7 +69,9 @@ fn head_val(addr: u32) -> u32 {
 }
 
 fn set_head(addr: u32, v: u32) {
-    unsafe { *((addr + OFF_HEAD) as *mut u32) = v; }
+    unsafe {
+        *((addr + OFF_HEAD) as *mut u32) = v;
+    }
 }
 
 fn tail_val(addr: u32) -> u32 {
@@ -75,7 +79,9 @@ fn tail_val(addr: u32) -> u32 {
 }
 
 fn set_tail(addr: u32, v: u32) {
-    unsafe { *((addr + OFF_TAIL) as *mut u32) = v; }
+    unsafe {
+        *((addr + OFF_TAIL) as *mut u32) = v;
+    }
 }
 
 fn data_ptr(addr: u32) -> *mut u8 {
@@ -88,10 +94,7 @@ pub fn alloc_buffer() -> Option<u32> {
         let used = core::ptr::read(core::ptr::addr_of!(NET_BUF_USED));
         for i in 0..MAX_NET_BUFFERS {
             if used & (1u64 << i) == 0 {
-                core::ptr::write(
-                    core::ptr::addr_of_mut!(NET_BUF_USED),
-                    used | (1u64 << i),
-                );
+                core::ptr::write(core::ptr::addr_of_mut!(NET_BUF_USED), used | (1u64 << i));
                 let addr = buf_addr(i as u32);
                 // Zero the buffer slot
                 core::ptr::write_bytes(addr as *mut u8, 0, NET_BUF_SIZE as usize);
@@ -108,10 +111,7 @@ pub fn alloc_buffer() -> Option<u32> {
 pub fn free_buffer(idx: u32) {
     unsafe {
         let used = core::ptr::read(core::ptr::addr_of!(NET_BUF_USED));
-        core::ptr::write(
-            core::ptr::addr_of_mut!(NET_BUF_USED),
-            used & !(1u64 << idx),
-        );
+        core::ptr::write(core::ptr::addr_of_mut!(NET_BUF_USED), used & !(1u64 << idx));
     }
 }
 
@@ -122,7 +122,11 @@ pub fn write(idx: u32, data: &[u8]) -> usize {
     let tail = tail_val(addr) as usize;
     let cap = BUF_SIZE as usize;
 
-    let used = if tail >= head { tail - head } else { cap - head + tail };
+    let used = if tail >= head {
+        tail - head
+    } else {
+        cap - head + tail
+    };
     let free = cap - 1 - used; // one slot reserved to distinguish full from empty
     if free == 0 {
         return 0;
@@ -132,7 +136,9 @@ pub fn write(idx: u32, data: &[u8]) -> usize {
     let dp = data_ptr(addr);
 
     for i in 0..to_write {
-        unsafe { *dp.add((tail + i) % cap) = data[i]; }
+        unsafe {
+            *dp.add((tail + i) % cap) = data[i];
+        }
     }
     set_tail(addr, ((tail + to_write) % cap) as u32);
 
@@ -150,7 +156,11 @@ pub fn read(idx: u32, buf: &mut [u8]) -> usize {
         return 0;
     }
 
-    let avail = if tail >= head { tail - head } else { cap - head + tail };
+    let avail = if tail >= head {
+        tail - head
+    } else {
+        cap - head + tail
+    };
     let to_read = buf.len().min(avail);
     let dp = data_ptr(addr);
 
@@ -169,7 +179,11 @@ pub fn available(idx: u32) -> usize {
     let tail = tail_val(addr) as usize;
     let cap = BUF_SIZE as usize;
 
-    if tail >= head { tail - head } else { cap - head + tail }
+    if tail >= head {
+        tail - head
+    } else {
+        cap - head + tail
+    }
 }
 
 /// Return number of bytes of free space for writing in buffer `idx`.
@@ -179,7 +193,11 @@ pub fn space(idx: u32) -> usize {
     let tail = tail_val(addr) as usize;
     let cap = BUF_SIZE as usize;
 
-    let used = if tail >= head { tail - head } else { cap - head + tail };
+    let used = if tail >= head {
+        tail - head
+    } else {
+        cap - head + tail
+    };
     cap - 1 - used
 }
 

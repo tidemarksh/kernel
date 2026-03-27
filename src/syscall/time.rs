@@ -28,6 +28,9 @@ const CLOCK_MONOTONIC_RAW: u64 = 4;
 const CLOCK_REALTIME_COARSE: u64 = 5;
 const CLOCK_MONOTONIC_COARSE: u64 = 6;
 const CLOCK_BOOTTIME: u64 = 7;
+const ITIMER_REAL: u64 = 0;
+const ITIMER_VIRTUAL: u64 = 1;
+const ITIMER_PROF: u64 = 2;
 
 // Base time injected by runtime. Defaults to a reasonable epoch if not set.
 static mut BASE_TIME_SEC: u64 = 0;
@@ -37,6 +40,21 @@ static mut BASE_TIME_SET: bool = false;
 // Monotonic counter incremented by instruction execution.
 static mut MONOTONIC_TICKS: u64 = 0;
 
+#[derive(Clone, Copy)]
+struct ItimerState {
+    interval_sec: u64,
+    interval_usec: u64,
+    value_sec: u64,
+    value_usec: u64,
+}
+
+static mut ITIMERS: [[ItimerState; 3]; abi::MAX_PROCESSES] = [[ItimerState {
+    interval_sec: 0,
+    interval_usec: 0,
+    value_sec: 0,
+    value_usec: 0,
+}; 3]; abi::MAX_PROCESSES];
+
 /// Reset time state. Called during test heap reset.
 pub fn init() {
     unsafe {
@@ -44,6 +62,15 @@ pub fn init() {
         core::ptr::write(core::ptr::addr_of_mut!(BASE_TIME_NSEC), 0);
         core::ptr::write(core::ptr::addr_of_mut!(BASE_TIME_SET), false);
         core::ptr::write(core::ptr::addr_of_mut!(MONOTONIC_TICKS), 0);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(ITIMERS),
+            [[ItimerState {
+                interval_sec: 0,
+                interval_usec: 0,
+                value_sec: 0,
+                value_usec: 0,
+            }; 3]; abi::MAX_PROCESSES],
+        );
     }
 }
 
@@ -73,8 +100,10 @@ fn monotonic_ticks() -> u64 {
 fn base_time() -> (u64, u64) {
     unsafe {
         if core::ptr::read(core::ptr::addr_of!(BASE_TIME_SET)) {
-            (core::ptr::read(core::ptr::addr_of!(BASE_TIME_SEC)),
-             core::ptr::read(core::ptr::addr_of!(BASE_TIME_NSEC)))
+            (
+                core::ptr::read(core::ptr::addr_of!(BASE_TIME_SEC)),
+                core::ptr::read(core::ptr::addr_of!(BASE_TIME_NSEC)),
+            )
         } else {
             (1700000000, 0) // fallback: ~2023-11-14 if runtime didn't set base time
         }
@@ -89,25 +118,82 @@ fn ticks_to_timespec(ticks: u64) -> (u64, u64) {
     (sec, nsec)
 }
 
+fn itimer_index(which: u64) -> Option<usize> {
+    match which {
+        ITIMER_REAL | ITIMER_VIRTUAL | ITIMER_PROF => Some(which as usize),
+        _ => None,
+    }
+}
+
+fn itimer_for_pid(pid: i32, which: u64) -> Option<&'static mut ItimerState> {
+    let which_idx = itimer_index(which)?;
+    if !(1..=abi::MAX_PROCESSES as i32).contains(&pid) {
+        return None;
+    }
+    unsafe { Some(&mut ITIMERS[(pid - 1) as usize][which_idx]) }
+}
+
+fn write_itimerval(base: u32, addr: u64, timer: ItimerState) {
+    unsafe {
+        guest_mem::write_u64(base, addr, timer.interval_sec);
+        guest_mem::write_u64(base, addr + 8, timer.interval_usec);
+        guest_mem::write_u64(base, addr + 16, timer.value_sec);
+        guest_mem::write_u64(base, addr + 24, timer.value_usec);
+    }
+}
+
+fn read_itimerval(base: u32, addr: u64) -> Result<ItimerState, i64> {
+    if addr == 0 {
+        return Ok(ItimerState {
+            interval_sec: 0,
+            interval_usec: 0,
+            value_sec: 0,
+            value_usec: 0,
+        });
+    }
+
+    let interval_sec = unsafe { guest_mem::read_i64(base, addr) };
+    let interval_usec = unsafe { guest_mem::read_i64(base, addr + 8) };
+    let value_sec = unsafe { guest_mem::read_i64(base, addr + 16) };
+    let value_usec = unsafe { guest_mem::read_i64(base, addr + 24) };
+
+    if interval_sec < 0
+        || value_sec < 0
+        || !(0..=999_999).contains(&interval_usec)
+        || !(0..=999_999).contains(&value_usec)
+    {
+        return Err(abi::EINVAL);
+    }
+
+    Ok(ItimerState {
+        interval_sec: interval_sec as u64,
+        interval_usec: interval_usec as u64,
+        value_sec: value_sec as u64,
+        value_usec: value_usec as u64,
+    })
+}
+
 /// clock_gettime: write timespec to guest memory.
 /// https://man7.org/linux/man-pages/man2/clock_gettime.2.html
 pub fn sys_clock_gettime(_vm: &ThreadState, base: u32, clk_id: u64, tp: u64) -> i64 {
-    if tp == 0 { return abi::EFAULT; }
+    if tp == 0 {
+        return abi::EFAULT;
+    }
 
     let (sec, nsec) = match clk_id {
         CLOCK_REALTIME | CLOCK_REALTIME_COARSE => {
             let (base_sec, base_nsec) = base_time();
             let (mono_sec, mono_nsec) = ticks_to_timespec(monotonic_ticks());
             let total_nsec = base_nsec + mono_nsec;
-            (base_sec + mono_sec + total_nsec / 1_000_000_000,
-             total_nsec % 1_000_000_000)
+            (
+                base_sec + mono_sec + total_nsec / 1_000_000_000,
+                total_nsec % 1_000_000_000,
+            )
         }
         CLOCK_MONOTONIC | CLOCK_MONOTONIC_RAW | CLOCK_MONOTONIC_COARSE | CLOCK_BOOTTIME => {
             ticks_to_timespec(monotonic_ticks())
         }
-        CLOCK_PROCESS_CPUTIME_ID | CLOCK_THREAD_CPUTIME_ID => {
-            ticks_to_timespec(monotonic_ticks())
-        }
+        CLOCK_PROCESS_CPUTIME_ID | CLOCK_THREAD_CPUTIME_ID => ticks_to_timespec(monotonic_ticks()),
         _ => return abi::EINVAL,
     };
 
@@ -122,17 +208,66 @@ pub fn sys_clock_gettime(_vm: &ThreadState, base: u32, clk_id: u64, tp: u64) -> 
 /// https://man7.org/linux/man-pages/man2/clock_getres.2.html
 pub fn sys_clock_getres(_vm: &ThreadState, base: u32, clk_id: u64, res: u64) -> i64 {
     match clk_id {
-        CLOCK_REALTIME | CLOCK_MONOTONIC | CLOCK_PROCESS_CPUTIME_ID |
-        CLOCK_THREAD_CPUTIME_ID | CLOCK_MONOTONIC_RAW | CLOCK_REALTIME_COARSE |
-        CLOCK_MONOTONIC_COARSE | CLOCK_BOOTTIME => {}
+        CLOCK_REALTIME
+        | CLOCK_MONOTONIC
+        | CLOCK_PROCESS_CPUTIME_ID
+        | CLOCK_THREAD_CPUTIME_ID
+        | CLOCK_MONOTONIC_RAW
+        | CLOCK_REALTIME_COARSE
+        | CLOCK_MONOTONIC_COARSE
+        | CLOCK_BOOTTIME => {}
         _ => return abi::EINVAL,
     }
     if res != 0 {
         unsafe {
-            guest_mem::write_u64(base, res, 0);     // tv_sec = 0
+            guest_mem::write_u64(base, res, 0); // tv_sec = 0
             guest_mem::write_u64(base, res + 8, 1); // tv_nsec = 1 (1 ns resolution)
         }
     }
+    0
+}
+
+/// getitimer: return the current interval timer for this process.
+/// https://man7.org/linux/man-pages/man2/setitimer.2.html
+pub fn sys_getitimer(vm: &ThreadState, base: u32, which: u64, curr_value: u64) -> i64 {
+    if curr_value == 0 {
+        return abi::EFAULT;
+    }
+
+    let pid = crate::syscall::signal::pid_from_vm(vm, base);
+    let timer = match itimer_for_pid(pid, which) {
+        Some(timer) => *timer,
+        None => return abi::EINVAL,
+    };
+    write_itimerval(base, curr_value, timer);
+    0
+}
+
+/// setitimer: store per-process interval timer state.
+/// We preserve Linux-visible state, but do not schedule asynchronous delivery yet.
+/// https://man7.org/linux/man-pages/man2/setitimer.2.html
+pub fn sys_setitimer(
+    vm: &ThreadState,
+    base: u32,
+    which: u64,
+    new_value: u64,
+    old_value: u64,
+) -> i64 {
+    let pid = crate::syscall::signal::pid_from_vm(vm, base);
+    let timer = match itimer_for_pid(pid, which) {
+        Some(timer) => timer,
+        None => return abi::EINVAL,
+    };
+
+    if old_value != 0 {
+        write_itimerval(base, old_value, *timer);
+    }
+
+    let next = match read_itimerval(base, new_value) {
+        Ok(timer) => timer,
+        Err(errno) => return errno,
+    };
+    *timer = next;
     0
 }
 
@@ -153,7 +288,38 @@ pub fn sys_nanosleep(vm: &mut ThreadState, base: u32, req: u64, _rem: u64) -> i3
 
 /// sched_yield: no-op, return success.
 /// https://man7.org/linux/man-pages/man2/sched_yield.2.html
-pub fn sys_sched_yield() -> i64 { 0 }
+pub fn sys_sched_yield() -> i64 {
+    0
+}
+
+/// sched_getaffinity: expose a single online CPU.
+/// The raw syscall returns the number of bytes written.
+/// https://man7.org/linux/man-pages/man2/sched_setaffinity.2.html
+pub fn sys_sched_getaffinity(
+    vm: &ThreadState,
+    base: u32,
+    pid: i64,
+    cpusetsize: u64,
+    mask_addr: u64,
+) -> i64 {
+    if mask_addr == 0 {
+        return abi::EFAULT;
+    }
+    if cpusetsize < 8 {
+        return abi::EINVAL;
+    }
+
+    let self_pid = crate::syscall::signal::pid_from_vm(vm, base) as i64;
+    if pid != 0 && pid != self_pid && pid != vm.tid as i64 {
+        return abi::ESRCH;
+    }
+
+    unsafe {
+        guest_mem::zero_mem(base, mask_addr, cpusetsize as usize);
+        guest_mem::write_u64(base, mask_addr, 1);
+    }
+    8
+}
 
 #[cfg(test)]
 mod tests {
@@ -167,9 +333,15 @@ mod tests {
         super::advance_monotonic(100_000_000); // 1 second worth of ticks
 
         let tp = t.scratch;
-        assert_eq!(super::sys_clock_gettime(&t.vm, t.base, super::CLOCK_REALTIME, tp), 0);
+        assert_eq!(
+            super::sys_clock_gettime(&t.vm, t.base, super::CLOCK_REALTIME, tp),
+            0
+        );
         let sec = unsafe { crate::guest_mem::read_u64(t.base, tp) };
-        assert_eq!(sec, 1735689601, "CLOCK_REALTIME should be base + monotonic offset");
+        assert_eq!(
+            sec, 1735689601,
+            "CLOCK_REALTIME should be base + monotonic offset"
+        );
     }
 
     #[test]
@@ -178,7 +350,10 @@ mod tests {
         super::advance_monotonic(200_000_000); // 2 seconds
 
         let tp = t.scratch;
-        assert_eq!(super::sys_clock_gettime(&t.vm, t.base, super::CLOCK_MONOTONIC, tp), 0);
+        assert_eq!(
+            super::sys_clock_gettime(&t.vm, t.base, super::CLOCK_MONOTONIC, tp),
+            0
+        );
         let sec = unsafe { crate::guest_mem::read_u64(t.base, tp) };
         assert!(sec >= 2, "CLOCK_MONOTONIC should reflect monotonic ticks");
     }
@@ -207,6 +382,9 @@ mod tests {
         let mut t = TestVm::new();
         let res = t.scratch;
         assert_eq!(super::sys_clock_getres(&t.vm, t.base, 0, res), 0);
-        assert_eq!(super::sys_clock_getres(&t.vm, t.base, 999, res), crate::abi::EINVAL);
+        assert_eq!(
+            super::sys_clock_getres(&t.vm, t.base, 999, res),
+            crate::abi::EINVAL
+        );
     }
 }

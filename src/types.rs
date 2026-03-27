@@ -6,8 +6,8 @@
 //!   SAB page cache: file data, inode metadata, pipe buffers (cross-worker visible)
 //!   kernel Worker:  OFD table, VMA table, epoll, socket, signal dispositions
 
-use core::sync::atomic::AtomicU32;
 use crate::abi::*;
+use core::sync::atomic::AtomicU32;
 
 // =============================================================================
 // ThreadState — per-thread CPU state (thread-local)
@@ -97,6 +97,9 @@ pub struct ProcessState {
     pub pid: i32,
     /// Parent process ID
     pub ppid: i32,
+    /// Current working directory inode in MemFS. 0 means "/" for legacy callers.
+    pub cwd_ino: u32,
+    _pad0: u32,
     /// Thread registry
     pub threads: [ThreadRecord; MAX_THREADS],
 }
@@ -154,9 +157,9 @@ pub struct OpenFileDesc {
 pub struct Vma {
     pub start: u64,
     pub end: u64,
-    pub prot: i32,   // PROT_READ | PROT_WRITE | PROT_EXEC | PROT_NONE
-    pub flags: i32,  // MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED
-    pub fd: i32,     // file-backed: OFD id. -1 = anonymous
+    pub prot: i32,  // PROT_READ | PROT_WRITE | PROT_EXEC | PROT_NONE
+    pub flags: i32, // MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED
+    pub fd: i32,    // file-backed: OFD id. -1 = anonymous
     pub _pad: i32,
     pub offset: u64, // file offset for file-backed mmap
 }
@@ -168,9 +171,9 @@ pub struct Vma {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct SigAction {
-    pub handler: u64,  // SIG_DFL (0), SIG_IGN (1), or handler address
-    pub flags: u64,    // SA_SIGINFO, SA_RESTART, SA_RESETHAND, etc.
-    pub mask: u64,     // signals to block during handler execution
+    pub handler: u64, // SIG_DFL (0), SIG_IGN (1), or handler address
+    pub flags: u64,   // SA_SIGINFO, SA_RESTART, SA_RESETHAND, etc.
+    pub mask: u64,    // signals to block during handler execution
 }
 
 pub const SIG_DFL: u64 = 0;
@@ -198,11 +201,15 @@ mod tests {
     #[test]
     fn vma_is_copy() {
         let v = Vma {
-            start: 0x1000, end: 0x2000, prot: PROT_READ | PROT_WRITE,
-            flags: 0, fd: -1, _pad: 0, offset: 0,
+            start: 0x1000,
+            end: 0x2000,
+            prot: PROT_READ | PROT_WRITE,
+            flags: 0,
+            fd: -1,
+            _pad: 0,
+            offset: 0,
         };
         let v2 = v;
         assert_eq!(v2.start, 0x1000);
     }
 }
-

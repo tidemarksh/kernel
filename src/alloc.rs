@@ -15,7 +15,11 @@ struct BumpAlloc;
 unsafe impl GlobalAlloc for BumpAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let ptr = unsafe { alloc(layout.size() as u32, layout.align() as u32) };
-        if ptr == 0 { core::ptr::null_mut() } else { ptr as *mut u8 }
+        if ptr == 0 {
+            core::ptr::null_mut()
+        } else {
+            ptr as *mut u8
+        }
     }
     unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
         // No-op: bump allocator does not free.
@@ -51,8 +55,6 @@ pub unsafe fn reset(base: u32) {
         HEAP_PTR = base;
     }
 }
-
-
 
 /// Allocate `size` bytes aligned to `align`. Returns 0 on failure.
 ///
@@ -92,7 +94,12 @@ pub unsafe fn alloc_zeroed(size: u32, align: u32) -> u32 {
 /// # Safety
 /// Same as `alloc`.
 pub unsafe fn alloc_type<T>() -> u32 {
-    unsafe { alloc_zeroed(core::mem::size_of::<T>() as u32, core::mem::align_of::<T>() as u32) }
+    unsafe {
+        alloc_zeroed(
+            core::mem::size_of::<T>() as u32,
+            core::mem::align_of::<T>() as u32,
+        )
+    }
 }
 
 /// Return current heap usage in bytes.
@@ -140,7 +147,9 @@ mod tests {
             // The second allocation must start at or after p1 + 128 (no overlap).
             assert!(
                 p2 >= p1 + 128,
-                "allocations should not overlap: p1={:#x}, p2={:#x}", p1, p2
+                "allocations should not overlap: p1={:#x}, p2={:#x}",
+                p1,
+                p2
             );
         }
     }

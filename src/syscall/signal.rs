@@ -21,19 +21,19 @@
 
 use crate::abi::*;
 use crate::guest_mem;
-use crate::types::{ThreadState, SigAction, SIG_DFL, SIG_IGN, MAX_SIGNALS};
+use crate::types::{MAX_SIGNALS, SIG_DFL, SIG_IGN, SigAction, ThreadState};
 
 // SA flags (https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/signal-defs.h)
 const SA_NOCLDSTOP: u64 = 0x00000001;
 const SA_NOCLDWAIT: u64 = 0x00000002;
-const SA_SIGINFO: u64   = 0x00000004;
-const SA_ONSTACK: u64   = 0x08000000;
-const SA_RESTART: u64   = 0x10000000;
-const SA_NODEFER: u64   = 0x40000000;
+const SA_SIGINFO: u64 = 0x00000004;
+const SA_ONSTACK: u64 = 0x08000000;
+const SA_RESTART: u64 = 0x10000000;
+const SA_NODEFER: u64 = 0x40000000;
 const SA_RESETHAND: u64 = 0x80000000;
 
 // sigprocmask how
-const SIG_BLOCK: u64   = 0;
+const SIG_BLOCK: u64 = 0;
 const SIG_UNBLOCK: u64 = 1;
 const SIG_SETMASK: u64 = 2;
 
@@ -53,12 +53,22 @@ const SS_DISABLE: i32 = 2;
 /// SIGACTIONS_PTR points to a heap-allocated [SigAction; MAX_SIGNALS] for the
 /// currently active process. Multi-process uses SIG_SLOTS_PTR (array of
 /// MAX_PROCESSES pointers, each pointing to a per-process table).
-static mut SIG_SLOTS_PTR: *mut [*mut [SigAction; MAX_SIGNALS]; MAX_PROCESSES] = core::ptr::null_mut();
+static mut SIG_SLOTS_PTR: *mut [*mut [SigAction; MAX_SIGNALS]; MAX_PROCESSES] =
+    core::ptr::null_mut();
+static mut PROCESS_PENDING_PTR: *mut [u64; MAX_PROCESSES] = core::ptr::null_mut();
 
 #[inline(always)]
 fn sig_slots() -> &'static mut [*mut [SigAction; MAX_SIGNALS]; MAX_PROCESSES] {
     unsafe {
         let p = core::ptr::read(core::ptr::addr_of!(SIG_SLOTS_PTR));
+        &mut *p
+    }
+}
+
+#[inline(always)]
+fn process_pending() -> &'static mut [u64; MAX_PROCESSES] {
+    unsafe {
+        let p = core::ptr::read(core::ptr::addr_of!(PROCESS_PENDING_PTR));
         &mut *p
     }
 }
@@ -73,7 +83,9 @@ fn sigactions_for(pid: i32) -> &'static mut [SigAction; MAX_SIGNALS] {
 #[inline(always)]
 pub fn pid_from_vm(vm: &ThreadState, base: u32) -> i32 {
     let ps_ptr = vm.process_ptr;
-    if ps_ptr == 0 { return 1; }
+    if ps_ptr == 0 {
+        return 1;
+    }
     unsafe {
         let pid_offset = core::mem::offset_of!(crate::types::ProcessState, pid);
         guest_mem::read_i32(base, ps_ptr as u64 + pid_offset as u64)
@@ -83,28 +95,74 @@ pub fn pid_from_vm(vm: &ThreadState, base: u32) -> i32 {
 /// Initialize signal subsystem. Must be called once at kernel init.
 pub fn init() {
     unsafe {
-        core::ptr::write(core::ptr::addr_of_mut!(SIG_SLOTS_PTR), core::ptr::null_mut());
+        core::ptr::write(
+            core::ptr::addr_of_mut!(SIG_SLOTS_PTR),
+            core::ptr::null_mut(),
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!(PROCESS_PENDING_PTR),
+            core::ptr::null_mut(),
+        );
 
         let size = core::mem::size_of::<[*mut [SigAction; MAX_SIGNALS]; MAX_PROCESSES]>() as u32;
         let align = core::mem::align_of::<*mut [SigAction; MAX_SIGNALS]>() as u32;
         let ptr = crate::alloc::alloc_zeroed(size, align);
-        if ptr == 0 { core::arch::wasm32::unreachable(); }
-        core::ptr::write(core::ptr::addr_of_mut!(SIG_SLOTS_PTR),
-            ptr as *mut [*mut [SigAction; MAX_SIGNALS]; MAX_PROCESSES]);
+        if ptr == 0 {
+            core::arch::wasm32::unreachable();
+        }
+        core::ptr::write(
+            core::ptr::addr_of_mut!(SIG_SLOTS_PTR),
+            ptr as *mut [*mut [SigAction; MAX_SIGNALS]; MAX_PROCESSES],
+        );
+
+        let pending_size = core::mem::size_of::<[u64; MAX_PROCESSES]>() as u32;
+        let pending_align = core::mem::align_of::<u64>() as u32;
+        let pending_ptr = crate::alloc::alloc_zeroed(pending_size, pending_align);
+        if pending_ptr == 0 {
+            core::arch::wasm32::unreachable();
+        }
+        core::ptr::write(
+            core::ptr::addr_of_mut!(PROCESS_PENDING_PTR),
+            pending_ptr as *mut [u64; MAX_PROCESSES],
+        );
     }
 }
 
 /// Allocate a new signal disposition table for a process.
 pub fn init_for_process(pid: i32) {
     let idx = (pid - 1) as usize;
-    if idx >= MAX_PROCESSES { return; }
+    if idx >= MAX_PROCESSES {
+        return;
+    }
     unsafe {
         let size = core::mem::size_of::<[SigAction; MAX_SIGNALS]>() as u32;
         let align = core::mem::align_of::<SigAction>() as u32;
         let ptr = crate::alloc::alloc_zeroed(size, align);
-        if ptr == 0 { core::arch::wasm32::unreachable(); }
+        if ptr == 0 {
+            core::arch::wasm32::unreachable();
+        }
         sig_slots()[idx] = ptr as *mut [SigAction; MAX_SIGNALS];
+        process_pending()[idx] = 0;
     }
+}
+
+/// fork(): child inherits the parent's signal dispositions but starts with no
+/// pending signals. This mirrors Linux process semantics.
+pub fn fork_from_parent(parent_pid: i32, child_pid: i32) {
+    let parent_idx = (parent_pid - 1) as usize;
+    let child_idx = (child_pid - 1) as usize;
+    if parent_idx >= MAX_PROCESSES || child_idx >= MAX_PROCESSES {
+        return;
+    }
+    if sig_slots()[parent_idx].is_null() {
+        return;
+    }
+
+    init_for_process(child_pid);
+    let parent = sigactions_for(parent_pid);
+    let child = sigactions_for(child_pid);
+    child.copy_from_slice(parent);
+    process_pending()[child_idx] = 0;
 }
 
 /// Reset signal dispositions on execve: caught signals (handler != SIG_DFL
@@ -115,12 +173,18 @@ pub fn init_for_process(pid: i32) {
 ///  caught are reset to the default."
 pub fn reset_on_execve(pid: i32) {
     let idx = (pid - 1) as usize;
-    if idx >= MAX_PROCESSES { return; }
+    if idx >= MAX_PROCESSES {
+        return;
+    }
     let table = sigactions_for(pid);
     for sig in 1..MAX_SIGNALS {
         let action = &mut table[sig];
         if action.handler != SIG_DFL && action.handler != SIG_IGN {
-            *action = SigAction { handler: SIG_DFL, flags: 0, mask: 0 };
+            *action = SigAction {
+                handler: SIG_DFL,
+                flags: 0,
+                mask: 0,
+            };
         }
     }
 }
@@ -128,13 +192,23 @@ pub fn reset_on_execve(pid: i32) {
 /// rt_sigaction: get/set signal disposition.
 /// signum in a0, act in a1, oldact in a2, sigsetsize in a3.
 pub fn sys_rt_sigaction(
-    vm: &mut ThreadState, base: u32,
-    signum: u64, act_addr: u64, oldact_addr: u64, sigsetsize: u64,
+    vm: &mut ThreadState,
+    base: u32,
+    signum: u64,
+    act_addr: u64,
+    oldact_addr: u64,
+    sigsetsize: u64,
 ) -> i64 {
-    if sigsetsize != 8 { return EINVAL; }
+    if sigsetsize != 8 {
+        return EINVAL;
+    }
     let sig = signum as usize;
-    if sig == 0 || sig >= MAX_SIGNALS { return EINVAL; }
-    if sig == SIGKILL as usize || sig == SIGSTOP as usize { return EINVAL; }
+    if sig == 0 || sig >= MAX_SIGNALS {
+        return EINVAL;
+    }
+    if sig == SIGKILL as usize || sig == SIGSTOP as usize {
+        return EINVAL;
+    }
 
     let pid = pid_from_vm(vm, base);
     let table = sigactions_for(pid);
@@ -163,10 +237,16 @@ pub fn sys_rt_sigaction(
 /// rt_sigprocmask: change blocked signal mask.
 /// how in a0, set in a1, oldset in a2, sigsetsize in a3.
 pub fn sys_rt_sigprocmask(
-    vm: &mut ThreadState, base: u32,
-    how: u64, set_addr: u64, oldset_addr: u64, sigsetsize: u64,
+    vm: &mut ThreadState,
+    base: u32,
+    how: u64,
+    set_addr: u64,
+    oldset_addr: u64,
+    sigsetsize: u64,
 ) -> i64 {
-    if sigsetsize != 8 { return EINVAL; }
+    if sigsetsize != 8 {
+        return EINVAL;
+    }
 
     unsafe {
         // Write old mask
@@ -204,7 +284,9 @@ pub fn sys_sigaltstack(vm: &mut ThreadState, base: u32, ss_addr: u64, old_ss_add
         // Read new stack
         if ss_addr != 0 {
             let flags = guest_mem::read_i32(base, ss_addr + 8);
-            if flags & !(SS_ONSTACK | SS_DISABLE) != 0 { return EINVAL; }
+            if flags & !(SS_ONSTACK | SS_DISABLE) != 0 {
+                return EINVAL;
+            }
 
             if flags & SS_DISABLE != 0 {
                 vm.sigaltstack_sp = 0;
@@ -213,7 +295,9 @@ pub fn sys_sigaltstack(vm: &mut ThreadState, base: u32, ss_addr: u64, old_ss_add
             } else {
                 let sp = guest_mem::read_u64(base, ss_addr);
                 let size = guest_mem::read_u64(base, ss_addr + 16);
-                if size < 2048 { return ENOMEM; } // MINSIGSTKSZ
+                if size < 2048 {
+                    return ENOMEM;
+                } // MINSIGSTKSZ
                 vm.sigaltstack_sp = sp;
                 vm.sigaltstack_size = size;
                 vm.sigaltstack_flags = flags;
@@ -284,11 +368,19 @@ fn push_signal_frame(vm: &mut ThreadState, base: u32, sig: usize, action: &SigAc
         guest_mem::write_u64(base, frame_base + SIGFRAME_OFF_MASK, vm.sig_mask);
         // Save integer registers
         for i in 0..32 {
-            guest_mem::write_u64(base, frame_base + SIGFRAME_OFF_REGS + i * 8, vm.x[i as usize]);
+            guest_mem::write_u64(
+                base,
+                frame_base + SIGFRAME_OFF_REGS + i * 8,
+                vm.x[i as usize],
+            );
         }
         // Save FP registers
         for i in 0..32 {
-            guest_mem::write_u64(base, frame_base + SIGFRAME_OFF_FREGS + i * 8, vm.f[i as usize]);
+            guest_mem::write_u64(
+                base,
+                frame_base + SIGFRAME_OFF_FREGS + i * 8,
+                vm.f[i as usize],
+            );
         }
         // Save fcsr
         guest_mem::write_u32(base, frame_base + SIGFRAME_OFF_FCSR, vm.fcsr);
@@ -308,14 +400,18 @@ fn push_signal_frame(vm: &mut ThreadState, base: u32, sig: usize, action: &SigAc
     // If SA_RESETHAND, reset disposition to SIG_DFL
     if action.flags & SA_RESETHAND != 0 {
         let pid = pid_from_vm(vm, base);
-        sigactions_for(pid)[sig] = SigAction { handler: SIG_DFL, flags: 0, mask: 0 };
+        sigactions_for(pid)[sig] = SigAction {
+            handler: SIG_DFL,
+            flags: 0,
+            mask: 0,
+        };
     }
 
     // Set up registers for handler entry
-    vm.x[2] = frame_base;                                       // sp = frame base
-    vm.x[1] = frame_base + SIGFRAME_OFF_TRAMPOLINE;             // ra = trampoline
-    vm.x[10] = sig as u64;                                       // a0 = signal number
-    vm.pc = action.handler;                                      // pc = handler
+    vm.x[2] = frame_base; // sp = frame base
+    vm.x[1] = frame_base + SIGFRAME_OFF_TRAMPOLINE; // ra = trampoline
+    vm.x[10] = sig as u64; // a0 = signal number
+    vm.pc = action.handler; // pc = handler
 }
 
 /// rt_sigreturn: restore state from signal frame on stack.
@@ -344,17 +440,29 @@ pub fn sys_rt_sigreturn(vm: &mut ThreadState, base: u32) {
 /// Check and deliver pending signals at syscall return boundary.
 /// Called after each syscall returns. Returns true if a signal was delivered.
 pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
+    let pid = pid_from_vm(vm, base);
+    if pid > 0 {
+        let idx = (pid - 1) as usize;
+        if idx < MAX_PROCESSES {
+            vm.sig_pending |= process_pending()[idx];
+            process_pending()[idx] = 0;
+        }
+    }
+
     let deliverable = vm.sig_pending & !vm.sig_mask;
-    if deliverable == 0 { return false; }
+    if deliverable == 0 {
+        return false;
+    }
 
     // Find lowest pending unblocked signal
     let sig = deliverable.trailing_zeros() as usize + 1;
-    if sig >= MAX_SIGNALS { return false; }
+    if sig >= MAX_SIGNALS {
+        return false;
+    }
 
     // Clear from pending
     vm.sig_pending &= !(1u64 << (sig - 1));
 
-    let pid = pid_from_vm(vm, base);
     let action = sigactions_for(pid)[sig];
 
     match action.handler {
@@ -362,7 +470,7 @@ pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
             // SIG_DFL: default action
             match sig as i32 {
                 SIGCHLD | SIGURG | SIGWINCH => {} // ignore by default
-                SIGCONT => {} // ignore (no job control)
+                SIGCONT => {}                     // ignore (no job control)
                 _ => {
                     // Terminate
                     vm.exit_code = 128 + sig as i32; // convention: 128 + signal
@@ -382,8 +490,24 @@ pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
 
 /// Queue a signal for delivery.
 pub fn send_signal(vm: &mut ThreadState, sig: i32) {
-    if sig <= 0 || sig as usize >= MAX_SIGNALS { return; }
+    if sig <= 0 || sig as usize >= MAX_SIGNALS {
+        return;
+    }
     vm.sig_pending |= 1u64 << (sig - 1);
+}
+
+/// Queue a process-directed signal. Delivery happens when the target process
+/// next reaches a signal check boundary.
+pub fn send_signal_to_pid(pid: i32, sig: i32) -> i64 {
+    if pid <= 0 || sig <= 0 || sig as usize >= MAX_SIGNALS {
+        return EINVAL;
+    }
+    let idx = (pid - 1) as usize;
+    if idx >= MAX_PROCESSES || sig_slots()[idx].is_null() {
+        return ESRCH;
+    }
+    process_pending()[idx] |= 1u64 << (sig - 1);
+    0
 }
 
 #[cfg(test)]
@@ -400,9 +524,16 @@ mod tests {
         // rt_sigprocmask: block SIGUSR1 (signal 10)
         let set_addr = t.scratch;
         let oldset_addr = t.scratch + 0x100;
-        unsafe { crate::guest_mem::write_u64(t.base, set_addr, 1 << 9); } // bit 9 = signal 10
+        unsafe {
+            crate::guest_mem::write_u64(t.base, set_addr, 1 << 9);
+        } // bit 9 = signal 10
         let ret = super::sys_rt_sigprocmask(
-            &mut t.vm, t.base, 0, set_addr, oldset_addr, 8, // SIG_BLOCK=0
+            &mut t.vm,
+            t.base,
+            0,
+            set_addr,
+            oldset_addr,
+            8, // SIG_BLOCK=0
         );
         assert_eq!(ret, 0);
         assert_eq!(t.vm.sig_mask & (1 << 9), 1 << 9);
@@ -412,12 +543,10 @@ mod tests {
         let oldact_addr = t.scratch + 0x300;
         unsafe {
             crate::guest_mem::write_u64(t.base, act_addr, 0x12345); // handler
-            crate::guest_mem::write_u64(t.base, act_addr + 8, 0);   // flags
-            crate::guest_mem::write_u64(t.base, act_addr + 16, 0);  // mask
+            crate::guest_mem::write_u64(t.base, act_addr + 8, 0); // flags
+            crate::guest_mem::write_u64(t.base, act_addr + 16, 0); // mask
         }
-        let ret2 = super::sys_rt_sigaction(
-            &mut t.vm, t.base, 10, act_addr, oldact_addr, 8,
-        );
+        let ret2 = super::sys_rt_sigaction(&mut t.vm, t.base, 10, act_addr, oldact_addr, 8);
         assert_eq!(ret2, 0);
 
         // sigaltstack
@@ -425,7 +554,7 @@ mod tests {
         let old_ss_addr = t.scratch + 0x500;
         unsafe {
             crate::guest_mem::write_u64(t.base, ss_addr, 0x50000); // sp
-            crate::guest_mem::write_u32(t.base, ss_addr + 8, 0);   // flags
+            crate::guest_mem::write_u32(t.base, ss_addr + 8, 0); // flags
             crate::guest_mem::write_u64(t.base, ss_addr + 16, 8192); // size
         }
         let ret3 = super::sys_sigaltstack(&mut t.vm, t.base, ss_addr, old_ss_addr);
@@ -474,7 +603,10 @@ mod tests {
 
         // check_pending should deliver the signal and return true.
         let delivered = super::check_pending(&mut t.vm, t.base);
-        assert!(delivered, "check_pending should return true when a signal is deliverable");
+        assert!(
+            delivered,
+            "check_pending should return true when a signal is deliverable"
+        );
 
         // SIGTERM with SIG_DFL terminates: exit_code = 128 + 15 = 143
         assert_eq!(
@@ -500,11 +632,23 @@ mod tests {
         let _t2 = TestVm::new();
         let tbl = super::sigactions_for(42);
         // Set signal 10 to a user handler (caught)
-        tbl[10] = crate::types::SigAction { handler: 0x12345, flags: 0, mask: 0 };
+        tbl[10] = crate::types::SigAction {
+            handler: 0x12345,
+            flags: 0,
+            mask: 0,
+        };
         // Set signal 15 to SIG_IGN
-        tbl[15] = crate::types::SigAction { handler: crate::types::SIG_IGN, flags: 0, mask: 0 };
+        tbl[15] = crate::types::SigAction {
+            handler: crate::types::SIG_IGN,
+            flags: 0,
+            mask: 0,
+        };
         // Set signal 2 to SIG_DFL (already default)
-        tbl[2] = crate::types::SigAction { handler: crate::types::SIG_DFL, flags: 0, mask: 0 };
+        tbl[2] = crate::types::SigAction {
+            handler: crate::types::SIG_DFL,
+            flags: 0,
+            mask: 0,
+        };
 
         super::reset_on_execve(42);
 

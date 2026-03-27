@@ -25,7 +25,16 @@ pub struct PackedOp {
 
 impl PackedOp {
     #[inline(always)]
-    pub fn new(op_id: u8, rd: u8, rs1: u8, rs2: u8, f3: u8, f7b5: bool, step: u64, imm: i32) -> Self {
+    pub fn new(
+        op_id: u8,
+        rd: u8,
+        rs1: u8,
+        rs2: u8,
+        f3: u8,
+        f7b5: bool,
+        step: u64,
+        imm: i32,
+    ) -> Self {
         let step4 = if step == 4 { 1u32 } else { 0 };
         let upper = (op_id as u32) << 24
             | (rd as u32 & 0x1F) << 19
@@ -34,17 +43,43 @@ impl PackedOp {
             | (f3 as u32 & 0x7) << 6
             | if f7b5 { 1u32 << 5 } else { 0 }
             | step4 << 4;
-        Self { packed: ((upper as u64) << 32) | (imm as u32 as u64) }
+        Self {
+            packed: ((upper as u64) << 32) | (imm as u32 as u64),
+        }
     }
 
-    #[inline(always)] pub fn op_id(self) -> u8 { (self.packed >> 56) as u8 }
-    #[inline(always)] pub fn rd(self) -> usize { ((self.packed >> 51) & 0x1F) as usize }
-    #[inline(always)] pub fn rs1(self) -> usize { ((self.packed >> 46) & 0x1F) as usize }
-    #[inline(always)] pub fn rs2(self) -> usize { ((self.packed >> 41) & 0x1F) as usize }
-    #[inline(always)] pub fn f3(self) -> u32 { ((self.packed >> 38) & 0x7) as u32 }
-    #[inline(always)] pub fn f7b5(self) -> bool { (self.packed >> 37) & 1 != 0 }
-    #[inline(always)] pub fn step(self) -> u64 { if (self.packed >> 36) & 1 != 0 { 4 } else { 2 } }
-    #[inline(always)] pub fn imm(self) -> i32 { self.packed as i32 }
+    #[inline(always)]
+    pub fn op_id(self) -> u8 {
+        (self.packed >> 56) as u8
+    }
+    #[inline(always)]
+    pub fn rd(self) -> usize {
+        ((self.packed >> 51) & 0x1F) as usize
+    }
+    #[inline(always)]
+    pub fn rs1(self) -> usize {
+        ((self.packed >> 46) & 0x1F) as usize
+    }
+    #[inline(always)]
+    pub fn rs2(self) -> usize {
+        ((self.packed >> 41) & 0x1F) as usize
+    }
+    #[inline(always)]
+    pub fn f3(self) -> u32 {
+        ((self.packed >> 38) & 0x7) as u32
+    }
+    #[inline(always)]
+    pub fn f7b5(self) -> bool {
+        (self.packed >> 37) & 1 != 0
+    }
+    #[inline(always)]
+    pub fn step(self) -> u64 {
+        if (self.packed >> 36) & 1 != 0 { 4 } else { 2 }
+    }
+    #[inline(always)]
+    pub fn imm(self) -> i32 {
+        self.packed as i32
+    }
 }
 
 /// A cached basic block.
@@ -110,7 +145,9 @@ impl BlockCache {
                 let raw16 = guest_mem::read_u16(ram_base, cur_pc);
                 let (raw, step) = if decode::is_compressed(raw16) {
                     let expanded = decode::expand_compressed(raw16);
-                    if expanded == 0 { break; } // unknown compressed
+                    if expanded == 0 {
+                        break;
+                    } // unknown compressed
                     (expanded, 2u64)
                 } else {
                     (guest_mem::read_u32(ram_base, cur_pc), 4u64)
@@ -127,8 +164,20 @@ impl BlockCache {
                 let op_id = match opc {
                     decode::OP_OP_IMM => 1,
                     decode::OP_OP_IMM_32 => 2,
-                    decode::OP_OP => if f7 == 1 { 22 } else { 3 },       // 22 = M ext
-                    decode::OP_OP_32 => if f7 == 1 { 23 } else { 4 },    // 23 = M ext 32
+                    decode::OP_OP => {
+                        if f7 == 1 {
+                            22
+                        } else {
+                            3
+                        }
+                    } // 22 = M ext
+                    decode::OP_OP_32 => {
+                        if f7 == 1 {
+                            23
+                        } else {
+                            4
+                        }
+                    } // 23 = M ext 32
                     decode::OP_LOAD => 5,
                     decode::OP_STORE => 6,
                     decode::OP_LUI => 7,
@@ -149,12 +198,17 @@ impl BlockCache {
                     _ => 0, // unknown → stop block
                 };
 
-                if op_id == 0 { break; }
+                if op_id == 0 {
+                    break;
+                }
 
                 // Extract immediate based on instruction type
                 let imm = match opc {
-                    decode::OP_OP_IMM | decode::OP_OP_IMM_32 | decode::OP_LOAD
-                    | decode::OP_LOAD_FP | decode::OP_JALR => decode::imm_i(raw) as i32,
+                    decode::OP_OP_IMM
+                    | decode::OP_OP_IMM_32
+                    | decode::OP_LOAD
+                    | decode::OP_LOAD_FP
+                    | decode::OP_JALR => decode::imm_i(raw) as i32,
                     decode::OP_STORE | decode::OP_STORE_FP => decode::imm_s(raw) as i32,
                     decode::OP_BRANCH => decode::imm_b(raw) as i32,
                     decode::OP_LUI | decode::OP_AUIPC => decode::imm_u(raw) as i32,
@@ -168,8 +222,11 @@ impl BlockCache {
 
                 // Terminators: branch, JAL, JALR, ECALL, FENCE stop the block
                 match opc {
-                    decode::OP_BRANCH | decode::OP_JAL | decode::OP_JALR
-                    | decode::OP_SYSTEM | decode::OP_MISC_MEM => break,
+                    decode::OP_BRANCH
+                    | decode::OP_JAL
+                    | decode::OP_JALR
+                    | decode::OP_SYSTEM
+                    | decode::OP_MISC_MEM => break,
                     _ => {}
                 }
             }
@@ -262,19 +319,23 @@ mod tests {
 
         // Allocate a block cache.
         let alloc_size = BlockCache::allocation_size();
-        let cache_ptr = unsafe {
-            crate::alloc::alloc_zeroed(alloc_size as u32, 8)
-        };
+        let cache_ptr = unsafe { crate::alloc::alloc_zeroed(alloc_size as u32, 8) };
         assert!(cache_ptr != 0, "cache allocation should succeed");
 
         let mut cache = unsafe { BlockCache::from_ptr(cache_ptr as *mut BlockEntry) };
 
         // Before building, get() should return None.
-        assert!(cache.get(code_addr).is_none(), "cache should be empty initially");
+        assert!(
+            cache.get(code_addr).is_none(),
+            "cache should be empty initially"
+        );
 
         // Build a block starting at code_addr.
         let block = unsafe { cache.build_block(code_addr, t.base) };
-        assert!(block.is_some(), "build_block should succeed for valid instructions");
+        assert!(
+            block.is_some(),
+            "build_block should succeed for valid instructions"
+        );
 
         let blk = block.unwrap();
         assert_eq!(blk.start_pc, code_addr, "block start_pc should match");
@@ -290,7 +351,10 @@ mod tests {
 
         // Drop the borrow from build_block, then verify get() returns the cached entry.
         let cached = cache.get(code_addr);
-        assert!(cached.is_some(), "cache should have an entry for the PC after build_block");
+        assert!(
+            cached.is_some(),
+            "cache should have an entry for the PC after build_block"
+        );
         assert_eq!(cached.unwrap().start_pc, code_addr);
         assert_eq!(cached.unwrap().len, 2);
     }

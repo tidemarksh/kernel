@@ -12,35 +12,51 @@
 
 /// Extract opcode (bits 6:0)
 #[inline(always)]
-pub fn opcode(insn: u32) -> u32 { insn & 0x7F }
+pub fn opcode(insn: u32) -> u32 {
+    insn & 0x7F
+}
 
 /// Extract rd (bits 11:7)
 #[inline(always)]
-pub fn rd(insn: u32) -> usize { ((insn >> 7) & 0x1F) as usize }
+pub fn rd(insn: u32) -> usize {
+    ((insn >> 7) & 0x1F) as usize
+}
 
 /// Extract funct3 (bits 14:12)
 #[inline(always)]
-pub fn funct3(insn: u32) -> u32 { (insn >> 12) & 0x7 }
+pub fn funct3(insn: u32) -> u32 {
+    (insn >> 12) & 0x7
+}
 
 /// Extract rs1 (bits 19:15)
 #[inline(always)]
-pub fn rs1(insn: u32) -> usize { ((insn >> 15) & 0x1F) as usize }
+pub fn rs1(insn: u32) -> usize {
+    ((insn >> 15) & 0x1F) as usize
+}
 
 /// Extract rs2 (bits 24:20)
 #[inline(always)]
-pub fn rs2(insn: u32) -> usize { ((insn >> 20) & 0x1F) as usize }
+pub fn rs2(insn: u32) -> usize {
+    ((insn >> 20) & 0x1F) as usize
+}
 
 /// Extract funct7 (bits 31:25)
 #[inline(always)]
-pub fn funct7(insn: u32) -> u32 { insn >> 25 }
+pub fn funct7(insn: u32) -> u32 {
+    insn >> 25
+}
 
 /// Extract funct5 for AMO (bits 31:27)
 #[inline(always)]
-pub fn funct5(insn: u32) -> u32 { insn >> 27 }
+pub fn funct5(insn: u32) -> u32 {
+    insn >> 27
+}
 
 /// Extract rs3 for FMA (bits 31:27)
 #[inline(always)]
-pub fn rs3(insn: u32) -> usize { (insn >> 27) as usize & 0x1F }
+pub fn rs3(insn: u32) -> usize {
+    (insn >> 27) as usize & 0x1F
+}
 
 // =============================================================================
 // Immediate extraction (sign-extended to i64)
@@ -66,7 +82,7 @@ pub fn imm_b(insn: u32) -> i64 {
     let v = (((insn as i32) >> 31) << 12)       // bit 12 (sign)
         | ((((insn >> 7) & 1) as i32) << 11)    // bit 11
         | ((((insn >> 25) & 0x3F) as i32) << 5) // bits 10:5
-        | ((((insn >> 8) & 0xF) as i32) << 1);  // bits 4:1
+        | ((((insn >> 8) & 0xF) as i32) << 1); // bits 4:1
     v as i64
 }
 
@@ -83,7 +99,7 @@ pub fn imm_j(insn: u32) -> i64 {
     let v = (((insn as i32) >> 31) << 20)           // bit 20 (sign)
         | ((insn & 0x000FF000) as i32)               // bits 19:12
         | ((((insn >> 20) & 1) as i32) << 11)        // bit 11
-        | ((((insn >> 21) & 0x3FF) as i32) << 1);    // bits 10:1
+        | ((((insn >> 21) & 0x3FF) as i32) << 1); // bits 10:1
     v as i64
 }
 
@@ -167,7 +183,9 @@ pub fn expand_compressed(insn: u16) -> u32 {
 
 // --- RVC helper: compressed register (3 bits → x8..x15) ---
 #[inline(always)]
-fn creg(bits: u16) -> u32 { (bits as u32 & 7) + 8 }
+fn creg(bits: u16) -> u32 {
+    (bits as u32 & 7) + 8
+}
 
 // --- Quadrant 0 expansions ---
 
@@ -177,7 +195,9 @@ fn expand_c_addi4spn(insn: u16) -> u32 {
         | (((insn >> 6) & 1) << 2)
         | (((insn >> 7) & 0x0F) << 6)
         | (((insn >> 11) & 0x03) << 4);
-    if nzuimm == 0 { return 0; } // reserved
+    if nzuimm == 0 {
+        return 0;
+    } // reserved
     let rd = creg((insn >> 2) & 7);
     encode_i(OP_OP_IMM, rd, 0, 2, nzuimm as u32) // addi rd', x2, nzuimm
 }
@@ -192,9 +212,7 @@ fn expand_c_fld(insn: u16) -> u32 {
 
 fn expand_c_lw(insn: u16) -> u32 {
     // C.LW: lw rd', offset(rs1')
-    let off = (((insn >> 5) & 1) << 6)
-        | (((insn >> 6) & 1) << 2)
-        | (((insn >> 10) & 7) << 3);
+    let off = (((insn >> 5) & 1) << 6) | (((insn >> 6) & 1) << 2) | (((insn >> 10) & 7) << 3);
     let rs1 = creg((insn >> 7) & 7);
     let rd = creg((insn >> 2) & 7);
     encode_i(OP_LOAD, rd, 2, rs1, off as u32) // lw
@@ -216,9 +234,7 @@ fn expand_c_fsd(insn: u16) -> u32 {
 }
 
 fn expand_c_sw(insn: u16) -> u32 {
-    let off = (((insn >> 5) & 1) << 6)
-        | (((insn >> 6) & 1) << 2)
-        | (((insn >> 10) & 7) << 3);
+    let off = (((insn >> 5) & 1) << 6) | (((insn >> 6) & 1) << 2) | (((insn >> 10) & 7) << 3);
     let rs1 = creg((insn >> 7) & 7);
     let rs2 = creg((insn >> 2) & 7);
     encode_s(OP_STORE, 2, rs1, rs2, off as u32)
@@ -243,7 +259,9 @@ fn expand_c_addi(insn: u16) -> u32 {
 fn expand_c_addiw(insn: u16) -> u32 {
     // C.ADDIW: addiw rd, rd, imm
     let rd = ((insn >> 7) & 0x1F) as u32;
-    if rd == 0 { return 0; } // reserved
+    if rd == 0 {
+        return 0;
+    } // reserved
     let imm = c_imm6(insn);
     encode_i(OP_OP_IMM_32, rd, 0, rd, imm)
 }
@@ -265,13 +283,17 @@ fn expand_c_lui_addi16sp(insn: u16) -> u32 {
             | (((insn >> 6) & 1) << 4)
             | (((insn >> 12) & 1) << 9);
         let nzimm = sign_extend(nzimm as u32, 10) as u32;
-        if nzimm == 0 { return 0; }
+        if nzimm == 0 {
+            return 0;
+        }
         encode_i(OP_OP_IMM, 2, 0, 2, nzimm)
     } else {
         // C.LUI: lui rd, nzimm
         let nzimm = (((insn >> 2) & 0x1F) as u32) | ((((insn >> 12) & 1) as u32) << 5);
         let nzimm = sign_extend(nzimm, 6);
-        if nzimm == 0 { return 0; }
+        if nzimm == 0 {
+            return 0;
+        }
         // LUI encodes imm[31:12], so shift left 12
         ((nzimm as u32) << 12) | (rd << 7) | OP_LUI
     }
@@ -281,15 +303,18 @@ fn expand_c_alu(insn: u16) -> u32 {
     let f2 = (insn >> 10) & 3;
     let rd = creg((insn >> 7) & 7);
     match f2 {
-        0 => { // C.SRLI
+        0 => {
+            // C.SRLI
             let shamt = c_shamt(insn);
             encode_i(OP_OP_IMM, rd, 5, rd, shamt)
         }
-        1 => { // C.SRAI
+        1 => {
+            // C.SRAI
             let shamt = c_shamt(insn) | (1 << 10); // funct7 bit
             encode_i(OP_OP_IMM, rd, 5, rd, shamt)
         }
-        2 => { // C.ANDI
+        2 => {
+            // C.ANDI
             let imm = c_imm6(insn);
             encode_i(OP_OP_IMM, rd, 7, rd, imm)
         }
@@ -298,12 +323,12 @@ fn expand_c_alu(insn: u16) -> u32 {
             let f1 = (insn >> 12) & 1;
             let f2b = (insn >> 5) & 3;
             match (f1, f2b) {
-                (0, 0) => encode_r(OP_OP, rd, 0, rd, rs2, 0x20),    // C.SUB
-                (0, 1) => encode_r(OP_OP, rd, 4, rd, rs2, 0),       // C.XOR
-                (0, 2) => encode_r(OP_OP, rd, 6, rd, rs2, 0),       // C.OR
-                (0, 3) => encode_r(OP_OP, rd, 7, rd, rs2, 0),       // C.AND
+                (0, 0) => encode_r(OP_OP, rd, 0, rd, rs2, 0x20), // C.SUB
+                (0, 1) => encode_r(OP_OP, rd, 4, rd, rs2, 0),    // C.XOR
+                (0, 2) => encode_r(OP_OP, rd, 6, rd, rs2, 0),    // C.OR
+                (0, 3) => encode_r(OP_OP, rd, 7, rd, rs2, 0),    // C.AND
                 (1, 0) => encode_r(OP_OP_32, rd, 0, rd, rs2, 0x20), // C.SUBW
-                (1, 1) => encode_r(OP_OP_32, rd, 0, rd, rs2, 0),    // C.ADDW
+                (1, 1) => encode_r(OP_OP_32, rd, 0, rd, rs2, 0), // C.ADDW
                 _ => 0,
             }
         }
@@ -345,7 +370,9 @@ fn expand_c_fldsp(insn: u16) -> u32 {
 
 fn expand_c_lwsp(insn: u16) -> u32 {
     let rd = ((insn >> 7) & 0x1F) as u32;
-    if rd == 0 { return 0; } // reserved
+    if rd == 0 {
+        return 0;
+    } // reserved
     // CI format: bit12=offset[5], bits6:4=offset[4:2], bits3:2=offset[7:6]
     let off = (((insn >> 4) & 7) << 2) | (((insn >> 2) & 3) << 6) | (((insn >> 12) & 1) << 5);
     encode_i(OP_LOAD, rd, 2, 2, off as u32) // lw rd, off(x2)
@@ -353,7 +380,9 @@ fn expand_c_lwsp(insn: u16) -> u32 {
 
 fn expand_c_ldsp(insn: u16) -> u32 {
     let rd = ((insn >> 7) & 0x1F) as u32;
-    if rd == 0 { return 0; }
+    if rd == 0 {
+        return 0;
+    }
     let off = (((insn >> 2) & 7) << 6) | (((insn >> 5) & 3) << 3) | (((insn >> 12) & 1) << 5);
     encode_i(OP_LOAD, rd, 3, 2, off as u32) // ld rd, off(x2)
 }
@@ -365,7 +394,9 @@ fn expand_c_jr_mv_jalr_add(insn: u16) -> u32 {
     if bit12 == 0 {
         if rs2 == 0 {
             // C.JR: jalr x0, 0(rs1)
-            if rd == 0 { return 0; }
+            if rd == 0 {
+                return 0;
+            }
             encode_i(OP_JALR, 0, 0, rd, 0)
         } else {
             // C.MV: add rd, x0, rs2
@@ -474,8 +505,14 @@ fn encode_b(opcode: u32, funct3: u32, rs1: u32, rs2: u32, imm: u32) -> u32 {
     let bit11 = (imm >> 11) & 1;
     let bits10_5 = (imm >> 5) & 0x3F;
     let bits4_1 = (imm >> 1) & 0xF;
-    (bit12 << 31) | (bits10_5 << 25) | (rs2 << 20) | (rs1 << 15)
-        | (funct3 << 12) | (bits4_1 << 8) | (bit11 << 7) | opcode
+    (bit12 << 31)
+        | (bits10_5 << 25)
+        | (rs2 << 20)
+        | (rs1 << 15)
+        | (funct3 << 12)
+        | (bits4_1 << 8)
+        | (bit11 << 7)
+        | opcode
 }
 
 fn encode_j(opcode: u32, rd: u32, imm: u32) -> u32 {

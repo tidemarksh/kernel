@@ -35,7 +35,7 @@
 //!   FD_CLOEXEC      = 1
 
 use crate::abi::*;
-use crate::types::{ThreadState, ProcessState, FdEntry, OpenFileDesc};
+use crate::types::{FdEntry, OpenFileDesc, ProcessState, ThreadState};
 
 // fcntl commands
 const F_DUPFD: u64 = 0;
@@ -60,35 +60,51 @@ fn ofd_table() -> &'static mut [OpenFileDesc; MAX_FDS] {
 /// Initialize OFD table. Allocates via alloc.rs.
 pub fn init() {
     unsafe {
-        core::ptr::write(core::ptr::addr_of_mut!(OFD_TABLE_PTR), core::ptr::null_mut());
+        core::ptr::write(
+            core::ptr::addr_of_mut!(OFD_TABLE_PTR),
+            core::ptr::null_mut(),
+        );
 
         let size = core::mem::size_of::<[OpenFileDesc; MAX_FDS]>() as u32;
         let align = core::mem::align_of::<OpenFileDesc>() as u32;
         let ptr = crate::alloc::alloc_zeroed(size, align);
-        if ptr == 0 { core::arch::wasm32::unreachable(); }
-        core::ptr::write(core::ptr::addr_of_mut!(OFD_TABLE_PTR), ptr as *mut [OpenFileDesc; MAX_FDS]);
+        if ptr == 0 {
+            core::arch::wasm32::unreachable();
+        }
+        core::ptr::write(
+            core::ptr::addr_of_mut!(OFD_TABLE_PTR),
+            ptr as *mut [OpenFileDesc; MAX_FDS],
+        );
     }
 }
 
 /// Get the ProcessState from guest memory.
-unsafe fn get_process_state(vm: &ThreadState) -> *mut ProcessState {
-    vm.process_ptr as *mut ProcessState
+unsafe fn get_process_state(base: u32, vm: &ThreadState) -> *mut ProcessState {
+    (base as u64 + vm.process_ptr as u64) as *mut ProcessState
 }
 
 /// Get FD entry from ProcessState. Returns None if out of range or unused.
-unsafe fn get_fd_entry(vm: &ThreadState, fd: u64) -> Option<&mut FdEntry> {
-    if fd as usize >= MAX_FDS { return None; }
-    let ps = get_process_state(vm);
-    if ps.is_null() { return None; }
+unsafe fn get_fd_entry(base: u32, vm: &ThreadState, fd: u64) -> Option<&mut FdEntry> {
+    if fd as usize >= MAX_FDS {
+        return None;
+    }
+    let ps = get_process_state(base, vm);
+    if ps.is_null() {
+        return None;
+    }
     let entry = &mut (*ps).fd_table[fd as usize];
-    if entry.ofd_id == 0 { return None; }
+    if entry.ofd_id == 0 {
+        return None;
+    }
     Some(entry)
 }
 
 /// Find the lowest available FD >= min_fd.
-unsafe fn find_free_fd(vm: &ThreadState, min_fd: usize) -> Option<usize> {
-    let ps = get_process_state(vm);
-    if ps.is_null() { return None; }
+unsafe fn find_free_fd(base: u32, vm: &ThreadState, min_fd: usize) -> Option<usize> {
+    let ps = get_process_state(base, vm);
+    if ps.is_null() {
+        return None;
+    }
     for i in min_fd..MAX_FDS {
         if (*ps).fd_table[i].ofd_id == 0 {
             return Some(i);
@@ -122,23 +138,42 @@ unsafe fn alloc_ofd(fd_type: i32, status_flags: i32) -> u32 {
 
 /// Open a pipe FD. `is_read_end` determines if this is the read or write end.
 /// pipe_idx is the index into the pipe table.
-pub fn open_pipe(vm: &mut ThreadState, _base: u32, pipe_idx: u32, is_read_end: bool, flags: i32) -> i64 {
+pub fn open_pipe(
+    vm: &mut ThreadState,
+    base: u32,
+    pipe_idx: u32,
+    is_read_end: bool,
+    flags: i32,
+) -> i64 {
     unsafe {
         let fd_type = FD_TYPE_PIPE;
         // Encode pipe_idx and read/write flag in host_fd field
-        let host_fd = if is_read_end { pipe_idx as i32 } else { -(pipe_idx as i32) - 1 };
+        let host_fd = if is_read_end {
+            pipe_idx as i32
+        } else {
+            -(pipe_idx as i32) - 1
+        };
         let ofd_id = alloc_ofd(fd_type, flags & O_NONBLOCK);
-        if ofd_id == 0 { return EMFILE; }
+        if ofd_id == 0 {
+            return EMFILE;
+        }
         ofd_table()[ofd_id as usize].host_fd = host_fd;
         ofd_table()[ofd_id as usize].ino = pipe_idx;
 
-        let cloexec = if flags & O_CLOEXEC != 0 { FD_CLOEXEC } else { 0 };
-        let newfd = match find_free_fd(vm, 0) {
+        let cloexec = if flags & O_CLOEXEC != 0 {
+            FD_CLOEXEC
+        } else {
+            0
+        };
+        let newfd = match find_free_fd(base, vm, 0) {
             Some(fd) => fd,
             None => return EMFILE,
         };
-        let ps = get_process_state(vm);
-        (*ps).fd_table[newfd] = FdEntry { ofd_id, fd_flags: cloexec };
+        let ps = get_process_state(base, vm);
+        (*ps).fd_table[newfd] = FdEntry {
+            ofd_id,
+            fd_flags: cloexec,
+        };
         newfd as i64
     }
 }
@@ -158,19 +193,28 @@ pub fn is_pipe_write(ofd: &OpenFileDesc) -> bool {
 // =========================================================================
 
 /// Open a socket FD. `socket_idx` is the index into the socket table.
-pub fn open_socket(vm: &mut ThreadState, _base: u32, socket_idx: u32, flags: i32) -> i64 {
+pub fn open_socket(vm: &mut ThreadState, base: u32, socket_idx: u32, flags: i32) -> i64 {
     unsafe {
         let ofd_id = alloc_ofd(FD_TYPE_SOCKET, flags & O_NONBLOCK);
-        if ofd_id == 0 { return EMFILE; }
+        if ofd_id == 0 {
+            return EMFILE;
+        }
         ofd_table()[ofd_id as usize].ino = socket_idx;
 
-        let cloexec = if flags & O_CLOEXEC != 0 { FD_CLOEXEC } else { 0 };
-        let newfd = match find_free_fd(vm, 0) {
+        let cloexec = if flags & O_CLOEXEC != 0 {
+            FD_CLOEXEC
+        } else {
+            0
+        };
+        let newfd = match find_free_fd(base, vm, 0) {
             Some(fd) => fd,
             None => return EMFILE,
         };
-        let ps = get_process_state(vm);
-        (*ps).fd_table[newfd] = FdEntry { ofd_id, fd_flags: cloexec };
+        let ps = get_process_state(base, vm);
+        (*ps).fd_table[newfd] = FdEntry {
+            ofd_id,
+            fd_flags: cloexec,
+        };
         newfd as i64
     }
 }
@@ -180,19 +224,28 @@ pub fn open_socket(vm: &mut ThreadState, _base: u32, socket_idx: u32, flags: i32
 // =========================================================================
 
 /// Open an epoll FD. epoll_idx is the index into the epoll instance table.
-pub fn open_epoll(vm: &mut ThreadState, _base: u32, epoll_idx: u32, flags: i32) -> i64 {
+pub fn open_epoll(vm: &mut ThreadState, base: u32, epoll_idx: u32, flags: i32) -> i64 {
     unsafe {
         let ofd_id = alloc_ofd(FD_TYPE_EPOLL, 0);
-        if ofd_id == 0 { return EMFILE; }
+        if ofd_id == 0 {
+            return EMFILE;
+        }
         ofd_table()[ofd_id as usize].ino = epoll_idx;
 
-        let cloexec = if flags & O_CLOEXEC != 0 { FD_CLOEXEC } else { 0 };
-        let newfd = match find_free_fd(vm, 0) {
+        let cloexec = if flags & O_CLOEXEC != 0 {
+            FD_CLOEXEC
+        } else {
+            0
+        };
+        let newfd = match find_free_fd(base, vm, 0) {
             Some(fd) => fd,
             None => return EMFILE,
         };
-        let ps = get_process_state(vm);
-        (*ps).fd_table[newfd] = FdEntry { ofd_id, fd_flags: cloexec };
+        let ps = get_process_state(base, vm);
+        (*ps).fd_table[newfd] = FdEntry {
+            ofd_id,
+            fd_flags: cloexec,
+        };
         newfd as i64
     }
 }
@@ -202,17 +255,17 @@ pub fn open_epoll(vm: &mut ThreadState, _base: u32, epoll_idx: u32, flags: i32) 
 // =========================================================================
 
 /// dup(oldfd) → newfd
-pub fn sys_dup(vm: &mut ThreadState, _base: u32, oldfd: u64) -> i64 {
+pub fn sys_dup(vm: &mut ThreadState, base: u32, oldfd: u64) -> i64 {
     unsafe {
-        let entry = match get_fd_entry(vm, oldfd) {
+        let entry = match get_fd_entry(base, vm, oldfd) {
             Some(e) => *e,
             None => return EBADF,
         };
-        let newfd = match find_free_fd(vm, 0) {
+        let newfd = match find_free_fd(base, vm, 0) {
             Some(fd) => fd,
             None => return EMFILE,
         };
-        let ps = get_process_state(vm);
+        let ps = get_process_state(base, vm);
         (*ps).fd_table[newfd] = FdEntry {
             ofd_id: entry.ofd_id,
             fd_flags: 0, // dup clears FD_CLOEXEC
@@ -223,17 +276,21 @@ pub fn sys_dup(vm: &mut ThreadState, _base: u32, oldfd: u64) -> i64 {
 }
 
 /// dup3(oldfd, newfd, flags) → newfd
-pub fn sys_dup3(vm: &mut ThreadState, _base: u32, oldfd: u64, newfd: u64, flags: u64) -> i64 {
+pub fn sys_dup3(vm: &mut ThreadState, base: u32, oldfd: u64, newfd: u64, flags: u64) -> i64 {
     unsafe {
-        if oldfd == newfd { return EINVAL; }
-        if newfd as usize >= MAX_FDS { return EBADF; }
+        if oldfd == newfd {
+            return EINVAL;
+        }
+        if newfd as usize >= MAX_FDS {
+            return EBADF;
+        }
 
-        let entry = match get_fd_entry(vm, oldfd) {
+        let entry = match get_fd_entry(base, vm, oldfd) {
             Some(e) => *e,
             None => return EBADF,
         };
 
-        let ps = get_process_state(vm);
+        let ps = get_process_state(base, vm);
 
         // POSIX dup3: silently close newfd if it's already open
         let old_new = &mut (*ps).fd_table[newfd as usize];
@@ -259,7 +316,11 @@ pub fn sys_dup3(vm: &mut ThreadState, _base: u32, oldfd: u64, newfd: u64, flags:
             }
         }
 
-        let cloexec = if (flags as i32 & O_CLOEXEC) != 0 { FD_CLOEXEC } else { 0 };
+        let cloexec = if (flags as i32 & O_CLOEXEC) != 0 {
+            FD_CLOEXEC
+        } else {
+            0
+        };
         (*ps).fd_table[newfd as usize] = FdEntry {
             ofd_id: entry.ofd_id,
             fd_flags: cloexec,
@@ -270,19 +331,19 @@ pub fn sys_dup3(vm: &mut ThreadState, _base: u32, oldfd: u64, newfd: u64, flags:
 }
 
 /// fcntl(fd, cmd, arg)
-pub fn sys_fcntl(vm: &mut ThreadState, _base: u32, fd: u64, cmd: u64, arg: u64) -> i64 {
+pub fn sys_fcntl(vm: &mut ThreadState, base: u32, fd: u64, cmd: u64, arg: u64) -> i64 {
     unsafe {
         match cmd {
             F_DUPFD => {
-                let entry = match get_fd_entry(vm, fd) {
+                let entry = match get_fd_entry(base, vm, fd) {
                     Some(e) => *e,
                     None => return EBADF,
                 };
-                let newfd = match find_free_fd(vm, arg as usize) {
+                let newfd = match find_free_fd(base, vm, arg as usize) {
                     Some(fd) => fd,
                     None => return EMFILE,
                 };
-                let ps = get_process_state(vm);
+                let ps = get_process_state(base, vm);
                 (*ps).fd_table[newfd] = FdEntry {
                     ofd_id: entry.ofd_id,
                     fd_flags: 0,
@@ -291,15 +352,15 @@ pub fn sys_fcntl(vm: &mut ThreadState, _base: u32, fd: u64, cmd: u64, arg: u64) 
                 newfd as i64
             }
             F_DUPFD_CLOEXEC => {
-                let entry = match get_fd_entry(vm, fd) {
+                let entry = match get_fd_entry(base, vm, fd) {
                     Some(e) => *e,
                     None => return EBADF,
                 };
-                let newfd = match find_free_fd(vm, arg as usize) {
+                let newfd = match find_free_fd(base, vm, arg as usize) {
                     Some(fd) => fd,
                     None => return EMFILE,
                 };
-                let ps = get_process_state(vm);
+                let ps = get_process_state(base, vm);
                 (*ps).fd_table[newfd] = FdEntry {
                     ofd_id: entry.ofd_id,
                     fd_flags: FD_CLOEXEC,
@@ -307,27 +368,26 @@ pub fn sys_fcntl(vm: &mut ThreadState, _base: u32, fd: u64, cmd: u64, arg: u64) 
                 ofd_table()[entry.ofd_id as usize].refcount += 1;
                 newfd as i64
             }
-            F_GETFD => {
-                match get_fd_entry(vm, fd) {
-                    Some(e) => e.fd_flags as i64,
-                    None => EBADF,
+            F_GETFD => match get_fd_entry(base, vm, fd) {
+                Some(e) => e.fd_flags as i64,
+                None => EBADF,
+            },
+            F_SETFD => match get_fd_entry(base, vm, fd) {
+                Some(e) => {
+                    e.fd_flags = arg as u32 & FD_CLOEXEC;
+                    0
                 }
-            }
-            F_SETFD => {
-                match get_fd_entry(vm, fd) {
-                    Some(e) => { e.fd_flags = arg as u32 & FD_CLOEXEC; 0 }
-                    None => EBADF,
-                }
-            }
+                None => EBADF,
+            },
             F_GETFL => {
-                let entry = match get_fd_entry(vm, fd) {
+                let entry = match get_fd_entry(base, vm, fd) {
                     Some(e) => e,
                     None => return EBADF,
                 };
                 ofd_table()[entry.ofd_id as usize].status_flags as i64
             }
             F_SETFL => {
-                let entry = match get_fd_entry(vm, fd) {
+                let entry = match get_fd_entry(base, vm, fd) {
                     Some(e) => e,
                     None => return EBADF,
                 };
@@ -343,15 +403,21 @@ pub fn sys_fcntl(vm: &mut ThreadState, _base: u32, fd: u64, cmd: u64, arg: u64) 
 }
 
 /// close(fd)
-pub fn sys_close(vm: &mut ThreadState, _base: u32, fd: u64) -> i64 {
+pub fn sys_close(vm: &mut ThreadState, base: u32, fd: u64) -> i64 {
     unsafe {
-        if fd as usize >= MAX_FDS { return EBADF; }
+        if fd as usize >= MAX_FDS {
+            return EBADF;
+        }
 
-        let ps = get_process_state(vm);
-        if ps.is_null() { return EBADF; }
+        let ps = get_process_state(base, vm);
+        if ps.is_null() {
+            return EBADF;
+        }
 
         let entry = &mut (*ps).fd_table[fd as usize];
-        if entry.ofd_id == 0 { return EBADF; }
+        if entry.ofd_id == 0 {
+            return EBADF;
+        }
 
         let ofd_id = entry.ofd_id as usize;
         entry.ofd_id = 0;
@@ -382,28 +448,37 @@ pub fn sys_close(vm: &mut ThreadState, _base: u32, fd: u64) -> i64 {
 // =========================================================================
 
 /// Open a file by inode number. Allocates OFD and FD. Returns FD or error.
-pub fn open_file(vm: &mut ThreadState, _base: u32, ino: u32, flags: i32) -> i64 {
+pub fn open_file(vm: &mut ThreadState, base: u32, ino: u32, flags: i32) -> i64 {
     unsafe {
         let fd_type = FD_TYPE_FILE;
         let ofd_id = alloc_ofd(fd_type, flags & (O_APPEND | O_NONBLOCK));
-        if ofd_id == 0 { return EMFILE; }
+        if ofd_id == 0 {
+            return EMFILE;
+        }
         ofd_table()[ofd_id as usize].ino = ino;
 
-        let cloexec = if flags & O_CLOEXEC != 0 { FD_CLOEXEC } else { 0 };
-        let newfd = match find_free_fd(vm, 0) {
+        let cloexec = if flags & O_CLOEXEC != 0 {
+            FD_CLOEXEC
+        } else {
+            0
+        };
+        let newfd = match find_free_fd(base, vm, 0) {
             Some(fd) => fd,
             None => return EMFILE,
         };
-        let ps = get_process_state(vm);
-        (*ps).fd_table[newfd] = FdEntry { ofd_id, fd_flags: cloexec };
+        let ps = get_process_state(base, vm);
+        (*ps).fd_table[newfd] = FdEntry {
+            ofd_id,
+            fd_flags: cloexec,
+        };
         newfd as i64
     }
 }
 
 /// Get OFD for a file descriptor (read-only snapshot).
-pub fn get_ofd(vm: &ThreadState, fd: u64) -> Option<OpenFileDesc> {
+pub fn get_ofd(base: u32, vm: &ThreadState, fd: u64) -> Option<OpenFileDesc> {
     unsafe {
-        let entry = get_fd_entry(vm, fd)?;
+        let entry = get_fd_entry(base, vm, fd)?;
         let ofd = &ofd_table()[entry.ofd_id as usize];
         Some(*ofd)
     }
@@ -411,18 +486,45 @@ pub fn get_ofd(vm: &ThreadState, fd: u64) -> Option<OpenFileDesc> {
 
 /// Get OFD by internal OFD id (for mmap file-backed without FD context).
 pub fn get_ofd_by_id(ofd_id: u32) -> Option<OpenFileDesc> {
-    if ofd_id == 0 || ofd_id as usize >= MAX_FDS { return None; }
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return None;
+    }
     unsafe {
         let ofd = &ofd_table()[ofd_id as usize];
-        if ofd.fd_type == FD_TYPE_NONE { return None; }
+        if ofd.fd_type == FD_TYPE_NONE {
+            return None;
+        }
         Some(*ofd)
     }
 }
 
-/// Get the current offset of the OFD associated with fd.
-pub fn get_offset(vm: &ThreadState, fd: u64) -> u64 {
+/// Increment OFD refcounts for every open FD in the process.
+///
+/// Used when emulating fork(): the child receives a copy of the parent's
+/// FD table, and both processes must hold a reference to the shared OFDs.
+pub fn retain_fds_for_fork(base: u32, vm: &ThreadState) {
     unsafe {
-        if let Some(entry) = get_fd_entry(vm, fd) {
+        let ps = get_process_state(base, vm);
+        if ps.is_null() {
+            return;
+        }
+
+        for entry in (*ps).fd_table.iter() {
+            if entry.ofd_id == 0 {
+                continue;
+            }
+            let ofd = &mut ofd_table()[entry.ofd_id as usize];
+            if ofd.refcount > 0 {
+                ofd.refcount += 1;
+            }
+        }
+    }
+}
+
+/// Get the current offset of the OFD associated with fd.
+pub fn get_offset(base: u32, vm: &ThreadState, fd: u64) -> u64 {
+    unsafe {
+        if let Some(entry) = get_fd_entry(base, vm, fd) {
             ofd_table()[entry.ofd_id as usize].offset as u64
         } else {
             0
@@ -431,18 +533,18 @@ pub fn get_offset(vm: &ThreadState, fd: u64) -> u64 {
 }
 
 /// Advance the offset of the OFD associated with fd.
-pub fn advance_offset(vm: &ThreadState, fd: u64, delta: u64) {
+pub fn advance_offset(base: u32, vm: &ThreadState, fd: u64, delta: u64) {
     unsafe {
-        if let Some(entry) = get_fd_entry(vm, fd) {
+        if let Some(entry) = get_fd_entry(base, vm, fd) {
             ofd_table()[entry.ofd_id as usize].offset += delta as i64;
         }
     }
 }
 
 /// Set the offset of the OFD associated with fd.
-pub fn set_offset(vm: &ThreadState, fd: u64, offset: u64) {
+pub fn set_offset(base: u32, vm: &ThreadState, fd: u64, offset: u64) {
     unsafe {
-        if let Some(entry) = get_fd_entry(vm, fd) {
+        if let Some(entry) = get_fd_entry(base, vm, fd) {
             ofd_table()[entry.ofd_id as usize].offset = offset as i64;
         }
     }
@@ -486,19 +588,30 @@ mod tests {
 }
 
 /// Initialize stdin/stdout/stderr FDs for a new process.
-pub unsafe fn init_stdio(vm: &ThreadState) {
-    let ps = get_process_state(vm);
-    if ps.is_null() { return; }
+pub unsafe fn init_stdio(base: u32, vm: &ThreadState) {
+    let ps = get_process_state(base, vm);
+    if ps.is_null() {
+        return;
+    }
 
     // FD 0: stdin (placeholder, type DEVNULL for now)
     let ofd0 = alloc_ofd(FD_TYPE_DEVNULL, 0);
-    (*ps).fd_table[0] = FdEntry { ofd_id: ofd0, fd_flags: 0 };
+    (*ps).fd_table[0] = FdEntry {
+        ofd_id: ofd0,
+        fd_flags: 0,
+    };
 
     // FD 1: stdout
     let ofd1 = alloc_ofd(FD_TYPE_STDOUT, 0);
-    (*ps).fd_table[1] = FdEntry { ofd_id: ofd1, fd_flags: 0 };
+    (*ps).fd_table[1] = FdEntry {
+        ofd_id: ofd1,
+        fd_flags: 0,
+    };
 
     // FD 2: stderr
     let ofd2 = alloc_ofd(FD_TYPE_STDERR, 0);
-    (*ps).fd_table[2] = FdEntry { ofd_id: ofd2, fd_flags: 0 };
+    (*ps).fd_table[2] = FdEntry {
+        ofd_id: ofd2,
+        fd_flags: 0,
+    };
 }

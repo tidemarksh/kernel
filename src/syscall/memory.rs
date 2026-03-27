@@ -128,6 +128,22 @@ pub fn is_prot_none(addr: u64) -> bool {
     false
 }
 
+pub fn range_has_prot_none(start: u64, len: u64) -> bool {
+    let Some(end) = start.checked_add(len) else {
+        return true;
+    };
+    let s = ms();
+    for v in s.vmas.iter() {
+        if v.prot != PROT_NONE {
+            continue;
+        }
+        if start < v.end && end > v.start {
+            return true;
+        }
+    }
+    false
+}
+
 // =========================================================================
 // brk
 // =========================================================================

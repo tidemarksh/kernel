@@ -37,7 +37,11 @@ impl TraceBuffer {
             recording: 0,
             start_pc: 0,
             count: 0,
-            entries: [TraceEntry { pc: 0, raw_insn: 0, step: 0 }; TRACE_MAX_ENTRIES],
+            entries: [TraceEntry {
+                pc: 0,
+                raw_insn: 0,
+                step: 0,
+            }; TRACE_MAX_ENTRIES],
         }
     }
 
@@ -53,7 +57,11 @@ impl TraceBuffer {
     #[inline(always)]
     pub fn record(&mut self, pc: u64, raw: u32, step: u32) -> bool {
         if (self.count as usize) < TRACE_MAX_ENTRIES {
-            self.entries[self.count as usize] = TraceEntry { pc, raw_insn: raw, step };
+            self.entries[self.count as usize] = TraceEntry {
+                pc,
+                raw_insn: raw,
+                step,
+            };
             self.count += 1;
         }
         self.count as usize >= TRACE_MAX_ENTRIES
@@ -74,7 +82,9 @@ pub struct HotCounts {
 
 impl HotCounts {
     pub const fn new() -> Self {
-        Self { counts: [0; HOT_TABLE_SIZE] }
+        Self {
+            counts: [0; HOT_TABLE_SIZE],
+        }
     }
 
     /// Increment hot count for a backward branch target.
@@ -83,7 +93,9 @@ impl HotCounts {
     pub fn increment(&mut self, target_pc: u64) -> bool {
         let idx = (target_pc >> 1) as usize & (HOT_TABLE_SIZE - 1);
         let c = self.counts[idx];
-        if c >= HOT_THRESHOLD { return false; }
+        if c >= HOT_THRESHOLD {
+            return false;
+        }
         self.counts[idx] = c + 1;
         c + 1 == HOT_THRESHOLD
     }
@@ -107,7 +119,9 @@ pub struct JitBitmap {
 
 impl JitBitmap {
     pub const fn new() -> Self {
-        Self { bits: [0; HOT_TABLE_SIZE / 8] }
+        Self {
+            bits: [0; HOT_TABLE_SIZE / 8],
+        }
     }
 
     #[inline(always)]

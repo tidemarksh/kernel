@@ -40,26 +40,26 @@ pub const HEADER_SIZE: usize = 32;
 pub const RING_BUFFER_SIZE: usize = HEADER_SIZE + SQ_SIZE * REQ_SIZE + CQ_SIZE * RESP_SIZE;
 
 // FS operation codes
-pub const FS_OP_READ: u32      = 1;
-pub const FS_OP_WRITE: u32     = 2;
-pub const FS_OP_OPENAT: u32    = 3;
-pub const FS_OP_CLOSE: u32     = 4;
-pub const FS_OP_FSTAT: u32     = 5;
-pub const FS_OP_MKDIR: u32     = 6;
-pub const FS_OP_UNLINK: u32    = 7;
-pub const FS_OP_RENAME: u32    = 8;
-pub const FS_OP_GETDENTS: u32  = 9;
-pub const FS_OP_TRUNCATE: u32  = 10;
-pub const FS_OP_LSEEK: u32     = 11;
+pub const FS_OP_READ: u32 = 1;
+pub const FS_OP_WRITE: u32 = 2;
+pub const FS_OP_OPENAT: u32 = 3;
+pub const FS_OP_CLOSE: u32 = 4;
+pub const FS_OP_FSTAT: u32 = 5;
+pub const FS_OP_MKDIR: u32 = 6;
+pub const FS_OP_UNLINK: u32 = 7;
+pub const FS_OP_RENAME: u32 = 8;
+pub const FS_OP_GETDENTS: u32 = 9;
+pub const FS_OP_TRUNCATE: u32 = 10;
+pub const FS_OP_LSEEK: u32 = 11;
 
 // Offsets within the ring buffer header
-pub const OFF_SUBMIT_HEAD: u32   = 0;
-pub const OFF_SUBMIT_TAIL: u32   = 4;
+pub const OFF_SUBMIT_HEAD: u32 = 0;
+pub const OFF_SUBMIT_TAIL: u32 = 4;
 pub const OFF_COMPLETE_HEAD: u32 = 8;
 pub const OFF_COMPLETE_TAIL: u32 = 12;
-pub const OFF_NOTIFY: u32        = 16;
-pub const OFF_SQ_BASE: u32      = HEADER_SIZE as u32;
-pub const OFF_CQ_BASE: u32      = (HEADER_SIZE + SQ_SIZE * REQ_SIZE) as u32;
+pub const OFF_NOTIFY: u32 = 16;
+pub const OFF_SQ_BASE: u32 = HEADER_SIZE as u32;
+pub const OFF_CQ_BASE: u32 = (HEADER_SIZE + SQ_SIZE * REQ_SIZE) as u32;
 
 /// Submit a FS request to the ring buffer.
 /// `ring_base` is the SAB offset where the ring buffer starts.
@@ -89,7 +89,9 @@ pub fn submit_request(
         let tail = (*tail_ptr).load(Ordering::Relaxed);
 
         let used = head.wrapping_sub(tail);
-        if used as usize >= SQ_SIZE { return -1; } // full
+        if used as usize >= SQ_SIZE {
+            return -1;
+        } // full
 
         let idx = (head as usize) % SQ_SIZE;
         let entry_off = ring_base + OFF_SQ_BASE + (idx as u32) * (REQ_SIZE as u32);
@@ -124,7 +126,9 @@ pub fn read_completion(ring_base: u32) -> i64 {
         let head = (*head_ptr).load(Ordering::Relaxed);
         let tail = (*tail_ptr).load(Ordering::Acquire);
 
-        if head == tail { return EAGAIN; } // empty
+        if head == tail {
+            return EAGAIN;
+        } // empty
 
         let idx = (tail as usize) % CQ_SIZE;
         let entry_off = ring_base + OFF_CQ_BASE + (idx as u32) * (RESP_SIZE as u32);
@@ -152,7 +156,9 @@ pub fn process_requests(ring_base: u32, vm_ptr: u32) {
         loop {
             let head = (*head_ptr).load(Ordering::Acquire);
             let tail = (*tail_ptr).load(Ordering::Relaxed);
-            if head == tail { break; } // no more requests
+            if head == tail {
+                break;
+            } // no more requests
 
             let idx = (tail as usize) % SQ_SIZE;
             let entry_off = ring_base + OFF_SQ_BASE + (idx as u32) * (REQ_SIZE as u32);
@@ -191,17 +197,16 @@ pub fn process_requests(ring_base: u32, vm_ptr: u32) {
                         EINVAL
                     } else {
                         crate::syscall::fs::sys_openat(
-                            vm, base,
-                            fd as u64,     // dirfd
-                            path_ptr,      // path address in guest memory
+                            vm,
+                            base,
+                            fd as u64, // dirfd
+                            path_ptr,  // path address in guest memory
                             flags as u64,
                             mode as u64,
                         )
                     }
                 }
-                FS_OP_CLOSE => {
-                    crate::fs::fd_table::sys_close(vm, base, fd as u64)
-                }
+                FS_OP_CLOSE => crate::fs::fd_table::sys_close(vm, base, fd as u64),
                 FS_OP_FSTAT => {
                     if buf_ptr == 0 {
                         EINVAL
@@ -214,7 +219,8 @@ pub fn process_requests(ring_base: u32, vm_ptr: u32) {
                         EINVAL
                     } else {
                         crate::syscall::fs::sys_mkdirat(
-                            vm, base,
+                            vm,
+                            base,
                             -100i32 as u64, // AT_FDCWD
                             path_ptr,
                             mode as u64,
@@ -226,7 +232,8 @@ pub fn process_requests(ring_base: u32, vm_ptr: u32) {
                         EINVAL
                     } else {
                         crate::syscall::fs::sys_unlinkat(
-                            vm, base,
+                            vm,
+                            base,
                             -100i32 as u64, // AT_FDCWD
                             path_ptr,
                             flags as u64,
@@ -245,12 +252,11 @@ pub fn process_requests(ring_base: u32, vm_ptr: u32) {
                         crate::syscall::fs::sys_getdents64(vm, base, fd as u64, buf_ptr, len)
                     }
                 }
-                FS_OP_TRUNCATE => {
-                    crate::fs::memfs::truncate(fd as u32, offset)
-                }
+                FS_OP_TRUNCATE => crate::fs::memfs::truncate(fd as u32, offset),
                 FS_OP_LSEEK => {
                     crate::syscall::fs::sys_lseek(
-                        vm, base,
+                        vm,
+                        base,
                         fd as u64,
                         offset as i64,
                         flags as u64, // whence
@@ -312,20 +318,22 @@ mod tests {
         // Write data to guest memory that the ring buffer write will read from.
         let data = b"Hello ring!";
         let data_addr: u64 = t.scratch + 0xA000;
-        unsafe { crate::guest_mem::write_bytes(t.base, data_addr, data); }
+        unsafe {
+            crate::guest_mem::write_bytes(t.base, data_addr, data);
+        }
 
         // Submit a WRITE request via the ring buffer.
         // FS_OP_WRITE uses `fd` as the inode number (see process_requests).
         let idx = submit_request(
             ring_base,
             FS_OP_WRITE,
-            ino as i32,          // inode, not FD
-            0,                   // offset
-            data.len() as u64,   // len
-            data_addr,           // buf_ptr
-            0,                   // path_ptr (not used for write)
-            0,                   // flags
-            0,                   // mode
+            ino as i32,        // inode, not FD
+            0,                 // offset
+            data.len() as u64, // len
+            data_addr,         // buf_ptr
+            0,                 // path_ptr (not used for write)
+            0,                 // flags
+            0,                 // mode
         );
         assert!(idx >= 0, "submit_request should succeed, got {}", idx);
 
@@ -335,12 +343,20 @@ mod tests {
 
         // Read the completion.
         let result = read_completion(ring_base);
-        assert_eq!(result, data.len() as i64, "write result should be the number of bytes written");
+        assert_eq!(
+            result,
+            data.len() as i64,
+            "write result should be the number of bytes written"
+        );
 
         // Verify the data was actually written to memfs.
         let mut read_buf = [0u8; 32];
         let nread = crate::fs::memfs::read_file(ino, 0, &mut read_buf);
-        assert_eq!(nread, data.len() as i64, "memfs should contain the written data");
+        assert_eq!(
+            nread,
+            data.len() as i64,
+            "memfs should contain the written data"
+        );
         assert_eq!(&read_buf[..data.len()], data);
     }
 
@@ -363,13 +379,13 @@ mod tests {
         let idx = submit_request(
             ring_base,
             FS_OP_MKDIR,
-            -100,                // AT_FDCWD
-            0,                   // offset (unused)
-            0,                   // len (unused)
-            0,                   // buf_ptr (unused)
-            path_addr,           // path_ptr
-            0,                   // flags
-            0o755,               // mode
+            -100,      // AT_FDCWD
+            0,         // offset (unused)
+            0,         // len (unused)
+            0,         // buf_ptr (unused)
+            path_addr, // path_ptr
+            0,         // flags
+            0o755,     // mode
         );
         assert!(idx >= 0, "submit_request should succeed");
 
@@ -379,7 +395,11 @@ mod tests {
 
         // Read the completion.
         let result = read_completion(ring_base);
-        assert_eq!(result, 0, "mkdir should return 0 on success, got {}", result);
+        assert_eq!(
+            result, 0,
+            "mkdir should return 0 on success, got {}",
+            result
+        );
 
         // Verify the directory was created.
         let dir_ino = crate::fs::memfs::resolve_path(b"/ringdir");

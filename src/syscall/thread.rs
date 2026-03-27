@@ -66,9 +66,13 @@ pub fn sys_exit_group(vm: &mut ThreadState, base: u32, exit_code: u64) -> i32 {
 /// TS runtime will spawn a new Worker with the same shared Memory.
 /// https://man7.org/linux/man-pages/man2/clone.2.html
 pub fn sys_clone(
-    vm: &mut ThreadState, base: u32,
-    flags: u64, child_stack: u64, parent_tidptr: u64,
-    tls: u64, child_tidptr: u64,
+    vm: &mut ThreadState,
+    base: u32,
+    flags: u64,
+    child_stack: u64,
+    parent_tidptr: u64,
+    tls: u64,
+    child_tidptr: u64,
 ) -> i64 {
     let clone_flags = flags;
 
@@ -76,7 +80,9 @@ pub fn sys_clone(
     if clone_flags & CLONE_VM != 0 && clone_flags & CLONE_THREAD != 0 {
         // Allocate new TID
         let new_tid = allocate_tid(vm, base);
-        if new_tid <= 0 { return ENOMEM; }
+        if new_tid <= 0 {
+            return ENOMEM;
+        }
 
         // Increment thread_count
         let ps_ptr = vm.process_ptr as u64;
@@ -126,7 +132,13 @@ fn allocate_tid(vm: &ThreadState, base: u32) -> i32 {
         let state = unsafe { guest_mem::read_i32(base, ps_ptr + state_off) };
         if state == crate::types::THREAD_NONE {
             // Mark as starting
-            unsafe { guest_mem::write_u32(base, ps_ptr + state_off, crate::types::THREAD_STARTING as u32) };
+            unsafe {
+                guest_mem::write_u32(
+                    base,
+                    ps_ptr + state_off,
+                    crate::types::THREAD_STARTING as u32,
+                )
+            };
             // TID = slot index + 1 (TID 0 is invalid)
             let tid = (i + 1) as i32;
             // Write TID into the record
@@ -142,8 +154,14 @@ fn allocate_tid(vm: &ThreadState, base: u32) -> i32 {
 /// FUTEX_WAKE: wake up to `val` waiters on addr (return count woken)
 /// https://man7.org/linux/man-pages/man2/futex.2.html
 pub fn sys_futex(
-    vm: &mut ThreadState, base: u32,
-    addr: u64, op: u64, val: u64, _timeout: u64, _addr2: u64, _val3: u64,
+    vm: &mut ThreadState,
+    base: u32,
+    addr: u64,
+    op: u64,
+    val: u64,
+    _timeout: u64,
+    _addr2: u64,
+    _val3: u64,
 ) -> i64 {
     let futex_op = (op & 0x7F) as u32; // mask out FUTEX_PRIVATE_FLAG
 
@@ -245,7 +263,10 @@ mod tests {
         let ret = super::sys_clone(&mut t.vm, t.base, flags, 0, parent_tidptr, 0, 0);
 
         let written_tid = unsafe { crate::guest_mem::read_u32(t.base, parent_tidptr) };
-        assert_eq!(written_tid, ret as u32, "parent_tidptr should contain child TID");
+        assert_eq!(
+            written_tid, ret as u32,
+            "parent_tidptr should contain child TID"
+        );
     }
 
     #[test]
@@ -256,7 +277,10 @@ mod tests {
 
         // val=99 doesn't match *addr=42 → EAGAIN
         let ret = super::sys_futex(&mut t.vm, t.base, addr, FUTEX_WAIT as u64, 99, 0, 0, 0);
-        assert_eq!(ret, EAGAIN, "futex_wait should return EAGAIN when value doesn't match");
+        assert_eq!(
+            ret, EAGAIN,
+            "futex_wait should return EAGAIN when value doesn't match"
+        );
     }
 
     #[test]
@@ -268,7 +292,10 @@ mod tests {
         // val=42 matches *addr=42 → STATUS_FUTEX_WAIT
         let ret = super::sys_futex(&mut t.vm, t.base, addr, FUTEX_WAIT as u64, 42, 0, 0, 0);
         assert_eq!(ret, 0);
-        assert_eq!(t.vm.status, STATUS_FUTEX_WAIT, "should set STATUS_FUTEX_WAIT");
+        assert_eq!(
+            t.vm.status, STATUS_FUTEX_WAIT,
+            "should set STATUS_FUTEX_WAIT"
+        );
     }
 
     #[test]
@@ -276,7 +303,10 @@ mod tests {
         let mut t = TestVm::new();
         let addr = t.scratch + 0x500;
         let ret = super::sys_futex(&mut t.vm, t.base, addr, FUTEX_WAKE as u64, 1, 0, 0, 0);
-        assert_eq!(ret, 0, "futex_wake should return 0 (no waiters in single-thread)");
+        assert_eq!(
+            ret, 0,
+            "futex_wake should return 0 (no waiters in single-thread)"
+        );
     }
 
     #[test]

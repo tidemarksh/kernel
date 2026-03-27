@@ -83,6 +83,8 @@ impl TestVm {
             crate::guest_mem::write_u32(base, ps_addr + pid_off, 42);
             let ppid_off = core::mem::offset_of!(ProcessState, ppid) as u64;
             crate::guest_mem::write_u32(base, ps_addr + ppid_off, 1);
+            let cwd_off = core::mem::offset_of!(ProcessState, cwd_ino) as u64;
+            crate::guest_mem::write_u32(base, ps_addr + cwd_off, 1);
 
             // Allocate per-process signal disposition table for PID 42.
             crate::syscall::signal::init_for_process(42);
@@ -95,7 +97,12 @@ impl TestVm {
             // Scratch area for test data (64KB, above shadow stack)
             let scratch = crate::alloc::alloc_zeroed(0x10000, 16) as u64;
 
-            TestVm { vm, base, scratch, memfs: MemfsHelper }
+            TestVm {
+                vm,
+                base,
+                scratch,
+                memfs: MemfsHelper,
+            }
         }
     }
 
@@ -104,13 +111,17 @@ impl TestVm {
     /// Read n bytes from guest memory at addr.
     pub fn guest_mem(&self, addr: u64, n: usize) -> alloc::vec::Vec<u8> {
         let mut buf = alloc::vec![0u8; n];
-        unsafe { crate::guest_mem::read_bytes(self.base, addr, &mut buf); }
+        unsafe {
+            crate::guest_mem::read_bytes(self.base, addr, &mut buf);
+        }
         buf
     }
 
     /// Write bytes to guest memory at addr.
     pub fn write_mem(&self, addr: u64, data: &[u8]) {
-        unsafe { crate::guest_mem::write_bytes(self.base, addr, data); }
+        unsafe {
+            crate::guest_mem::write_bytes(self.base, addr, data);
+        }
     }
 
     /// Write a null-terminated path string to scratch + offset, return the address.
@@ -128,26 +139,44 @@ impl TestVm {
     pub fn sys_openat(&mut self, path: &[u8], flags: i32) -> i64 {
         let path_addr = self.write_path(0xF000, path);
         crate::syscall::fs::sys_openat(
-            &mut self.vm, self.base, (-100i64) as u64, path_addr, flags as u64, 0o644,
+            &mut self.vm,
+            self.base,
+            (-100i64) as u64,
+            path_addr,
+            flags as u64,
+            0o644,
         )
     }
 
     pub fn sys_read(&mut self, fd: i64, buf: &mut [u8]) -> i64 {
         let addr = self.scratch + 0xE000;
         let n = crate::syscall::fs::sys_read(
-            &mut self.vm, self.base, fd as u64, addr, buf.len() as u64,
+            &mut self.vm,
+            self.base,
+            fd as u64,
+            addr,
+            buf.len() as u64,
         );
         if n > 0 {
-            unsafe { crate::guest_mem::read_bytes(self.base, addr, &mut buf[..n as usize]); }
+            unsafe {
+                crate::guest_mem::read_bytes(self.base, addr, &mut buf[..n as usize]);
+            }
         }
         n
     }
 
     pub fn sys_write_data(&mut self, fd: i64, data: &[u8]) -> i64 {
         let addr = self.scratch + 0xD000;
-        unsafe { crate::guest_mem::write_bytes(self.base, addr, data); }
+        unsafe {
+            crate::guest_mem::write_bytes(self.base, addr, data);
+        }
         crate::syscall::fs::sys_write(
-            &mut self.vm, self.base, fd as u64, addr, data.len() as u64, SYS_WRITE,
+            &mut self.vm,
+            self.base,
+            fd as u64,
+            addr,
+            data.len() as u64,
+            SYS_WRITE,
         )
     }
 
@@ -165,24 +194,35 @@ impl TestVm {
 
     pub fn sys_mkdirat(&mut self, path: &[u8]) -> i64 {
         let path_addr = self.write_path(0xF000, path);
-        crate::syscall::fs::sys_mkdirat(
-            &mut self.vm, self.base, (-100i64) as u64, path_addr, 0o755,
-        )
+        crate::syscall::fs::sys_mkdirat(&mut self.vm, self.base, (-100i64) as u64, path_addr, 0o755)
     }
 
     pub fn sys_getdents64(&mut self, fd: i64, buf_addr: u64, buf_size: u64) -> i64 {
-        crate::syscall::fs::sys_getdents64(
-            &mut self.vm, self.base, fd as u64, buf_addr, buf_size,
-        )
+        crate::syscall::fs::sys_getdents64(&mut self.vm, self.base, fd as u64, buf_addr, buf_size)
     }
 
     pub fn sys_brk(&mut self, addr: u64) -> i64 {
         crate::syscall::memory::sys_brk(&mut self.vm, self.base, addr)
     }
 
-    pub fn sys_mmap(&mut self, addr: u64, len: u64, prot: i32, flags: u64, fd: i64, offset: u64) -> i64 {
+    pub fn sys_mmap(
+        &mut self,
+        addr: u64,
+        len: u64,
+        prot: i32,
+        flags: u64,
+        fd: i64,
+        offset: u64,
+    ) -> i64 {
         crate::syscall::memory::sys_mmap(
-            &mut self.vm, self.base, addr, len, prot as u64, flags, fd, offset,
+            &mut self.vm,
+            self.base,
+            addr,
+            len,
+            prot as u64,
+            flags,
+            fd,
+            offset,
         )
     }
 

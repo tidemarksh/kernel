@@ -85,8 +85,11 @@ pub unsafe fn load_elf(
         let e = elf_ptr as *const u8;
 
         // Magic number
-        if *e.add(0) != EI_MAG0 || *e.add(1) != EI_MAG1
-            || *e.add(2) != EI_MAG2 || *e.add(3) != EI_MAG3 {
+        if *e.add(0) != EI_MAG0
+            || *e.add(1) != EI_MAG1
+            || *e.add(2) != EI_MAG2
+            || *e.add(3) != EI_MAG3
+        {
             return Err(-1);
         }
 
@@ -166,8 +169,8 @@ pub unsafe fn load_elf(
                 brk_end = seg_end;
             }
 
-            // Record first LOAD segment for phdr (heuristic: usually first segment contains phdrs)
-            if i == 0 {
+            // Record first LOAD segment for phdr (first LOAD usually contains program headers)
+            if phdr_addr == 0 && p_offset == 0 {
                 phdr_addr = p_vaddr + ph_off as u64;
             }
         }
@@ -195,10 +198,10 @@ pub unsafe fn load_elf(
 pub unsafe fn setup_stack(
     ram_base: u32,
     stack_top: u64,
-    argv: &[u64],     // pointers to arg strings in guest memory
-    envp: &[u64],     // pointers to env strings in guest memory
+    argv: &[u64], // pointers to arg strings in guest memory
+    envp: &[u64], // pointers to env strings in guest memory
     elf_result: &ElfLoadResult,
-    random_addr: u64,  // 16 bytes of random data address
+    random_addr: u64, // 16 bytes of random data address
 ) -> u64 {
     unsafe {
         // Stack layout (grows downward):
