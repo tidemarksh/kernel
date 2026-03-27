@@ -20,23 +20,23 @@
 //!     data:       [u8; 4096],           // offset 32  — circular buffer
 //! };
 
-use core::sync::atomic::{AtomicU32, AtomicI32, Ordering};
 use crate::abi::*;
 use crate::alloc;
-use crate::guest_mem;
 use crate::fs::fd_table;
+use crate::guest_mem;
 use crate::types::ThreadState;
+use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 
 const PIPE_BUF_SIZE: u32 = 4096;
 const PIPE_SLOT_SIZE: u32 = 32 + PIPE_BUF_SIZE; // 4128 bytes
 
 // Field offsets within a pipe slot
-const OFF_HEAD: u32       = 0;
-const OFF_TAIL: u32       = 4;
-const OFF_READ_OPEN: u32  = 8;
+const OFF_HEAD: u32 = 0;
+const OFF_TAIL: u32 = 4;
+const OFF_READ_OPEN: u32 = 8;
 const OFF_WRITE_OPEN: u32 = 12;
-const OFF_NOTIFY: u32     = 16;
-const OFF_DATA: u32       = 32;
+const OFF_NOTIFY: u32 = 16;
+const OFF_DATA: u32 = 32;
 
 /// SAB page cache base address for pipe slots.
 /// Set by init() — points to a region in SAB (shared memory).
@@ -57,7 +57,9 @@ pub fn init() {
         // Allocate from shared memory (in production, this is SAB;
         // in single-instance, alloc.rs allocates from the same shared WASM Memory)
         let base = alloc::alloc_zeroed(total, 8);
-        if base == 0 { core::arch::wasm32::unreachable(); }
+        if base == 0 {
+            core::arch::wasm32::unreachable();
+        }
         core::ptr::write(core::ptr::addr_of_mut!(SAB_PIPE_BASE), base);
     }
 }
@@ -124,7 +126,9 @@ pub fn sys_pipe2(vm: &mut ThreadState, base: u32, pipefd_addr: u64, flags: u64) 
     };
 
     let read_fd = fd_table::open_pipe(vm, base, pipe_idx, true, flags as i32);
-    if read_fd < 0 { return read_fd; }
+    if read_fd < 0 {
+        return read_fd;
+    }
 
     let write_fd = fd_table::open_pipe(vm, base, pipe_idx, false, flags as i32);
     if write_fd < 0 {
@@ -186,15 +190,23 @@ pub fn pipe_write(pipe_idx: u32, data: &[u8]) -> i64 {
     let tail = tail_ptr(addr).load(Ordering::Acquire) as usize;
     let cap = PIPE_BUF_SIZE as usize;
 
-    let used = if tail >= head { tail - head } else { cap - head + tail };
+    let used = if tail >= head {
+        tail - head
+    } else {
+        cap - head + tail
+    };
     let free = cap - 1 - used;
-    if free == 0 { return EAGAIN; }
+    if free == 0 {
+        return EAGAIN;
+    }
 
     let to_write = data.len().min(free);
     let dp = data_ptr(addr);
 
     for i in 0..to_write {
-        unsafe { *dp.add((tail + i) % cap) = data[i]; }
+        unsafe {
+            *dp.add((tail + i) % cap) = data[i];
+        }
     }
     tail_ptr(addr).store(((tail + to_write) % cap) as u32, Ordering::Release);
 
@@ -236,7 +248,11 @@ pub fn pipe_writable(pipe_idx: u32) -> bool {
     let head = head_ptr(addr).load(Ordering::Acquire) as usize;
     let tail = tail_ptr(addr).load(Ordering::Acquire) as usize;
     let cap = PIPE_BUF_SIZE as usize;
-    let used = if tail >= head { tail - head } else { cap - head + tail };
+    let used = if tail >= head {
+        tail - head
+    } else {
+        cap - head + tail
+    };
     let free = cap - 1 - used;
     free > 0
 }
@@ -315,5 +331,36 @@ mod tests {
         let mut out = [0u8; 4095];
         let r2 = pipe_read(idx, &mut out);
         assert!(r2 > 0);
+    }
+
+    #[test]
+    fn sys_pipe2_sets_cloexec_and_nonblock_flags() {
+        let mut t = TestVm::new();
+        let pipefd_addr = t.scratch + 0x1000;
+
+        assert_eq!(
+            super::sys_pipe2(
+                &mut t.vm,
+                t.base,
+                pipefd_addr,
+                (O_CLOEXEC | O_NONBLOCK) as u64,
+            ),
+            0
+        );
+
+        let read_fd = unsafe { crate::guest_mem::read_u32(t.base, pipefd_addr) } as i64;
+        let write_fd = unsafe { crate::guest_mem::read_u32(t.base, pipefd_addr + 4) } as i64;
+        assert!(read_fd >= 3);
+        assert!(write_fd >= 3);
+
+        assert_eq!(t.sys_fcntl(read_fd as u64, 1, 0), 1);
+        assert_eq!(t.sys_fcntl(write_fd as u64, 1, 0), 1);
+        assert_ne!(t.sys_fcntl(read_fd as u64, 3, 0) & O_NONBLOCK as i64, 0);
+        assert_ne!(t.sys_fcntl(write_fd as u64, 3, 0) & O_NONBLOCK as i64, 0);
+
+        assert_eq!(t.sys_write_data(write_fd, b"ok"), 2);
+        let mut buf = [0u8; 2];
+        assert_eq!(t.sys_read(read_fd, &mut buf), 2);
+        assert_eq!(&buf, b"ok");
     }
 }

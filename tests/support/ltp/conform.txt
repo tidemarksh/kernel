@@ -1,0 +1,28 @@
+# PASS-required tests with Linux-conformant semantics.
+testcases/kernel/syscalls/close/close01.c verified close(2) for file/pipe/socket descriptors
+testcases/kernel/syscalls/close/close02.c verified close(2) EBADF on invalid fd
+testcases/kernel/syscalls/epoll_create1/epoll_create1_01.c verified epoll_create1 CLOEXEC behavior
+testcases/kernel/syscalls/epoll_create1/epoll_create1_02.c verified epoll_create1 EINVAL on invalid flags
+testcases/kernel/syscalls/faccessat/faccessat01.c verified faccessat(2) relative/absolute/AT_FDCWD existence checks
+testcases/kernel/syscalls/faccessat/faccessat02.c verified faccessat(2) ENOTDIR and EBADF error paths
+testcases/kernel/syscalls/fstatat/fstatat01.c verified newfstatat basic path/dirfd errno handling
+testcases/kernel/syscalls/ftruncate/ftruncate01.c verified ftruncate(2) shrink and extend semantics
+testcases/kernel/syscalls/geteuid/geteuid01.c verified basic geteuid(2) success path
+testcases/kernel/syscalls/getuid/getuid01.c verified basic getuid(2) success path
+testcases/kernel/syscalls/lseek/lseek01.c verified lseek(2) basic offset movement and reads
+testcases/kernel/syscalls/mkdirat/mkdirat01.c verified mkdirat(2) relative/absolute dirfd handling
+testcases/kernel/syscalls/openat/openat01.c verified openat(2) relative/absolute dirfd handling
+testcases/kernel/syscalls/pread/pread01.c verified pread(2) reads at offsets without changing file position
+testcases/kernel/syscalls/pwrite/pwrite01.c verified pwrite(2) writes at offsets without changing file position
+testcases/kernel/syscalls/read/read01.c verified basic read(2) success path
+testcases/kernel/syscalls/read/read04.c verified read(2) returns correct byte count and data
+testcases/kernel/syscalls/sched_getaffinity/sched_getaffinity01.c verified single-CPU affinity mask and error handling
+testcases/kernel/syscalls/sched_yield/sched_yield01.c verified sched_yield returns success
+testcases/kernel/syscalls/sysinfo/sysinfo01.c verified sysinfo(2) success path
+testcases/kernel/syscalls/sysinfo/sysinfo02.c verified sysinfo(2) EFAULT on invalid address
+testcases/kernel/syscalls/truncate/truncate02.c verified truncate(2) shrink/extend semantics without changing file offset
+testcases/kernel/syscalls/uname/uname01.c verified uname(2) reports Linux sysname
+testcases/kernel/syscalls/uname/uname02.c verified uname(2) EFAULT on invalid address
+testcases/kernel/syscalls/unlinkat/unlinkat01.c verified unlinkat file/remove-dir errno handling
+testcases/kernel/syscalls/write/write02.c verified write(fd, NULL, 0) returns 0
+testcases/kernel/syscalls/epoll_ctl/epoll_ctl01.c verified epoll_ctl(2) add/mod/del semantics on ready pipe fds

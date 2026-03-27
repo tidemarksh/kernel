@@ -1,5 +1,6 @@
 //! ELF test helpers for integration tests.
-//! Runs in a separate wasm instance from unit tests, so base=0 is safe.
+//! Each filtered wasm32-wasip1 test run executes in a fresh wasmtime process,
+//! so the guest layout can stay fixed.
 //!
 //! Uses Result<(), String> to avoid panics (wasm32-wasip1 uses panic=abort,
 //! so any panic causes a WASM trap that terminates the entire test binary).
@@ -63,6 +64,10 @@ fn proc_meminfo() -> String {
     format!(
         "MemTotal: {total_kib} kB\nMemFree: {free_kib} kB\nMemAvailable: {free_kib} kB\nCached: 0 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n"
     )
+}
+
+fn proc_pid_max() -> String {
+    format!("{}\n", tidemark_kernel::abi::MAX_PROCESSES)
 }
 
 fn allocate_cache(
@@ -230,13 +235,22 @@ fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> Result<(i32, u64), String
         tidemark_kernel::syscall::signal::init();
         tidemark_kernel::syscall::epoll::init();
         tidemark_kernel::syscall::pipe::init();
+        tidemark_kernel::syscall::socket::init();
         tidemark_kernel::fs::fd_table::init();
         tidemark_kernel::fs::memfs::init();
         let tmp_ino = ensure_dir(1, b"tmp", 0o1777)?;
         let dev_ino = ensure_dir(1, b"dev", 0o755)?;
         let proc_ino = ensure_dir(1, b"proc", 0o555)?;
+        let proc_sys_ino = ensure_dir(proc_ino, b"sys", 0o555)?;
+        let proc_kernel_ino = ensure_dir(proc_sys_ino, b"kernel", 0o555)?;
         let _ = ensure_dir(dev_ino, b"shm", 0o1777)?;
         let _ = ensure_file(proc_ino, b"meminfo", proc_meminfo().as_bytes(), 0o444)?;
+        let _ = ensure_file(
+            proc_kernel_ino,
+            b"pid_max",
+            proc_pid_max().as_bytes(),
+            0o444,
+        )?;
         let _ = tmp_ino;
 
         let random_addr = 0xBF_FF00u64;

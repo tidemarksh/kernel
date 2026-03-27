@@ -5,6 +5,11 @@ edition = "2024"
 license = "GPL-3.0"
 description = "RISC-V Linux userland kernel for WebAssembly"
 
+[workspace]
+members = ["xtask"]
+default-members = ["."]
+resolver = "3"
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 

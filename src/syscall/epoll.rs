@@ -11,15 +11,15 @@
 
 use crate::abi::*;
 use crate::alloc;
-use crate::guest_mem;
 use crate::fs::fd_table;
+use crate::guest_mem;
 use crate::types::ThreadState;
 
 const EPOLL_CTL_ADD: u64 = 1;
 const EPOLL_CTL_DEL: u64 = 2;
 const EPOLL_CTL_MOD: u64 = 3;
 
-const EPOLLIN: u32  = 0x001;
+const EPOLLIN: u32 = 0x001;
 const EPOLLOUT: u32 = 0x004;
 const EPOLLERR: u32 = 0x008;
 const EPOLLHUP: u32 = 0x010;
@@ -45,12 +45,20 @@ static mut EPOLL_TABLE_PTR: *mut *mut EpollInstance = core::ptr::null_mut();
 /// Initialize epoll table. Allocates via alloc.rs.
 pub fn init() {
     unsafe {
-        core::ptr::write(core::ptr::addr_of_mut!(EPOLL_TABLE_PTR), core::ptr::null_mut());
+        core::ptr::write(
+            core::ptr::addr_of_mut!(EPOLL_TABLE_PTR),
+            core::ptr::null_mut(),
+        );
 
         let size = (MAX_EPOLL_ENTRIES * core::mem::size_of::<*mut EpollInstance>()) as u32;
         let ptr = alloc::alloc_zeroed(size, core::mem::align_of::<*mut EpollInstance>() as u32);
-        if ptr == 0 { core::arch::wasm32::unreachable(); }
-        core::ptr::write(core::ptr::addr_of_mut!(EPOLL_TABLE_PTR), ptr as *mut *mut EpollInstance);
+        if ptr == 0 {
+            core::arch::wasm32::unreachable();
+        }
+        core::ptr::write(
+            core::ptr::addr_of_mut!(EPOLL_TABLE_PTR),
+            ptr as *mut *mut EpollInstance,
+        );
     }
 }
 
@@ -74,6 +82,10 @@ fn set_epoll_ptr(idx: usize, val: *mut EpollInstance) {
 
 /// epoll_create1: create a new epoll instance and return its FD.
 pub fn sys_epoll_create1(vm: &mut ThreadState, base: u32, flags: u64) -> i64 {
+    if flags & !(O_CLOEXEC as u64) != 0 {
+        return EINVAL;
+    }
+
     // Find free epoll slot
     let mut slot_idx = usize::MAX;
     for i in 0..MAX_EPOLL_ENTRIES {
@@ -82,12 +94,16 @@ pub fn sys_epoll_create1(vm: &mut ThreadState, base: u32, flags: u64) -> i64 {
             break;
         }
     }
-    if slot_idx == usize::MAX { return ENOMEM; }
+    if slot_idx == usize::MAX {
+        return ENOMEM;
+    }
 
     unsafe {
         let size = core::mem::size_of::<EpollInstance>() as u32;
         let ptr = alloc::alloc_zeroed(size, 8);
-        if ptr == 0 { return ENOMEM; }
+        if ptr == 0 {
+            return ENOMEM;
+        }
         set_epoll_ptr(slot_idx, ptr as *mut EpollInstance);
     }
 
@@ -100,27 +116,46 @@ pub fn sys_epoll_create1(vm: &mut ThreadState, base: u32, flags: u64) -> i64 {
 // =========================================================================
 
 /// epoll_ctl: add, modify, or delete an entry in the epoll interest list.
-pub fn sys_epoll_ctl(vm: &mut ThreadState, base: u32, epfd: u64, op: u64, fd: u64, event_addr: u64) -> i64 {
-    let ofd = match fd_table::get_ofd(vm, epfd) {
+pub fn sys_epoll_ctl(
+    vm: &mut ThreadState,
+    base: u32,
+    epfd: u64,
+    op: u64,
+    fd: u64,
+    event_addr: u64,
+) -> i64 {
+    let ofd = match fd_table::get_ofd(base, vm, epfd) {
         Some(o) => o,
         None => return EBADF,
     };
-    if ofd.fd_type != FD_TYPE_EPOLL { return EINVAL; }
+    if ofd.fd_type != FD_TYPE_EPOLL {
+        return EINVAL;
+    }
 
     let inst = unsafe { &mut *epoll_ptr(ofd.ino as usize) };
-    if inst as *mut _ == core::ptr::null_mut() { return EBADF; }
+    if inst as *mut _ == core::ptr::null_mut() {
+        return EBADF;
+    }
 
     match op {
         EPOLL_CTL_ADD => {
-            if inst.count as usize >= MAX_EPOLL_ENTRIES { return ENOMEM; }
+            if inst.count as usize >= MAX_EPOLL_ENTRIES {
+                return ENOMEM;
+            }
             // Check for duplicate
             for i in 0..inst.count as usize {
-                if inst.entries[i].fd == fd as i32 { return EEXIST; }
+                if inst.entries[i].fd == fd as i32 {
+                    return EEXIST;
+                }
             }
             let events = unsafe { guest_mem::read_u32(base, event_addr) };
             let data = unsafe { guest_mem::read_u64(base, event_addr + 8) };
             let idx = inst.count as usize;
-            inst.entries[idx] = EpollEntry { fd: fd as i32, events, data };
+            inst.entries[idx] = EpollEntry {
+                fd: fd as i32,
+                events,
+                data,
+            };
             inst.count += 1;
             0
         }
@@ -160,21 +195,33 @@ pub fn sys_epoll_ctl(vm: &mut ThreadState, base: u32, epfd: u64, op: u64, fd: u6
 ///
 /// Blocking info stored in ThreadState:
 ///   fault_addr = epfd, fault_pc = events_addr (repacked for resume)
-pub fn sys_epoll_pwait(vm: &mut ThreadState, base: u32, epfd: u64, events_addr: u64, maxevents: u64, timeout: i64, _sigmask: u64) -> i64 {
-    let ofd = match fd_table::get_ofd(vm, epfd) {
+pub fn sys_epoll_pwait(
+    vm: &mut ThreadState,
+    base: u32,
+    epfd: u64,
+    events_addr: u64,
+    maxevents: u64,
+    timeout: i64,
+    _sigmask: u64,
+) -> i64 {
+    let ofd = match fd_table::get_ofd(base, vm, epfd) {
         Some(o) => o,
         None => return EBADF,
     };
-    if ofd.fd_type != FD_TYPE_EPOLL { return EINVAL; }
+    if ofd.fd_type != FD_TYPE_EPOLL {
+        return EINVAL;
+    }
 
     let inst = unsafe { &*epoll_ptr(ofd.ino as usize) };
     let max = maxevents as usize;
     let mut ready = 0usize;
 
     for i in 0..inst.count as usize {
-        if ready >= max { break; }
+        if ready >= max {
+            break;
+        }
         let e = &inst.entries[i];
-        let revents = poll_fd(vm, e.fd as u64, e.events);
+        let revents = poll_fd(base, vm, e.fd as u64, e.events);
         if revents != 0 {
             let out_addr = events_addr + (ready as u64) * 16;
             unsafe {
@@ -199,8 +246,8 @@ pub fn sys_epoll_pwait(vm: &mut ThreadState, base: u32, epfd: u64, events_addr: 
 }
 
 /// Poll a single FD for readiness using pipe_peek (non-consuming).
-fn poll_fd(vm: &ThreadState, fd: u64, interest: u32) -> u32 {
-    let ofd = match fd_table::get_ofd(vm, fd) {
+fn poll_fd(base: u32, vm: &ThreadState, fd: u64, interest: u32) -> u32 {
+    let ofd = match fd_table::get_ofd(base, vm, fd) {
         Some(o) => o,
         None => return EPOLLERR,
     };
@@ -216,7 +263,7 @@ fn poll_fd(vm: &ThreadState, fd: u64, interest: u32) -> u32 {
             if peek == 0 {
                 revents |= EPOLLHUP; // EOF: write end closed, no data
             } else if peek > 0 {
-                revents |= EPOLLIN;  // data available
+                revents |= EPOLLIN; // data available
             }
             // peek == EAGAIN: empty, write end open → not ready
         } else {
@@ -231,8 +278,12 @@ fn poll_fd(vm: &ThreadState, fd: u64, interest: u32) -> u32 {
         }
     } else if ofd.fd_type == FD_TYPE_FILE {
         // Files are always ready
-        if interest & EPOLLIN != 0 { revents |= EPOLLIN; }
-        if interest & EPOLLOUT != 0 { revents |= EPOLLOUT; }
+        if interest & EPOLLIN != 0 {
+            revents |= EPOLLIN;
+        }
+        if interest & EPOLLOUT != 0 {
+            revents |= EPOLLOUT;
+        }
     }
 
     revents & (interest | EPOLLERR | EPOLLHUP)
@@ -256,7 +307,11 @@ mod tests {
         let inst = unsafe { &mut *epoll_ptr(0) };
 
         // Add entry
-        inst.entries[0] = EpollEntry { fd: 5, events: EPOLLIN, data: 0x42 };
+        inst.entries[0] = EpollEntry {
+            fd: 5,
+            events: EPOLLIN,
+            data: 0x42,
+        };
         inst.count = 1;
         assert_eq!(inst.count, 1);
         assert_eq!(inst.entries[0].fd, 5);
@@ -264,5 +319,86 @@ mod tests {
         // Delete entry
         inst.count = 0;
         set_epoll_ptr(0, core::ptr::null_mut());
+    }
+
+    #[test]
+    fn epoll_pwait_reports_ready_pipe() {
+        let mut t = TestVm::new();
+        let pipefd_addr = t.scratch + 0x1000;
+        assert_eq!(crate::syscall::pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+        let read_fd = unsafe { crate::guest_mem::read_u32(t.base, pipefd_addr) } as u64;
+        let write_fd = unsafe { crate::guest_mem::read_u32(t.base, pipefd_addr + 4) } as i64;
+
+        let epfd = super::sys_epoll_create1(&mut t.vm, t.base, 0);
+        assert!(epfd >= 3);
+
+        let event_addr = t.scratch + 0x2000;
+        let out_addr = t.scratch + 0x3000;
+        unsafe {
+            crate::guest_mem::write_u32(t.base, event_addr, EPOLLIN);
+            crate::guest_mem::write_u64(t.base, event_addr + 8, 0x1234);
+        }
+
+        assert_eq!(
+            super::sys_epoll_ctl(
+                &mut t.vm,
+                t.base,
+                epfd as u64,
+                EPOLL_CTL_ADD,
+                read_fd,
+                event_addr,
+            ),
+            0
+        );
+        assert_eq!(
+            super::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 1, 0, 0),
+            0
+        );
+
+        assert_eq!(t.sys_write_data(write_fd, b"x"), 1);
+        assert_eq!(
+            super::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 1, 0, 0),
+            1
+        );
+        assert_eq!(unsafe { crate::guest_mem::read_u32(t.base, out_addr) }, EPOLLIN);
+        assert_eq!(unsafe { crate::guest_mem::read_u64(t.base, out_addr + 8) }, 0x1234);
+    }
+
+    #[test]
+    fn epoll_pwait_sets_wait_status_for_blocking_calls() {
+        let mut t = TestVm::new();
+        let pipefd_addr = t.scratch + 0x1000;
+        assert_eq!(crate::syscall::pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+        let read_fd = unsafe { crate::guest_mem::read_u32(t.base, pipefd_addr) } as u64;
+
+        let epfd = super::sys_epoll_create1(&mut t.vm, t.base, 0);
+        assert!(epfd >= 3);
+
+        let event_addr = t.scratch + 0x2000;
+        let out_addr = t.scratch + 0x3000;
+        unsafe {
+            crate::guest_mem::write_u32(t.base, event_addr, EPOLLIN);
+            crate::guest_mem::write_u64(t.base, event_addr + 8, 0x55);
+        }
+
+        assert_eq!(
+            super::sys_epoll_ctl(
+                &mut t.vm,
+                t.base,
+                epfd as u64,
+                EPOLL_CTL_ADD,
+                read_fd,
+                event_addr,
+            ),
+            0
+        );
+
+        assert_eq!(
+            super::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 1, 10, 0),
+            0
+        );
+        assert_eq!(t.vm.status, STATUS_EPOLL_WAIT);
+        assert_eq!(t.vm.fault_addr, epfd as u64);
+        assert_eq!(t.vm.fault_pc, out_addr);
     }
 }

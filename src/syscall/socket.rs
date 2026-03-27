@@ -22,8 +22,8 @@
 
 use crate::abi::*;
 use crate::alloc;
-use crate::guest_mem;
 use crate::fs::fd_table;
+use crate::guest_mem;
 use crate::types::ThreadState;
 
 // Socket states
@@ -65,13 +65,18 @@ fn socket_table() -> &'static mut [SocketSlot; MAX_SOCKETS] {
 /// Initialize socket subsystem. Allocates socket table via alloc.rs.
 pub fn init() {
     unsafe {
-        core::ptr::write(core::ptr::addr_of_mut!(SOCKET_TABLE_PTR), core::ptr::null_mut());
+        core::ptr::write(
+            core::ptr::addr_of_mut!(SOCKET_TABLE_PTR),
+            core::ptr::null_mut(),
+        );
         core::ptr::write(core::ptr::addr_of_mut!(SOCKET_USED), 0);
 
         let size = core::mem::size_of::<[SocketSlot; MAX_SOCKETS]>() as u32;
         let align = core::mem::align_of::<SocketSlot>() as u32;
         let ptr = alloc::alloc_zeroed(size, align);
-        if ptr == 0 { core::arch::wasm32::unreachable(); }
+        if ptr == 0 {
+            core::arch::wasm32::unreachable();
+        }
         core::ptr::write(
             core::ptr::addr_of_mut!(SOCKET_TABLE_PTR),
             ptr as *mut [SocketSlot; MAX_SOCKETS],
@@ -111,7 +116,9 @@ fn free_socket_slot(idx: u32) {
 
 /// Check if a socket slot is allocated.
 pub fn is_slot_used(idx: u32) -> bool {
-    if idx >= MAX_SOCKETS as u32 { return false; }
+    if idx >= MAX_SOCKETS as u32 {
+        return false;
+    }
     unsafe {
         let used = core::ptr::read(core::ptr::addr_of!(SOCKET_USED));
         used & (1u32 << idx) != 0
@@ -126,9 +133,11 @@ pub fn socket_close(socket_idx: u32) {
 }
 
 /// Look up the socket index for an FD. Returns None if the FD is not a socket.
-fn get_socket_idx(vm: &ThreadState, fd: u64) -> Option<u32> {
-    let ofd = fd_table::get_ofd(vm, fd)?;
-    if ofd.fd_type != FD_TYPE_SOCKET { return None; }
+fn get_socket_idx(base: u32, vm: &ThreadState, fd: u64) -> Option<u32> {
+    let ofd = fd_table::get_ofd(base, vm, fd)?;
+    if ofd.fd_type != FD_TYPE_SOCKET {
+        return None;
+    }
     Some(ofd.ino)
 }
 
@@ -170,8 +179,12 @@ pub fn sys_socket(vm: &mut ThreadState, base: u32, domain: u64, stype: u64, prot
 
     // Translate SOCK_NONBLOCK/SOCK_CLOEXEC to O_NONBLOCK/O_CLOEXEC
     let mut fd_flags: i32 = 0;
-    if flags & SOCK_NONBLOCK != 0 { fd_flags |= O_NONBLOCK; }
-    if flags & SOCK_CLOEXEC != 0 { fd_flags |= O_CLOEXEC; }
+    if flags & SOCK_NONBLOCK != 0 {
+        fd_flags |= O_NONBLOCK;
+    }
+    if flags & SOCK_CLOEXEC != 0 {
+        fd_flags |= O_CLOEXEC;
+    }
 
     let fd = fd_table::open_socket(vm, base, idx, fd_flags);
     if fd < 0 {
@@ -187,7 +200,7 @@ pub fn sys_socket(vm: &mut ThreadState, base: u32, domain: u64, stype: u64, prot
 
 /// bind(fd, addr, addrlen) -> 0 or error
 pub fn sys_bind(vm: &mut ThreadState, base: u32, fd: u64, addr: u64, addrlen: u64) -> i64 {
-    let idx = match get_socket_idx(vm, fd) {
+    let idx = match get_socket_idx(base, vm, fd) {
         Some(i) => i,
         None => return ENOTSOCK,
     };
@@ -204,7 +217,9 @@ pub fn sys_bind(vm: &mut ThreadState, base: u32, fd: u64, addr: u64, addrlen: u6
 
     // Copy address from guest memory
     let mut buf = [0u8; SOCKADDR_STORAGE_LEN];
-    unsafe { guest_mem::read_bytes(base, addr, &mut buf[..len]); }
+    unsafe {
+        guest_mem::read_bytes(base, addr, &mut buf[..len]);
+    }
 
     // Validate that the address family matches the socket domain
     let sa_family = u16::from_le_bytes([buf[0], buf[1]]);
@@ -223,8 +238,8 @@ pub fn sys_bind(vm: &mut ThreadState, base: u32, fd: u64, addr: u64, addrlen: u6
 // =========================================================================
 
 /// listen(fd, backlog) -> 0 or error
-pub fn sys_listen(vm: &mut ThreadState, _base: u32, fd: u64, _backlog: u64) -> i64 {
-    let idx = match get_socket_idx(vm, fd) {
+pub fn sys_listen(vm: &mut ThreadState, base: u32, fd: u64, _backlog: u64) -> i64 {
+    let idx = match get_socket_idx(base, vm, fd) {
         Some(i) => i,
         None => return ENOTSOCK,
     };
@@ -244,7 +259,7 @@ pub fn sys_listen(vm: &mut ThreadState, _base: u32, fd: u64, _backlog: u64) -> i
 
 /// connect(fd, addr, addrlen) -> STATUS_CONNECT (async to TS runtime)
 pub fn sys_connect(vm: &mut ThreadState, base: u32, fd: u64, addr: u64, addrlen: u64) -> i64 {
-    let idx = match get_socket_idx(vm, fd) {
+    let idx = match get_socket_idx(base, vm, fd) {
         Some(i) => i,
         None => return ENOTSOCK,
     };
@@ -264,7 +279,9 @@ pub fn sys_connect(vm: &mut ThreadState, base: u32, fd: u64, addr: u64, addrlen:
 
     // Copy peer address from guest memory
     let mut buf = [0u8; SOCKADDR_STORAGE_LEN];
-    unsafe { guest_mem::read_bytes(base, addr, &mut buf[..len]); }
+    unsafe {
+        guest_mem::read_bytes(base, addr, &mut buf[..len]);
+    }
 
     slot.peer_addr[..len].copy_from_slice(&buf[..len]);
     slot.peer_len = len as u32;
@@ -281,7 +298,12 @@ pub fn sys_connect(vm: &mut ThreadState, base: u32, fd: u64, addr: u64, addrlen:
 
 /// accept4(fd, addr, addrlen, flags) -> ENOSYS (stub)
 pub fn sys_accept4(
-    _vm: &mut ThreadState, _base: u32, _fd: u64, _addr: u64, _addrlen: u64, _flags: u64,
+    _vm: &mut ThreadState,
+    _base: u32,
+    _fd: u64,
+    _addr: u64,
+    _addrlen: u64,
+    _flags: u64,
 ) -> i64 {
     ENOSYS
 }
@@ -292,11 +314,16 @@ pub fn sys_accept4(
 
 /// sendto(fd, buf, len, flags, dest_addr, addrlen) -> STATUS_SOCKET_SEND
 pub fn sys_sendto(
-    vm: &mut ThreadState, base: u32,
-    fd: u64, _buf: u64, _len: u64, _flags: u64,
-    dest_addr: u64, dest_addrlen: u64,
+    vm: &mut ThreadState,
+    base: u32,
+    fd: u64,
+    _buf: u64,
+    _len: u64,
+    _flags: u64,
+    dest_addr: u64,
+    dest_addrlen: u64,
 ) -> i64 {
-    let idx = match get_socket_idx(vm, fd) {
+    let idx = match get_socket_idx(base, vm, fd) {
         Some(i) => i,
         None => return ENOTSOCK,
     };
@@ -319,7 +346,9 @@ pub fn sys_sendto(
         if len >= 2 {
             let slot_mut = &mut socket_table()[idx as usize];
             let mut buf = [0u8; SOCKADDR_STORAGE_LEN];
-            unsafe { guest_mem::read_bytes(base, dest_addr, &mut buf[..len]); }
+            unsafe {
+                guest_mem::read_bytes(base, dest_addr, &mut buf[..len]);
+            }
             slot_mut.peer_addr[..len].copy_from_slice(&buf[..len]);
             slot_mut.peer_len = len as u32;
         }
@@ -336,11 +365,16 @@ pub fn sys_sendto(
 
 /// recvfrom(fd, buf, len, flags, src_addr, addrlen) -> EAGAIN or STATUS_SOCKET_RECV
 pub fn sys_recvfrom(
-    vm: &mut ThreadState, _base: u32,
-    fd: u64, _buf: u64, _len: u64, _flags: u64,
-    _src_addr: u64, _addrlen: u64,
+    vm: &mut ThreadState,
+    _base: u32,
+    fd: u64,
+    _buf: u64,
+    _len: u64,
+    _flags: u64,
+    _src_addr: u64,
+    _addrlen: u64,
 ) -> i64 {
-    let idx = match get_socket_idx(vm, fd) {
+    let idx = match get_socket_idx(_base, vm, fd) {
         Some(i) => i,
         None => return ENOTSOCK,
     };
@@ -353,7 +387,7 @@ pub fn sys_recvfrom(
     }
 
     // Check if socket is non-blocking via OFD status_flags
-    let ofd = match fd_table::get_ofd(vm, fd) {
+    let ofd = match fd_table::get_ofd(_base, vm, fd) {
         Some(o) => o,
         None => return EBADF,
     };
@@ -373,10 +407,15 @@ pub fn sys_recvfrom(
 
 /// setsockopt(fd, level, optname, optval, optlen) -> 0 (stub success)
 pub fn sys_setsockopt(
-    vm: &mut ThreadState, _base: u32,
-    fd: u64, _level: u64, _optname: u64, _optval: u64, _optlen: u64,
+    vm: &mut ThreadState,
+    _base: u32,
+    fd: u64,
+    _level: u64,
+    _optname: u64,
+    _optval: u64,
+    _optlen: u64,
 ) -> i64 {
-    match get_socket_idx(vm, fd) {
+    match get_socket_idx(_base, vm, fd) {
         Some(_) => 0, // stub: accept all options silently
         None => ENOTSOCK,
     }
@@ -386,10 +425,15 @@ pub fn sys_setsockopt(
 ///
 /// Writes a zero u32 to optval and sets *optlen = 4 as a safe default.
 pub fn sys_getsockopt(
-    vm: &mut ThreadState, base: u32,
-    fd: u64, _level: u64, _optname: u64, optval: u64, optlen: u64,
+    vm: &mut ThreadState,
+    base: u32,
+    fd: u64,
+    _level: u64,
+    _optname: u64,
+    optval: u64,
+    optlen: u64,
 ) -> i64 {
-    match get_socket_idx(vm, fd) {
+    match get_socket_idx(base, vm, fd) {
         Some(_) => {
             // Return a 4-byte zero as the option value
             if optval != 0 && optlen != 0 {
@@ -409,8 +453,14 @@ pub fn sys_getsockopt(
 // =========================================================================
 
 /// getsockname(fd, addr, addrlen) -> 0 or error
-pub fn sys_getsockname(vm: &mut ThreadState, base: u32, fd: u64, addr: u64, addrlen_ptr: u64) -> i64 {
-    let idx = match get_socket_idx(vm, fd) {
+pub fn sys_getsockname(
+    vm: &mut ThreadState,
+    base: u32,
+    fd: u64,
+    addr: u64,
+    addrlen_ptr: u64,
+) -> i64 {
+    let idx = match get_socket_idx(base, vm, fd) {
         Some(i) => i,
         None => return ENOTSOCK,
     };
@@ -445,8 +495,14 @@ pub fn sys_getsockname(vm: &mut ThreadState, base: u32, fd: u64, addr: u64, addr
 }
 
 /// getpeername(fd, addr, addrlen) -> 0 or error
-pub fn sys_getpeername(vm: &mut ThreadState, base: u32, fd: u64, addr: u64, addrlen_ptr: u64) -> i64 {
-    let idx = match get_socket_idx(vm, fd) {
+pub fn sys_getpeername(
+    vm: &mut ThreadState,
+    base: u32,
+    fd: u64,
+    addr: u64,
+    addrlen_ptr: u64,
+) -> i64 {
+    let idx = match get_socket_idx(base, vm, fd) {
         Some(i) => i,
         None => return ENOTSOCK,
     };
@@ -487,7 +543,7 @@ mod tests {
         let fd = sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
         assert!(fd >= 3, "socket fd should be >= 3, got {}", fd);
 
-        let ofd = fd_table::get_ofd(&t.vm, fd as u64).unwrap();
+        let ofd = fd_table::get_ofd(t.base, &t.vm, fd as u64).unwrap();
         assert_eq!(ofd.fd_type, FD_TYPE_SOCKET);
 
         // Close frees the slot
@@ -508,7 +564,9 @@ mod tests {
         // getsockname on unbound socket: returns family only
         let addr_buf = t.scratch + 0x300;
         let addrlen_ptr = t.scratch + 0x380;
-        unsafe { guest_mem::write_u32(t.base, addrlen_ptr, 16); }
+        unsafe {
+            guest_mem::write_u32(t.base, addrlen_ptr, 16);
+        }
         let ret = sys_getsockname(&mut t.vm, t.base, fd as u64, addr_buf, addrlen_ptr);
         assert_eq!(ret, 0);
         let family = unsafe { guest_mem::read_u16(t.base, addr_buf) };
@@ -517,22 +575,22 @@ mod tests {
         assert_eq!(actual_len, 2);
 
         // Bind
-        let sockaddr: [u8; 16] = [
-            2, 0, 0x50, 0x00, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
-        ];
+        let sockaddr: [u8; 16] = [2, 0, 0x50, 0x00, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
         let bind_addr = t.scratch + 0x100;
         t.write_mem(bind_addr, &sockaddr);
         let ret = sys_bind(&mut t.vm, t.base, fd as u64, bind_addr, 16);
         assert_eq!(ret, 0);
 
-        let ofd = fd_table::get_ofd(&t.vm, fd as u64).unwrap();
+        let ofd = fd_table::get_ofd(t.base, &t.vm, fd as u64).unwrap();
         let slot = &socket_table()[ofd.ino as usize];
         assert_eq!(slot.state, SOCK_STATE_BOUND);
         assert_eq!(slot.local_len, 16);
 
         // getsockname on bound socket: returns bound address
         let out_addr = t.scratch + 0x400;
-        unsafe { guest_mem::write_u32(t.base, addrlen_ptr, 16); }
+        unsafe {
+            guest_mem::write_u32(t.base, addrlen_ptr, 16);
+        }
         let ret2 = sys_getsockname(&mut t.vm, t.base, fd as u64, out_addr, addrlen_ptr);
         assert_eq!(ret2, 0);
         let bound_len = unsafe { guest_mem::read_u32(t.base, addrlen_ptr) };
@@ -549,7 +607,9 @@ mod tests {
         assert!(fd >= 0);
 
         let val_addr = t.scratch + 0x200;
-        unsafe { guest_mem::write_u32(t.base, val_addr, 1); }
+        unsafe {
+            guest_mem::write_u32(t.base, val_addr, 1);
+        }
         let ret = sys_setsockopt(&mut t.vm, t.base, fd as u64, 1, 2, val_addr, 4);
         assert_eq!(ret, 0);
 
@@ -568,14 +628,14 @@ mod tests {
         // getpeername before connect -> ENOTCONN
         let out_addr = t.scratch + 0x600;
         let addrlen_ptr = t.scratch + 0x680;
-        unsafe { guest_mem::write_u32(t.base, addrlen_ptr, 16); }
+        unsafe {
+            guest_mem::write_u32(t.base, addrlen_ptr, 16);
+        }
         let ret = sys_getpeername(&mut t.vm, t.base, fd as u64, out_addr, addrlen_ptr);
         assert_eq!(ret, ENOTCONN);
 
         // connect -> STATUS_CONNECT
-        let sockaddr: [u8; 16] = [
-            2, 0, 0x00, 0x50, 93, 184, 216, 34, 0, 0, 0, 0, 0, 0, 0, 0,
-        ];
+        let sockaddr: [u8; 16] = [2, 0, 0x00, 0x50, 93, 184, 216, 34, 0, 0, 0, 0, 0, 0, 0, 0];
         let addr = t.scratch + 0x500;
         t.write_mem(addr, &sockaddr);
         let ret = sys_connect(&mut t.vm, t.base, fd as u64, addr, 16);

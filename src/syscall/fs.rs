@@ -75,31 +75,75 @@ fn set_current_dir_ino(base: u32, vm: &ThreadState, ino: u32) {
     }
 }
 
-fn resolve_at(vm: &ThreadState, dirfd: u64, path_addr: u64, base: u32) -> u32 {
+fn dirfd_base_ino(vm: &ThreadState, dirfd: u64, base: u32) -> Result<u32, i64> {
+    if dirfd as i32 == AT_FDCWD {
+        return Ok(current_dir_ino(base, vm));
+    }
+
+    let ofd = fd_table::get_ofd(base, vm, dirfd).ok_or(EBADF)?;
+    let dir_ino = ofd.ino as u32;
+    let st = memfs::stat(dir_ino).ok_or(ENOENT)?;
+    if st.mode & memfs::S_IFMT != memfs::S_IFDIR {
+        return Err(ENOTDIR);
+    }
+
+    Ok(dir_ino)
+}
+
+fn trim_trailing_slashes(path: &[u8]) -> &[u8] {
+    let mut end = path.len();
+    while end > 1 && path[end - 1] == b'/' {
+        end -= 1;
+    }
+    &path[..end]
+}
+
+fn path_has_trailing_slash(path: &[u8]) -> bool {
+    path.len() > 1 && path[path.len() - 1] == b'/'
+}
+
+fn resolve_path_with_errno(start_ino: u32, path: &[u8]) -> Result<u32, i64> {
+    let mut ino = start_ino;
+    let components = if path.first() == Some(&b'/') {
+        &path[1..]
+    } else {
+        path
+    };
+
+    for component in components.split(|&b| b == b'/') {
+        if component.is_empty() || component == b"." {
+            continue;
+        }
+
+        let st = memfs::stat(ino).ok_or(ENOENT)?;
+        if st.mode & memfs::S_IFMT != memfs::S_IFDIR {
+            return Err(ENOTDIR);
+        }
+
+        ino = memfs::lookup(ino, component);
+        if ino == 0 {
+            return Err(ENOENT);
+        }
+    }
+
+    Ok(ino)
+}
+
+fn resolve_at(vm: &ThreadState, dirfd: u64, path_addr: u64, base: u32) -> Result<u32, i64> {
     let mut path_buf = [0u8; 512];
     let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf) };
-    let path = &path_buf[..len];
+    let path = trim_trailing_slashes(&path_buf[..len]);
 
     if path.is_empty() {
-        return 0;
+        return Err(ENOENT);
     }
 
     if path[0] == b'/' {
-        memfs::resolve_path(path)
-    } else if dirfd as i32 == AT_FDCWD {
-        memfs::resolve_path_from(current_dir_ino(base, vm), path)
-    } else {
-        // dirfd-relative: resolve path relative to the directory that dirfd refers to
-        let ofd = match fd_table::get_ofd(base, vm, dirfd) {
-            Some(o) => o,
-            None => return 0,
-        };
-        let dir_ino = ofd.ino as u32;
-        if dir_ino == 0 {
-            return 0;
-        }
-        memfs::resolve_path_from(dir_ino, path)
+        return resolve_path_with_errno(1, path);
     }
+
+    let dir_ino = dirfd_base_ino(vm, dirfd, base)?;
+    resolve_path_with_errno(dir_ino, path)
 }
 
 pub fn sys_getcwd(vm: &ThreadState, base: u32, buf: u64, size: u64) -> i64 {
@@ -119,10 +163,10 @@ pub fn sys_getcwd(vm: &ThreadState, base: u32, buf: u64, size: u64) -> i64 {
 }
 
 pub fn sys_chdir(vm: &mut ThreadState, base: u32, path_addr: u64) -> i64 {
-    let ino = resolve_at(vm, AT_FDCWD as u64, path_addr, base);
-    if ino == 0 {
-        return ENOENT;
-    }
+    let ino = match resolve_at(vm, AT_FDCWD as u64, path_addr, base) {
+        Ok(ino) => ino,
+        Err(errno) => return errno,
+    };
     let st = match memfs::stat(ino) {
         Some(st) => st,
         None => return ENOENT,
@@ -135,10 +179,10 @@ pub fn sys_chdir(vm: &mut ThreadState, base: u32, path_addr: u64) -> i64 {
 }
 
 pub fn sys_statfs(vm: &ThreadState, base: u32, path_addr: u64, buf: u64) -> i64 {
-    let ino = resolve_at(vm, AT_FDCWD as u64, path_addr, base);
-    if ino == 0 {
-        return ENOENT;
-    }
+    let ino = match resolve_at(vm, AT_FDCWD as u64, path_addr, base) {
+        Ok(ino) => ino,
+        Err(errno) => return errno,
+    };
 
     if memfs::stat(ino).is_none() {
         return ENOENT;
@@ -180,10 +224,31 @@ pub fn sys_openat(
     let oflags = flags as i32;
     let mut path_buf = [0u8; 513];
     let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf[1..]) };
-    let path = &path_buf[1..1 + len];
+    let raw_path = &path_buf[1..1 + len];
+    let require_directory = path_has_trailing_slash(raw_path);
+    let path = trim_trailing_slashes(raw_path);
 
     if path.is_empty() {
         return ENOENT;
+    }
+
+    if oflags & O_CREAT == 0 {
+        let ino = if path[0] == b'/' {
+            match resolve_path_with_errno(1, path) {
+                Ok(ino) => ino,
+                Err(errno) => return errno,
+            }
+        } else {
+            let base_ino = match dirfd_base_ino(vm, dirfd, base) {
+                Ok(ino) => ino,
+                Err(errno) => return errno,
+            };
+            match resolve_path_with_errno(base_ino, path) {
+                Ok(ino) => ino,
+                Err(errno) => return errno,
+            }
+        };
+        return open_existing_inode(vm, base, ino, oflags, require_directory);
     }
 
     if path[0] == b'/' {
@@ -195,17 +260,12 @@ pub fn sys_openat(
         if parent_ino == 0 {
             return ENOENT;
         }
-        openat_with_parent(vm, base, parent_ino, name, oflags, mode)
+        openat_with_parent(vm, base, parent_ino, name, oflags, mode, require_directory)
     } else {
         // Relative path: determine base directory inode
-        let base_ino = if dirfd as i32 == AT_FDCWD {
-            current_dir_ino(base, vm)
-        } else {
-            let ofd = match fd_table::get_ofd(base, vm, dirfd) {
-                Some(o) => o,
-                None => return EBADF,
-            };
-            ofd.ino as u32
+        let base_ino = match dirfd_base_ino(vm, dirfd, base) {
+            Ok(ino) => ino,
+            Err(errno) => return errno,
         };
 
         let (parent_rel, name) = split_relative_parent_name(path);
@@ -230,32 +290,18 @@ pub fn sys_openat(
         if parent_ino == 0 {
             return ENOENT;
         }
-        openat_with_parent(vm, base, parent_ino, name, oflags, mode)
+        openat_with_parent(vm, base, parent_ino, name, oflags, mode, require_directory)
     }
 }
 
-fn openat_with_parent(
+fn open_existing_inode(
     vm: &mut ThreadState,
     base: u32,
-    parent_ino: u32,
-    name: &[u8],
+    ino: u32,
     oflags: i32,
-    mode: u64,
+    require_directory: bool,
 ) -> i64 {
-    let mut ino = memfs::lookup(parent_ino, name);
-
-    if ino == 0 {
-        if oflags & O_CREAT != 0 {
-            ino = memfs::create_file(parent_ino, name, mode as u32 & 0o7777);
-            if ino == 0 {
-                return ENOSPC;
-            }
-        } else {
-            return ENOENT;
-        }
-    }
-
-    if oflags & O_DIRECTORY != 0 {
+    if require_directory || oflags & O_DIRECTORY != 0 {
         let st = match memfs::stat(ino) {
             Some(st) => st,
             None => return ENOENT,
@@ -270,6 +316,31 @@ fn openat_with_parent(
     }
 
     fd_table::open_file(vm, base, ino, oflags)
+}
+
+fn openat_with_parent(
+    vm: &mut ThreadState,
+    base: u32,
+    parent_ino: u32,
+    name: &[u8],
+    oflags: i32,
+    mode: u64,
+    require_directory: bool,
+) -> i64 {
+    let mut ino = memfs::lookup(parent_ino, name);
+
+    if ino == 0 {
+        if oflags & O_CREAT != 0 {
+            ino = memfs::create_file(parent_ino, name, mode as u32 & 0o7777);
+            if ino == 0 {
+                return ENOSPC;
+            }
+        } else {
+            return ENOENT;
+        }
+    }
+
+    open_existing_inode(vm, base, ino, oflags, require_directory)
 }
 
 fn split_parent_name(path: &[u8]) -> (u32, &[u8]) {
@@ -564,12 +635,16 @@ pub fn sys_newfstatat(
     dirfd: u64,
     path_addr: u64,
     stat_buf: u64,
-    _flags: u64,
+    flags: u64,
 ) -> i64 {
-    let ino = resolve_at(vm, dirfd, path_addr, base);
-    if ino == 0 {
-        return ENOENT;
+    if flags & !AT_SYMLINK_NOFOLLOW != 0 {
+        return EINVAL;
     }
+
+    let ino = match resolve_at(vm, dirfd, path_addr, base) {
+        Ok(ino) => ino,
+        Err(errno) => return errno,
+    };
     write_stat(base, stat_buf, ino)
 }
 
@@ -602,7 +677,7 @@ fn write_stat(base: u32, stat_buf: u64, ino: u32) -> i64 {
 pub fn sys_mkdirat(vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, mode: u64) -> i64 {
     let mut path_buf = [0u8; 513];
     let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf[1..]) };
-    let path = &path_buf[1..1 + len];
+    let path = trim_trailing_slashes(&path_buf[1..1 + len]);
     if path.is_empty() {
         return ENOENT;
     }
@@ -620,14 +695,9 @@ pub fn sys_mkdirat(vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, 
         0
     } else {
         // Relative path
-        let base_ino = if dirfd as i32 == AT_FDCWD {
-            current_dir_ino(base, vm)
-        } else {
-            let ofd = match fd_table::get_ofd(base, vm, dirfd) {
-                Some(o) => o,
-                None => return EBADF,
-            };
-            ofd.ino as u32
+        let base_ino = match dirfd_base_ino(vm, dirfd, base) {
+            Ok(ino) => ino,
+            Err(errno) => return errno,
         };
 
         let (parent_rel, name) = split_relative_parent_name(path);
@@ -659,9 +729,13 @@ pub fn sys_unlinkat(
     path_addr: u64,
     flags: u64,
 ) -> i64 {
+    if flags & !AT_REMOVEDIR != 0 {
+        return EINVAL;
+    }
+
     let mut path_buf = [0u8; 513];
     let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf[1..]) };
-    let path = &path_buf[1..1 + len];
+    let path = trim_trailing_slashes(&path_buf[1..1 + len]);
     if path.is_empty() {
         return ENOENT;
     }
@@ -684,14 +758,9 @@ pub fn sys_unlinkat(
             return ENOENT;
         }
 
-        let base_ino = if dirfd as i32 == AT_FDCWD {
-            current_dir_ino(base, vm)
-        } else {
-            let ofd = match fd_table::get_ofd(base, vm, dirfd) {
-                Some(o) => o,
-                None => return EBADF,
-            };
-            ofd.ino as u32
+        let base_ino = match dirfd_base_ino(vm, dirfd, base) {
+            Ok(ino) => ino,
+            Err(errno) => return errno,
         };
 
         let parent_ino = if parent_rel.is_empty() {
@@ -810,8 +879,10 @@ pub fn sys_faccessat(
     path_addr: u64,
     _mode: u64,
 ) -> i64 {
-    let ino = resolve_at(vm, dirfd, path_addr, base);
-    if ino == 0 { ENOENT } else { 0 }
+    match resolve_at(vm, dirfd, path_addr, base) {
+        Ok(_) => 0,
+        Err(errno) => errno,
+    }
 }
 
 pub fn sys_fchmodat(
@@ -822,10 +893,10 @@ pub fn sys_fchmodat(
     mode: u64,
     _flags: u64,
 ) -> i64 {
-    let ino = resolve_at(vm, dirfd, path_addr, base);
-    if ino == 0 {
-        return ENOENT;
-    }
+    let ino = match resolve_at(vm, dirfd, path_addr, base) {
+        Ok(ino) => ino,
+        Err(errno) => return errno,
+    };
 
     memfs::set_mode(ino, mode as u32)
 }
@@ -843,10 +914,10 @@ pub fn sys_fchownat(
         return EINVAL;
     }
 
-    let ino = resolve_at(vm, dirfd, path_addr, base);
-    if ino == 0 {
-        return ENOENT;
-    }
+    let ino = match resolve_at(vm, dirfd, path_addr, base) {
+        Ok(ino) => ino,
+        Err(errno) => return errno,
+    };
 
     let uid = if owner as i64 == -1 {
         None
@@ -872,10 +943,28 @@ pub fn sys_readlinkat(
     buf: u64,
     bufsiz: u64,
 ) -> i64 {
-    let ino = resolve_at(vm, dirfd, path_addr, base);
-    if ino == 0 {
-        return ENOENT;
+    if bufsiz == 0 {
+        return EINVAL;
     }
+
+    let mut path_buf = [0u8; 512];
+    let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf) };
+    let path = trim_trailing_slashes(&path_buf[..len]);
+
+    let ino = if path.is_empty() {
+        if dirfd as i32 == AT_FDCWD {
+            return ENOENT;
+        }
+        match fd_table::get_ofd(base, vm, dirfd) {
+            Some(ofd) => ofd.ino as u32,
+            None => return EBADF,
+        }
+    } else {
+        match resolve_at(vm, dirfd, path_addr, base) {
+            Ok(ino) => ino,
+            Err(errno) => return errno,
+        }
+    };
 
     // Read symlink target via memfs
     let mut link_buf = [0u8; 512];
@@ -907,7 +996,7 @@ pub fn sys_ftruncate(vm: &mut ThreadState, base: u32, fd: u64, length: u64) -> i
 pub fn sys_truncate(_vm: &mut ThreadState, base: u32, path_addr: u64, length: u64) -> i64 {
     let mut path_buf = [0u8; 513];
     let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf[1..]) };
-    let path = &path_buf[1..1 + len];
+    let path = trim_trailing_slashes(&path_buf[1..1 + len]);
 
     if path.is_empty() {
         return ENOENT;
@@ -935,6 +1024,7 @@ pub fn sys_truncate(_vm: &mut ThreadState, base: u32, path_addr: u64, length: u6
 #[cfg(test)]
 mod tests {
     use crate::abi::*;
+    use crate::fs::{fd_table, memfs};
     use crate::test_helpers::TestVm;
 
     #[test]
@@ -1035,14 +1125,72 @@ mod tests {
     }
 
     #[test]
+    fn newfstatat_rejects_non_directory_dirfd() {
+        let mut t = TestVm::new();
+
+        let fd = t.sys_openat(b"/plain", O_CREAT | O_RDWR);
+        assert!(fd >= 3);
+
+        let path_addr = t.write_path(0xF000, b"child");
+        let stat_addr = t.scratch + 0x3000;
+        let ret = super::sys_newfstatat(&mut t.vm, t.base, fd as u64, path_addr, stat_addr, 0);
+        assert_eq!(ret, ENOTDIR);
+    }
+
+    #[test]
+    fn newfstatat_rejects_invalid_flags() {
+        let mut t = TestVm::new();
+
+        let fd = t.sys_openat(b"/plain", O_CREAT | O_RDWR);
+        assert!(fd >= 3);
+        t.sys_close(fd);
+
+        let path_addr = t.write_path(0xF000, b"/plain");
+        let stat_addr = t.scratch + 0x3000;
+        let ret = super::sys_newfstatat(&mut t.vm, t.base, (-100i64) as u64, path_addr, stat_addr, 9999);
+        assert_eq!(ret, EINVAL);
+    }
+
+    #[test]
     fn unlinkat_with_at_removedir_removes_empty_directory() {
         let mut t = TestVm::new();
 
         assert_eq!(t.sys_mkdirat(b"/empty"), 0);
         let path_addr = t.write_path(0xF000, b"/empty");
-        let ret = super::sys_unlinkat(&mut t.vm, t.base, (-100i64) as u64, path_addr, AT_REMOVEDIR);
+        let ret = super::sys_unlinkat(
+            &mut t.vm,
+            t.base,
+            (-100i64) as u64,
+            path_addr,
+            super::AT_REMOVEDIR,
+        );
         assert_eq!(ret, 0);
         assert_eq!(crate::fs::memfs::resolve_path(b"/empty"), 0);
+    }
+
+    #[test]
+    fn unlinkat_rejects_non_directory_dirfd() {
+        let mut t = TestVm::new();
+
+        let fd = t.sys_openat(b"/plain", O_CREAT | O_RDWR);
+        assert!(fd >= 3);
+
+        let path_addr = t.write_path(0xF000, b"child");
+        let ret = super::sys_unlinkat(&mut t.vm, t.base, fd as u64, path_addr, 0);
+        assert_eq!(ret, ENOTDIR);
+    }
+
+    #[test]
+    fn unlinkat_rejects_invalid_flags() {
+        let mut t = TestVm::new();
+
+        let fd = t.sys_openat(b"/victim", O_CREAT | O_RDWR);
+        assert!(fd >= 3);
+        t.sys_close(fd);
+
+        let path_addr = t.write_path(0xF000, b"/victim");
+        let ret = super::sys_unlinkat(&mut t.vm, t.base, (-100i64) as u64, path_addr, 9999);
+        assert_eq!(ret, EINVAL);
     }
 
     /// Test sys_truncate: create a file with data, truncate it, verify size.
@@ -1137,5 +1285,158 @@ mod tests {
         assert_eq!(&data[..], b"nested content");
 
         t.sys_close(dir_fd);
+    }
+
+    #[test]
+    fn openat_accepts_dot_path() {
+        let mut t = TestVm::new();
+
+        assert_eq!(t.sys_mkdirat(b"/dir"), 0);
+        let dir_fd = t.sys_openat(b"/dir", O_RDONLY | O_DIRECTORY);
+        assert!(dir_fd >= 3);
+
+        let dot_addr = t.write_path(0xF100, b".");
+        let reopened = super::sys_openat(
+            &mut t.vm,
+            t.base,
+            dir_fd as u64,
+            dot_addr,
+            (O_RDONLY | O_DIRECTORY) as u64,
+            0,
+        );
+        assert!(reopened >= 3);
+
+        t.sys_close(reopened);
+        t.sys_close(dir_fd);
+    }
+
+    #[test]
+    fn faccessat_basic_and_error_paths() {
+        let mut t = TestVm::new();
+        let read_ok = 4u64;
+
+        assert_eq!(t.sys_mkdirat(b"/dir"), 0);
+        let fd = t.sys_openat(b"/dir/file", O_CREAT | O_RDWR);
+        assert!(fd >= 3);
+        t.sys_close(fd);
+
+        let dir_fd = t.sys_openat(b"/dir", O_RDONLY | O_DIRECTORY);
+        assert!(dir_fd >= 3);
+        let file_fd = t.sys_openat(b"/dir/file", O_RDONLY);
+        assert!(file_fd >= 3);
+
+        let rel_addr = t.write_path(0xF100, b"file");
+        let abs_addr = t.write_path(0xF200, b"/dir/file");
+        let cwd_addr = t.write_path(0xF300, b"dir/file");
+        let missing_addr = t.write_path(0xF400, b"missing");
+
+        assert_eq!(
+            super::sys_faccessat(&mut t.vm, t.base, dir_fd as u64, rel_addr, read_ok),
+            0
+        );
+        assert_eq!(
+            super::sys_faccessat(&mut t.vm, t.base, 999, abs_addr, read_ok),
+            0
+        );
+        assert_eq!(
+            super::sys_faccessat(
+                &mut t.vm,
+                t.base,
+                (-100i64) as u64,
+                cwd_addr,
+                read_ok,
+            ),
+            0
+        );
+        assert_eq!(
+            super::sys_faccessat(
+                &mut t.vm,
+                t.base,
+                file_fd as u64,
+                missing_addr,
+                read_ok,
+            ),
+            ENOTDIR
+        );
+        assert_eq!(
+            super::sys_faccessat(&mut t.vm, t.base, 999, rel_addr, read_ok),
+            EBADF
+        );
+    }
+
+    #[test]
+    fn readlinkat_basic_and_error_paths() {
+        let mut t = TestVm::new();
+
+        let dir_ino = memfs::create_dir(1, b"dir", 0o755);
+        assert!(dir_ino > 0);
+        let file_ino = memfs::create_file(dir_ino, b"file", 0o644);
+        assert!(file_ino > 0);
+        let link_ino = memfs::create_symlink(dir_ino, b"link", b"file");
+        assert!(link_ino > 0);
+
+        let dir_fd = t.sys_openat(b"/dir", O_RDONLY | O_DIRECTORY);
+        assert!(dir_fd >= 3);
+        let file_fd = t.sys_openat(b"/dir/file", O_RDONLY);
+        assert!(file_fd >= 3);
+        let link_fd = fd_table::open_file(&mut t.vm, t.base, link_ino, O_RDONLY);
+        assert!(link_fd >= 3);
+
+        let rel_addr = t.write_path(0xF100, b"link");
+        let abs_addr = t.write_path(0xF200, b"/dir/link");
+        let cwd_addr = t.write_path(0xF300, b"dir/link");
+        let empty_addr = t.write_path(0xF400, b"");
+        let file_addr = t.write_path(0xF500, b"file");
+        let missing_addr = t.write_path(0xF600, b"missing");
+        let nested_addr = t.write_path(0xF700, b"file/child");
+        let buf_addr = t.scratch + 0x2000;
+
+        let n = super::sys_readlinkat(&mut t.vm, t.base, dir_fd as u64, rel_addr, buf_addr, 16);
+        assert_eq!(n, 4);
+        assert_eq!(&t.guest_mem(buf_addr, 4), b"file");
+
+        let n = super::sys_readlinkat(&mut t.vm, t.base, 999, abs_addr, buf_addr, 16);
+        assert_eq!(n, 4);
+        assert_eq!(&t.guest_mem(buf_addr, 4), b"file");
+
+        let n = super::sys_readlinkat(
+            &mut t.vm,
+            t.base,
+            (-100i64) as u64,
+            cwd_addr,
+            buf_addr,
+            16,
+        );
+        assert_eq!(n, 4);
+        assert_eq!(&t.guest_mem(buf_addr, 4), b"file");
+
+        let n = super::sys_readlinkat(&mut t.vm, t.base, link_fd as u64, empty_addr, buf_addr, 16);
+        assert_eq!(n, 4);
+        assert_eq!(&t.guest_mem(buf_addr, 4), b"file");
+
+        assert_eq!(
+            super::sys_readlinkat(&mut t.vm, t.base, dir_fd as u64, rel_addr, buf_addr, 0),
+            EINVAL
+        );
+        assert_eq!(
+            super::sys_readlinkat(&mut t.vm, t.base, dir_fd as u64, file_addr, buf_addr, 16),
+            EINVAL
+        );
+        assert_eq!(
+            super::sys_readlinkat(&mut t.vm, t.base, file_fd as u64, rel_addr, buf_addr, 16),
+            ENOTDIR
+        );
+        assert_eq!(
+            super::sys_readlinkat(&mut t.vm, t.base, 999, rel_addr, buf_addr, 16),
+            EBADF
+        );
+        assert_eq!(
+            super::sys_readlinkat(&mut t.vm, t.base, dir_fd as u64, missing_addr, buf_addr, 16),
+            ENOENT
+        );
+        assert_eq!(
+            super::sys_readlinkat(&mut t.vm, t.base, dir_fd as u64, nested_addr, buf_addr, 16),
+            ENOTDIR
+        );
     }
 }

@@ -29,4 +29,4 @@ macro_rules! ltp_test {
     };
 }
 
-ltp_test!(ltp_read01, "read01");
+include!(concat!(env!("OUT_DIR"), "/ltp_tests_generated.rs"));

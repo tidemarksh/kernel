@@ -1,0 +1,11 @@
+# Intentionally divergent tests documented in internal design note.
+testcases/kernel/syscalls/clock_gettime/clock_gettime01.c virtual clock design; skip per DIVERGENT policy
+testcases/kernel/syscalls/clock_gettime/clock_gettime02.c virtual clock design; skip per DIVERGENT policy
+testcases/kernel/syscalls/clock_gettime/clock_gettime03.c virtual clock design; skip per DIVERGENT policy
+testcases/kernel/syscalls/clock_gettime/clock_gettime04.c virtual clock design; skip per DIVERGENT policy
+testcases/kernel/syscalls/clock_gettime/leapsec01.c virtual clock design; skip per DIVERGENT policy
+testcases/kernel/syscalls/getrandom/getrandom01.c deterministic getrandom design; skip per DIVERGENT policy
+testcases/kernel/syscalls/getrandom/getrandom02.c deterministic getrandom design; skip per DIVERGENT policy
+testcases/kernel/syscalls/getrandom/getrandom03.c deterministic getrandom design; skip per DIVERGENT policy
+testcases/kernel/syscalls/getrandom/getrandom04.c deterministic getrandom design; skip per DIVERGENT policy
+testcases/kernel/syscalls/getrandom/getrandom05.c deterministic getrandom design; skip per DIVERGENT policy
