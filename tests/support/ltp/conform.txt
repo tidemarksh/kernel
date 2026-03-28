@@ -7,6 +7,7 @@ testcases/kernel/syscalls/faccessat/faccessat01.c verified faccessat(2) relative
 testcases/kernel/syscalls/faccessat/faccessat02.c verified faccessat(2) ENOTDIR and EBADF error paths
 testcases/kernel/syscalls/fstatat/fstatat01.c verified newfstatat basic path/dirfd errno handling
 testcases/kernel/syscalls/ftruncate/ftruncate01.c verified ftruncate(2) shrink and extend semantics
+testcases/kernel/syscalls/futex/futex_wake01.c verified futex(FUTEX_WAKE) returns 0 when no waiters are present
 testcases/kernel/syscalls/geteuid/geteuid01.c verified basic geteuid(2) success path
 testcases/kernel/syscalls/getuid/getuid01.c verified basic getuid(2) success path
 testcases/kernel/syscalls/lseek/lseek01.c verified lseek(2) basic offset movement and reads
@@ -18,6 +19,8 @@ testcases/kernel/syscalls/read/read01.c verified basic read(2) success path
 testcases/kernel/syscalls/read/read04.c verified read(2) returns correct byte count and data
 testcases/kernel/syscalls/sched_getaffinity/sched_getaffinity01.c verified single-CPU affinity mask and error handling
 testcases/kernel/syscalls/sched_yield/sched_yield01.c verified sched_yield returns success
+testcases/kernel/syscalls/set_robust_list/set_robust_list01.c verified set_robust_list(2) accepts sizeof(robust_list_head) and rejects invalid len
+testcases/kernel/syscalls/set_tid_address/set_tid_address01.c verified set_tid_address(2) returns the thread-group leader tid for the main thread
 testcases/kernel/syscalls/sysinfo/sysinfo01.c verified sysinfo(2) success path
 testcases/kernel/syscalls/sysinfo/sysinfo02.c verified sysinfo(2) EFAULT on invalid address
 testcases/kernel/syscalls/truncate/truncate02.c verified truncate(2) shrink/extend semantics without changing file offset

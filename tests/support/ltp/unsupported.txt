@@ -195,7 +195,6 @@ testcases/kernel/syscalls/execvp/execvp01.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/execvp/execvp01_child.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/exit/exit01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/exit/exit02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/exit_group/exit_group01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/faccessat2/faccessat201.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/faccessat2/faccessat202.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fadvise/posix_fadvise01.c not yet enabled in current syscall-conformance profile
@@ -363,8 +362,6 @@ testcases/kernel/syscalls/futex/futex_wait_bitset01.c futex currently implements
 testcases/kernel/syscalls/futex/futex_waitv01.c futex currently implements only WAIT/WAKE
 testcases/kernel/syscalls/futex/futex_waitv02.c futex currently implements only WAIT/WAKE
 testcases/kernel/syscalls/futex/futex_waitv03.c futex currently implements only WAIT/WAKE
-testcases/kernel/syscalls/futex/futex_wake01.c futex currently implements only WAIT/WAKE
-testcases/kernel/syscalls/futex/futex_wake02.c futex currently implements only WAIT/WAKE
 testcases/kernel/syscalls/futex/futex_wake03.c futex currently implements only WAIT/WAKE
 testcases/kernel/syscalls/futex/futex_wake04.c futex currently implements only WAIT/WAKE
 testcases/kernel/syscalls/futimesat/futimesat01.c not yet enabled in current syscall-conformance profile
@@ -1042,10 +1039,8 @@ testcases/kernel/syscalls/set_mempolicy/set_mempolicy02.c not yet enabled in cur
 testcases/kernel/syscalls/set_mempolicy/set_mempolicy03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/set_mempolicy/set_mempolicy04.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/set_mempolicy/set_mempolicy05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/set_robust_list/set_robust_list01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/set_thread_area/set_thread_area01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/set_thread_area/set_thread_area02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/set_tid_address/set_tid_address01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setdomainname/setdomainname01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setdomainname/setdomainname02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setdomainname/setdomainname03.c not yet enabled in current syscall-conformance profile
@@ -1336,3 +1331,5 @@ testcases/kernel/syscalls/writev/writev06.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/writev/writev07.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getppid/getppid01.c parent/child semantics belong to Phase 5 process support, not current Phase 4 conformance scope
 testcases/kernel/syscalls/statfs/statfs01.c LTP variant requires mount-device/all-filesystems harness support not present in current wasm test environment
+testcases/kernel/syscalls/exit_group/exit_group01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/futex/futex_wake02.c futex currently implements only WAIT/WAKE
