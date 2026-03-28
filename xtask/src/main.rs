@@ -5,6 +5,12 @@ use std::process::Command;
 
 const DEFAULT_TEST_TARGET: &str = "wasm32-wasip1";
 
+#[derive(Clone, Copy)]
+enum TestTarget<'a> {
+    Binary(&'a str),
+    Lib,
+}
+
 fn main() {
     if let Err(err) = real_main() {
         eprintln!("xtask: {}", err);
@@ -26,14 +32,18 @@ fn real_main() -> Result<(), String> {
         }
         "ltp-conform" => {
             let pattern = optional_pattern(args)?;
-            run_test_binary("ltp_tests", pattern.as_deref())
+            run_test_target(TestTarget::Binary("ltp_tests"), pattern.as_deref())
         }
         "test-binary" => {
-            let binary = args
-                .next()
-                .ok_or_else(|| "usage: cargo xtask test-binary <binary> [test-name-regex]".to_string())?;
+            let binary = args.next().ok_or_else(|| {
+                "usage: cargo xtask test-binary <binary> [test-name-regex]".to_string()
+            })?;
             let pattern = optional_pattern(args)?;
-            run_test_binary(&binary, pattern.as_deref())
+            run_test_target(TestTarget::Binary(&binary), pattern.as_deref())
+        }
+        "test-lib" => {
+            let pattern = optional_pattern(args)?;
+            run_test_target(TestTarget::Lib, pattern.as_deref())
         }
         other => Err(format!("unknown xtask command {:?}", other)),
     }
@@ -51,34 +61,46 @@ fn print_help() {
     eprintln!("usage:");
     eprintln!("  cargo xtask ltp-conform [test-name-regex]");
     eprintln!("  cargo xtask test-binary <binary> [test-name-regex]");
+    eprintln!("  cargo xtask test-lib [test-name-regex]");
 }
 
-fn run_test_binary(binary: &str, pattern: Option<&str>) -> Result<(), String> {
+fn run_test_target(target: TestTarget<'_>, pattern: Option<&str>) -> Result<(), String> {
     let matcher = match pattern {
         Some(raw) => Some(Regex::new(raw).map_err(|e| format!("invalid regex {:?}: {}", raw, e))?),
         None => None,
     };
 
-    let mut tests = list_tests(binary)?;
+    let mut tests = list_tests(target)?;
     if let Some(matcher) = &matcher {
         tests.retain(|name| matcher.is_match(name));
     }
 
     if tests.is_empty() {
-        return Err(format!("no tests matched for binary {:?}", binary));
+        return Err(format!(
+            "no tests matched for {}",
+            target_description(target)
+        ));
     }
 
     for test_name in tests {
-        println!("==> {} :: {}", binary, test_name);
-        let status = cargo_command()
+        println!("==> {} :: {}", target_description(target), test_name);
+        let mut command = cargo_command();
+        command.arg("test");
+        match target {
+            TestTarget::Binary(binary) => {
+                command.args(["--test", binary]);
+            }
+            TestTarget::Lib => {
+                command.arg("--lib");
+            }
+        }
+        let status = command
             .args([
-                "test",
-                "--test",
-                binary,
                 "--target",
                 DEFAULT_TEST_TARGET,
                 &test_name,
                 "--",
+                "--exact",
                 "--nocapture",
             ])
             .status()
@@ -86,8 +108,17 @@ fn run_test_binary(binary: &str, pattern: Option<&str>) -> Result<(), String> {
 
         if !status.success() {
             return Err(match status.code() {
-                Some(code) => format!("{} :: {} failed with exit code {}", binary, test_name, code),
-                None => format!("{} :: {} terminated by signal", binary, test_name),
+                Some(code) => format!(
+                    "{} :: {} failed with exit code {}",
+                    target_description(target),
+                    test_name,
+                    code
+                ),
+                None => format!(
+                    "{} :: {} terminated by signal",
+                    target_description(target),
+                    test_name
+                ),
             });
         }
     }
@@ -95,18 +126,30 @@ fn run_test_binary(binary: &str, pattern: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-fn list_tests(binary: &str) -> Result<Vec<String>, String> {
-    let output = cargo_command()
-        .args(["test", "--test", binary, "--target", DEFAULT_TEST_TARGET, "--", "--list"])
+fn list_tests(target: TestTarget<'_>) -> Result<Vec<String>, String> {
+    let mut command = cargo_command();
+    command.arg("test");
+    match target {
+        TestTarget::Binary(binary) => {
+            command.args(["--test", binary]);
+        }
+        TestTarget::Lib => {
+            command.arg("--lib");
+        }
+    }
+    let output = command
+        .args(["--target", DEFAULT_TEST_TARGET, "--", "--list"])
         .output()
-        .map_err(|e| format!("failed to list tests for {}: {}", binary, e))?;
+        .map_err(|e| format!("failed to list tests for {}: {}", target_description(target), e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
         return Err(format!(
             "failed to list tests for {}:\n{}{}",
-            binary, stdout, stderr
+            target_description(target),
+            stdout,
+            stderr
         ));
     }
 
@@ -116,6 +159,13 @@ fn list_tests(binary: &str) -> Result<Vec<String>, String> {
         String::from_utf8_lossy(&output.stderr)
     );
     Ok(parse_test_names(&combined))
+}
+
+fn target_description(target: TestTarget<'_>) -> String {
+    match target {
+        TestTarget::Binary(binary) => format!("test binary {:?}", binary),
+        TestTarget::Lib => "lib tests".to_string(),
+    }
 }
 
 fn parse_test_names(text: &str) -> Vec<String> {
