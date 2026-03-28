@@ -2,8 +2,8 @@
 //!
 //! Two-layer design:
 //!
-//! FD table lives in guest Memory (ProcessState.fd_table) — dup/close(refcount>1)/fcntl
-//! operate without kernel Worker.
+//! FD table lives in guest Memory (ProcessState.fd_table) — dup/close(same-process alias)/
+//! fcntl operate without kernel Worker.
 //!
 //! OFD table lives in kernel Worker linear memory (alloc.rs) — shared by FDs via
 //! refcount. Last close triggers OFD cleanup via kernel Worker.
@@ -19,7 +19,8 @@
 //!     fd_type:      i32,               // offset 0  — FD_TYPE_FILE, FD_TYPE_PIPE, etc.
 //!     host_fd:      i32,               // offset 4  — pipe: idx or -(idx+1)
 //!     status_flags: i32,               // offset 8  — O_APPEND, O_NONBLOCK
-//!     refcount:     i32,               // offset 12 — dup/fork increment, close decrement
+//!     refcount:     i32,               // offset 12 — process-level holds (fork increments,
+//!                                      //             last close in a process decrements)
 //!     offset:       i64,               // offset 16 — current file offset
 //!     ino:          u32,               // offset 24 — inode number (MemFS)
 //!     _pad:         u32,               // offset 28
@@ -45,7 +46,7 @@ const F_GETFL: u64 = 3;
 const F_SETFL: u64 = 4;
 const F_DUPFD_CLOEXEC: u64 = 1030;
 
-const FD_CLOEXEC: u32 = 1;
+pub const FD_CLOEXEC: u32 = 1;
 
 /// Pointer to OFD table in kernel Worker linear memory.
 static mut OFD_TABLE_PTR: *mut [OpenFileDesc; MAX_FDS] = core::ptr::null_mut();
@@ -54,6 +55,19 @@ fn ofd_table() -> &'static mut [OpenFileDesc; MAX_FDS] {
     unsafe {
         let p = core::ptr::read(core::ptr::addr_of!(OFD_TABLE_PTR));
         &mut *p
+    }
+}
+
+pub fn ofd_table_ptr() -> u32 {
+    unsafe { core::ptr::read(core::ptr::addr_of!(OFD_TABLE_PTR)) as u32 }
+}
+
+pub fn attach_ofd_table_ptr(ptr: u32) {
+    unsafe {
+        core::ptr::write(
+            core::ptr::addr_of_mut!(OFD_TABLE_PTR),
+            ptr as *mut [OpenFileDesc; MAX_FDS],
+        );
     }
 }
 
@@ -113,6 +127,18 @@ unsafe fn find_free_fd(base: u32, vm: &ThreadState, min_fd: usize) -> Option<usi
     None
 }
 
+unsafe fn process_has_ofd(ps: *const ProcessState, ofd_id: u32) -> bool {
+    if ps.is_null() || ofd_id == 0 {
+        return false;
+    }
+    for entry in (*ps).fd_table.iter() {
+        if entry.ofd_id == ofd_id {
+            return true;
+        }
+    }
+    false
+}
+
 /// Allocate a new OFD slot. Returns ofd_id (1-based), or 0 on failure.
 unsafe fn alloc_ofd(fd_type: i32, status_flags: i32) -> u32 {
     for i in 1..MAX_FDS {
@@ -130,6 +156,50 @@ unsafe fn alloc_ofd(fd_type: i32, status_flags: i32) -> u32 {
         }
     }
     0
+}
+
+fn cleanup_ofd(ofd_id: usize) {
+    let ofd = &mut ofd_table()[ofd_id];
+    if ofd.fd_type == FD_TYPE_PIPE {
+        let pipe_idx = ofd.ino;
+        let is_read = ofd.host_fd >= 0;
+        crate::syscall::pipe::pipe_close(pipe_idx, is_read);
+    } else if ofd.fd_type == FD_TYPE_SOCKET {
+        crate::syscall::socket::socket_close(ofd.ino);
+    }
+    ofd.fd_type = 0;
+    ofd.host_fd = -1;
+    ofd.status_flags = 0;
+    ofd.refcount = 0;
+    ofd.offset = 0;
+    ofd.ino = 0;
+}
+
+/// Increment the OFD refcount for an additional process holding this OFD.
+pub fn retain_ofd_id(ofd_id: u32) {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return;
+    }
+    let ofd = &mut ofd_table()[ofd_id as usize];
+    if ofd.refcount > 0 {
+        ofd.refcount += 1;
+    }
+}
+
+/// Drop one process-level reference to an OFD and run backend cleanup on last close.
+pub fn release_ofd_id(ofd_id: u32) {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return;
+    }
+    let slot = ofd_id as usize;
+    let ofd = &mut ofd_table()[slot];
+    if ofd.refcount <= 0 {
+        return;
+    }
+    ofd.refcount -= 1;
+    if ofd.refcount <= 0 {
+        cleanup_ofd(slot);
+    }
 }
 
 // =========================================================================
@@ -255,6 +325,7 @@ pub fn open_epoll(vm: &mut ThreadState, base: u32, epoll_idx: u32, flags: i32) -
 // =========================================================================
 
 /// dup(oldfd) → newfd
+/// Duplicating an FD inside the same process does not change OFD process refcount.
 pub fn sys_dup(vm: &mut ThreadState, base: u32, oldfd: u64) -> i64 {
     unsafe {
         let entry = match get_fd_entry(base, vm, oldfd) {
@@ -270,7 +341,6 @@ pub fn sys_dup(vm: &mut ThreadState, base: u32, oldfd: u64) -> i64 {
             ofd_id: entry.ofd_id,
             fd_flags: 0, // dup clears FD_CLOEXEC
         };
-        ofd_table()[entry.ofd_id as usize].refcount += 1;
         newfd as i64
     }
 }
@@ -292,27 +362,16 @@ pub fn sys_dup3(vm: &mut ThreadState, base: u32, oldfd: u64, newfd: u64, flags: 
 
         let ps = get_process_state(base, vm);
 
-        // POSIX dup3: silently close newfd if it's already open
+        // POSIX dup3: silently close newfd if it's already open.
+        // Releasing the OFD is only required when this was the process's last
+        // FD alias to that OFD.
         let old_new = &mut (*ps).fd_table[newfd as usize];
         if old_new.ofd_id != 0 {
-            let old_ofd_id = old_new.ofd_id as usize;
+            let old_ofd_id = old_new.ofd_id;
             old_new.ofd_id = 0;
             old_new.fd_flags = 0;
-
-            let ofd = &mut ofd_table()[old_ofd_id];
-            ofd.refcount -= 1;
-
-            if ofd.refcount <= 0 {
-                // Last reference: backend-specific cleanup before releasing OFD.
-                if ofd.fd_type == FD_TYPE_PIPE {
-                    let pipe_idx = ofd.ino;
-                    let is_read = ofd.host_fd >= 0;
-                    crate::syscall::pipe::pipe_close(pipe_idx, is_read);
-                } else if ofd.fd_type == FD_TYPE_SOCKET {
-                    crate::syscall::socket::socket_close(ofd.ino);
-                }
-                ofd.fd_type = 0;
-                ofd.refcount = 0;
+            if !process_has_ofd(ps, old_ofd_id) {
+                release_ofd_id(old_ofd_id);
             }
         }
 
@@ -325,7 +384,6 @@ pub fn sys_dup3(vm: &mut ThreadState, base: u32, oldfd: u64, newfd: u64, flags: 
             ofd_id: entry.ofd_id,
             fd_flags: cloexec,
         };
-        ofd_table()[entry.ofd_id as usize].refcount += 1;
         newfd as i64
     }
 }
@@ -348,7 +406,6 @@ pub fn sys_fcntl(vm: &mut ThreadState, base: u32, fd: u64, cmd: u64, arg: u64) -
                     ofd_id: entry.ofd_id,
                     fd_flags: 0,
                 };
-                ofd_table()[entry.ofd_id as usize].refcount += 1;
                 newfd as i64
             }
             F_DUPFD_CLOEXEC => {
@@ -365,7 +422,6 @@ pub fn sys_fcntl(vm: &mut ThreadState, base: u32, fd: u64, cmd: u64, arg: u64) -
                     ofd_id: entry.ofd_id,
                     fd_flags: FD_CLOEXEC,
                 };
-                ofd_table()[entry.ofd_id as usize].refcount += 1;
                 newfd as i64
             }
             F_GETFD => match get_fd_entry(base, vm, fd) {
@@ -403,6 +459,7 @@ pub fn sys_fcntl(vm: &mut ThreadState, base: u32, fd: u64, cmd: u64, arg: u64) -
 }
 
 /// close(fd)
+/// Only the last FD alias in the current process drops the OFD process refcount.
 pub fn sys_close(vm: &mut ThreadState, base: u32, fd: u64) -> i64 {
     unsafe {
         if fd as usize >= MAX_FDS {
@@ -419,24 +476,11 @@ pub fn sys_close(vm: &mut ThreadState, base: u32, fd: u64) -> i64 {
             return EBADF;
         }
 
-        let ofd_id = entry.ofd_id as usize;
+        let ofd_id = entry.ofd_id;
         entry.ofd_id = 0;
         entry.fd_flags = 0;
-
-        let ofd = &mut ofd_table()[ofd_id];
-        ofd.refcount -= 1;
-
-        if ofd.refcount <= 0 {
-            // Last reference: backend-specific cleanup before releasing OFD.
-            if ofd.fd_type == FD_TYPE_PIPE {
-                let pipe_idx = ofd.ino;
-                let is_read = ofd.host_fd >= 0;
-                crate::syscall::pipe::pipe_close(pipe_idx, is_read);
-            } else if ofd.fd_type == FD_TYPE_SOCKET {
-                crate::syscall::socket::socket_close(ofd.ino);
-            }
-            ofd.fd_type = 0;
-            ofd.refcount = 0;
+        if !process_has_ofd(ps, ofd_id) {
+            release_ofd_id(ofd_id);
         }
 
         0
@@ -498,10 +542,11 @@ pub fn get_ofd_by_id(ofd_id: u32) -> Option<OpenFileDesc> {
     }
 }
 
-/// Increment OFD refcounts for every open FD in the process.
+/// Increment OFD refcounts for every distinct OFD held by the process.
 ///
 /// Used when emulating fork(): the child receives a copy of the parent's
-/// FD table, and both processes must hold a reference to the shared OFDs.
+/// FD table, and both processes must hold a process-level reference to the
+/// shared OFDs.
 pub fn retain_fds_for_fork(base: u32, vm: &ThreadState) {
     unsafe {
         let ps = get_process_state(base, vm);
@@ -509,14 +554,35 @@ pub fn retain_fds_for_fork(base: u32, vm: &ThreadState) {
             return;
         }
 
+        let mut retained = [false; MAX_FDS];
         for entry in (*ps).fd_table.iter() {
-            if entry.ofd_id == 0 {
+            if entry.ofd_id == 0 || retained[entry.ofd_id as usize] {
                 continue;
             }
-            let ofd = &mut ofd_table()[entry.ofd_id as usize];
-            if ofd.refcount > 0 {
-                ofd.refcount += 1;
+            retained[entry.ofd_id as usize] = true;
+            retain_ofd_id(entry.ofd_id);
+        }
+    }
+}
+
+/// Drop this process's reference to every distinct OFD it still holds.
+pub fn close_all_for_process(base: u32, vm: &ThreadState) {
+    unsafe {
+        let ps = get_process_state(base, vm);
+        if ps.is_null() {
+            return;
+        }
+
+        let mut released = [false; MAX_FDS];
+        for entry in (*ps).fd_table.iter_mut() {
+            let ofd_id = entry.ofd_id;
+            entry.ofd_id = 0;
+            entry.fd_flags = 0;
+            if ofd_id == 0 || released[ofd_id as usize] {
+                continue;
             }
+            released[ofd_id as usize] = true;
+            release_ofd_id(ofd_id);
         }
     }
 }
@@ -584,6 +650,64 @@ mod tests {
         // dup3(1, 10, O_CLOEXEC)
         let ret4 = t.sys_dup3(1, 10, O_CLOEXEC as u64);
         assert_eq!(ret4, 10);
+    }
+
+    #[test]
+    fn close_shared_fd_only_drops_last_process_reference() {
+        let mut t = TestVm::new();
+        let fd = t.sys_dup(1);
+        assert_eq!(fd, 3);
+
+        let ofd_id = unsafe {
+            let ps = super::get_process_state(t.base, &t.vm);
+            (*ps).fd_table[1].ofd_id
+        };
+        assert!(ofd_id > 0);
+
+        assert_eq!(
+            super::get_ofd_by_id(ofd_id)
+                .expect("stdout OFD should exist")
+                .refcount,
+            1
+        );
+
+        assert_eq!(t.sys_close(fd), 0);
+        assert_eq!(
+            super::get_ofd_by_id(ofd_id)
+                .expect("stdout OFD should still exist after closing duplicate")
+                .refcount,
+            1
+        );
+
+        assert_eq!(t.sys_close(1), 0);
+        assert!(super::get_ofd_by_id(ofd_id).is_none());
+    }
+
+    #[test]
+    fn retain_fds_for_fork_counts_distinct_ofds_once() {
+        let mut t = TestVm::new();
+        let fd = t.sys_dup(1);
+        assert_eq!(fd, 3);
+
+        let ofd_id = unsafe {
+            let ps = super::get_process_state(t.base, &t.vm);
+            (*ps).fd_table[1].ofd_id
+        };
+        assert!(ofd_id > 0);
+        assert_eq!(
+            super::get_ofd_by_id(ofd_id)
+                .expect("stdout OFD should exist")
+                .refcount,
+            1
+        );
+
+        super::retain_fds_for_fork(t.base, &t.vm);
+        assert_eq!(
+            super::get_ofd_by_id(ofd_id)
+                .expect("stdout OFD should still exist")
+                .refcount,
+            2
+        );
     }
 }
 

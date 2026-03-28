@@ -70,26 +70,86 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         }
 
         // filesystem
-        SYS_OPENAT => fs::sys_openat(vm, base, a0, a1, a2, a3),
+        SYS_OPENAT => {
+            let r = fs::dispatch_openat(vm, base, a0, a1, a2, a3);
+            if vm.status == abi::STATUS_FS {
+                return abi::STATUS_FS;
+            }
+            r
+        }
         SYS_READ => fs::sys_read(vm, base, a0, a1, a2),
         SYS_PREAD64 => fs::sys_pread64(vm, base, a0, a1, a2, a3),
-        SYS_WRITE | SYS_WRITEV => fs::sys_write(vm, base, a0, a1, a2, nr),
-        SYS_PWRITE64 => fs::sys_pwrite64(vm, base, a0, a1, a2, a3),
+        SYS_WRITE | SYS_WRITEV => {
+            let r = fs::dispatch_write(vm, base, a0, a1, a2, nr);
+            if vm.status == abi::STATUS_FS {
+                return abi::STATUS_FS;
+            }
+            r
+        }
+        SYS_PWRITE64 => {
+            let r = fs::dispatch_pwrite64(vm, base, a0, a1, a2, a3);
+            if vm.status == abi::STATUS_FS {
+                return abi::STATUS_FS;
+            }
+            r
+        }
         SYS_READV => 0, // TODO
         SYS_NEWFSTATAT => fs::sys_newfstatat(vm, base, a0, a1, a2, a3),
-        SYS_FSTAT => fs::sys_fstat(vm, base, a0, a1),
-        SYS_LSEEK => fs::sys_lseek(vm, base, a0, a1 as i64, a2),
-        SYS_GETDENTS64 => fs::sys_getdents64(vm, base, a0, a1, a2),
-        SYS_MKDIRAT => fs::sys_mkdirat(vm, base, a0, a1, a2),
-        SYS_UNLINKAT => fs::sys_unlinkat(vm, base, a0, a1, a2),
+        SYS_FSTAT => {
+            let r = fs::dispatch_fstat(vm, base, a0, a1);
+            if vm.status == abi::STATUS_FS {
+                return abi::STATUS_FS;
+            }
+            r
+        }
+        SYS_LSEEK => {
+            let r = fs::dispatch_lseek(vm, base, a0, a1 as i64, a2);
+            if vm.status == abi::STATUS_FS {
+                return abi::STATUS_FS;
+            }
+            r
+        }
+        SYS_GETDENTS64 => {
+            let r = fs::dispatch_getdents64(vm, base, a0, a1, a2);
+            if vm.status == abi::STATUS_FS {
+                return abi::STATUS_FS;
+            }
+            r
+        }
+        SYS_MKDIRAT => {
+            let r = fs::dispatch_mkdirat(vm, base, a0, a1, a2);
+            if vm.status == abi::STATUS_FS {
+                return abi::STATUS_FS;
+            }
+            r
+        }
+        SYS_UNLINKAT => {
+            let r = fs::dispatch_unlinkat(vm, base, a0, a1, a2);
+            if vm.status == abi::STATUS_FS {
+                return abi::STATUS_FS;
+            }
+            r
+        }
         SYS_STATFS => fs::sys_statfs(vm, base, a0, a1),
         SYS_FACCESSAT => fs::sys_faccessat(vm, base, a0, a1, a2),
         SYS_CHDIR => fs::sys_chdir(vm, base, a0),
         SYS_FCHMODAT => fs::sys_fchmodat(vm, base, a0, a1, a2, a3),
         SYS_FCHOWNAT => fs::sys_fchownat(vm, base, a0, a1, a2, a3, a4),
         SYS_READLINKAT => fs::sys_readlinkat(vm, base, a0, a1, a2, a3),
-        SYS_TRUNCATE => fs::sys_truncate(vm, base, a0, a1),
-        SYS_FTRUNCATE => fs::sys_ftruncate(vm, base, a0, a1),
+        SYS_TRUNCATE => {
+            let r = fs::dispatch_truncate(vm, base, a0, a1);
+            if vm.status == abi::STATUS_FS {
+                return abi::STATUS_FS;
+            }
+            r
+        }
+        SYS_FTRUNCATE => {
+            let r = fs::dispatch_ftruncate(vm, base, a0, a1);
+            if vm.status == abi::STATUS_FS {
+                return abi::STATUS_FS;
+            }
+            r
+        }
         SYS_IOCTL => 0,
         SYS_GETCWD => fs::sys_getcwd(vm, base, a0, a1),
 
@@ -148,8 +208,16 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         // signal delivery
         SYS_KILL => signal::send_signal_to_pid(a0 as i32, a1 as i32),
         SYS_TKILL | SYS_TGKILL => {
-            let target_pid = if nr == SYS_TGKILL { a0 as i32 } else { a0 as i32 };
-            let sig = if nr == SYS_TGKILL { a2 as i32 } else { a1 as i32 };
+            let target_pid = if nr == SYS_TGKILL {
+                a0 as i32
+            } else {
+                a0 as i32
+            };
+            let sig = if nr == SYS_TGKILL {
+                a2 as i32
+            } else {
+                a1 as i32
+            };
             let self_pid = signal::pid_from_vm(vm, base);
             if target_pid == self_pid {
                 signal::send_signal(vm, sig);

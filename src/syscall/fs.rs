@@ -36,7 +36,7 @@
 //! https://man7.org/linux/man-pages/man2/getdents.2.html
 
 use crate::abi::*;
-use crate::fs::{fd_table, memfs};
+use crate::fs::{fd_table, memfs, ring_buffer};
 use crate::guest_mem;
 use crate::syscall::signal;
 use crate::types::{ProcessState, ThreadState};
@@ -69,10 +69,281 @@ fn current_dir_ino(base: u32, vm: &ThreadState) -> u32 {
     }
 }
 
+fn process_fs_ring_base(base: u32, vm: &ThreadState) -> u32 {
+    process_state(base, vm).map(|ps| ps.fs_ring_base).unwrap_or(0)
+}
+
 fn set_current_dir_ino(base: u32, vm: &ThreadState, ino: u32) {
     if let Some(ps) = process_state(base, vm) {
         ps.cwd_ino = ino;
     }
+}
+
+fn submit_fs_request(
+    vm: &mut ThreadState,
+    base: u32,
+    opcode: u32,
+    fd: i32,
+    offset: u64,
+    len: u64,
+    buf_ptr: u64,
+    path_ptr: u64,
+    flags: u32,
+    mode: u32,
+) -> i64 {
+    let ring_base = process_fs_ring_base(base, vm);
+    if ring_base == 0 {
+        return ENOMEM;
+    }
+
+    let idx = ring_buffer::submit_request(
+        ring_base, opcode, fd, offset, len, buf_ptr, path_ptr, flags, mode,
+    );
+    if idx < 0 {
+        return EAGAIN;
+    }
+
+    vm.status = STATUS_FS;
+    0
+}
+
+pub fn process_pending_requests(vm_ptr: u32, base: u32) {
+    unsafe {
+        let vm = &*(vm_ptr as *const ThreadState);
+        let ring_base = process_fs_ring_base(base, vm);
+        if ring_base != 0 {
+            ring_buffer::process_requests(ring_base, vm_ptr, base);
+        }
+    }
+}
+
+pub fn resume_from_fs(vm_ptr: u32, base: u32) -> i64 {
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut ThreadState);
+        let ring_base = process_fs_ring_base(base, vm);
+        if ring_base == 0 {
+            vm.x[10] = ENOMEM as u64;
+            vm.status = STATUS_OK;
+            return ENOMEM;
+        }
+
+        let result = ring_buffer::read_completion(ring_base);
+        vm.x[10] = result as u64;
+        vm.status = STATUS_OK;
+        result
+    }
+}
+
+pub fn dispatch_openat(
+    vm: &mut ThreadState,
+    base: u32,
+    dirfd: u64,
+    path_addr: u64,
+    flags: u64,
+    mode: u64,
+) -> i64 {
+    submit_fs_request(
+        vm,
+        base,
+        ring_buffer::FS_OP_OPENAT,
+        dirfd as i32,
+        0,
+        0,
+        0,
+        path_addr,
+        flags as u32,
+        mode as u32,
+    )
+}
+
+pub fn dispatch_pwrite64(
+    vm: &mut ThreadState,
+    base: u32,
+    fd: u64,
+    buf: u64,
+    count: u64,
+    offset: u64,
+) -> i64 {
+    let ofd = match fd_table::get_ofd(base, vm, fd) {
+        Some(o) => o,
+        None => return EBADF,
+    };
+    if ofd.fd_type == FD_TYPE_PIPE {
+        return ESPIPE;
+    }
+
+    submit_fs_request(
+        vm,
+        base,
+        ring_buffer::FS_OP_WRITE,
+        fd as i32,
+        offset,
+        count,
+        buf,
+        0,
+        ring_buffer::FS_REQ_FLAG_PWRITE,
+        0,
+    )
+}
+
+pub fn dispatch_write(
+    vm: &mut ThreadState,
+    base: u32,
+    fd: u64,
+    buf: u64,
+    count: u64,
+    nr: u64,
+) -> i64 {
+    if nr == SYS_WRITEV || fd == 1 || fd == 2 {
+        return sys_write(vm, base, fd, buf, count, nr);
+    }
+
+    let ofd = match fd_table::get_ofd(base, vm, fd) {
+        Some(o) => o,
+        None => return EBADF,
+    };
+    if ofd.fd_type == FD_TYPE_PIPE {
+        return sys_write(vm, base, fd, buf, count, nr);
+    }
+
+    submit_fs_request(
+        vm,
+        base,
+        ring_buffer::FS_OP_WRITE,
+        fd as i32,
+        0,
+        count,
+        buf,
+        0,
+        0,
+        0,
+    )
+}
+
+pub fn dispatch_fstat(vm: &mut ThreadState, base: u32, fd: u64, stat_buf: u64) -> i64 {
+    if fd <= 2 {
+        return sys_fstat(vm, base, fd, stat_buf);
+    }
+    submit_fs_request(
+        vm,
+        base,
+        ring_buffer::FS_OP_FSTAT,
+        fd as i32,
+        0,
+        0,
+        stat_buf,
+        0,
+        0,
+        0,
+    )
+}
+
+pub fn dispatch_mkdirat(
+    vm: &mut ThreadState,
+    base: u32,
+    dirfd: u64,
+    path_addr: u64,
+    mode: u64,
+) -> i64 {
+    submit_fs_request(
+        vm,
+        base,
+        ring_buffer::FS_OP_MKDIR,
+        dirfd as i32,
+        0,
+        0,
+        0,
+        path_addr,
+        0,
+        mode as u32,
+    )
+}
+
+pub fn dispatch_unlinkat(
+    vm: &mut ThreadState,
+    base: u32,
+    dirfd: u64,
+    path_addr: u64,
+    flags: u64,
+) -> i64 {
+    submit_fs_request(
+        vm,
+        base,
+        ring_buffer::FS_OP_UNLINK,
+        dirfd as i32,
+        0,
+        0,
+        0,
+        path_addr,
+        flags as u32,
+        0,
+    )
+}
+
+pub fn dispatch_getdents64(
+    vm: &mut ThreadState,
+    base: u32,
+    fd: u64,
+    buf: u64,
+    buf_size: u64,
+) -> i64 {
+    submit_fs_request(
+        vm,
+        base,
+        ring_buffer::FS_OP_GETDENTS,
+        fd as i32,
+        0,
+        buf_size,
+        buf,
+        0,
+        0,
+        0,
+    )
+}
+
+pub fn dispatch_lseek(vm: &mut ThreadState, base: u32, fd: u64, offset: i64, whence: u64) -> i64 {
+    submit_fs_request(
+        vm,
+        base,
+        ring_buffer::FS_OP_LSEEK,
+        fd as i32,
+        offset as u64,
+        0,
+        0,
+        0,
+        whence as u32,
+        0,
+    )
+}
+
+pub fn dispatch_ftruncate(vm: &mut ThreadState, base: u32, fd: u64, length: u64) -> i64 {
+    submit_fs_request(
+        vm,
+        base,
+        ring_buffer::FS_OP_TRUNCATE,
+        fd as i32,
+        length,
+        0,
+        0,
+        0,
+        0,
+        0,
+    )
+}
+
+pub fn dispatch_truncate(vm: &mut ThreadState, base: u32, path_addr: u64, length: u64) -> i64 {
+    submit_fs_request(
+        vm,
+        base,
+        ring_buffer::FS_OP_TRUNCATE,
+        0,
+        length,
+        0,
+        0,
+        path_addr,
+        0,
+        0,
+    )
 }
 
 fn dirfd_base_ino(vm: &ThreadState, dirfd: u64, base: u32) -> Result<u32, i64> {
@@ -1088,6 +1359,48 @@ mod tests {
     }
 
     #[test]
+    fn status_fs_round_trip_for_open_write_and_lseek() {
+        let mut t = TestVm::new();
+        let vm_ptr = &mut t.vm as *mut crate::types::ThreadState as u32;
+
+        let path_addr = t.write_path(0x6000, b"/async.txt");
+        let ret = super::dispatch_openat(
+            &mut t.vm,
+            t.base,
+            super::AT_FDCWD as u64,
+            path_addr,
+            (O_CREAT | O_RDWR) as u64,
+            0o644,
+        );
+        assert_eq!(ret, 0);
+        assert_eq!(t.vm.status, STATUS_FS);
+        super::process_pending_requests(vm_ptr, t.base);
+        let fd = super::resume_from_fs(vm_ptr, t.base);
+        assert!(fd >= 3);
+
+        let buf_addr = t.scratch + 0x6100;
+        t.write_mem(buf_addr, b"async fs");
+        let ret = super::dispatch_write(&mut t.vm, t.base, fd as u64, buf_addr, 8, SYS_WRITE);
+        assert_eq!(ret, 0);
+        assert_eq!(t.vm.status, STATUS_FS);
+        super::process_pending_requests(vm_ptr, t.base);
+        assert_eq!(super::resume_from_fs(vm_ptr, t.base), 8);
+
+        let ret = super::dispatch_lseek(&mut t.vm, t.base, fd as u64, 0, 0);
+        assert_eq!(ret, 0);
+        assert_eq!(t.vm.status, STATUS_FS);
+        super::process_pending_requests(vm_ptr, t.base);
+        assert_eq!(super::resume_from_fs(vm_ptr, t.base), 0);
+
+        let mut out = [0u8; 8];
+        assert_eq!(super::sys_read(&mut t.vm, t.base, fd as u64, buf_addr, 8), 8);
+        unsafe {
+            crate::guest_mem::read_bytes(t.base, buf_addr, &mut out);
+        }
+        assert_eq!(&out, b"async fs");
+    }
+
+    #[test]
     fn getdents64_advances_directory_offset() {
         let mut t = TestVm::new();
 
@@ -1147,7 +1460,14 @@ mod tests {
 
         let path_addr = t.write_path(0xF000, b"/plain");
         let stat_addr = t.scratch + 0x3000;
-        let ret = super::sys_newfstatat(&mut t.vm, t.base, (-100i64) as u64, path_addr, stat_addr, 9999);
+        let ret = super::sys_newfstatat(
+            &mut t.vm,
+            t.base,
+            (-100i64) as u64,
+            path_addr,
+            stat_addr,
+            9999,
+        );
         assert_eq!(ret, EINVAL);
     }
 
@@ -1339,23 +1659,11 @@ mod tests {
             0
         );
         assert_eq!(
-            super::sys_faccessat(
-                &mut t.vm,
-                t.base,
-                (-100i64) as u64,
-                cwd_addr,
-                read_ok,
-            ),
+            super::sys_faccessat(&mut t.vm, t.base, (-100i64) as u64, cwd_addr, read_ok,),
             0
         );
         assert_eq!(
-            super::sys_faccessat(
-                &mut t.vm,
-                t.base,
-                file_fd as u64,
-                missing_addr,
-                read_ok,
-            ),
+            super::sys_faccessat(&mut t.vm, t.base, file_fd as u64, missing_addr, read_ok,),
             ENOTDIR
         );
         assert_eq!(
@@ -1399,14 +1707,7 @@ mod tests {
         assert_eq!(n, 4);
         assert_eq!(&t.guest_mem(buf_addr, 4), b"file");
 
-        let n = super::sys_readlinkat(
-            &mut t.vm,
-            t.base,
-            (-100i64) as u64,
-            cwd_addr,
-            buf_addr,
-            16,
-        );
+        let n = super::sys_readlinkat(&mut t.vm, t.base, (-100i64) as u64, cwd_addr, buf_addr, 16);
         assert_eq!(n, 4);
         assert_eq!(&t.guest_mem(buf_addr, 4), b"file");
 

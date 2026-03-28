@@ -42,7 +42,10 @@ fn ensure_file(parent_ino: u32, name: &[u8], data: &[u8], mode: u32) -> Result<u
 
     let truncate_ret = tidemark_kernel::fs::memfs::truncate(ino, 0);
     if truncate_ret != 0 {
-        return Err(format!("failed to truncate file {:?}: {}", name, truncate_ret));
+        return Err(format!(
+            "failed to truncate file {:?}: {}",
+            name, truncate_ret
+        ));
     }
 
     let written = tidemark_kernel::fs::memfs::write_file(ino, 0, data);
@@ -70,9 +73,7 @@ fn proc_pid_max() -> String {
     format!("{}\n", tidemark_kernel::abi::MAX_PROCESSES)
 }
 
-fn allocate_cache(
-    use_cache: bool,
-) -> Option<tidemark_kernel::cpu::block_cache::BlockCache> {
+fn allocate_cache(use_cache: bool) -> Option<tidemark_kernel::cpu::block_cache::BlockCache> {
     if !use_cache {
         return None;
     }
@@ -123,6 +124,7 @@ fn snapshot_guest_memory(base: u32) -> Vec<u8> {
 fn run_vm(vm: &mut ThreadState, base: u32, use_cache: bool) -> Result<(i32, u64), String> {
     let mut cache = allocate_cache(use_cache);
     let mut total = 0i64;
+    let vm_ptr = vm as *mut ThreadState as u32;
 
     loop {
         let budget = 500_000i32;
@@ -138,6 +140,10 @@ fn run_vm(vm: &mut ThreadState, base: u32, use_cache: bool) -> Result<(i32, u64)
                     return Ok((-999, vm.pc));
                 }
             }
+            STATUS_FS => {
+                tidemark_kernel::syscall::fs::process_pending_requests(vm_ptr, base);
+                tidemark_kernel::syscall::fs::resume_from_fs(vm_ptr, base);
+            }
             STATUS_FAULT => return Ok((vm.exit_code, vm.pc)),
             STATUS_SLEEP => {}
             STATUS_EXECVE_SPAWN if vm.x[17] == SYS_CLONE => {
@@ -148,7 +154,11 @@ fn run_vm(vm: &mut ThreadState, base: u32, use_cache: bool) -> Result<(i32, u64)
     }
 }
 
-fn handle_plain_fork(parent_vm: &mut ThreadState, base: u32, use_cache: bool) -> Result<(), String> {
+fn handle_plain_fork(
+    parent_vm: &mut ThreadState,
+    base: u32,
+    use_cache: bool,
+) -> Result<(), String> {
     let child_pid = parent_vm.x[10] as i32;
     if child_pid <= 0 {
         return Err(format!("fork returned invalid child pid {}", child_pid));
@@ -231,11 +241,15 @@ fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> Result<(i32, u64), String
         // Keep kernel-private allocations outside the guest RAM window.
         tidemark_kernel::alloc::init(HOST_HEAP_BASE);
         let guest_brk_start = elf_result.brk_start;
+        tidemark_kernel::syscall::time::init();
         tidemark_kernel::syscall::memory::init(guest_brk_start);
+        tidemark_kernel::syscall::process::init();
+        tidemark_kernel::syscall::thread::init();
         tidemark_kernel::syscall::signal::init();
         tidemark_kernel::syscall::epoll::init();
         tidemark_kernel::syscall::pipe::init();
         tidemark_kernel::syscall::socket::init();
+        tidemark_kernel::net::ring_buffer::init();
         tidemark_kernel::fs::fd_table::init();
         tidemark_kernel::fs::memfs::init();
         let tmp_ino = ensure_dir(1, b"tmp", 0o1777)?;
@@ -272,7 +286,7 @@ fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> Result<(i32, u64), String
         vm.pc = elf_result.entry;
         vm.x[2] = sp;
         vm.status = STATUS_OK;
-        vm.tid = 1;
+        vm.tid = INITIAL_PID;
 
         // Allocate ProcessState in guest Memory via brk (not alloc.rs).
         let ps_size = core::mem::size_of::<ProcessState>() as u64;
@@ -292,12 +306,16 @@ fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> Result<(i32, u64), String
         tidemark_kernel::guest_mem::write_u32(base, ps_addr + ppid_off, INITIAL_PPID as u32);
         let cwd_off = core::mem::offset_of!(ProcessState, cwd_ino) as u64;
         tidemark_kernel::guest_mem::write_u32(base, ps_addr + cwd_off, 1);
+        let fs_ring_off = core::mem::offset_of!(ProcessState, fs_ring_base) as u64;
+        let fs_ring_base = tidemark_kernel::alloc::alloc_zeroed(
+            tidemark_kernel::fs::ring_buffer::RING_BUFFER_SIZE as u32,
+            16,
+        );
+        tidemark_kernel::guest_mem::write_u32(base, ps_addr + fs_ring_off, fs_ring_base);
         tidemark_kernel::syscall::signal::init_for_process(INITIAL_PID);
 
-        let fd_off = 0u64;
-        tidemark_kernel::guest_mem::write_u32(base, ps_addr + fd_off + 0, 1);
-        tidemark_kernel::guest_mem::write_u32(base, ps_addr + fd_off + 8, 2);
-        tidemark_kernel::guest_mem::write_u32(base, ps_addr + fd_off + 16, 3);
+        tidemark_kernel::fs::fd_table::init_stdio(base, &vm);
+        tidemark_kernel::syscall::thread::init_main_thread(&mut vm as *mut ThreadState as u32, base);
 
         let cache_size = tidemark_kernel::cpu::block_cache::BlockCache::allocation_size() as u32;
         let cache_ptr = if use_cache {

@@ -51,6 +51,7 @@ pub const FS_OP_RENAME: u32 = 8;
 pub const FS_OP_GETDENTS: u32 = 9;
 pub const FS_OP_TRUNCATE: u32 = 10;
 pub const FS_OP_LSEEK: u32 = 11;
+pub const FS_REQ_FLAG_PWRITE: u32 = 1 << 0;
 
 // Offsets within the ring buffer header
 pub const OFF_SUBMIT_HEAD: u32 = 0;
@@ -145,7 +146,7 @@ pub fn read_completion(ring_base: u32) -> i64 {
 /// Process pending FS requests from the submission queue.
 /// Called by the kernel Worker (or in single-instance mode, synchronously).
 /// Reads requests, dispatches to MemFS, writes completions.
-pub fn process_requests(ring_base: u32, vm_ptr: u32) {
+pub fn process_requests(ring_base: u32, vm_ptr: u32, base: u32) {
     unsafe {
         use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -173,24 +174,16 @@ pub fn process_requests(ring_base: u32, vm_ptr: u32) {
             let flags = *(p.add(40) as *const u32);
             let mode = *(p.add(44) as *const u32);
 
-            let base: u32 = 0;
             let vm = &mut *(vm_ptr as *mut crate::types::ThreadState);
 
             let result: i64 = match opcode {
-                FS_OP_READ => {
-                    let mut tmp = [0u8; 4096];
-                    let n = len.min(4096) as usize;
-                    let nread = crate::fs::memfs::read_file(fd as u32, offset, &mut tmp[..n]);
-                    if nread > 0 {
-                        crate::guest_mem::write_bytes(base, buf_ptr, &tmp[..nread as usize]);
-                    }
-                    nread
-                }
+                FS_OP_READ => crate::syscall::fs::sys_pread64(vm, base, fd as u64, buf_ptr, len, offset),
                 FS_OP_WRITE => {
-                    let mut tmp = [0u8; 4096];
-                    let n = len.min(4096) as usize;
-                    crate::guest_mem::read_bytes(base, buf_ptr, &mut tmp[..n]);
-                    crate::fs::memfs::write_file(fd as u32, offset, &tmp[..n])
+                    if flags & FS_REQ_FLAG_PWRITE != 0 {
+                        crate::syscall::fs::sys_pwrite64(vm, base, fd as u64, buf_ptr, len, offset)
+                    } else {
+                        crate::syscall::fs::sys_write(vm, base, fd as u64, buf_ptr, len, SYS_WRITE)
+                    }
                 }
                 FS_OP_OPENAT => {
                     if path_ptr == 0 {
@@ -252,7 +245,13 @@ pub fn process_requests(ring_base: u32, vm_ptr: u32) {
                         crate::syscall::fs::sys_getdents64(vm, base, fd as u64, buf_ptr, len)
                     }
                 }
-                FS_OP_TRUNCATE => crate::fs::memfs::truncate(fd as u32, offset),
+                FS_OP_TRUNCATE => {
+                    if path_ptr != 0 {
+                        crate::syscall::fs::sys_truncate(vm, base, path_ptr, offset)
+                    } else {
+                        crate::syscall::fs::sys_ftruncate(vm, base, fd as u64, offset)
+                    }
+                }
                 FS_OP_LSEEK => {
                     crate::syscall::fs::sys_lseek(
                         vm,
@@ -297,19 +296,14 @@ mod tests {
 
     /// Test that process_requests dispatches FS_OP_WRITE correctly.
     /// Writes data via the ring buffer and reads it back via memfs.
-    ///
-    /// Note: FS_OP_WRITE in process_requests passes `fd` directly as an inode number
-    /// to memfs::write_file (not as a file descriptor). So the test submits
-    /// the inode number in the `fd` field.
     #[test]
     fn ring_buffer_dispatch_write() {
         use crate::test_helpers::TestVm;
 
         let mut t = TestVm::new();
 
-        // Create a file to write to. ino is the inode number.
-        let ino = t.memfs.create_file(b"ring_write.txt", b"");
-        assert!(ino > 0, "file creation should succeed");
+        let fd = t.sys_openat(b"/ring_write.txt", O_CREAT | O_RDWR);
+        assert!(fd >= 3, "openat should succeed");
 
         // Allocate a ring buffer.
         let ring_base = unsafe { crate::alloc::alloc_zeroed(RING_BUFFER_SIZE as u32, 16) };
@@ -323,11 +317,10 @@ mod tests {
         }
 
         // Submit a WRITE request via the ring buffer.
-        // FS_OP_WRITE uses `fd` as the inode number (see process_requests).
         let idx = submit_request(
             ring_base,
             FS_OP_WRITE,
-            ino as i32,        // inode, not FD
+            fd as i32,
             0,                 // offset
             data.len() as u64, // len
             data_addr,         // buf_ptr
@@ -339,7 +332,7 @@ mod tests {
 
         // Process the request.
         let vm_ptr = &mut t.vm as *mut crate::types::ThreadState as u32;
-        process_requests(ring_base, vm_ptr);
+        process_requests(ring_base, vm_ptr, t.base);
 
         // Read the completion.
         let result = read_completion(ring_base);
@@ -351,6 +344,7 @@ mod tests {
 
         // Verify the data was actually written to memfs.
         let mut read_buf = [0u8; 32];
+        let ino = crate::fs::memfs::resolve_path(b"/ring_write.txt");
         let nread = crate::fs::memfs::read_file(ino, 0, &mut read_buf);
         assert_eq!(
             nread,
@@ -391,7 +385,7 @@ mod tests {
 
         // Process the request.
         let vm_ptr = &mut t.vm as *mut crate::types::ThreadState as u32;
-        process_requests(ring_base, vm_ptr);
+        process_requests(ring_base, vm_ptr, t.base);
 
         // Read the completion.
         let result = read_completion(ring_base);
