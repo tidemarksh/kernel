@@ -56,6 +56,8 @@ impl TestVm {
             crate::alloc::reset(0x20_0000);
             crate::syscall::time::init();
             crate::syscall::memory::init(0x12_0000); // brk above static data
+            crate::syscall::process::reset_for_tests();
+            crate::syscall::thread::init();
             crate::syscall::signal::init();
             crate::syscall::epoll::init();
             crate::syscall::pipe::init();
@@ -85,24 +87,28 @@ impl TestVm {
             crate::guest_mem::write_u32(base, ps_addr + ppid_off, 1);
             let cwd_off = core::mem::offset_of!(ProcessState, cwd_ino) as u64;
             crate::guest_mem::write_u32(base, ps_addr + cwd_off, 1);
+            let fs_ring_off = core::mem::offset_of!(ProcessState, fs_ring_base) as u64;
+            let fs_ring_base =
+                crate::alloc::alloc_zeroed(crate::fs::ring_buffer::RING_BUFFER_SIZE as u32, 16);
+            crate::guest_mem::write_u32(base, ps_addr + fs_ring_off, fs_ring_base);
 
             // Allocate per-process signal disposition table for PID 42.
             crate::syscall::signal::init_for_process(42);
 
-            // FD 0/1/2
-            crate::guest_mem::write_u32(base, ps_addr + 0, 1);
-            crate::guest_mem::write_u32(base, ps_addr + 8, 2);
-            crate::guest_mem::write_u32(base, ps_addr + 16, 3);
+            crate::fs::fd_table::init_stdio(base, &vm);
 
             // Scratch area for test data (64KB, above shadow stack)
             let scratch = crate::alloc::alloc_zeroed(0x10000, 16) as u64;
 
-            TestVm {
+            let mut test_vm = TestVm {
                 vm,
                 base,
                 scratch,
                 memfs: MemfsHelper,
-            }
+            };
+            let vm_ptr = &mut test_vm.vm as *mut ThreadState as u32;
+            crate::syscall::thread::init_main_thread(vm_ptr, base);
+            test_vm
         }
     }
 

@@ -68,6 +68,22 @@ fn sab_base() -> u32 {
     unsafe { core::ptr::read(core::ptr::addr_of!(SAB_PIPE_BASE)) }
 }
 
+pub fn pipe_state() -> (u32, u64) {
+    unsafe {
+        (
+            core::ptr::read(core::ptr::addr_of!(SAB_PIPE_BASE)),
+            core::ptr::read(core::ptr::addr_of!(PIPE_USED)),
+        )
+    }
+}
+
+pub fn attach_pipe_state(base: u32, used: u64) {
+    unsafe {
+        core::ptr::write(core::ptr::addr_of_mut!(SAB_PIPE_BASE), base);
+        core::ptr::write(core::ptr::addr_of_mut!(PIPE_USED), used);
+    }
+}
+
 pub fn slot_addr(idx: u32) -> u32 {
     sab_base() + idx * PIPE_SLOT_SIZE
 }

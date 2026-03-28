@@ -63,28 +63,20 @@ pub struct ElfLoadResult {
     pub phnum: u16,
 }
 
-/// Load an ELF binary from `elf_data` (byte slice in WASM memory at `elf_ptr`)
-/// into guest RAM at `ram_base`.
-///
-/// Returns entry point and metadata, or -1 on error.
-///
-/// # Safety
-/// `ram_base` must point to valid guest memory. `elf_ptr` must contain a valid ELF.
-pub unsafe fn load_elf(
-    ram_base: u32,
-    ram_size: u64,
+/// Validate an ELF image and compute the metadata needed for loading it
+/// without mutating guest memory.
+pub unsafe fn inspect_elf(
     elf_ptr: u32,
     elf_len: u32,
+    ram_size: u64,
 ) -> Result<ElfLoadResult, i32> {
     unsafe {
         if elf_len < 64 {
             return Err(-1); // too small for ELF header
         }
 
-        // --- Validate ELF header ---
         let e = elf_ptr as *const u8;
 
-        // Magic number
         if *e.add(0) != EI_MAG0
             || *e.add(1) != EI_MAG1
             || *e.add(2) != EI_MAG2
@@ -93,23 +85,19 @@ pub unsafe fn load_elf(
             return Err(-1);
         }
 
-        // Class: 64-bit
         if *e.add(EI_CLASS) != ELFCLASS64 {
             return Err(-2);
         }
 
-        // Endianness: little-endian
         if *e.add(EI_DATA) != ELFDATA2LSB {
             return Err(-3);
         }
 
-        // Type: executable
         let e_type = read_u16(e, E_TYPE);
         if e_type != ET_EXEC {
             return Err(-4);
         }
 
-        // Machine: RISC-V
         let e_machine = read_u16(e, E_MACHINE);
         if e_machine != EM_RISCV {
             return Err(-5);
@@ -124,7 +112,6 @@ pub unsafe fn load_elf(
             return Err(-6);
         }
 
-        // --- Load PT_LOAD segments ---
         let mut brk_end: u64 = 0;
         let mut phdr_addr: u64 = 0;
 
@@ -141,13 +128,67 @@ pub unsafe fn load_elf(
             let p_filesz = read_u64(ph, P_FILESZ);
             let p_memsz = read_u64(ph, P_MEMSZ);
 
-            // Bounds check
             if p_vaddr + p_memsz > ram_size {
-                return Err(-7); // segment out of bounds
+                return Err(-7);
             }
             if p_offset + p_filesz > elf_len as u64 {
-                return Err(-8); // file data out of bounds
+                return Err(-8);
             }
+
+            let seg_end = p_vaddr + p_memsz;
+            if seg_end > brk_end {
+                brk_end = seg_end;
+            }
+
+            if phdr_addr == 0 && p_offset == 0 {
+                phdr_addr = p_vaddr + ph_off as u64;
+            }
+        }
+
+        brk_end = (brk_end + 4095) & !4095;
+
+        Ok(ElfLoadResult {
+            entry,
+            brk_start: brk_end,
+            phdr_addr,
+            phent: ph_entsize as u16,
+            phnum: ph_num as u16,
+        })
+    }
+}
+
+/// Load an ELF binary from `elf_data` (byte slice in WASM memory at `elf_ptr`)
+/// into guest RAM at `ram_base`.
+///
+/// Returns entry point and metadata, or -1 on error.
+///
+/// # Safety
+/// `ram_base` must point to valid guest memory. `elf_ptr` must contain a valid ELF.
+pub unsafe fn load_elf(
+    ram_base: u32,
+    ram_size: u64,
+    elf_ptr: u32,
+    elf_len: u32,
+) -> Result<ElfLoadResult, i32> {
+    unsafe {
+        let inspected = inspect_elf(elf_ptr, elf_len, ram_size)?;
+        let e = elf_ptr as *const u8;
+        let ph_off = read_u64(e, E_PHOFF) as usize;
+        let ph_entsize = read_u16(e, E_PHENTSIZE) as usize;
+        let ph_num = read_u16(e, E_PHNUM) as usize;
+
+        for i in 0..ph_num {
+            let ph = e.add(ph_off + i * ph_entsize);
+            let p_type = read_u32(ph, P_TYPE);
+
+            if p_type != PT_LOAD {
+                continue;
+            }
+
+            let p_offset = read_u64(ph, P_OFFSET);
+            let p_vaddr = read_u64(ph, P_VADDR);
+            let p_filesz = read_u64(ph, P_FILESZ);
+            let p_memsz = read_u64(ph, P_MEMSZ);
 
             // Copy file data to guest memory
             if p_filesz > 0 {
@@ -162,29 +203,9 @@ pub unsafe fn load_elf(
                 let bss_len = (p_memsz - p_filesz) as usize;
                 guest_mem::zero_mem(ram_base, bss_start, bss_len);
             }
-
-            // Track highest address for brk
-            let seg_end = p_vaddr + p_memsz;
-            if seg_end > brk_end {
-                brk_end = seg_end;
-            }
-
-            // Record first LOAD segment for phdr (first LOAD usually contains program headers)
-            if phdr_addr == 0 && p_offset == 0 {
-                phdr_addr = p_vaddr + ph_off as u64;
-            }
         }
 
-        // Align brk to page boundary
-        brk_end = (brk_end + 4095) & !4095;
-
-        Ok(ElfLoadResult {
-            entry,
-            brk_start: brk_end,
-            phdr_addr,
-            phent: ph_entsize as u16,
-            phnum: ph_num as u16,
-        })
+        Ok(inspected)
     }
 }
 

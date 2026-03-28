@@ -33,6 +33,10 @@ pub struct ThreadState {
     pub tls_base: u64,
     /// Address to clear and futex-wake on thread exit (set_tid_address)
     pub clear_child_tid: u64,
+    /// Head pointer registered by set_robust_list(2).
+    pub robust_list_head: u64,
+    /// Size of the registered robust_list_head.
+    pub robust_list_len: u64,
 
     // --- Per-thread signal state ---
     /// Signal mask (blocked signals)
@@ -62,6 +66,33 @@ pub struct ThreadState {
     pub process_ptr: u32,
 
     _pad: [u8; 4],
+
+    // --- Runtime handoff scratch ---
+    /// Pending clone flags for `STATUS_CLONE_SPAWN` handoff. Zero = inactive.
+    pub clone_flags: u64,
+    /// Child stack pointer requested by clone.
+    pub clone_child_stack: u64,
+    /// TLS base requested via CLONE_SETTLS.
+    pub clone_tls: u64,
+    /// Child TID pointer for CLONE_CHILD_{SET,CLEAR}TID.
+    pub clone_child_tidptr: u64,
+    /// Allocated child TID for the pending clone handoff.
+    pub clone_child_tid: i32,
+    /// Non-zero while a clone handoff is pending.
+    pub clone_pending: i32,
+    /// Pending process-spawn handoff kind. Zero = inactive.
+    pub spawn_kind: u32,
+    /// Reserved for future process-spawn flags.
+    pub spawn_flags: u32,
+    /// Child PID allocated for execve/fork handoff.
+    pub spawn_child_pid: i32,
+    _pad1: u32,
+    /// Guest pointer to execve path string.
+    pub spawn_path: u64,
+    /// Guest pointer to argv vector.
+    pub spawn_argv: u64,
+    /// Guest pointer to envp vector.
+    pub spawn_envp: u64,
 }
 
 // =============================================================================
@@ -99,7 +130,8 @@ pub struct ProcessState {
     pub ppid: i32,
     /// Current working directory inode in MemFS. 0 means "/" for legacy callers.
     pub cwd_ino: u32,
-    _pad0: u32,
+    /// Per-process FS request/completion ring in shared WebAssembly.Memory.
+    pub fs_ring_base: u32,
     /// Thread registry
     pub threads: [ThreadRecord; MAX_THREADS],
 }
@@ -125,6 +157,36 @@ pub struct ThreadRecord {
     pub clear_child_tid: u32,
     pub blocked_addr: u32,
     _pad: [u8; 12],
+}
+
+impl ThreadRecord {
+    pub const fn empty() -> Self {
+        Self {
+            tid: 0,
+            state: THREAD_NONE,
+            thread_ptr: 0,
+            clear_child_tid: 0,
+            blocked_addr: 0,
+            _pad: [0; 12],
+        }
+    }
+
+    pub const fn new(
+        tid: i32,
+        state: i32,
+        thread_ptr: u32,
+        clear_child_tid: u32,
+        blocked_addr: u32,
+    ) -> Self {
+        Self {
+            tid,
+            state,
+            thread_ptr,
+            clear_child_tid,
+            blocked_addr,
+            _pad: [0; 12],
+        }
+    }
 }
 
 // =============================================================================

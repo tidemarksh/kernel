@@ -107,9 +107,21 @@ pub fn heap_used() -> u32 {
     unsafe { HEAP_PTR - HEAP_BASE }
 }
 
+/// Return the heap base address.
+pub fn heap_base() -> u32 {
+    unsafe { HEAP_BASE }
+}
+
 /// Return current heap pointer (first unallocated byte).
 pub fn heap_ptr() -> u32 {
     unsafe { HEAP_PTR }
+}
+
+pub fn attach_heap_state(base: u32, ptr: u32) {
+    unsafe {
+        HEAP_BASE = base;
+        HEAP_PTR = ptr;
+    }
 }
 
 #[cfg(test)]

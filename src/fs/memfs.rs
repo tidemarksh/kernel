@@ -89,6 +89,16 @@ fn fs() -> &'static mut MemFsHeader {
     }
 }
 
+pub fn memfs_ptr() -> u32 {
+    unsafe { core::ptr::read(core::ptr::addr_of!(MEMFS_PTR)) as u32 }
+}
+
+pub fn attach_memfs_ptr(ptr: u32) {
+    unsafe {
+        core::ptr::write(core::ptr::addr_of_mut!(MEMFS_PTR), ptr as *mut MemFsHeader);
+    }
+}
+
 fn inodes() -> &'static mut [Inode] {
     let h = fs();
     unsafe { core::slice::from_raw_parts_mut(h.inodes, MAX_INODES) }

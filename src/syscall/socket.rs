@@ -62,6 +62,24 @@ fn socket_table() -> &'static mut [SocketSlot; MAX_SOCKETS] {
     }
 }
 
+pub fn socket_table_ptr() -> u32 {
+    unsafe { core::ptr::read(core::ptr::addr_of!(SOCKET_TABLE_PTR)) as u32 }
+}
+
+pub fn socket_used() -> u32 {
+    unsafe { core::ptr::read(core::ptr::addr_of!(SOCKET_USED)) }
+}
+
+pub fn attach_socket_state(table_ptr: u32, used: u32) {
+    unsafe {
+        core::ptr::write(
+            core::ptr::addr_of_mut!(SOCKET_TABLE_PTR),
+            table_ptr as *mut [SocketSlot; MAX_SOCKETS],
+        );
+        core::ptr::write(core::ptr::addr_of_mut!(SOCKET_USED), used);
+    }
+}
+
 /// Initialize socket subsystem. Allocates socket table via alloc.rs.
 pub fn init() {
     unsafe {

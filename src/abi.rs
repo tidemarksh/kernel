@@ -21,6 +21,13 @@ pub const STATUS_SOCKET_SEND: i32 = 29;
 pub const STATUS_SOCKET_RECV: i32 = 30;
 
 // =============================================================================
+// Process spawn handoff kinds
+// =============================================================================
+pub const SPAWN_KIND_NONE: u32 = 0;
+pub const SPAWN_KIND_EXECVE: u32 = 1;
+pub const SPAWN_KIND_FORK: u32 = 2;
+
+// =============================================================================
 // FD types (internal, not Linux ABI)
 // =============================================================================
 pub const FD_TYPE_NONE: i32 = 0;
@@ -249,6 +256,7 @@ pub const EISDIR: i64 = -21;
 pub const EINVAL: i64 = -22;
 pub const ERANGE: i64 = -34;
 pub const EMFILE: i64 = -24;
+pub const ESPIPE: i64 = -29;
 pub const ENOSPC: i64 = -28;
 pub const EPIPE: i64 = -32;
 pub const ENOSYS: i64 = -38;
@@ -305,6 +313,9 @@ export_const!(abi_status_execve_spawn, STATUS_EXECVE_SPAWN);
 export_const!(abi_status_clone_spawn, STATUS_CLONE_SPAWN);
 export_const!(abi_status_sleep, STATUS_SLEEP);
 export_const!(abi_status_jit_ready, STATUS_JIT_READY);
+export_const!(abi_spawn_kind_none, SPAWN_KIND_NONE as i32);
+export_const!(abi_spawn_kind_execve, SPAWN_KIND_EXECVE as i32);
+export_const!(abi_spawn_kind_fork, SPAWN_KIND_FORK as i32);
 export_const!(abi_status_connect, STATUS_CONNECT);
 export_const!(abi_status_socket_send, STATUS_SOCKET_SEND);
 export_const!(abi_status_socket_recv, STATUS_SOCKET_RECV);
@@ -547,12 +558,127 @@ pub extern "C" fn kernel_init(heap_base: u32) {
         crate::guest_mem::init(core::ptr::null(), core::ptr::null());
     }
     crate::syscall::memory::init(0);
+    crate::syscall::process::init();
+    crate::syscall::time::init();
+    crate::syscall::thread::init();
     crate::syscall::signal::init();
     crate::syscall::epoll::init();
     crate::syscall::pipe::init();
     crate::syscall::socket::init();
     crate::fs::fd_table::init();
     crate::fs::memfs::init();
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_heap_base() -> u32 {
+    crate::alloc::heap_base()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_heap_ptr() -> u32 {
+    crate::alloc::heap_ptr()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_ofd_table_ptr() -> u32 {
+    crate::fs::fd_table::ofd_table_ptr()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_memfs_ptr() -> u32 {
+    crate::fs::memfs::memfs_ptr()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_mem_state_ptr() -> u32 {
+    crate::syscall::memory::mem_state_ptr()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_epoll_table_ptr() -> u32 {
+    crate::syscall::epoll::epoll_table_ptr()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_socket_table_ptr() -> u32 {
+    crate::syscall::socket::socket_table_ptr()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_socket_used() -> u32 {
+    crate::syscall::socket::socket_used()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_pipe_base() -> u32 {
+    crate::syscall::pipe::pipe_state().0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_pipe_used() -> u64 {
+    crate::syscall::pipe::pipe_state().1
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_net_buf_base() -> u32 {
+    crate::net::ring_buffer::net_buffer_state().0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_net_buf_used() -> u64 {
+    crate::net::ring_buffer::net_buffer_state().1
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_sig_slots_ptr() -> u32 {
+    crate::syscall::signal::sig_slots_ptr()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_process_pending_ptr() -> u32 {
+    crate::syscall::signal::process_pending_ptr()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_process_runtime_state_ptr() -> u32 {
+    crate::syscall::process::process_runtime_state_ptr()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_time_state_ptr() -> u32 {
+    crate::syscall::time::time_state_ptr()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_attach_runtime_state(
+    heap_base: u32,
+    heap_ptr: u32,
+    ofd_table_ptr: u32,
+    memfs_ptr: u32,
+    mem_state_ptr: u32,
+    epoll_table_ptr: u32,
+    socket_table_ptr: u32,
+    socket_used: u32,
+    pipe_base: u32,
+    pipe_used: u64,
+    net_buf_base: u32,
+    net_buf_used: u64,
+    sig_slots_ptr: u32,
+    process_pending_ptr: u32,
+    process_runtime_state_ptr: u32,
+    time_state_ptr: u32,
+) {
+    crate::alloc::attach_heap_state(heap_base, heap_ptr);
+    crate::fs::fd_table::attach_ofd_table_ptr(ofd_table_ptr);
+    crate::fs::memfs::attach_memfs_ptr(memfs_ptr);
+    crate::syscall::memory::attach_mem_state_ptr(mem_state_ptr);
+    crate::syscall::epoll::attach_epoll_table_ptr(epoll_table_ptr);
+    crate::syscall::socket::attach_socket_state(socket_table_ptr, socket_used);
+    crate::syscall::pipe::attach_pipe_state(pipe_base, pipe_used);
+    crate::net::ring_buffer::attach_net_buffer_state(net_buf_base, net_buf_used);
+    crate::syscall::signal::attach_process_signal_state(sig_slots_ptr, process_pending_ptr);
+    crate::syscall::process::attach_process_runtime_state_ptr(process_runtime_state_ptr);
+    crate::syscall::time::attach_time_state_ptr(time_state_ptr);
 }
 
 // =========================================================================
@@ -644,6 +770,10 @@ pub extern "C" fn process_create(
         ps.pid = 2;
         ps.ppid = 1;
         ps.cwd_ino = 1;
+        ps.fs_ring_base = crate::alloc::alloc_zeroed(crate::fs::ring_buffer::RING_BUFFER_SIZE as u32, 16);
+        if ps.fs_ring_base == 0 {
+            return 0;
+        }
         crate::syscall::signal::init_for_process(2);
 
         // Wire guest_mem to ProcessState's thread_count for seqlock
@@ -729,6 +859,7 @@ pub extern "C" fn process_create(
         ts.status = STATUS_OK;
         ts.tid = 1;
         ts.process_ptr = ps_ptr;
+        crate::syscall::thread::init_main_thread(ts_ptr, base);
         ts_ptr
     }
 }
@@ -738,6 +869,11 @@ pub extern "C" fn process_create(
 pub extern "C" fn thread_step(vm_ptr: u32, budget: i32) -> i32 {
     unsafe {
         let vm = &mut *(vm_ptr as *mut crate::types::ThreadState);
+        if vm.process_ptr != 0 {
+            let ps = &*(vm.process_ptr as *const crate::types::ProcessState);
+            let tc_ptr = core::ptr::addr_of!(ps.thread_count);
+            crate::guest_mem::init(core::ptr::null(), tc_ptr);
+        }
         vm.status = STATUS_OK;
         crate::cpu::exec(vm, budget, None, None, None, None)
     }
@@ -763,9 +899,80 @@ pub extern "C" fn thread_a0(vm_ptr: u32) -> u64 {
     unsafe { (*(vm_ptr as *const crate::types::ThreadState)).x[10] }
 }
 
+/// Allocate and initialize the child ThreadState for a pending
+/// clone(CLONE_VM | CLONE_THREAD) handoff.
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_spawn_from_clone(parent_vm_ptr: u32) -> u32 {
+    crate::syscall::thread::spawn_from_clone(parent_vm_ptr, 0)
+}
+
+/// Return the current shared ProcessState.thread_count for the given thread.
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_process_thread_count(vm_ptr: u32) -> u32 {
+    crate::syscall::thread::process_thread_count(vm_ptr, 0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_process_fs(vm_ptr: u32) {
+    crate::syscall::fs::process_pending_requests(vm_ptr, 0);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_resume_fs(vm_ptr: u32) -> i64 {
+    crate::syscall::fs::resume_from_fs(vm_ptr, 0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_spawn_kind(vm_ptr: u32) -> u32 {
+    unsafe { (*(vm_ptr as *const crate::types::ThreadState)).spawn_kind }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_spawn_child_pid(vm_ptr: u32) -> i32 {
+    unsafe { (*(vm_ptr as *const crate::types::ThreadState)).spawn_child_pid }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_spawn_path(vm_ptr: u32) -> u64 {
+    unsafe { (*(vm_ptr as *const crate::types::ThreadState)).spawn_path }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_spawn_argv(vm_ptr: u32) -> u64 {
+    unsafe { (*(vm_ptr as *const crate::types::ThreadState)).spawn_argv }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_spawn_envp(vm_ptr: u32) -> u64 {
+    unsafe { (*(vm_ptr as *const crate::types::ThreadState)).spawn_envp }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_clear_spawn_handoff(vm_ptr: u32) {
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut crate::types::ThreadState);
+        vm.spawn_kind = SPAWN_KIND_NONE;
+        vm.spawn_flags = 0;
+        vm.spawn_child_pid = 0;
+        vm.spawn_path = 0;
+        vm.spawn_argv = 0;
+        vm.spawn_envp = 0;
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_resume_vfork_parent(vm_ptr: u32, child_pid: i32) {
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut crate::types::ThreadState);
+        crate::syscall::process::vfork_parent_resume(vm, child_pid);
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use alloc_crate::vec;
     use super::*;
+    use crate::test_helpers::TestVm;
 
     #[test]
     fn status_codes_are_distinct() {
@@ -790,6 +997,69 @@ mod tests {
                 assert_ne!(codes[i], codes[j]);
             }
         }
+    }
+
+    #[test]
+    fn spawn_handoff_exports_round_trip() {
+        let mut t = TestVm::new();
+        let mut elf = vec![0u8; 0x104];
+        elf[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
+        elf[4] = 2;
+        elf[5] = 1;
+        elf[6] = 1;
+        elf[16..18].copy_from_slice(&2u16.to_le_bytes());
+        elf[18..20].copy_from_slice(&243u16.to_le_bytes());
+        elf[20..24].copy_from_slice(&1u32.to_le_bytes());
+        elf[24..32].copy_from_slice(&0x1000u64.to_le_bytes());
+        elf[32..40].copy_from_slice(&64u64.to_le_bytes());
+        elf[52..54].copy_from_slice(&64u16.to_le_bytes());
+        elf[54..56].copy_from_slice(&56u16.to_le_bytes());
+        elf[56..58].copy_from_slice(&1u16.to_le_bytes());
+        elf[64..68].copy_from_slice(&1u32.to_le_bytes());
+        elf[68..72].copy_from_slice(&5u32.to_le_bytes());
+        elf[72..80].copy_from_slice(&0x100u64.to_le_bytes());
+        elf[80..88].copy_from_slice(&0x1000u64.to_le_bytes());
+        elf[96..104].copy_from_slice(&4u64.to_le_bytes());
+        elf[104..112].copy_from_slice(&4u64.to_le_bytes());
+        elf[112..120].copy_from_slice(&0x1000u64.to_le_bytes());
+        elf[0x100..0x104].copy_from_slice(&[0x13, 0x05, 0x70, 0x00]);
+
+        assert_ne!(t.memfs.create_file(b"test", &elf), 0);
+        let path_addr = t.scratch;
+        t.write_mem(path_addr, b"/test\0");
+
+        crate::syscall::process::sys_vfork(&mut t.vm, t.base);
+        let ret = crate::syscall::process::sys_execve(&mut t.vm, t.base, path_addr, 0x1111, 0x2222);
+        assert!(ret > 0);
+
+        let vm_ptr = &mut t.vm as *mut crate::types::ThreadState as u32;
+        assert_eq!(thread_spawn_kind(vm_ptr), SPAWN_KIND_EXECVE);
+        assert_eq!(thread_spawn_child_pid(vm_ptr), ret as i32);
+        assert_eq!(thread_spawn_path(vm_ptr), path_addr);
+        assert_eq!(thread_spawn_argv(vm_ptr), 0x1111);
+        assert_eq!(thread_spawn_envp(vm_ptr), 0x2222);
+
+        thread_clear_spawn_handoff(vm_ptr);
+        assert_eq!(thread_spawn_kind(vm_ptr), SPAWN_KIND_NONE);
+        assert_eq!(thread_spawn_child_pid(vm_ptr), 0);
+        assert_eq!(thread_spawn_path(vm_ptr), 0);
+    }
+
+    #[test]
+    fn resume_vfork_parent_export_restores_parent_view() {
+        let mut t = TestVm::new();
+        t.vm.x[1] = 0x1234;
+        t.vm.pc = 0x4000;
+        crate::syscall::process::sys_vfork(&mut t.vm, t.base);
+        t.vm.x[1] = 0xFFFF;
+        t.vm.pc = 0x9000;
+
+        let vm_ptr = &mut t.vm as *mut crate::types::ThreadState as u32;
+        thread_resume_vfork_parent(vm_ptr, 55);
+        assert_eq!(t.vm.x[1], 0x1234);
+        assert_eq!(t.vm.pc, 0x4000);
+        assert_eq!(t.vm.x[10], 55);
+        assert_eq!(t.vm.status, STATUS_OK);
     }
 
     #[test]

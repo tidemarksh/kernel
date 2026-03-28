@@ -60,6 +60,16 @@ fn ms() -> &'static mut MemState {
     }
 }
 
+pub fn mem_state_ptr() -> u32 {
+    unsafe { core::ptr::read(core::ptr::addr_of!(MEM_STATE)) as u32 }
+}
+
+pub fn attach_mem_state_ptr(ptr: u32) {
+    unsafe {
+        core::ptr::write(core::ptr::addr_of_mut!(MEM_STATE), ptr as *mut MemState);
+    }
+}
+
 /// Initialize memory state. Allocates MemState via alloc.rs.
 pub fn init(brk_start: u64) {
     // Guest VMA placement must depend on the guest address space, not on the
@@ -116,6 +126,16 @@ pub(crate) fn restore_after_plain_fork(snapshot: &MemStateSnapshot) {
     s.brk_current = snapshot.brk_current;
     s.mmap_next = snapshot.mmap_next;
     s.has_prot_none = snapshot.has_prot_none;
+}
+
+pub fn reset_for_execve(brk_start: u64) {
+    let mmap_start = ((brk_start + 0x1F_FFFF) & !0xF_FFFF).max(0x20_0000);
+    let s = ms();
+    s.vmas.clear();
+    s.brk_base = brk_start;
+    s.brk_current = brk_start;
+    s.mmap_next = mmap_start;
+    s.has_prot_none = 0;
 }
 
 pub fn is_prot_none(addr: u64) -> bool {

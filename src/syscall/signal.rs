@@ -73,6 +73,27 @@ fn process_pending() -> &'static mut [u64; MAX_PROCESSES] {
     }
 }
 
+pub fn sig_slots_ptr() -> u32 {
+    unsafe { core::ptr::read(core::ptr::addr_of!(SIG_SLOTS_PTR)) as u32 }
+}
+
+pub fn process_pending_ptr() -> u32 {
+    unsafe { core::ptr::read(core::ptr::addr_of!(PROCESS_PENDING_PTR)) as u32 }
+}
+
+pub fn attach_process_signal_state(sig_slots_ptr: u32, process_pending_ptr: u32) {
+    unsafe {
+        core::ptr::write(
+            core::ptr::addr_of_mut!(SIG_SLOTS_PTR),
+            sig_slots_ptr as *mut [*mut [SigAction; MAX_SIGNALS]; MAX_PROCESSES],
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!(PROCESS_PENDING_PTR),
+            process_pending_ptr as *mut [u64; MAX_PROCESSES],
+        );
+    }
+}
+
 #[inline(always)]
 fn sigactions_for(pid: i32) -> &'static mut [SigAction; MAX_SIGNALS] {
     let idx = (pid - 1) as usize;
@@ -658,5 +679,29 @@ mod tests {
         assert_eq!(tbl[15].handler, crate::types::SIG_IGN);
         // SIG_DFL should remain SIG_DFL
         assert_eq!(tbl[2].handler, crate::types::SIG_DFL);
+    }
+
+    #[test]
+    fn send_signal_to_pid_queues_process_pending_signal() {
+        let mut t = TestVm::new();
+        super::sigactions_for(42)[crate::abi::SIGALRM as usize].handler = crate::types::SIG_IGN;
+
+        assert_eq!(super::send_signal_to_pid(42, crate::abi::SIGALRM), 0);
+        assert_eq!(
+            t.vm.sig_pending, 0,
+            "thread-local pending should stay empty before merge"
+        );
+
+        let delivered = super::check_pending(&mut t.vm, t.base);
+        assert!(
+            delivered,
+            "process-directed SIGALRM should be merged and delivered"
+        );
+        assert_eq!(t.vm.status, crate::abi::STATUS_OK);
+        assert_eq!(
+            t.vm.sig_pending & (1u64 << (crate::abi::SIGALRM - 1)),
+            0,
+            "SIGALRM should be cleared after delivery"
+        );
     }
 }

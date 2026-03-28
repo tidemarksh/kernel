@@ -76,6 +76,19 @@ fn set_epoll_ptr(idx: usize, val: *mut EpollInstance) {
     }
 }
 
+pub fn epoll_table_ptr() -> u32 {
+    unsafe { core::ptr::read(core::ptr::addr_of!(EPOLL_TABLE_PTR)) as u32 }
+}
+
+pub fn attach_epoll_table_ptr(ptr: u32) {
+    unsafe {
+        core::ptr::write(
+            core::ptr::addr_of_mut!(EPOLL_TABLE_PTR),
+            ptr as *mut *mut EpollInstance,
+        );
+    }
+}
+
 // =========================================================================
 // epoll_create1
 // =========================================================================
@@ -325,7 +338,10 @@ mod tests {
     fn epoll_pwait_reports_ready_pipe() {
         let mut t = TestVm::new();
         let pipefd_addr = t.scratch + 0x1000;
-        assert_eq!(crate::syscall::pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+        assert_eq!(
+            crate::syscall::pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0),
+            0
+        );
         let read_fd = unsafe { crate::guest_mem::read_u32(t.base, pipefd_addr) } as u64;
         let write_fd = unsafe { crate::guest_mem::read_u32(t.base, pipefd_addr + 4) } as i64;
 
@@ -360,15 +376,24 @@ mod tests {
             super::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 1, 0, 0),
             1
         );
-        assert_eq!(unsafe { crate::guest_mem::read_u32(t.base, out_addr) }, EPOLLIN);
-        assert_eq!(unsafe { crate::guest_mem::read_u64(t.base, out_addr + 8) }, 0x1234);
+        assert_eq!(
+            unsafe { crate::guest_mem::read_u32(t.base, out_addr) },
+            EPOLLIN
+        );
+        assert_eq!(
+            unsafe { crate::guest_mem::read_u64(t.base, out_addr + 8) },
+            0x1234
+        );
     }
 
     #[test]
     fn epoll_pwait_sets_wait_status_for_blocking_calls() {
         let mut t = TestVm::new();
         let pipefd_addr = t.scratch + 0x1000;
-        assert_eq!(crate::syscall::pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+        assert_eq!(
+            crate::syscall::pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0),
+            0
+        );
         let read_fd = unsafe { crate::guest_mem::read_u32(t.base, pipefd_addr) } as u64;
 
         let epfd = super::sys_epoll_create1(&mut t.vm, t.base, 0);

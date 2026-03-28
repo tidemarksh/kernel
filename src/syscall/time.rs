@@ -16,6 +16,7 @@
 //! WASM has no system clock — time is derived from execution progress.
 
 use crate::abi;
+use crate::alloc;
 use crate::guest_mem;
 use crate::types::ThreadState;
 
@@ -32,14 +33,6 @@ const ITIMER_REAL: u64 = 0;
 const ITIMER_VIRTUAL: u64 = 1;
 const ITIMER_PROF: u64 = 2;
 
-// Base time injected by runtime. Defaults to a reasonable epoch if not set.
-static mut BASE_TIME_SEC: u64 = 0;
-static mut BASE_TIME_NSEC: u64 = 0;
-static mut BASE_TIME_SET: bool = false;
-
-// Monotonic counter incremented by instruction execution.
-static mut MONOTONIC_TICKS: u64 = 0;
-
 #[derive(Clone, Copy)]
 struct ItimerState {
     interval_sec: u64,
@@ -48,65 +41,90 @@ struct ItimerState {
     value_usec: u64,
 }
 
-static mut ITIMERS: [[ItimerState; 3]; abi::MAX_PROCESSES] = [[ItimerState {
-    interval_sec: 0,
-    interval_usec: 0,
-    value_sec: 0,
-    value_usec: 0,
-}; 3]; abi::MAX_PROCESSES];
+#[repr(C)]
+struct TimeState {
+    base_time_sec: u64,
+    base_time_nsec: u64,
+    base_time_set: u32,
+    _pad: u32,
+    monotonic_ticks: u64,
+    itimers: [[ItimerState; 3]; abi::MAX_PROCESSES],
+}
+
+static mut TIME_STATE: *mut TimeState = core::ptr::null_mut();
+
+fn ts() -> &'static mut TimeState {
+    unsafe {
+        let p = core::ptr::read(core::ptr::addr_of!(TIME_STATE));
+        &mut *p
+    }
+}
 
 /// Reset time state. Called during test heap reset.
 pub fn init() {
     unsafe {
-        core::ptr::write(core::ptr::addr_of_mut!(BASE_TIME_SEC), 0);
-        core::ptr::write(core::ptr::addr_of_mut!(BASE_TIME_NSEC), 0);
-        core::ptr::write(core::ptr::addr_of_mut!(BASE_TIME_SET), false);
-        core::ptr::write(core::ptr::addr_of_mut!(MONOTONIC_TICKS), 0);
-        core::ptr::write(
-            core::ptr::addr_of_mut!(ITIMERS),
-            [[ItimerState {
-                interval_sec: 0,
-                interval_usec: 0,
-                value_sec: 0,
-                value_usec: 0,
-            }; 3]; abi::MAX_PROCESSES],
+        core::ptr::write(core::ptr::addr_of_mut!(TIME_STATE), core::ptr::null_mut());
+        let ptr = alloc::alloc_zeroed(
+            core::mem::size_of::<TimeState>() as u32,
+            core::mem::align_of::<TimeState>() as u32,
         );
+        if ptr == 0 {
+            core::arch::wasm32::unreachable();
+        }
+        core::ptr::write(
+            ptr as *mut TimeState,
+            TimeState {
+                base_time_sec: 0,
+                base_time_nsec: 0,
+                base_time_set: 0,
+                _pad: 0,
+                monotonic_ticks: 0,
+                itimers: [[ItimerState {
+                    interval_sec: 0,
+                    interval_usec: 0,
+                    value_sec: 0,
+                    value_usec: 0,
+                }; 3]; abi::MAX_PROCESSES],
+            },
+        );
+        core::ptr::write(core::ptr::addr_of_mut!(TIME_STATE), ptr as *mut TimeState);
+    }
+}
+
+pub fn time_state_ptr() -> u32 {
+    unsafe { core::ptr::read(core::ptr::addr_of!(TIME_STATE)) as u32 }
+}
+
+pub fn attach_time_state_ptr(ptr: u32) {
+    unsafe {
+        core::ptr::write(core::ptr::addr_of_mut!(TIME_STATE), ptr as *mut TimeState);
     }
 }
 
 /// Set the base wall-clock time. Called by runtime at initialization.
 /// All subsequent clock_gettime(CLOCK_REALTIME) calls use this as the epoch.
 pub fn set_base_time(sec: u64, nsec: u64) {
-    unsafe {
-        core::ptr::write(core::ptr::addr_of_mut!(BASE_TIME_SEC), sec);
-        core::ptr::write(core::ptr::addr_of_mut!(BASE_TIME_NSEC), nsec);
-        core::ptr::write(core::ptr::addr_of_mut!(BASE_TIME_SET), true);
-    }
+    let state = ts();
+    state.base_time_sec = sec;
+    state.base_time_nsec = nsec;
+    state.base_time_set = 1;
 }
 
 /// Advance the monotonic clock by `ticks` (typically instruction count).
 pub fn advance_monotonic(ticks: u64) {
-    unsafe {
-        let p = core::ptr::addr_of_mut!(MONOTONIC_TICKS);
-        let current = core::ptr::read(p);
-        core::ptr::write(p, current + ticks);
-    }
+    ts().monotonic_ticks += ticks;
 }
 
 fn monotonic_ticks() -> u64 {
-    unsafe { core::ptr::read(core::ptr::addr_of!(MONOTONIC_TICKS)) }
+    ts().monotonic_ticks
 }
 
 fn base_time() -> (u64, u64) {
-    unsafe {
-        if core::ptr::read(core::ptr::addr_of!(BASE_TIME_SET)) {
-            (
-                core::ptr::read(core::ptr::addr_of!(BASE_TIME_SEC)),
-                core::ptr::read(core::ptr::addr_of!(BASE_TIME_NSEC)),
-            )
-        } else {
-            (1700000000, 0) // fallback: ~2023-11-14 if runtime didn't set base time
-        }
+    let state = ts();
+    if state.base_time_set != 0 {
+        (state.base_time_sec, state.base_time_nsec)
+    } else {
+        (1700000000, 0) // fallback: ~2023-11-14 if runtime didn't set base time
     }
 }
 
@@ -130,7 +148,7 @@ fn itimer_for_pid(pid: i32, which: u64) -> Option<&'static mut ItimerState> {
     if !(1..=abi::MAX_PROCESSES as i32).contains(&pid) {
         return None;
     }
-    unsafe { Some(&mut ITIMERS[(pid - 1) as usize][which_idx]) }
+    Some(&mut ts().itimers[(pid - 1) as usize][which_idx])
 }
 
 fn write_itimerval(base: u32, addr: u64, timer: ItimerState) {
@@ -323,6 +341,7 @@ pub fn sys_sched_getaffinity(
 
 #[cfg(test)]
 mod tests {
+    use crate::abi;
     use crate::test_helpers::TestVm;
 
     #[test]
@@ -385,6 +404,65 @@ mod tests {
         assert_eq!(
             super::sys_clock_getres(&t.vm, t.base, 999, res),
             crate::abi::EINVAL
+        );
+    }
+
+    #[test]
+    fn setitimer_and_getitimer_round_trip() {
+        let t = TestVm::new();
+        let new_value = t.scratch + 0x100;
+        let curr_value = t.scratch + 0x200;
+
+        unsafe {
+            crate::guest_mem::write_u64(t.base, new_value, 3);
+            crate::guest_mem::write_u64(t.base, new_value + 8, 250_000);
+            crate::guest_mem::write_u64(t.base, new_value + 16, 1);
+            crate::guest_mem::write_u64(t.base, new_value + 24, 125_000);
+        }
+
+        assert_eq!(
+            super::sys_setitimer(&t.vm, t.base, super::ITIMER_REAL, new_value, 0),
+            0
+        );
+        assert_eq!(
+            super::sys_getitimer(&t.vm, t.base, super::ITIMER_REAL, curr_value),
+            0
+        );
+
+        assert_eq!(unsafe { crate::guest_mem::read_u64(t.base, curr_value) }, 3);
+        assert_eq!(
+            unsafe { crate::guest_mem::read_u64(t.base, curr_value + 8) },
+            250_000
+        );
+        assert_eq!(
+            unsafe { crate::guest_mem::read_u64(t.base, curr_value + 16) },
+            1
+        );
+        assert_eq!(
+            unsafe { crate::guest_mem::read_u64(t.base, curr_value + 24) },
+            125_000
+        );
+    }
+
+    #[test]
+    fn setitimer_rejects_invalid_usec_fields() {
+        let t = TestVm::new();
+        let new_value = t.scratch + 0x300;
+
+        unsafe {
+            crate::guest_mem::write_u64(t.base, new_value, 0);
+            crate::guest_mem::write_u64(t.base, new_value + 8, 1_000_000);
+            crate::guest_mem::write_u64(t.base, new_value + 16, 0);
+            crate::guest_mem::write_u64(t.base, new_value + 24, 0);
+        }
+
+        assert_eq!(
+            super::sys_setitimer(&t.vm, t.base, super::ITIMER_REAL, new_value, 0),
+            abi::EINVAL
+        );
+        assert_eq!(
+            super::sys_getitimer(&t.vm, t.base, super::ITIMER_REAL, 0),
+            abi::EFAULT
         );
     }
 }

@@ -59,6 +59,22 @@ fn buf_base() -> u32 {
     unsafe { core::ptr::read(core::ptr::addr_of!(NET_BUF_BASE)) }
 }
 
+pub fn net_buffer_state() -> (u32, u64) {
+    unsafe {
+        (
+            core::ptr::read(core::ptr::addr_of!(NET_BUF_BASE)),
+            core::ptr::read(core::ptr::addr_of!(NET_BUF_USED)),
+        )
+    }
+}
+
+pub fn attach_net_buffer_state(base: u32, used: u64) {
+    unsafe {
+        core::ptr::write(core::ptr::addr_of_mut!(NET_BUF_BASE), base);
+        core::ptr::write(core::ptr::addr_of_mut!(NET_BUF_USED), used);
+    }
+}
+
 /// Byte address of buffer `idx` in linear memory.
 fn buf_addr(idx: u32) -> u32 {
     buf_base() + idx * NET_BUF_SIZE
