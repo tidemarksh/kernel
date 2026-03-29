@@ -201,7 +201,11 @@ pub fn grow_brk(base: u32, new_brk: u64) -> i64 {
         let needed = (base as u64 + new_brk) as u32;
         let mem_size = core::arch::wasm32::memory_size(0) as u32 * 65536;
         if needed > mem_size {
-            let pages = ((needed - mem_size) + 65535) / 65536;
+            // §6.10: grow in 1MB (16 page) units to amortize grow cost.
+            let deficit = needed - mem_size;
+            let grow_unit = 16u32 * 65536; // 1 MB
+            let grow_bytes = ((deficit + grow_unit - 1) / grow_unit) * grow_unit;
+            let pages = grow_bytes / 65536;
             if core::arch::wasm32::memory_grow(0, pages as usize) == usize::MAX {
                 return s.brk_current as i64;
             }
@@ -227,12 +231,15 @@ pub fn sys_brk(_vm: &mut ThreadState, base: u32, addr: u64) -> i64 {
         return s.brk_current as i64;
     }
 
-    // Ensure WASM memory is large enough
+    // Ensure WASM memory is large enough (§6.10: grow in 1MB units)
     unsafe {
         let needed = addr as u32;
         let mem_size = core::arch::wasm32::memory_size(0) as u32 * 65536;
         if needed > mem_size {
-            let pages = ((needed - mem_size) + 65535) / 65536;
+            let deficit = needed - mem_size;
+            let grow_unit = 16u32 * 65536; // 1 MB
+            let grow_bytes = ((deficit + grow_unit - 1) / grow_unit) * grow_unit;
+            let pages = grow_bytes / 65536;
             if core::arch::wasm32::memory_grow(0, pages as usize) == usize::MAX {
                 return s.brk_current as i64;
             }
@@ -307,12 +314,15 @@ pub fn sys_mmap(
         hole
     };
 
-    // Ensure WASM memory covers the mapped region
+    // Ensure WASM memory covers the mapped region (§6.10: 1MB grow units)
     unsafe {
         let needed = (start + len) as u32;
         let mem_size = core::arch::wasm32::memory_size(0) as u32 * 65536;
         if needed > mem_size {
-            let pages = ((needed - mem_size) + 65535) / 65536;
+            let deficit = needed - mem_size;
+            let grow_unit = 16u32 * 65536; // 1 MB
+            let grow_bytes = ((deficit + grow_unit - 1) / grow_unit) * grow_unit;
+            let pages = grow_bytes / 65536;
             if core::arch::wasm32::memory_grow(0, pages as usize) == usize::MAX {
                 return ENOMEM;
             }
@@ -442,7 +452,10 @@ pub fn sys_mremap(
             let needed = grow_end as u32;
             let mem_size = core::arch::wasm32::memory_size(0) as u32 * 65536;
             if needed > mem_size {
-                let pages = ((needed - mem_size) + 65535) / 65536;
+                let deficit = needed - mem_size;
+                let grow_unit = 16u32 * 65536;
+                let grow_bytes = ((deficit + grow_unit - 1) / grow_unit) * grow_unit;
+                let pages = grow_bytes / 65536;
                 if core::arch::wasm32::memory_grow(0, pages as usize) == usize::MAX {
                     return ENOMEM;
                 }
@@ -462,7 +475,10 @@ pub fn sys_mremap(
         let needed = (new_start + new_len) as u32;
         let mem_size = core::arch::wasm32::memory_size(0) as u32 * 65536;
         if needed > mem_size {
-            let pages = ((needed - mem_size) + 65535) / 65536;
+            let deficit = needed - mem_size;
+            let grow_unit = 16u32 * 65536;
+            let grow_bytes = ((deficit + grow_unit - 1) / grow_unit) * grow_unit;
+            let pages = grow_bytes / 65536;
             if core::arch::wasm32::memory_grow(0, pages as usize) == usize::MAX {
                 return ENOMEM;
             }
