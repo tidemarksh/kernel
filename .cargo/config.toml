@@ -1,6 +1,19 @@
 [build]
 target = "wasm32-unknown-unknown"
 
+[target.wasm32-unknown-unknown]
+# --import-memory: use external Memory (shared with guest / provided by runtime)
+# --global-base=0x100000: place kernel data segments at 1MB, above __stack_first
+#   but below guest ELF segments (typically start at 0x10000 with 64KB alignment)
+# NOTE: Go ELF starts at vaddr 0x10000, so kernel data at 1MB overlaps.
+#   For shared memory mode, kernel Worker should use private memory (§6.1).
+#   For testing, we use --global-base high enough to avoid ELF conflicts.
+# --import-memory: runtime provides Memory (shared between threads, §6.1)
+# --global-base=50331648: place kernel static data at 48MB to avoid overlap with
+#   guest ELF segments (Go BSS extends to ~45MB). Kernel heap (alloc.rs) starts
+#   above this, at the heapBase passed to kernel_init.
+rustflags = ["-C", "link-args=--import-memory --global-base=50331648"]
+
 [alias]
 xtask = "run -p xtask --target x86_64-unknown-linux-gnu --target-dir target --"
 

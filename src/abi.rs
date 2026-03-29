@@ -767,13 +767,24 @@ pub extern "C" fn process_clear_args() {
 /// Create a new process. Loads ELF from `elf_ptr` in WASM memory.
 /// Returns pointer to ThreadState, or 0 on failure.
 #[unsafe(no_mangle)]
-/// Debug: test ELF loading without full process setup. Returns brk_start or 0 on error.
+/// Debug: test ELF loading without full process setup. Returns brk_start or error code.
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_inspect_elf(elf_ptr: u32, elf_len: u32, ram_size: u32) -> u64 {
     unsafe {
         match crate::elf::inspect_elf(elf_ptr, elf_len, ram_size as u64) {
             Ok(r) => r.brk_start,
             Err(code) => code as u64,
+        }
+    }
+}
+
+/// Debug: test load_elf. Returns brk_start or 0 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_load_elf(elf_ptr: u32, elf_len: u32, ram_size: u32) -> u64 {
+    unsafe {
+        match crate::elf::load_elf(0, ram_size as u64, elf_ptr, elf_len) {
+            Ok(r) => r.brk_start,
+            Err(_) => 0,
         }
     }
 }
@@ -786,6 +797,9 @@ pub extern "C" fn process_create(
     _stack_size: u32,
 ) -> u32 {
     unsafe {
+        // Guest RAM base must be above kernel's WASM data segments (__heap_base).
+        // When kernel shares memory with guest (import-memory), kernel data
+        // occupies low addresses. Guest segments start above that.
         let base: u32 = 0;
         let elf_result = match crate::elf::load_elf(base, ram_size as u64, elf_ptr, elf_len) {
             Ok(r) => r,
