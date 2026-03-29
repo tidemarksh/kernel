@@ -767,6 +767,18 @@ pub extern "C" fn process_clear_args() {
 /// Create a new process. Loads ELF from `elf_ptr` in WASM memory.
 /// Returns pointer to ThreadState, or 0 on failure.
 #[unsafe(no_mangle)]
+/// Debug: test ELF loading without full process setup. Returns brk_start or 0 on error.
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_inspect_elf(elf_ptr: u32, elf_len: u32, ram_size: u32) -> u64 {
+    unsafe {
+        match crate::elf::inspect_elf(elf_ptr, elf_len, ram_size as u64) {
+            Ok(r) => r.brk_start,
+            Err(code) => code as u64,
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn process_create(
     elf_ptr: u32,
     elf_len: u32,
