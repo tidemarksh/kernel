@@ -1004,6 +1004,134 @@ pub extern "C" fn thread_resume_vfork_parent(vm_ptr: u32, child_pid: i32) {
     }
 }
 
+// =============================================================================
+// Blocking state accessors (for runtime Atomics.wait integration)
+// =============================================================================
+
+/// Return the guest-memory address this thread is blocked on for FUTEX_WAIT.
+/// The runtime uses this to call Atomics.wait32 on the shared Memory.
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_futex_wait_addr(vm_ptr: u32) -> u64 {
+    unsafe { (*(vm_ptr as *const crate::types::ThreadState)).futex_wait_addr }
+}
+
+/// Return the guest pointer to the timeout timespec for FUTEX_WAIT (0 = infinite).
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_futex_wait_timeout(vm_ptr: u32) -> u64 {
+    unsafe { (*(vm_ptr as *const crate::types::ThreadState)).futex_wait_timeout }
+}
+
+/// Resume a thread after FUTEX_WAIT (woken by another thread's FUTEX_WAKE).
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_resume_futex_wait(vm_ptr: u32) {
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut crate::types::ThreadState);
+        crate::syscall::thread::resume_futex_wait(vm, 0);
+    }
+}
+
+/// Resume a thread after FUTEX_WAIT with a specific result (e.g. -ETIMEDOUT).
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_resume_futex_wait_result(vm_ptr: u32, result: i64) {
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut crate::types::ThreadState);
+        crate::syscall::thread::resume_futex_wait_result(vm, 0, result);
+    }
+}
+
+/// Return the sleep duration seconds (stored in fault_addr by STATUS_SLEEP).
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_sleep_seconds(vm_ptr: u32) -> u64 {
+    unsafe { (*(vm_ptr as *const crate::types::ThreadState)).fault_addr }
+}
+
+/// Return the sleep duration nanoseconds (stored in fault_pc by STATUS_SLEEP).
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_sleep_nanoseconds(vm_ptr: u32) -> u64 {
+    unsafe { (*(vm_ptr as *const crate::types::ThreadState)).fault_pc }
+}
+
+/// Return the ThreadRecord.blocked_addr for the given thread.
+/// Returns 0 if the thread has been woken (FUTEX_WAKE clears this).
+/// Returns u32::MAX if the thread record was not found.
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_record_blocked_addr(vm_ptr: u32) -> u32 {
+    unsafe {
+        let vm = &*(vm_ptr as *const crate::types::ThreadState);
+        crate::syscall::thread::thread_record_blocked_addr(vm, 0)
+    }
+}
+
+/// Return the child PID allocated during an active vfork.
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_vfork_child_pid() -> i32 {
+    crate::syscall::process::vfork_child_pid()
+}
+
+// =============================================================================
+// MemFS operations (for Runtime.writeFile/readFile via kernel Worker)
+// =============================================================================
+
+/// Resolve an absolute path to an inode number. Returns 0 if not found.
+/// `path_ptr` and `path_len` point into kernel Worker WASM linear memory.
+#[unsafe(no_mangle)]
+pub extern "C" fn memfs_resolve_path(path_ptr: u32, path_len: u32) -> u32 {
+    let path = unsafe { core::slice::from_raw_parts(path_ptr as *const u8, path_len as usize) };
+    crate::fs::memfs::resolve_path(path)
+}
+
+/// Create a file under `parent_ino`. Returns the new inode number, or 0 on failure.
+#[unsafe(no_mangle)]
+pub extern "C" fn memfs_create_file(parent_ino: u32, name_ptr: u32, name_len: u32) -> u32 {
+    let name = unsafe { core::slice::from_raw_parts(name_ptr as *const u8, name_len as usize) };
+    crate::fs::memfs::create_file(parent_ino, name, 0o644)
+}
+
+/// Write data to a file at the given offset. Returns bytes written or negative error.
+#[unsafe(no_mangle)]
+pub extern "C" fn memfs_write_file_at(ino: u32, offset: u64, data_ptr: u32, data_len: u32) -> i64 {
+    let data = unsafe { core::slice::from_raw_parts(data_ptr as *const u8, data_len as usize) };
+    crate::fs::memfs::write_file(ino, offset, data)
+}
+
+/// Read file data into a buffer. Returns bytes read or negative error.
+#[unsafe(no_mangle)]
+pub extern "C" fn memfs_read_file_to(ino: u32, offset: u64, buf_ptr: u32, buf_len: u32) -> i64 {
+    let buf = unsafe { core::slice::from_raw_parts_mut(buf_ptr as *mut u8, buf_len as usize) };
+    crate::fs::memfs::read_file(ino, offset, buf)
+}
+
+/// Return the size of a file in bytes, or 0 if the inode doesn't exist.
+#[unsafe(no_mangle)]
+pub extern "C" fn memfs_file_size(ino: u32) -> u64 {
+    crate::fs::memfs::stat(ino).map_or(0, |s| s.size)
+}
+
+/// Ensure a directory exists under `parent_ino`. Returns existing or new inode.
+#[unsafe(no_mangle)]
+pub extern "C" fn memfs_ensure_dir(parent_ino: u32, name_ptr: u32, name_len: u32, mode: u32) -> u32 {
+    let name = unsafe { core::slice::from_raw_parts(name_ptr as *const u8, name_len as usize) };
+    let existing = crate::fs::memfs::lookup(parent_ino, name);
+    if existing != 0 {
+        return existing;
+    }
+    crate::fs::memfs::create_dir(parent_ino, name, mode)
+}
+
+/// Create a file with initial data content. Returns the new inode number.
+#[unsafe(no_mangle)]
+pub extern "C" fn memfs_create_file_with_data(
+    parent_ino: u32,
+    name_ptr: u32,
+    name_len: u32,
+    data_ptr: u32,
+    data_len: u32,
+) -> u32 {
+    let name = unsafe { core::slice::from_raw_parts(name_ptr as *const u8, name_len as usize) };
+    let data = unsafe { core::slice::from_raw_parts(data_ptr as *const u8, data_len as usize) };
+    crate::fs::memfs::create_file_with_data(parent_ino, name, data)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

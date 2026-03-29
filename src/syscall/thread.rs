@@ -526,6 +526,20 @@ pub fn process_thread_count(vm_ptr: u32, base: u32) -> u32 {
     }
 }
 
+/// Read the blocked_addr for the given thread from its ThreadRecord.
+/// Returns 0 if woken (FUTEX_WAKE clears this), u32::MAX if not found.
+pub fn thread_record_blocked_addr(vm: &ThreadState, base: u32) -> u32 {
+    unsafe {
+        if vm.tid <= 0 || vm.tid as usize > MAX_THREADS {
+            return u32::MAX;
+        }
+        let Some(ps) = process_state(base, vm) else {
+            return u32::MAX;
+        };
+        ps.threads[(vm.tid - 1) as usize].blocked_addr
+    }
+}
+
 /// Allocate a new thread ID. Simple increment based on thread registry.
 fn allocate_tid(vm: &ThreadState, base: u32) -> i32 {
     unsafe {
