@@ -600,10 +600,13 @@ pub fn sys_futex(
                 addr as u32,
                 val.min(u32::MAX as u64) as u32,
             );
+            #[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
             let external = crate::runtime_test_support::wake_plain_fork_futex_waits(
                 addr as u32,
                 val.min(u32::MAX as u64) as u32,
             );
+            #[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
+            let external = 0u32;
             return (local + external) as i64;
         }
         _ => ENOSYS,
