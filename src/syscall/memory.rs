@@ -23,10 +23,12 @@ use crate::fs::{fd_table, memfs};
 use crate::guest_mem;
 use crate::types::{ThreadState, Vma};
 
-/// Memory management state, allocated in kernel Worker linear memory via alloc.rs.
+/// Address space state — shared by all threads of a process.
+/// Allocated in kernel Worker linear memory via alloc.rs.
+/// Separated for fork (new address space) and execve (reinit).
 /// VMA table is a sorted Vec<Vma> (sorted by start address).
 /// https://man7.org/linux/man-pages/man2/mmap.2.html
-struct MemState {
+struct AddressSpaceState {
     vmas: Vec<Vma>,
     brk_base: u64,
     brk_current: u64,
@@ -34,9 +36,9 @@ struct MemState {
     has_prot_none: u32,
 }
 
-/// Internal snapshot of mm state used by plain-fork handoff support.
+/// Internal snapshot of address space state used by plain-fork handoff support.
 #[derive(Clone)]
-pub(crate) struct MemStateSnapshot {
+pub(crate) struct AddressSpaceSnapshot {
     vmas: Vec<Vma>,
     brk_base: u64,
     brk_current: u64,
@@ -44,16 +46,16 @@ pub(crate) struct MemStateSnapshot {
     has_prot_none: u32,
 }
 
-impl MemStateSnapshot {
+impl AddressSpaceSnapshot {
     pub(crate) fn vmas(&self) -> &[Vma] {
         &self.vmas
     }
 }
 
-/// Pointer to MemState in kernel Worker linear memory (allocated via alloc.rs).
-static mut MEM_STATE: *mut MemState = core::ptr::null_mut();
+/// Pointer to AddressSpaceState in kernel Worker linear memory (allocated via alloc.rs).
+static mut MEM_STATE: *mut AddressSpaceState = core::ptr::null_mut();
 
-fn ms() -> &'static mut MemState {
+fn ms() -> &'static mut AddressSpaceState {
     unsafe {
         let p = core::ptr::read(core::ptr::addr_of!(MEM_STATE));
         &mut *p
@@ -66,33 +68,33 @@ pub fn mem_state_ptr() -> u32 {
 
 pub fn attach_mem_state_ptr(ptr: u32) {
     unsafe {
-        core::ptr::write(core::ptr::addr_of_mut!(MEM_STATE), ptr as *mut MemState);
+        core::ptr::write(core::ptr::addr_of_mut!(MEM_STATE), ptr as *mut AddressSpaceState);
     }
 }
 
-/// Initialize memory state. Allocates MemState via alloc.rs.
+/// Initialize memory state. Allocates AddressSpaceState via alloc.rs.
 pub fn init(brk_start: u64) {
     // Guest VMA placement must depend on the guest address space, not on the
     // kernel-worker bump allocator's host-side placement.
     let mmap_start = ((brk_start + 0x1F_FFFF) & !0xF_FFFF).max(0x20_0000);
     unsafe {
         // Null the pointer so we always take the fresh allocation path.
-        // After alloc::reset() the old MemState occupies bump-allocated memory
+        // After alloc::reset() the old AddressSpaceState occupies bump-allocated memory
         // that will be reused by other subsystem inits. The old Vec<Vma>'s
         // system-allocator buffer (if any) is leaked; this is acceptable
         // because alloc::reset() reclaims the bump region anyway.
         core::ptr::write(core::ptr::addr_of_mut!(MEM_STATE), core::ptr::null_mut());
 
         let ptr = crate::alloc::alloc(
-            core::mem::size_of::<MemState>() as u32,
-            core::mem::align_of::<MemState>() as u32,
+            core::mem::size_of::<AddressSpaceState>() as u32,
+            core::mem::align_of::<AddressSpaceState>() as u32,
         );
         if ptr == 0 {
             core::arch::wasm32::unreachable();
         }
         core::ptr::write(
-            ptr as *mut MemState,
-            MemState {
+            ptr as *mut AddressSpaceState,
+            AddressSpaceState {
                 vmas: Vec::new(),
                 brk_base: brk_start,
                 brk_current: brk_start,
@@ -100,7 +102,7 @@ pub fn init(brk_start: u64) {
                 has_prot_none: 0,
             },
         );
-        core::ptr::write(core::ptr::addr_of_mut!(MEM_STATE), ptr as *mut MemState);
+        core::ptr::write(core::ptr::addr_of_mut!(MEM_STATE), ptr as *mut AddressSpaceState);
     }
 }
 
@@ -108,9 +110,9 @@ pub fn has_prot_none() -> bool {
     ms().has_prot_none != 0
 }
 
-pub(crate) fn snapshot_for_plain_fork() -> MemStateSnapshot {
+pub(crate) fn snapshot_for_plain_fork() -> AddressSpaceSnapshot {
     let s = ms();
-    MemStateSnapshot {
+    AddressSpaceSnapshot {
         vmas: s.vmas.clone(),
         brk_base: s.brk_base,
         brk_current: s.brk_current,
@@ -119,7 +121,7 @@ pub(crate) fn snapshot_for_plain_fork() -> MemStateSnapshot {
     }
 }
 
-pub(crate) fn restore_after_plain_fork(snapshot: &MemStateSnapshot) {
+pub(crate) fn restore_after_plain_fork(snapshot: &AddressSpaceSnapshot) {
     let s = ms();
     s.vmas = snapshot.vmas.clone();
     s.brk_base = snapshot.brk_base;
@@ -545,7 +547,7 @@ pub fn sys_mprotect(_vm: &mut ThreadState, _base: u32, addr: u64, length: u64, p
 // VMA table helpers
 // =========================================================================
 
-fn find_hole(s: &mut MemState, len: u64) -> u64 {
+fn find_hole(s: &mut AddressSpaceState, len: u64) -> u64 {
     let mut candidate = s.mmap_next;
     loop {
         if candidate + len > 0x8000_0000 {
@@ -564,7 +566,7 @@ fn find_hole(s: &mut MemState, len: u64) -> u64 {
     }
 }
 
-fn overlaps(s: &MemState, start: u64, end: u64) -> bool {
+fn overlaps(s: &AddressSpaceState, start: u64, end: u64) -> bool {
     for v in s.vmas.iter() {
         if v.start < end && v.end > start {
             return true;
@@ -573,7 +575,7 @@ fn overlaps(s: &MemState, start: u64, end: u64) -> bool {
     false
 }
 
-fn overlaps_except(s: &MemState, start: u64, end: u64, except: usize) -> bool {
+fn overlaps_except(s: &AddressSpaceState, start: u64, end: u64, except: usize) -> bool {
     for (i, v) in s.vmas.iter().enumerate() {
         if i == except {
             continue;
@@ -585,7 +587,7 @@ fn overlaps_except(s: &MemState, start: u64, end: u64, except: usize) -> bool {
     false
 }
 
-fn remove_overlap(s: &mut MemState, start: u64, end: u64) {
+fn remove_overlap(s: &mut AddressSpaceState, start: u64, end: u64) {
     let mut i = 0;
     while i < s.vmas.len() {
         let v = s.vmas[i];
@@ -618,7 +620,7 @@ fn remove_overlap(s: &mut MemState, start: u64, end: u64) {
     s.vmas.sort_by_key(|v| v.start);
 }
 
-fn find_vma_containing(s: &MemState, addr: u64) -> Option<usize> {
+fn find_vma_containing(s: &AddressSpaceState, addr: u64) -> Option<usize> {
     for (i, v) in s.vmas.iter().enumerate() {
         if addr >= v.start && addr < v.end {
             return Some(i);
@@ -627,7 +629,7 @@ fn find_vma_containing(s: &MemState, addr: u64) -> Option<usize> {
     None
 }
 
-fn recompute_prot_none(s: &mut MemState) {
+fn recompute_prot_none(s: &mut AddressSpaceState) {
     s.has_prot_none = 0;
     for v in s.vmas.iter() {
         if v.prot == PROT_NONE {

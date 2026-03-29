@@ -21,7 +21,7 @@ struct PlainForkFutexWait {
 }
 
 pub struct PlainForkSnapshot {
-    mm_state: memory::MemStateSnapshot,
+    mm_state: memory::AddressSpaceSnapshot,
 }
 
 static mut GUEST_OUTPUT: Option<Vec<u8>> = None;
@@ -163,7 +163,7 @@ where
 fn snapshot_shared_mappings(
     base: u32,
     guest_limit: u64,
-    snapshot: &memory::MemStateSnapshot,
+    snapshot: &memory::AddressSpaceSnapshot,
 ) -> Vec<SharedMappingSnapshot> {
     let mut snapshots = Vec::new();
 
