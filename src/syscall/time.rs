@@ -304,10 +304,14 @@ pub fn sys_nanosleep(vm: &mut ThreadState, base: u32, req: u64, _rem: u64) -> i3
     abi::STATUS_SLEEP
 }
 
-/// sched_yield: no-op, return success.
+/// sched_yield: cooperative yield point for the runtime/test harness.
+/// Returns STATUS_SLEEP so the outer scheduler can run another runnable thread
+/// before resuming this one; guest-visible return value remains 0.
 /// https://man7.org/linux/man-pages/man2/sched_yield.2.html
-pub fn sys_sched_yield() -> i64 {
-    0
+pub fn sys_sched_yield(vm: &mut ThreadState) -> i32 {
+    vm.x[10] = 0;
+    vm.status = abi::STATUS_SLEEP;
+    abi::STATUS_SLEEP
 }
 
 /// sched_getaffinity: expose a single online CPU.

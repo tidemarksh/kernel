@@ -152,7 +152,7 @@ pub fn init() {
         let h = &mut *(header_ptr as *mut MemFsHeader);
         h.inode_count = 2; // 0=unused, 1=root
         h.dir_entry_count = 1; // 0=unused
-        h.data_used = 0;
+        h.data_used = 8;
         h.data_cap = INITIAL_DATA_SIZE;
         h.inodes = inodes_ptr as *mut Inode;
         h.first_child = first_child_ptr as *mut u32;
@@ -181,28 +181,63 @@ fn alloc_inode(mode: u32) -> u32 {
     if ino >= MAX_INODES {
         return 0;
     }
-    inodes()[ino] = Inode {
-        mode,
-        nlink: 1,
-        uid: 0,
-        gid: 0,
-        size: 0,
-        data_offset: 0,
-        data_cap: 0,
-    };
+    unsafe {
+        core::ptr::write(
+            h.inodes.add(ino),
+            Inode {
+                mode,
+                nlink: 1,
+                uid: 0,
+                gid: 0,
+                size: 0,
+                data_offset: 0,
+                data_cap: 0,
+            },
+        );
+    }
     h.inode_count += 1;
     ino as u32
 }
 
 fn alloc_data(size: u32) -> u32 {
-    let h = fs();
     let aligned = (size + 7) & !7;
-    if h.data_used + aligned > h.data_cap {
+    let data_used = fs().data_used;
+    let needed = match data_used.checked_add(aligned) {
+        Some(needed) => needed,
+        None => return u32::MAX,
+    };
+    if needed > fs().data_cap && !grow_data_pool(needed) {
         return u32::MAX;
     }
+    let h = fs();
     let off = h.data_used;
-    h.data_used += aligned;
+    h.data_used = needed;
     off
+}
+
+fn grow_data_pool(needed: u32) -> bool {
+    let h = fs();
+    let mut new_cap = h.data_cap.max(4096);
+    while new_cap < needed {
+        let Some(doubled) = new_cap.checked_mul(2) else {
+            return false;
+        };
+        new_cap = doubled;
+    }
+
+    // MemFS uses bump allocation, so growth installs a new backing store and
+    // leaves the old one unreachable for the lifetime of the worker.
+    let new_data = unsafe { alloc::alloc_zeroed(new_cap, 8) };
+    if new_data == 0 {
+        return false;
+    }
+
+    unsafe {
+        core::ptr::copy_nonoverlapping(h.data, new_data as *mut u8, h.data_used as usize);
+    }
+    h.data = new_data as *mut u8;
+    h.data_cap = new_cap;
+    true
 }
 
 // =========================================================================
@@ -210,17 +245,18 @@ fn alloc_data(size: u32) -> u32 {
 // =========================================================================
 
 pub fn lookup(parent_ino: u32, name: &[u8]) -> u32 {
-    let fc = first_child();
-    let des = dir_entries();
-    let mut idx = fc[parent_ino as usize];
-    while idx != 0 {
-        let de = &des[idx as usize];
-        if de.name_len as usize == name.len() && &de.name[..name.len()] == name {
-            return de.ino;
+    let h = fs();
+    unsafe {
+        let mut idx = *h.first_child.add(parent_ino as usize);
+        while idx != 0 {
+            let de = &*h.dir_entries.add(idx as usize);
+            if de.name_len as usize == name.len() && &de.name[..name.len()] == name {
+                return de.ino;
+            }
+            idx = de.next_sibling;
         }
-        idx = de.next_sibling;
+        0
     }
-    0
 }
 
 pub fn resolve_path(path: &[u8]) -> u32 {
@@ -271,12 +307,15 @@ fn add_dir_entry(parent_ino: u32, name: &[u8], ino: u32) -> bool {
         return false;
     }
 
-    let des = dir_entries();
-    des[idx].name[..name.len()].copy_from_slice(name);
-    des[idx].name_len = name.len() as u16;
-    des[idx].ino = ino;
-    des[idx].next_sibling = first_child()[parent_ino as usize];
-    first_child()[parent_ino as usize] = idx as u32;
+    unsafe {
+        let de = &mut *h.dir_entries.add(idx);
+        de.name[..name.len()].copy_from_slice(name);
+        de.name_len = name.len() as u16;
+        de.ino = ino;
+        let parent_first_child = h.first_child.add(parent_ino as usize);
+        de.next_sibling = *parent_first_child;
+        *parent_first_child = idx as u32;
+    }
     h.dir_entry_count += 1;
     true
 }
@@ -377,7 +416,9 @@ pub fn create_symlink(parent_ino: u32, name: &[u8], target: &[u8]) -> u32 {
     if off == u32::MAX {
         return 0;
     }
-    data_slice_mut()[off as usize..off as usize + target.len()].copy_from_slice(target);
+    unsafe {
+        core::ptr::copy_nonoverlapping(target.as_ptr(), fs().data.add(off as usize), target.len());
+    }
     inodes()[ino as usize].data_offset = off;
     inodes()[ino as usize].data_cap = target.len() as u32;
     inodes()[ino as usize].size = target.len() as u64;
@@ -400,7 +441,9 @@ pub fn read_link(ino: u32, buf: &mut [u8]) -> usize {
     let len = inode.size as usize;
     let n = len.min(buf.len());
     let off = inode.data_offset as usize;
-    buf[..n].copy_from_slice(&data_slice()[off..off + n]);
+    unsafe {
+        core::ptr::copy_nonoverlapping(fs().data.add(off), buf.as_mut_ptr(), n);
+    }
     n
 }
 
@@ -419,7 +462,6 @@ pub fn create_file(parent_ino: u32, name: &[u8], mode: u32) -> u32 {
     if !add_dir_entry(parent_ino, name, ino) {
         return 0;
     }
-    inodes()[parent_ino as usize].nlink += 1;
     ino
 }
 
@@ -449,7 +491,6 @@ pub fn unlink(parent_ino: u32, name: &[u8]) -> i64 {
     }
     remove_dir_entry(parent_ino, name);
     inodes()[ino as usize].nlink -= 1;
-    inodes()[parent_ino as usize].nlink -= 1;
     0
 }
 
@@ -476,36 +517,46 @@ pub fn rmdir(parent_ino: u32, name: &[u8]) -> i64 {
 
 pub fn write_file(ino: u32, offset: u64, data: &[u8]) -> i64 {
     let idx = ino as usize;
-    let ins = inodes();
-    if ins[idx].mode & S_IFMT != S_IFREG {
+    if inodes()[idx].mode & S_IFMT != S_IFREG {
         return EBADF;
     }
 
     let end = offset as u32 + data.len() as u32;
+    let data_cap = inodes()[idx].data_cap;
 
-    if ins[idx].data_cap == 0 {
+    if data_cap == 0 {
         let cap = end.max(4096);
         let off = alloc_data(cap);
         if off == u32::MAX {
             return ENOSPC;
         }
-        inodes()[idx].data_offset = off;
-        inodes()[idx].data_cap = cap;
-    } else if end > ins[idx].data_cap {
-        let old_off = ins[idx].data_offset as usize;
-        let old_size = ins[idx].size as usize;
-        let new_cap = (end * 2).max(ins[idx].data_cap * 2);
+        let inode = &mut inodes()[idx];
+        inode.data_offset = off;
+        inode.data_cap = cap;
+    } else if end > data_cap {
+        let old_off = inodes()[idx].data_offset as usize;
+        let old_size = inodes()[idx].size as usize;
+        let new_cap = (end * 2).max(data_cap * 2);
         let new_off = alloc_data(new_cap);
         if new_off == u32::MAX {
             return ENOSPC;
         }
-        data_slice_mut().copy_within(old_off..old_off + old_size, new_off as usize);
-        inodes()[idx].data_offset = new_off;
-        inodes()[idx].data_cap = new_cap;
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                fs().data.add(old_off),
+                fs().data.add(new_off as usize),
+                old_size,
+            );
+        }
+        let inode = &mut inodes()[idx];
+        inode.data_offset = new_off;
+        inode.data_cap = new_cap;
     }
 
     let base = inodes()[idx].data_offset as usize + offset as usize;
-    data_slice_mut()[base..base + data.len()].copy_from_slice(data);
+    unsafe {
+        core::ptr::copy_nonoverlapping(data.as_ptr(), fs().data.add(base), data.len());
+    }
     if end as u64 > inodes()[idx].size {
         inodes()[idx].size = end as u64;
     }
@@ -513,8 +564,7 @@ pub fn write_file(ino: u32, offset: u64, data: &[u8]) -> i64 {
 }
 
 pub fn read_file(ino: u32, offset: u64, buf: &mut [u8]) -> i64 {
-    let ins = inodes();
-    let inode = &ins[ino as usize];
+    let inode = inodes()[ino as usize];
     if inode.mode & S_IFMT != S_IFREG {
         return EBADF;
     }
@@ -524,20 +574,61 @@ pub fn read_file(ino: u32, offset: u64, buf: &mut [u8]) -> i64 {
     let avail = (inode.size - offset) as usize;
     let n = buf.len().min(avail);
     let base = inode.data_offset as usize + offset as usize;
-    buf[..n].copy_from_slice(&data_slice()[base..base + n]);
+    unsafe {
+        core::ptr::copy_nonoverlapping(fs().data.add(base), buf.as_mut_ptr(), n);
+    }
     n as i64
 }
 
 pub fn truncate(ino: u32, size: u64) -> i64 {
     let idx = ino as usize;
-    let ins = inodes();
-    if ins[idx].mode & S_IFMT != S_IFREG {
+    if inodes()[idx].mode & S_IFMT != S_IFREG {
         return EINVAL;
     }
-    if size < ins[idx].size {
-        let base = ins[idx].data_offset as usize + size as usize;
-        let end = ins[idx].data_offset as usize + ins[idx].size as usize;
-        data_slice_mut()[base..end].fill(0);
+    let old_size = inodes()[idx].size;
+    let data_cap = inodes()[idx].data_cap as u64;
+
+    if size > 0 && data_cap == 0 {
+        let cap = (size as u32).max(4096);
+        let off = alloc_data(cap);
+        if off == u32::MAX {
+            return ENOSPC;
+        }
+        let inode = &mut inodes()[idx];
+        inode.data_offset = off;
+        inode.data_cap = cap;
+    } else if size > data_cap {
+        let old_off = inodes()[idx].data_offset as usize;
+        let new_cap = ((size as u32) * 2).max((data_cap as u32) * 2);
+        let new_off = alloc_data(new_cap);
+        if new_off == u32::MAX {
+            return ENOSPC;
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                fs().data.add(old_off),
+                fs().data.add(new_off as usize),
+                old_size as usize,
+            );
+        }
+        let inode = &mut inodes()[idx];
+        inode.data_offset = new_off;
+        inode.data_cap = new_cap;
+    }
+
+    let data_offset = inodes()[idx].data_offset as usize;
+    if size < old_size {
+        let base = data_offset + size as usize;
+        let len = old_size as usize - size as usize;
+        unsafe {
+            core::ptr::write_bytes(fs().data.add(base), 0, len);
+        }
+    } else if size > old_size {
+        let base = data_offset + old_size as usize;
+        let len = size as usize - old_size as usize;
+        unsafe {
+            core::ptr::write_bytes(fs().data.add(base), 0, len);
+        }
     }
     inodes()[idx].size = size;
     0
@@ -750,5 +841,23 @@ mod tests {
         let mut buf = [0u8; 64];
         let n = read_link(exe_ino, &mut buf);
         assert_eq!(&buf[..n], b"/init");
+    }
+
+    #[test]
+    fn file_and_symlink_do_not_change_parent_nlink() {
+        let _ = TestVm::new();
+        let root_before = stat(1).unwrap().nlink;
+
+        let file_ino = create_file(1, b"tmp.txt", 0o644);
+        assert!(file_ino > 0);
+        assert_eq!(stat(1).unwrap().nlink, root_before);
+
+        let link_ino = create_symlink(1, b"tmp.link", b"/tmp.txt");
+        assert!(link_ino > 0);
+        assert_eq!(stat(1).unwrap().nlink, root_before);
+
+        assert_eq!(unlink(1, b"tmp.txt"), 0);
+        assert_eq!(unlink(1, b"tmp.link"), 0);
+        assert_eq!(stat(1).unwrap().nlink, root_before);
     }
 }

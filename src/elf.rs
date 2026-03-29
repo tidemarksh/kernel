@@ -65,11 +65,7 @@ pub struct ElfLoadResult {
 
 /// Validate an ELF image and compute the metadata needed for loading it
 /// without mutating guest memory.
-pub unsafe fn inspect_elf(
-    elf_ptr: u32,
-    elf_len: u32,
-    ram_size: u64,
-) -> Result<ElfLoadResult, i32> {
+pub unsafe fn inspect_elf(elf_ptr: u32, elf_len: u32, ram_size: u64) -> Result<ElfLoadResult, i32> {
     unsafe {
         if elf_len < 64 {
             return Err(-1); // too small for ELF header

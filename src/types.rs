@@ -27,8 +27,18 @@ pub struct ThreadState {
     pub status: i32,
     /// Exit code (set on STATUS_FAULT)
     pub exit_code: i32,
+    /// Non-zero when STATUS_FAULT was caused by default signal termination.
+    pub term_signal: i32,
     /// Thread ID
     pub tid: i32,
+    /// Real user ID
+    pub uid: u32,
+    /// Effective user ID
+    pub euid: u32,
+    /// Real group ID
+    pub gid: u32,
+    /// Effective group ID
+    pub egid: u32,
     /// TLS base address (set by set_tid_address / clone CLONE_SETTLS)
     pub tls_base: u64,
     /// Address to clear and futex-wake on thread exit (set_tid_address)
@@ -93,6 +103,22 @@ pub struct ThreadState {
     pub spawn_argv: u64,
     /// Guest pointer to envp vector.
     pub spawn_envp: u64,
+    /// Pending blocking wait4 target pid.
+    pub wait_pid: i64,
+    /// wait-family selector (wait4/waitid).
+    pub wait_kind: u32,
+    /// waitid idtype (P_ALL/P_PID/P_PGID).
+    pub wait_idtype: u32,
+    /// Guest pointer for wait status storage.
+    pub wait_wstatus_addr: u64,
+    /// wait4 options (WNOHANG, etc.).
+    pub wait_options: u64,
+    /// Guest pointer for wait rusage storage.
+    pub wait_rusage_addr: u64,
+    /// Blocked futex address for `STATUS_FUTEX_WAIT`.
+    pub futex_wait_addr: u64,
+    /// Guest pointer to FUTEX_WAIT timeout timespec (0 = infinite wait).
+    pub futex_wait_timeout: u64,
 }
 
 // =============================================================================
@@ -221,7 +247,7 @@ pub struct Vma {
     pub end: u64,
     pub prot: i32,  // PROT_READ | PROT_WRITE | PROT_EXEC | PROT_NONE
     pub flags: i32, // MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED
-    pub fd: i32,    // file-backed: OFD id. -1 = anonymous
+    pub fd: i32,    // file-backed: backing MemFS inode. -1 = anonymous
     pub _pad: i32,
     pub offset: u64, // file offset for file-backed mmap
 }

@@ -10,7 +10,7 @@
 //!     end:    u64,                      // offset 8   — region end (exclusive)
 //!     prot:   i32,                      // offset 16  — PROT_READ | PROT_WRITE | PROT_EXEC | PROT_NONE
 //!     flags:  i32,                      // offset 20  — MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED
-//!     fd:     i32,                      // offset 24  — file-backed OFD id, -1 = anonymous
+//!     fd:     i32,                      // offset 24  — file-backed MemFS inode, -1 = anonymous
 //!     _pad:   i32,                      // offset 28
 //!     offset: u64,                      // offset 32  — file offset for file-backed mmap
 //! };
@@ -128,14 +128,26 @@ pub(crate) fn restore_after_plain_fork(snapshot: &MemStateSnapshot) {
     s.has_prot_none = snapshot.has_prot_none;
 }
 
-pub fn reset_for_execve(brk_start: u64) {
+pub fn reset_for_execve(base: u32, brk_start: u64) {
     let mmap_start = ((brk_start + 0x1F_FFFF) & !0xF_FFFF).max(0x20_0000);
     let s = ms();
+    flush_shared_mappings_in_range(base, 0, u64::MAX);
     s.vmas.clear();
     s.brk_base = brk_start;
     s.brk_current = brk_start;
     s.mmap_next = mmap_start;
     s.has_prot_none = 0;
+}
+
+pub fn flush_shared_mappings(base: u32) {
+    flush_shared_mappings_in_range(base, 0, u64::MAX);
+}
+
+pub fn refresh_shared_file_mappings(base: u32, guest_limit: u64) {
+    let s = ms();
+    for vma in s.vmas.iter() {
+        refresh_shared_file_vma(base, vma, guest_limit);
+    }
 }
 
 pub fn is_prot_none(addr: u64) -> bool {
@@ -262,11 +274,16 @@ pub fn sys_mmap(
 
     // Validate fd for file-backed mmap
     // https://man7.org/linux/man-pages/man2/mmap.2.html
-    if !is_anon {
-        if fd < 0 || fd_table::get_ofd(base, vm, fd as u64).is_none() {
-            return EBADF;
+    let backing_ino = if is_anon {
+        0
+    } else if fd < 0 {
+        return EBADF;
+    } else {
+        match fd_table::get_ofd(base, vm, fd as u64) {
+            Some(ofd) => ofd.ino,
+            None => return EBADF,
         }
-    }
+    };
 
     let start = if is_fixed {
         if addr & (PAGE_SIZE - 1) != 0 {
@@ -316,32 +333,28 @@ pub fn sys_mmap(
         unsafe {
             guest_mem::zero_mem(base, start, len as usize);
         }
-        let ofd = fd_table::get_ofd(base, vm, fd as u64);
-        if let Some(ofd) = ofd {
-            let st = memfs::stat(ofd.ino as u32);
-            if let Some(st) = st {
-                let file_size = st.size;
-                let copy_start = offset.min(file_size);
-                let copy_end = (offset + len).min(file_size);
-                if copy_end > copy_start {
-                    let copy_len = (copy_end - copy_start) as usize;
-                    let mut tmp = [0u8; 4096];
-                    let mut off = 0usize;
-                    while off < copy_len {
-                        let chunk = (copy_len - off).min(tmp.len());
-                        let n = memfs::read_file(
-                            ofd.ino as u32,
-                            copy_start + off as u64,
-                            &mut tmp[..chunk],
-                        );
-                        if n <= 0 {
-                            break;
-                        }
-                        unsafe {
-                            guest_mem::write_bytes(base, start + off as u64, &tmp[..n as usize]);
-                        }
-                        off += n as usize;
+        if let Some(st) = memfs::stat(backing_ino as u32) {
+            let file_size = st.size;
+            let copy_start = offset.min(file_size);
+            let copy_end = (offset + len).min(file_size);
+            if copy_end > copy_start {
+                let copy_len = (copy_end - copy_start) as usize;
+                let mut tmp = [0u8; 4096];
+                let mut off = 0usize;
+                while off < copy_len {
+                    let chunk = (copy_len - off).min(tmp.len());
+                    let n = memfs::read_file(
+                        backing_ino as u32,
+                        copy_start + off as u64,
+                        &mut tmp[..chunk],
+                    );
+                    if n <= 0 {
+                        break;
                     }
+                    unsafe {
+                        guest_mem::write_bytes(base, start + off as u64, &tmp[..n as usize]);
+                    }
+                    off += n as usize;
                 }
             }
         }
@@ -352,7 +365,7 @@ pub fn sys_mmap(
         end: start + len,
         prot: prot as i32,
         flags: flags as i32,
-        fd: if is_anon { -1 } else { fd as i32 },
+        fd: if is_anon { -1 } else { backing_ino as i32 },
         _pad: 0,
         offset,
     });
@@ -370,12 +383,13 @@ pub fn sys_mmap(
 // =========================================================================
 
 /// munmap: unmap pages. Removes matching VMAs and recomputes PROT_NONE flag.
-pub fn sys_munmap(_vm: &mut ThreadState, _base: u32, addr: u64, length: u64) -> i64 {
+pub fn sys_munmap(_vm: &mut ThreadState, base: u32, addr: u64, length: u64) -> i64 {
     if addr & (PAGE_SIZE - 1) != 0 {
         return EINVAL;
     }
     let len = (length + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
     let s = ms();
+    flush_shared_mappings_in_range(base, addr, len);
     remove_overlap(s, addr, addr + len);
     recompute_prot_none(s);
     0
@@ -387,6 +401,7 @@ pub fn sys_munmap(_vm: &mut ThreadState, _base: u32, addr: u64, length: u64) -> 
 /// page cache to flush for the mappings we expose to guests, so success is
 /// equivalent for the cleanup paths that use msync() before munmap().
 pub fn sys_msync(_vm: &mut ThreadState, _base: u32, _addr: u64, _length: u64, _flags: u64) -> i64 {
+    flush_shared_mappings_in_range(_base, _addr, _length);
     0
 }
 
@@ -619,6 +634,85 @@ fn recompute_prot_none(s: &mut MemState) {
             s.has_prot_none = 1;
             return;
         }
+    }
+}
+
+fn flush_shared_mappings_in_range(base: u32, start: u64, length: u64) {
+    let end = start.saturating_add(length);
+    let s = ms();
+    for vma in s.vmas.iter() {
+        let flush_start = start.max(vma.start);
+        let flush_end = end.min(vma.end);
+        if flush_start >= flush_end {
+            continue;
+        }
+        flush_shared_vma_range(base, vma, flush_start, flush_end);
+    }
+}
+
+fn flush_shared_vma_range(base: u32, vma: &Vma, flush_start: u64, flush_end: u64) {
+    if (vma.flags as u64 & MAP_SHARED) == 0 || vma.fd < 0 {
+        return;
+    }
+
+    let ino = vma.fd as u32;
+    let mut guest_addr = flush_start;
+    let mut file_offset = vma.offset + (flush_start - vma.start);
+    let mut tmp = [0u8; 4096];
+
+    while guest_addr < flush_end {
+        let chunk = ((flush_end - guest_addr) as usize).min(tmp.len());
+        unsafe {
+            guest_mem::read_bytes(base, guest_addr, &mut tmp[..chunk]);
+        }
+        let written = memfs::write_file(ino, file_offset, &tmp[..chunk]);
+        if written != chunk as i64 {
+            return;
+        }
+        guest_addr += chunk as u64;
+        file_offset += chunk as u64;
+    }
+}
+
+fn refresh_shared_file_vma(base: u32, vma: &Vma, guest_limit: u64) {
+    if (vma.flags as u64 & MAP_SHARED) == 0 || vma.fd < 0 {
+        return;
+    }
+
+    let start = vma.start.min(guest_limit);
+    let end = vma.end.min(guest_limit);
+    if start >= end {
+        return;
+    }
+
+    unsafe {
+        guest_mem::zero_mem(base, start, (end - start) as usize);
+    }
+
+    let ino = vma.fd as u32;
+    let Some(st) = memfs::stat(ino) else {
+        return;
+    };
+    let file_size = st.size;
+    let copy_start = vma.offset.min(file_size);
+    let copy_end = (vma.offset + (end - start)).min(file_size);
+    if copy_end <= copy_start {
+        return;
+    }
+
+    let copy_len = (copy_end - copy_start) as usize;
+    let mut tmp = [0u8; 4096];
+    let mut off = 0usize;
+    while off < copy_len {
+        let chunk = (copy_len - off).min(tmp.len());
+        let n = memfs::read_file(ino, copy_start + off as u64, &mut tmp[..chunk]);
+        if n <= 0 {
+            break;
+        }
+        unsafe {
+            guest_mem::write_bytes(base, start + off as u64, &tmp[..n as usize]);
+        }
+        off += n as usize;
     }
 }
 

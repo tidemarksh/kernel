@@ -19,6 +19,7 @@ pub const STATUS_JIT_READY: i32 = 27;
 pub const STATUS_CONNECT: i32 = 28;
 pub const STATUS_SOCKET_SEND: i32 = 29;
 pub const STATUS_SOCKET_RECV: i32 = 30;
+pub const STATUS_WAIT4: i32 = 31;
 
 // =============================================================================
 // Process spawn handoff kinds
@@ -92,6 +93,7 @@ pub const SYS_FTRUNCATE: u64 = 46;
 pub const SYS_UTIMENSAT: u64 = 88;
 pub const SYS_EXIT: u64 = 93;
 pub const SYS_EXIT_GROUP: u64 = 94;
+pub const SYS_WAITID: u64 = 95;
 pub const SYS_SET_TID_ADDRESS: u64 = 96;
 pub const SYS_SET_ROBUST_LIST: u64 = 99;
 pub const SYS_FUTEX: u64 = 98;
@@ -106,8 +108,17 @@ pub const SYS_TKILL: u64 = 130;
 pub const SYS_TGKILL: u64 = 131;
 pub const SYS_RT_SIGACTION: u64 = 134;
 pub const SYS_RT_SIGPROCMASK: u64 = 135;
+pub const SYS_RT_SIGPENDING: u64 = 136;
 pub const SYS_RT_SIGRETURN: u64 = 139;
 pub const SYS_SIGALTSTACK: u64 = 132;
+pub const SYS_SETREGID: u64 = 143;
+pub const SYS_SETGID: u64 = 144;
+pub const SYS_SETREUID: u64 = 145;
+pub const SYS_SETUID: u64 = 146;
+pub const SYS_SETRESUID: u64 = 147;
+pub const SYS_GETRESUID: u64 = 148;
+pub const SYS_SETRESGID: u64 = 149;
+pub const SYS_GETRESGID: u64 = 150;
 pub const SYS_TIMES: u64 = 153;
 pub const SYS_SETPGID: u64 = 154;
 pub const SYS_GETPGID: u64 = 155;
@@ -159,6 +170,7 @@ pub const CLONE_VM: u64 = 0x00000100;
 pub const CLONE_FS: u64 = 0x00000200;
 pub const CLONE_FILES: u64 = 0x00000400;
 pub const CLONE_SIGHAND: u64 = 0x00000800;
+pub const CLONE_PARENT: u64 = 0x00008000;
 pub const CLONE_THREAD: u64 = 0x00010000;
 pub const CLONE_SETTLS: u64 = 0x00080000;
 pub const CLONE_PARENT_SETTID: u64 = 0x00100000;
@@ -245,6 +257,7 @@ pub const ESRCH: i64 = -3;
 pub const EINTR: i64 = -4;
 pub const EIO: i64 = -5;
 pub const ENXIO: i64 = -6;
+pub const ENOEXEC: i64 = -8;
 pub const EBADF: i64 = -9;
 pub const EAGAIN: i64 = -11;
 pub const ENOMEM: i64 = -12;
@@ -254,7 +267,9 @@ pub const EEXIST: i64 = -17;
 pub const ENOTDIR: i64 = -20;
 pub const EISDIR: i64 = -21;
 pub const EINVAL: i64 = -22;
+pub const ETXTBSY: i64 = -26;
 pub const ERANGE: i64 = -34;
+pub const ENAMETOOLONG: i64 = -36;
 pub const EMFILE: i64 = -24;
 pub const ESPIPE: i64 = -29;
 pub const ENOSPC: i64 = -28;
@@ -272,6 +287,7 @@ pub const EADDRNOTAVAIL: i64 = -99;
 pub const ENOTCONN: i64 = -107;
 pub const EISCONN: i64 = -106;
 pub const ECONNREFUSED: i64 = -111;
+pub const ETIMEDOUT: i64 = -110;
 
 // =============================================================================
 // Socket address families
@@ -319,6 +335,7 @@ export_const!(abi_spawn_kind_fork, SPAWN_KIND_FORK as i32);
 export_const!(abi_status_connect, STATUS_CONNECT);
 export_const!(abi_status_socket_send, STATUS_SOCKET_SEND);
 export_const!(abi_status_socket_recv, STATUS_SOCKET_RECV);
+export_const!(abi_status_wait4, STATUS_WAIT4);
 export_const!(abi_page_size, PAGE_SIZE as i32);
 export_const!(abi_max_fds, MAX_FDS as i32);
 export_const!(abi_max_threads, MAX_THREADS as i32);
@@ -362,6 +379,7 @@ export_const_u64!(abi_sys_clone, SYS_CLONE);
 export_const_u64!(abi_sys_execve, SYS_EXECVE);
 export_const_u64!(abi_sys_exit, SYS_EXIT);
 export_const_u64!(abi_sys_exit_group, SYS_EXIT_GROUP);
+export_const_u64!(abi_sys_waitid, SYS_WAITID);
 export_const_u64!(abi_sys_futex, SYS_FUTEX);
 export_const_u64!(abi_sys_pipe2, SYS_PIPE2);
 export_const_u64!(abi_sys_epoll_create1, SYS_EPOLL_CREATE1);
@@ -369,6 +387,7 @@ export_const_u64!(abi_sys_epoll_ctl, SYS_EPOLL_CTL);
 export_const_u64!(abi_sys_epoll_pwait, SYS_EPOLL_PWAIT);
 export_const_u64!(abi_sys_rt_sigaction, SYS_RT_SIGACTION);
 export_const_u64!(abi_sys_rt_sigprocmask, SYS_RT_SIGPROCMASK);
+export_const_u64!(abi_sys_rt_sigpending, SYS_RT_SIGPENDING);
 export_const_u64!(abi_sys_wait4, SYS_WAIT4);
 export_const_u64!(abi_sys_getpid, SYS_GETPID);
 export_const_u64!(abi_sys_gettid, SYS_GETTID);
@@ -414,6 +433,14 @@ export_const_u64!(abi_sys_tkill, SYS_TKILL);
 export_const_u64!(abi_sys_tgkill, SYS_TGKILL);
 export_const_u64!(abi_sys_rt_sigreturn, SYS_RT_SIGRETURN);
 export_const_u64!(abi_sys_sigaltstack, SYS_SIGALTSTACK);
+export_const_u64!(abi_sys_setregid, SYS_SETREGID);
+export_const_u64!(abi_sys_setgid, SYS_SETGID);
+export_const_u64!(abi_sys_setreuid, SYS_SETREUID);
+export_const_u64!(abi_sys_setuid, SYS_SETUID);
+export_const_u64!(abi_sys_setresuid, SYS_SETRESUID);
+export_const_u64!(abi_sys_getresuid, SYS_GETRESUID);
+export_const_u64!(abi_sys_setresgid, SYS_SETRESGID);
+export_const_u64!(abi_sys_getresgid, SYS_GETRESGID);
 export_const_u64!(abi_sys_times, SYS_TIMES);
 export_const_u64!(abi_sys_getppid, SYS_GETPPID);
 export_const_u64!(abi_sys_getuid, SYS_GETUID);
@@ -450,6 +477,7 @@ export_const_u64!(abi_sys_umask, SYS_UMASK);
 export_const_u64!(abi_clone_vm, CLONE_VM);
 export_const_u64!(abi_clone_thread, CLONE_THREAD);
 export_const_u64!(abi_clone_vfork, CLONE_VFORK);
+export_const_u64!(abi_clone_parent, CLONE_PARENT);
 export_const_u64!(abi_clone_files, CLONE_FILES);
 export_const_u64!(abi_clone_sighand, CLONE_SIGHAND);
 export_const_u64!(abi_clone_settls, CLONE_SETTLS);
@@ -514,12 +542,14 @@ export_const!(abi_esrch, ESRCH as i32);
 export_const!(abi_eintr, EINTR as i32);
 export_const!(abi_eio, EIO as i32);
 export_const!(abi_enxio, ENXIO as i32);
+export_const!(abi_enoexec, ENOEXEC as i32);
 export_const!(abi_efault, EFAULT as i32);
 export_const!(abi_enotdir, ENOTDIR as i32);
 export_const!(abi_eisdir, EISDIR as i32);
 export_const!(abi_emfile, EMFILE as i32);
 export_const!(abi_enospc, ENOSPC as i32);
 export_const!(abi_enotempty, ENOTEMPTY as i32);
+export_const!(abi_enametoolong, ENAMETOOLONG as i32);
 export_const!(abi_enotsock, ENOTSOCK as i32);
 export_const!(abi_edestaddrreq, EDESTADDRREQ as i32);
 export_const!(abi_eprototype, EPROTOTYPE as i32);
@@ -770,7 +800,8 @@ pub extern "C" fn process_create(
         ps.pid = 2;
         ps.ppid = 1;
         ps.cwd_ino = 1;
-        ps.fs_ring_base = crate::alloc::alloc_zeroed(crate::fs::ring_buffer::RING_BUFFER_SIZE as u32, 16);
+        ps.fs_ring_base =
+            crate::alloc::alloc_zeroed(crate::fs::ring_buffer::RING_BUFFER_SIZE as u32, 16);
         if ps.fs_ring_base == 0 {
             return 0;
         }
@@ -923,6 +954,11 @@ pub extern "C" fn thread_resume_fs(vm_ptr: u32) -> i64 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn thread_resume_wait4(vm_ptr: u32) -> i64 {
+    crate::syscall::process::resume_wait4(vm_ptr, 0)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn thread_spawn_kind(vm_ptr: u32) -> u32 {
     unsafe { (*(vm_ptr as *const crate::types::ThreadState)).spawn_kind }
 }
@@ -970,9 +1006,9 @@ pub extern "C" fn thread_resume_vfork_parent(vm_ptr: u32, child_pid: i32) {
 
 #[cfg(test)]
 mod tests {
-    use alloc_crate::vec;
     use super::*;
     use crate::test_helpers::TestVm;
+    use alloc_crate::vec;
 
     #[test]
     fn status_codes_are_distinct() {
@@ -991,6 +1027,7 @@ mod tests {
             STATUS_CONNECT,
             STATUS_SOCKET_SEND,
             STATUS_SOCKET_RECV,
+            STATUS_WAIT4,
         ];
         for i in 0..codes.len() {
             for j in (i + 1)..codes.len() {

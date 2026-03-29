@@ -83,21 +83,20 @@ testcases/kernel/syscalls/clock_settime/clock_settime01.c not yet enabled in cur
 testcases/kernel/syscalls/clock_settime/clock_settime02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/clock_settime/clock_settime03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/clock_settime/clock_settime04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/clone/clone01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/clone/clone02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/clone/clone03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/clone/clone04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/clone/clone05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/clone/clone06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/clone/clone07.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/clone/clone08.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/clone/clone09.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/clone/clone10.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/clone/clone11.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/clone3/clone301.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/clone3/clone302.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/clone3/clone303.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/clone3/clone304.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/clone/clone01.c clone currently supports only the CLONE_VM | CLONE_THREAD thread-worker subset; the broader LTP clone matrix is not yet audited
+testcases/kernel/syscalls/clone/clone02.c clone currently supports only the CLONE_VM | CLONE_THREAD thread-worker subset; the broader LTP clone matrix is not yet audited
+testcases/kernel/syscalls/clone/clone03.c clone currently supports only the CLONE_VM | CLONE_THREAD thread-worker subset; the broader LTP clone matrix is not yet audited
+testcases/kernel/syscalls/clone/clone04.c clone currently supports only the CLONE_VM | CLONE_THREAD thread-worker subset; the broader LTP clone matrix is not yet audited
+testcases/kernel/syscalls/clone/clone05.c clone currently supports only the CLONE_VM | CLONE_THREAD thread-worker subset; the broader LTP clone matrix is not yet audited
+testcases/kernel/syscalls/clone/clone06.c clone currently supports only the CLONE_VM | CLONE_THREAD thread-worker subset; the broader LTP clone matrix is not yet audited
+testcases/kernel/syscalls/clone/clone07.c clone currently supports only the CLONE_VM | CLONE_THREAD thread-worker subset; the broader LTP clone matrix is not yet audited
+testcases/kernel/syscalls/clone/clone09.c clone currently supports only the CLONE_VM | CLONE_THREAD thread-worker subset; the broader LTP clone matrix is not yet audited
+testcases/kernel/syscalls/clone/clone10.c clone currently supports only the CLONE_VM | CLONE_THREAD thread-worker subset; the broader LTP clone matrix is not yet audited
+testcases/kernel/syscalls/clone/clone11.c clone currently supports only the CLONE_VM | CLONE_THREAD thread-worker subset; the broader LTP clone matrix is not yet audited
+testcases/kernel/syscalls/clone3/clone301.c clone3 is not yet implemented in syscall dispatch
+testcases/kernel/syscalls/clone3/clone302.c clone3 is not yet implemented in syscall dispatch
+testcases/kernel/syscalls/clone3/clone303.c clone3 is not yet implemented in syscall dispatch
+testcases/kernel/syscalls/clone3/clone304.c clone3 is not yet implemented in syscall dispatch
 testcases/kernel/syscalls/close_range/close_range01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/close_range/close_range02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/cma/process_vm01.c not yet enabled in current syscall-conformance profile
@@ -173,19 +172,19 @@ testcases/kernel/syscalls/execl/execl01.c not yet enabled in current syscall-con
 testcases/kernel/syscalls/execl/execl01_child.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/execle/execle01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/execle/execle01_child.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/execlp/execlp01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/execlp/execlp01.c dedicated execlp(3) LTP ownership is not yet enabled in the current syscall-conformance profile
 testcases/kernel/syscalls/execlp/execlp01_child.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/execv/execv01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/execv/execv01_child.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/execve/execve01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/execve/execve01_child.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/execve/execve02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/execve/execve03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/execve/execve04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/execve/execve05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/execve/execve06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/execve/execve06_child.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/execve/execve_child.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/execve/execve01.c execve LTP coverage depends on child_needs_reinit and nested exec/wait orchestration that belongs to the runtime harness runtime-backed harness, so Phase 5 keeps Rust semantics tests instead
+testcases/kernel/syscalls/execve/execve02.c execve LTP coverage depends on child_needs_reinit and nested exec/wait orchestration that belongs to the runtime harness runtime-backed harness, so Phase 5 keeps Rust semantics tests instead
+testcases/kernel/syscalls/execve/execve03.c execve LTP coverage depends on child_needs_reinit and nested exec/wait orchestration that belongs to the runtime harness runtime-backed harness, so Phase 5 keeps Rust semantics tests instead
+testcases/kernel/syscalls/execve/execve04.c execve LTP coverage depends on child_needs_reinit and nested exec/wait orchestration that belongs to the runtime harness runtime-backed harness, so Phase 5 keeps Rust semantics tests instead
+testcases/kernel/syscalls/execve/execve05.c resource_files + child_needs_reinit depend on guest /bin/sh and cp plus runtime-backed nested process orchestration, so this testcase belongs to runtime harness rather than the kernel-only Phase 5 harness
+testcases/kernel/syscalls/execve/execve06.c execve LTP coverage depends on child_needs_reinit and nested exec/wait orchestration that belongs to the runtime harness runtime-backed harness, so Phase 5 keeps Rust semantics tests instead
+testcases/kernel/syscalls/execve/execve01_child.c helper binary for execve01 coverage; built and staged for PATH-based execve tests but not executed as a standalone LTP case
+testcases/kernel/syscalls/execve/execve06_child.c helper binary for execve06 coverage; built and staged for PATH-based execve tests but not executed as a standalone LTP case
+testcases/kernel/syscalls/execve/execve_child.c helper binary for unpromoted execve coverage; not executed as a standalone LTP case
 testcases/kernel/syscalls/execveat/execveat01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/execveat/execveat02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/execveat/execveat03.c not yet enabled in current syscall-conformance profile
@@ -193,8 +192,6 @@ testcases/kernel/syscalls/execveat/execveat_child.c not yet enabled in current s
 testcases/kernel/syscalls/execveat/execveat_errno.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/execvp/execvp01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/execvp/execvp01_child.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/exit/exit01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/exit/exit02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/faccessat2/faccessat201.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/faccessat2/faccessat202.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fadvise/posix_fadvise01.c not yet enabled in current syscall-conformance profile
@@ -353,8 +350,7 @@ testcases/kernel/syscalls/ftruncate/ftruncate03.c not yet enabled in current sys
 testcases/kernel/syscalls/ftruncate/ftruncate04.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/futex/futex_cmp_requeue01.c futex currently implements only WAIT/WAKE
 testcases/kernel/syscalls/futex/futex_cmp_requeue02.c futex currently implements only WAIT/WAKE
-testcases/kernel/syscalls/futex/futex_wait01.c futex currently implements only WAIT/WAKE
-testcases/kernel/syscalls/futex/futex_wait02.c futex currently implements only WAIT/WAKE
+testcases/kernel/syscalls/futex/futex_wake02.c futex currently implements only WAIT/WAKE
 testcases/kernel/syscalls/futex/futex_wait03.c futex currently implements only WAIT/WAKE
 testcases/kernel/syscalls/futex/futex_wait04.c futex currently implements only WAIT/WAKE
 testcases/kernel/syscalls/futex/futex_wait05.c futex currently implements only WAIT/WAKE
@@ -393,8 +389,6 @@ testcases/kernel/syscalls/getitimer/getitimer01.c getitimer/setitimer currently 
 testcases/kernel/syscalls/getitimer/getitimer02.c getitimer/setitimer currently preserve state only and do not schedule delivery
 testcases/kernel/syscalls/getpagesize/getpagesize01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getpeername/getpeername01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getpgid/getpgid01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getpgid/getpgid02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getpgrp/getpgrp01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getpid/getpid01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getpid/getpid02.c not yet enabled in current syscall-conformance profile
@@ -1064,10 +1058,6 @@ testcases/kernel/syscalls/setitimer/setitimer01.c getitimer/setitimer currently 
 testcases/kernel/syscalls/setitimer/setitimer02.c getitimer/setitimer currently preserve state only and do not schedule delivery
 testcases/kernel/syscalls/setns/setns01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setns/setns02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setpgid/setpgid01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setpgid/setpgid02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setpgid/setpgid03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setpgid/setpgid03_child.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setpgrp/setpgrp01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setpgrp/setpgrp02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setpriority/setpriority01.c not yet enabled in current syscall-conformance profile
@@ -1098,7 +1088,6 @@ testcases/kernel/syscalls/setrlimit/setrlimit03.c not yet enabled in current sys
 testcases/kernel/syscalls/setrlimit/setrlimit04.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setrlimit/setrlimit05.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setrlimit/setrlimit06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setsid/setsid01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setsockopt/setsockopt01.c setsockopt currently returns stub success without option semantics
 testcases/kernel/syscalls/setsockopt/setsockopt02.c setsockopt currently returns stub success without option semantics
 testcases/kernel/syscalls/setsockopt/setsockopt03.c setsockopt currently returns stub success without option semantics
@@ -1283,8 +1272,6 @@ testcases/kernel/syscalls/utime/utime06.c not yet enabled in current syscall-con
 testcases/kernel/syscalls/utime/utime07.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/utimensat/utimensat01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/utimes/utimes01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/vfork/vfork01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/vfork/vfork02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/vhangup/vhangup01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/vhangup/vhangup02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/vmsplice/vmsplice01.c not yet enabled in current syscall-conformance profile
@@ -1293,27 +1280,20 @@ testcases/kernel/syscalls/vmsplice/vmsplice03.c not yet enabled in current sysca
 testcases/kernel/syscalls/vmsplice/vmsplice04.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/wait/wait01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/wait/wait02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/wait4/wait401.c wait4 currently reaps exited children only and lacks blocking wait semantics
-testcases/kernel/syscalls/wait4/wait402.c wait4 currently reaps exited children only and lacks blocking wait semantics
-testcases/kernel/syscalls/wait4/wait403.c wait4 currently reaps exited children only and lacks blocking wait semantics
 testcases/kernel/syscalls/waitid/waitid01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/waitid/waitid02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/waitid/waitid03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/waitid/waitid04.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/waitid/waitid05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/waitid/waitid06.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/waitid/waitid07.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/waitid/waitid08.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/waitid/waitid09.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/waitid/waitid10.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/waitid/waitid11.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/waitpid/waitpid01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/waitpid/waitpid03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/waitpid/waitpid04.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/waitpid/waitpid06.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/waitpid/waitpid07.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/waitpid/waitpid08.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/waitpid/waitpid09.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/waitpid/waitpid10.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/waitpid/waitpid11.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/waitpid/waitpid12.c not yet enabled in current syscall-conformance profile
@@ -1331,5 +1311,3 @@ testcases/kernel/syscalls/writev/writev06.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/writev/writev07.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getppid/getppid01.c parent/child semantics belong to Phase 5 process support, not current Phase 4 conformance scope
 testcases/kernel/syscalls/statfs/statfs01.c LTP variant requires mount-device/all-filesystems harness support not present in current wasm test environment
-testcases/kernel/syscalls/exit_group/exit_group01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/futex/futex_wake02.c futex currently implements only WAIT/WAKE

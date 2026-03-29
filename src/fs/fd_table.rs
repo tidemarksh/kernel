@@ -18,7 +18,7 @@
 //! struct OpenFileDesc {                 // 32 bytes total
 //!     fd_type:      i32,               // offset 0  — FD_TYPE_FILE, FD_TYPE_PIPE, etc.
 //!     host_fd:      i32,               // offset 4  — pipe: idx or -(idx+1)
-//!     status_flags: i32,               // offset 8  — O_APPEND, O_NONBLOCK
+//!     status_flags: i32,               // offset 8  — O_ACCMODE, O_APPEND, O_NONBLOCK
 //!     refcount:     i32,               // offset 12 — process-level holds (fork increments,
 //!                                      //             last close in a process decrements)
 //!     offset:       i64,               // offset 16 — current file offset
@@ -45,6 +45,7 @@ const F_SETFD: u64 = 2;
 const F_GETFL: u64 = 3;
 const F_SETFL: u64 = 4;
 const F_DUPFD_CLOEXEC: u64 = 1030;
+const OPEN_ACCESS_MODE_MASK: i32 = 0x3;
 
 pub const FD_CLOEXEC: u32 = 1;
 
@@ -200,6 +201,15 @@ pub fn release_ofd_id(ofd_id: u32) {
     if ofd.refcount <= 0 {
         cleanup_ofd(slot);
     }
+}
+
+pub fn inode_has_write_open(ino: u32) -> bool {
+    ofd_table().iter().any(|ofd| {
+        ofd.refcount > 0
+            && ofd.fd_type == FD_TYPE_FILE
+            && ofd.ino == ino
+            && (ofd.status_flags & OPEN_ACCESS_MODE_MASK) != O_RDONLY
+    })
 }
 
 // =========================================================================
@@ -495,7 +505,10 @@ pub fn sys_close(vm: &mut ThreadState, base: u32, fd: u64) -> i64 {
 pub fn open_file(vm: &mut ThreadState, base: u32, ino: u32, flags: i32) -> i64 {
     unsafe {
         let fd_type = FD_TYPE_FILE;
-        let ofd_id = alloc_ofd(fd_type, flags & (O_APPEND | O_NONBLOCK));
+        let ofd_id = alloc_ofd(
+            fd_type,
+            flags & (OPEN_ACCESS_MODE_MASK | O_APPEND | O_NONBLOCK),
+        );
         if ofd_id == 0 {
             return EMFILE;
         }
@@ -708,6 +721,20 @@ mod tests {
                 .refcount,
             2
         );
+    }
+
+    #[test]
+    fn inode_has_write_open_tracks_open_and_close() {
+        let mut t = TestVm::new();
+        let fd = t.sys_openat(b"/etxtbusy.bin", O_CREAT | O_WRONLY);
+        assert!(fd >= 3);
+
+        let ino = crate::fs::memfs::resolve_path(b"/etxtbusy.bin");
+        assert!(ino > 0);
+        assert!(super::inode_has_write_open(ino));
+
+        assert_eq!(t.sys_close(fd), 0);
+        assert!(!super::inode_has_write_open(ino));
     }
 }
 

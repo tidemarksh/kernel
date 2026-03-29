@@ -32,6 +32,7 @@
 //! };
 //! https://github.com/torvalds/linux/blob/v6.12/include/uapi/linux/sysinfo.h
 
+use crate::abi::*;
 use crate::guest_mem;
 use crate::types::ThreadState;
 
@@ -42,6 +43,32 @@ pub const SYSINFO_MEM_UNIT: u32 = 1;
 fn guest_range_valid(addr: u64, len: usize) -> bool {
     let len = len as u64;
     addr != 0 && addr <= u32::MAX as u64 && len <= (u32::MAX as u64 + 1).saturating_sub(addr)
+}
+
+fn parse_cred_arg(raw: i64) -> Result<Option<u32>, i64> {
+    if raw == -1 {
+        return Ok(None);
+    }
+    if raw < 0 || raw > u32::MAX as i64 {
+        return Err(EINVAL);
+    }
+    Ok(Some(raw as u32))
+}
+
+fn can_change_uid(vm: &ThreadState, uid: Option<u32>, euid: Option<u32>) -> bool {
+    if vm.euid == 0 {
+        return true;
+    }
+    uid.map_or(true, |id| id == vm.uid || id == vm.euid)
+        && euid.map_or(true, |id| id == vm.uid || id == vm.euid)
+}
+
+fn can_change_gid(vm: &ThreadState, gid: Option<u32>, egid: Option<u32>) -> bool {
+    if vm.euid == 0 {
+        return true;
+    }
+    gid.map_or(true, |id| id == vm.gid || id == vm.egid)
+        && egid.map_or(true, |id| id == vm.gid || id == vm.egid)
 }
 
 /// getpid: return process ID from ProcessState in guest Memory.
@@ -145,9 +172,137 @@ pub fn sys_getrandom(vm: &ThreadState, base: u32, buf: u64, len: u64, _flags: u6
     count as i64
 }
 
-/// getuid/geteuid/getgid/getegid: always return 0 (root).
-pub fn sys_getuid() -> i64 {
+/// getuid/geteuid/getgid/getegid: read credentials from ThreadState.
+pub fn sys_getuid(vm: &ThreadState) -> i64 {
+    vm.uid as i64
+}
+
+pub fn sys_geteuid(vm: &ThreadState) -> i64 {
+    vm.euid as i64
+}
+
+pub fn sys_getgid(vm: &ThreadState) -> i64 {
+    vm.gid as i64
+}
+
+pub fn sys_getegid(vm: &ThreadState) -> i64 {
+    vm.egid as i64
+}
+
+pub fn sys_getresuid(
+    vm: &ThreadState,
+    base: u32,
+    ruid_addr: u64,
+    euid_addr: u64,
+    suid_addr: u64,
+) -> i64 {
+    for addr in [ruid_addr, euid_addr, suid_addr] {
+        if !guest_range_valid(addr, 4) || crate::syscall::memory::range_has_prot_none(addr, 4) {
+            return EFAULT;
+        }
+    }
+
+    unsafe {
+        guest_mem::write_u32(base, ruid_addr, vm.uid);
+        guest_mem::write_u32(base, euid_addr, vm.euid);
+        guest_mem::write_u32(base, suid_addr, vm.euid);
+    }
     0
+}
+
+pub fn sys_getresgid(
+    vm: &ThreadState,
+    base: u32,
+    rgid_addr: u64,
+    egid_addr: u64,
+    sgid_addr: u64,
+) -> i64 {
+    for addr in [rgid_addr, egid_addr, sgid_addr] {
+        if !guest_range_valid(addr, 4) || crate::syscall::memory::range_has_prot_none(addr, 4) {
+            return EFAULT;
+        }
+    }
+
+    unsafe {
+        guest_mem::write_u32(base, rgid_addr, vm.gid);
+        guest_mem::write_u32(base, egid_addr, vm.egid);
+        guest_mem::write_u32(base, sgid_addr, vm.egid);
+    }
+    0
+}
+
+pub fn sys_setuid(vm: &mut ThreadState, uid: i64) -> i64 {
+    let Ok(Some(uid)) = parse_cred_arg(uid) else {
+        return EINVAL;
+    };
+    if vm.euid != 0 && uid != vm.uid && uid != vm.euid {
+        return EPERM;
+    }
+    vm.uid = uid;
+    vm.euid = uid;
+    0
+}
+
+pub fn sys_setgid(vm: &mut ThreadState, gid: i64) -> i64 {
+    let Ok(Some(gid)) = parse_cred_arg(gid) else {
+        return EINVAL;
+    };
+    if vm.euid != 0 && gid != vm.gid && gid != vm.egid {
+        return EPERM;
+    }
+    vm.gid = gid;
+    vm.egid = gid;
+    0
+}
+
+pub fn sys_setreuid(vm: &mut ThreadState, ruid: i64, euid: i64) -> i64 {
+    let uid = match parse_cred_arg(ruid) {
+        Ok(uid) => uid,
+        Err(err) => return err,
+    };
+    let euid = match parse_cred_arg(euid) {
+        Ok(euid) => euid,
+        Err(err) => return err,
+    };
+    if !can_change_uid(vm, uid, euid) {
+        return EPERM;
+    }
+    if let Some(uid) = uid {
+        vm.uid = uid;
+    }
+    if let Some(euid) = euid {
+        vm.euid = euid;
+    }
+    0
+}
+
+pub fn sys_setregid(vm: &mut ThreadState, rgid: i64, egid: i64) -> i64 {
+    let gid = match parse_cred_arg(rgid) {
+        Ok(gid) => gid,
+        Err(err) => return err,
+    };
+    let egid = match parse_cred_arg(egid) {
+        Ok(egid) => egid,
+        Err(err) => return err,
+    };
+    if !can_change_gid(vm, gid, egid) {
+        return EPERM;
+    }
+    if let Some(gid) = gid {
+        vm.gid = gid;
+    }
+    if let Some(egid) = egid {
+        vm.egid = egid;
+    }
+    0
+}
+
+pub fn sys_setresuid(vm: &mut ThreadState, ruid: i64, euid: i64, _suid: i64) -> i64 {
+    sys_setreuid(vm, ruid, euid)
+}
+
+pub fn sys_setresgid(vm: &mut ThreadState, rgid: i64, egid: i64, _sgid: i64) -> i64 {
+    sys_setregid(vm, rgid, egid)
 }
 
 #[cfg(test)]
@@ -175,8 +330,39 @@ mod tests {
         assert_eq!(super::sys_sysinfo(&t.vm, t.base, buf2), 0);
         let totalram = unsafe { crate::guest_mem::read_u64(t.base, buf2 + 32) };
         assert!(totalram > 0);
-        assert_eq!(super::sys_sysinfo(&t.vm, t.base, u64::MAX), crate::abi::EFAULT);
-        assert_eq!(super::sys_uname(&t.vm, t.base, u64::MAX), crate::abi::EFAULT);
+        assert_eq!(
+            super::sys_sysinfo(&t.vm, t.base, u64::MAX),
+            crate::abi::EFAULT
+        );
+        assert_eq!(
+            super::sys_uname(&t.vm, t.base, u64::MAX),
+            crate::abi::EFAULT
+        );
+
+        assert_eq!(super::sys_getuid(&t.vm), 0);
+        assert_eq!(super::sys_geteuid(&t.vm), 0);
+        assert_eq!(super::sys_getgid(&t.vm), 0);
+        assert_eq!(super::sys_getegid(&t.vm), 0);
+        assert_eq!(super::sys_setgid(&mut t.vm, 65534), 0);
+        assert_eq!(super::sys_getgid(&t.vm), 65534);
+        assert_eq!(super::sys_getegid(&t.vm), 65534);
+        assert_eq!(super::sys_setresuid(&mut t.vm, -1, 65534, -1), 0);
+        assert_eq!(super::sys_getuid(&t.vm), 0);
+        assert_eq!(super::sys_geteuid(&t.vm), 65534);
+        let ruid = t.scratch + 0x3000;
+        let euid = ruid + 4;
+        let suid = euid + 4;
+        assert_eq!(super::sys_getresuid(&t.vm, t.base, ruid, euid, suid), 0);
+        assert_eq!(unsafe { crate::guest_mem::read_u32(t.base, ruid) }, 0);
+        assert_eq!(unsafe { crate::guest_mem::read_u32(t.base, euid) }, 65534);
+        assert_eq!(unsafe { crate::guest_mem::read_u32(t.base, suid) }, 65534);
+        let rgid = suid + 4;
+        let egid = rgid + 4;
+        let sgid = egid + 4;
+        assert_eq!(super::sys_getresgid(&t.vm, t.base, rgid, egid, sgid), 0);
+        assert_eq!(unsafe { crate::guest_mem::read_u32(t.base, rgid) }, 65534);
+        assert_eq!(unsafe { crate::guest_mem::read_u32(t.base, egid) }, 65534);
+        assert_eq!(unsafe { crate::guest_mem::read_u32(t.base, sgid) }, 65534);
 
         // getrandom
         let buf3 = t.scratch + 0x2000;

@@ -73,12 +73,7 @@ fn clear_tid_and_wake(process_ptr: u32, base: u32, addr: u64) -> u32 {
     wake_futex_waiters_by_process_ptr(process_ptr, base, addr as u32, u32::MAX)
 }
 
-fn wake_futex_waiters_by_process_ptr(
-    process_ptr: u32,
-    base: u32,
-    addr: u32,
-    max_wake: u32,
-) -> u32 {
+fn wake_futex_waiters_by_process_ptr(process_ptr: u32, base: u32, addr: u32, max_wake: u32) -> u32 {
     if process_ptr == 0 || max_wake == 0 {
         return 0;
     }
@@ -182,13 +177,8 @@ pub fn init_main_thread(vm_ptr: u32, base: u32) {
         }
 
         if vm.tid > 0 && vm.tid as usize <= MAX_THREADS {
-            ps.threads[(vm.tid - 1) as usize] = ThreadRecord::new(
-                vm.tid,
-                THREAD_RUNNING,
-                vm_ptr,
-                vm.clear_child_tid as u32,
-                0,
-            );
+            ps.threads[(vm.tid - 1) as usize] =
+                ThreadRecord::new(vm.tid, THREAD_RUNNING, vm_ptr, vm.clear_child_tid as u32, 0);
         }
 
         let tc_ptr = core::ptr::addr_of!(ps.thread_count);
@@ -217,6 +207,13 @@ pub fn discard_other_threads_for_exec(vm: &ThreadState, base: u32) -> u32 {
                 continue;
             }
             if record.state == THREAD_NONE || record.state == THREAD_DEAD {
+                continue;
+            }
+            let has_valid_thread =
+                record.tid > 0 && thread_state_from_guest_ptr(base, record.thread_ptr).is_some();
+            if !has_valid_thread {
+                *record = ThreadRecord::empty();
+                discarded += 1;
                 continue;
             }
             if record.clear_child_tid != 0 {
@@ -266,6 +263,12 @@ pub fn sys_set_robust_list(vm: &mut ThreadState, head: u64, len: u64) -> i64 {
 /// https://man7.org/linux/man-pages/man2/exit.2.html
 pub fn sys_exit(vm: &mut ThreadState, base: u32, exit_code: u64) -> i32 {
     vm.exit_code = exit_code as i32;
+    vm.term_signal = 0;
+
+    if crate::syscall::process::vfork_active() {
+        vm.status = STATUS_FAULT;
+        return STATUS_FAULT;
+    }
 
     unsafe {
         if let Some(record) = thread_record(vm, base) {
@@ -305,6 +308,13 @@ pub fn sys_exit(vm: &mut ThreadState, base: u32, exit_code: u64) -> i32 {
 /// https://man7.org/linux/man-pages/man2/exit_group.2.html
 pub fn sys_exit_group(vm: &mut ThreadState, base: u32, exit_code: u64) -> i32 {
     vm.exit_code = exit_code as i32;
+    vm.term_signal = 0;
+
+    if crate::syscall::process::vfork_active() {
+        vm.status = STATUS_FAULT;
+        return STATUS_FAULT;
+    }
+
     let process_ptr = vm.process_ptr;
 
     unsafe {
@@ -562,21 +572,49 @@ pub fn sys_futex(
                     record.clear_child_tid = vm.clear_child_tid as u32;
                 }
             }
+            vm.futex_wait_addr = addr;
+            vm.futex_wait_timeout = _timeout;
             // Value matches — block. Return STATUS_FUTEX_WAIT for TS to Atomics.wait.
             vm.x[10] = addr; // stash addr for TS
             vm.status = STATUS_FUTEX_WAIT;
             return 0;
         }
         FUTEX_WAKE => {
-            return wake_futex_waiters_by_process_ptr(
+            let local = wake_futex_waiters_by_process_ptr(
                 vm.process_ptr,
                 base,
                 addr as u32,
                 val.min(u32::MAX as u64) as u32,
-            ) as i64;
+            );
+            let external = crate::runtime_test_support::wake_plain_fork_futex_waits(
+                addr as u32,
+                val.min(u32::MAX as u64) as u32,
+            );
+            return (local + external) as i64;
         }
         _ => ENOSYS,
     }
+}
+
+pub fn resume_futex_wait(vm: &mut ThreadState, base: u32) {
+    resume_futex_wait_result(vm, base, 0);
+}
+
+pub fn resume_futex_wait_result(vm: &mut ThreadState, base: u32, result: i64) {
+    unsafe {
+        if let Some(record) = thread_record(vm, base) {
+            if record.state == THREAD_BLOCKED_FUTEX {
+                record.state = THREAD_RUNNING;
+                record.blocked_addr = 0;
+                record.clear_child_tid = vm.clear_child_tid as u32;
+            }
+        }
+    }
+    vm.futex_wait_addr = 0;
+    vm.futex_wait_timeout = 0;
+    vm.status = STATUS_OK;
+    vm.x[10] = result as u64;
+    crate::syscall::signal::check_pending(vm, base);
 }
 
 #[cfg(test)]
@@ -586,285 +624,258 @@ mod tests {
     use crate::types::*;
     use core::sync::atomic::Ordering;
 
-    #[test]
-    fn exit_decrements_thread_count() {
-        let mut t = TestVm::new();
-        // Set thread_count to 2
-        let ps_ptr = t.vm.process_ptr as u64;
-        let tc_off = core::mem::offset_of!(ProcessState, thread_count) as u64;
-        unsafe { crate::guest_mem::write_u32(t.base, ps_ptr + tc_off, 2) };
+    mod contract_tests {
+        use super::*;
+        use crate::syscall::thread as thread_impl;
 
-        let status = super::sys_exit(&mut t.vm, t.base, 42);
-        assert_eq!(status, STATUS_FAULT);
-        assert_eq!(t.vm.exit_code, 42);
+        // Permanent Tidemark contract tests. These assert worker handoff and
+        // bookkeeping that LTP cannot observe.
+        #[test]
+        fn contract_exit_decrements_thread_count() {
+            let mut t = TestVm::new();
+            let ps_ptr = t.vm.process_ptr as u64;
+            let tc_off = core::mem::offset_of!(ProcessState, thread_count) as u64;
+            unsafe { crate::guest_mem::write_u32(t.base, ps_ptr + tc_off, 2) };
 
-        let tc = unsafe { crate::guest_mem::read_u32(t.base, ps_ptr + tc_off) };
-        assert_eq!(tc, 1, "thread_count should be decremented from 2 to 1");
-    }
+            let status = thread_impl::sys_exit(&mut t.vm, t.base, 42);
+            assert_eq!(status, STATUS_FAULT);
+            assert_eq!(t.vm.exit_code, 42);
 
-    #[test]
-    fn exit_clears_child_tid() {
-        let mut t = TestVm::new();
-        let tid_addr = t.scratch + 0x100;
-        unsafe { crate::guest_mem::write_u32(t.base, tid_addr, 99) };
-        t.vm.clear_child_tid = tid_addr;
+            let tc = unsafe { crate::guest_mem::read_u32(t.base, ps_ptr + tc_off) };
+            assert_eq!(tc, 1, "thread_count should be decremented from 2 to 1");
+        }
 
-        super::sys_exit(&mut t.vm, t.base, 0);
+        #[test]
+        fn contract_clone_thread_returns_status_clone_spawn() {
+            let mut t = TestVm::new();
+            t.vm.tid = 1;
+            let ps_ptr = t.vm.process_ptr as u64;
+            let tc_off = core::mem::offset_of!(ProcessState, thread_count) as u64;
 
-        let val = unsafe { crate::guest_mem::read_u32(t.base, tid_addr) };
-        assert_eq!(val, 0, "clear_child_tid address should be written with 0");
-    }
+            let flags = (CLONE_VM | CLONE_THREAD | CLONE_SIGHAND | CLONE_FS) as u64;
+            let child_stack = 0x80000u64;
+            let ret = thread_impl::sys_clone(&mut t.vm, t.base, flags, child_stack, 0, 0, 0);
 
-    #[test]
-    fn clone_thread_returns_status_clone_spawn() {
-        let mut t = TestVm::new();
-        t.vm.tid = 1;
-        let ps_ptr = t.vm.process_ptr as u64;
-        let tc_off = core::mem::offset_of!(ProcessState, thread_count) as u64;
+            assert!(ret > 0, "clone should return positive TID, got {}", ret);
+            assert_eq!(t.vm.status, STATUS_CLONE_SPAWN);
 
-        let flags = (CLONE_VM | CLONE_THREAD | CLONE_SIGHAND | CLONE_FS) as u64;
-        let child_stack = 0x80000u64;
-        let ret = super::sys_clone(&mut t.vm, t.base, flags, child_stack, 0, 0, 0);
+            // thread_count should be incremented
+            let tc = unsafe { crate::guest_mem::read_u32(t.base, ps_ptr + tc_off) };
+            assert_eq!(tc, 2, "thread_count should be incremented from 1 to 2");
+        }
 
-        assert!(ret > 0, "clone should return positive TID, got {}", ret);
-        assert_eq!(t.vm.status, STATUS_CLONE_SPAWN);
+        #[test]
+        fn contract_spawn_from_clone_initializes_child_thread_state() {
+            let mut t = TestVm::new();
+            t.vm.tid = 1;
+            t.vm.sig_mask = 0x55;
+            t.vm.sig_pending = 0xAA;
+            t.vm.sigaltstack_sp = 0x9000;
+            t.vm.sigaltstack_size = 4096;
+            t.vm.sigaltstack_flags = 1;
 
-        // thread_count should be incremented
-        let tc = unsafe { crate::guest_mem::read_u32(t.base, ps_ptr + tc_off) };
-        assert_eq!(tc, 2, "thread_count should be incremented from 1 to 2");
-    }
+            let ps_ptr = t.vm.process_ptr as u64;
 
-    #[test]
-    fn clone_parent_settid_writes_tid() {
-        let mut t = TestVm::new();
-        t.vm.tid = 1;
+            let child_tidptr = t.scratch + 0x280;
+            let flags = (CLONE_VM
+                | CLONE_THREAD
+                | CLONE_SIGHAND
+                | CLONE_FS
+                | CLONE_SETTLS
+                | CLONE_CHILD_SETTID
+                | CLONE_CHILD_CLEARTID) as u64;
+            let child_stack = 0x88000u64;
+            let tls = 0x1234_5000u64;
 
-        let parent_tidptr = t.scratch + 0x200;
-        let flags = (CLONE_VM | CLONE_THREAD | CLONE_PARENT_SETTID) as u64;
-        let ret = super::sys_clone(&mut t.vm, t.base, flags, 0, parent_tidptr, 0, 0);
+            let ret =
+                thread_impl::sys_clone(&mut t.vm, t.base, flags, child_stack, 0, tls, child_tidptr);
+            assert!(ret > 0);
+            assert_eq!(t.vm.clone_pending, 1);
+            assert_eq!(t.vm.clone_child_tid, ret as i32);
+            assert_eq!(t.vm.clone_child_stack, child_stack);
+            assert_eq!(t.vm.clone_tls, tls);
+            assert_eq!(t.vm.clone_child_tidptr, child_tidptr);
 
-        let written_tid = unsafe { crate::guest_mem::read_u32(t.base, parent_tidptr) };
-        assert_eq!(
-            written_tid, ret as u32,
-            "parent_tidptr should contain child TID"
-        );
-    }
+            let child_ptr =
+                thread_impl::spawn_from_clone(&t.vm as *const ThreadState as u32, t.base);
+            assert_ne!(child_ptr, 0);
 
-    #[test]
-    fn spawn_from_clone_initializes_child_thread_state() {
-        let mut t = TestVm::new();
-        t.vm.tid = 1;
-        t.vm.sig_mask = 0x55;
-        t.vm.sig_pending = 0xAA;
-        t.vm.sigaltstack_sp = 0x9000;
-        t.vm.sigaltstack_size = 4096;
-        t.vm.sigaltstack_flags = 1;
+            let child = unsafe { &*(child_ptr as *const ThreadState) };
+            assert_eq!(child.tid, ret as i32);
+            assert_eq!(child.x[10], 0);
+            assert_eq!(child.x[2], child_stack);
+            assert_eq!(child.x[4], tls);
+            assert_eq!(child.tls_base, tls);
+            assert_eq!(child.clear_child_tid, child_tidptr);
+            assert_eq!(child.sig_mask, 0x55);
+            assert_eq!(child.sig_pending, 0);
+            assert_eq!(child.sigaltstack_sp, 0);
+            assert_eq!(child.sigaltstack_size, 0);
+            assert_eq!(child.sigaltstack_flags, 0);
 
-        let ps_ptr = t.vm.process_ptr as u64;
+            let written_tid = unsafe { crate::guest_mem::read_u32(t.base, child_tidptr) };
+            assert_eq!(written_tid, ret as u32);
 
-        let child_tidptr = t.scratch + 0x280;
-        let flags = (CLONE_VM
-            | CLONE_THREAD
-            | CLONE_SIGHAND
-            | CLONE_FS
-            | CLONE_SETTLS
-            | CLONE_CHILD_SETTID
-            | CLONE_CHILD_CLEARTID) as u64;
-        let child_stack = 0x88000u64;
-        let tls = 0x1234_5000u64;
+            let threads_off = core::mem::offset_of!(ProcessState, threads) as u64;
+            let record_size = core::mem::size_of::<ThreadRecord>() as u64;
+            let record_off = ps_ptr + threads_off + ((ret as u64) - 1) * record_size;
+            let state = unsafe { crate::guest_mem::read_u32(t.base, record_off) };
+            let thread_ptr = unsafe { crate::guest_mem::read_u32(t.base, record_off + 8) };
+            assert_eq!(state as i32, THREAD_RUNNING);
+            assert_eq!(thread_ptr, child_ptr);
 
-        let ret = super::sys_clone(&mut t.vm, t.base, flags, child_stack, 0, tls, child_tidptr);
-        assert!(ret > 0);
-        assert_eq!(t.vm.clone_pending, 1);
-        assert_eq!(t.vm.clone_child_tid, ret as i32);
-        assert_eq!(t.vm.clone_child_stack, child_stack);
-        assert_eq!(t.vm.clone_tls, tls);
-        assert_eq!(t.vm.clone_child_tidptr, child_tidptr);
+            assert_eq!(t.vm.clone_pending, 0);
+            assert_eq!(t.vm.clone_child_tid, 0);
+            assert_eq!(t.vm.clone_child_stack, 0);
+            assert_eq!(t.vm.clone_tls, 0);
+            assert_eq!(t.vm.clone_child_tidptr, 0);
+        }
 
-        let child_ptr = super::spawn_from_clone(&t.vm as *const ThreadState as u32, t.base);
-        assert_ne!(child_ptr, 0);
+        #[test]
+        fn contract_futex_wake_unblocks_waiting_thread_record() {
+            let mut t = TestVm::new();
+            let addr = t.scratch + 0x500;
+            let ps =
+                unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+            ps.threads[1] =
+                ThreadRecord::new(2, THREAD_BLOCKED_FUTEX, 0xDEAD_BEEFu32, 0, addr as u32);
+            ps.thread_count.store(2, Ordering::Release);
 
-        let child = unsafe { &*(child_ptr as *const ThreadState) };
-        assert_eq!(child.tid, ret as i32);
-        assert_eq!(child.x[10], 0);
-        assert_eq!(child.x[2], child_stack);
-        assert_eq!(child.x[4], tls);
-        assert_eq!(child.tls_base, tls);
-        assert_eq!(child.clear_child_tid, child_tidptr);
-        assert_eq!(child.sig_mask, 0x55);
-        assert_eq!(child.sig_pending, 0);
-        assert_eq!(child.sigaltstack_sp, 0);
-        assert_eq!(child.sigaltstack_size, 0);
-        assert_eq!(child.sigaltstack_flags, 0);
+            let ret =
+                thread_impl::sys_futex(&mut t.vm, t.base, addr, FUTEX_WAKE as u64, 1, 0, 0, 0);
+            assert_eq!(ret, 1, "futex_wake should report one woken waiter");
+            assert_eq!(ps.threads[1].state, THREAD_RUNNING);
+            assert_eq!(ps.threads[1].blocked_addr, 0);
+        }
 
-        let written_tid = unsafe { crate::guest_mem::read_u32(t.base, child_tidptr) };
-        assert_eq!(written_tid, ret as u32);
+        #[test]
+        fn contract_exit_marks_owned_robust_futex_owner_died_and_wakes_waiters() {
+            let mut t = TestVm::new();
+            let head = t.scratch + 0x600;
+            let node = head + 0x40;
+            let futex_addr = node + 8;
 
-        let threads_off = core::mem::offset_of!(ProcessState, threads) as u64;
-        let record_size = core::mem::size_of::<ThreadRecord>() as u64;
-        let record_off = ps_ptr + threads_off + ((ret as u64) - 1) * record_size;
-        let state = unsafe { crate::guest_mem::read_u32(t.base, record_off) };
-        let thread_ptr = unsafe { crate::guest_mem::read_u32(t.base, record_off + 8) };
-        assert_eq!(state as i32, THREAD_RUNNING);
-        assert_eq!(thread_ptr, child_ptr);
+            unsafe {
+                crate::guest_mem::write_u64(t.base, head, node);
+                crate::guest_mem::write_u64(t.base, head + 8, 8);
+                crate::guest_mem::write_u64(t.base, head + 16, 0);
+                crate::guest_mem::write_u64(t.base, node, head);
+                crate::guest_mem::write_u32(
+                    t.base,
+                    futex_addr,
+                    thread_impl::FUTEX_WAITERS | t.vm.tid as u32,
+                );
+            }
+            t.vm.robust_list_head = head;
+            t.vm.robust_list_len = thread_impl::ROBUST_LIST_HEAD_LEN;
 
-        assert_eq!(t.vm.clone_pending, 0);
-        assert_eq!(t.vm.clone_child_tid, 0);
-        assert_eq!(t.vm.clone_child_stack, 0);
-        assert_eq!(t.vm.clone_tls, 0);
-        assert_eq!(t.vm.clone_child_tidptr, 0);
-    }
-
-    #[test]
-    fn futex_wait_returns_eagain_on_mismatch() {
-        let mut t = TestVm::new();
-        let addr = t.scratch + 0x300;
-        unsafe { crate::guest_mem::write_u32(t.base, addr, 42) };
-
-        // val=99 doesn't match *addr=42 → EAGAIN
-        let ret = super::sys_futex(&mut t.vm, t.base, addr, FUTEX_WAIT as u64, 99, 0, 0, 0);
-        assert_eq!(
-            ret, EAGAIN,
-            "futex_wait should return EAGAIN when value doesn't match"
-        );
-    }
-
-    #[test]
-    fn futex_wait_blocks_on_match() {
-        let mut t = TestVm::new();
-        let addr = t.scratch + 0x400;
-        unsafe { crate::guest_mem::write_u32(t.base, addr, 42) };
-
-        // val=42 matches *addr=42 → STATUS_FUTEX_WAIT
-        let ret = super::sys_futex(&mut t.vm, t.base, addr, FUTEX_WAIT as u64, 42, 0, 0, 0);
-        assert_eq!(ret, 0);
-        assert_eq!(
-            t.vm.status, STATUS_FUTEX_WAIT,
-            "should set STATUS_FUTEX_WAIT"
-        );
-
-        let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
-        assert_eq!(ps.threads[0].state, THREAD_BLOCKED_FUTEX);
-        assert_eq!(ps.threads[0].blocked_addr, addr as u32);
-    }
-
-    #[test]
-    fn futex_wake_unblocks_waiting_thread_record() {
-        let mut t = TestVm::new();
-        let addr = t.scratch + 0x500;
-        let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
-        ps.threads[1] = ThreadRecord::new(2, THREAD_BLOCKED_FUTEX, 0xDEAD_BEEFu32, 0, addr as u32);
-        ps.thread_count.store(2, Ordering::Release);
-
-        let ret = super::sys_futex(&mut t.vm, t.base, addr, FUTEX_WAKE as u64, 1, 0, 0, 0);
-        assert_eq!(ret, 1, "futex_wake should report one woken waiter");
-        assert_eq!(ps.threads[1].state, THREAD_RUNNING);
-        assert_eq!(ps.threads[1].blocked_addr, 0);
-    }
-
-    #[test]
-    fn exit_marks_owned_robust_futex_owner_died_and_wakes_waiters() {
-        let mut t = TestVm::new();
-        let head = t.scratch + 0x600;
-        let node = head + 0x40;
-        let futex_addr = node + 8;
-
-        unsafe {
-            crate::guest_mem::write_u64(t.base, head, node);
-            crate::guest_mem::write_u64(t.base, head + 8, 8);
-            crate::guest_mem::write_u64(t.base, head + 16, 0);
-            crate::guest_mem::write_u64(t.base, node, head);
-            crate::guest_mem::write_u32(
-                t.base,
-                futex_addr,
-                super::FUTEX_WAITERS | t.vm.tid as u32,
+            let ps =
+                unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+            ps.threads[1] = ThreadRecord::new(
+                2,
+                THREAD_BLOCKED_FUTEX,
+                0xDEAD_BEEFu32,
+                0,
+                futex_addr as u32,
             );
-        }
-        t.vm.robust_list_head = head;
-        t.vm.robust_list_len = super::ROBUST_LIST_HEAD_LEN;
+            ps.thread_count.store(2, Ordering::Release);
 
-        let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
-        ps.threads[1] = ThreadRecord::new(2, THREAD_BLOCKED_FUTEX, 0xDEAD_BEEFu32, 0, futex_addr as u32);
-        ps.thread_count.store(2, Ordering::Release);
-
-        let status = super::sys_exit(&mut t.vm, t.base, 7);
-        assert_eq!(status, STATUS_FAULT);
-        assert_eq!(
-            unsafe { crate::guest_mem::read_u32(t.base, futex_addr) },
-            super::FUTEX_WAITERS | super::FUTEX_OWNER_DIED
-        );
-        assert_eq!(ps.threads[1].state, THREAD_RUNNING);
-        assert_eq!(ps.threads[1].blocked_addr, 0);
-    }
-
-    #[test]
-    fn exit_group_cleans_up_other_thread_robust_futexes() {
-        let mut t = TestVm::new();
-        let head = t.scratch + 0x700;
-        let node = head + 0x40;
-        let futex_addr = node + 8;
-
-        unsafe {
-            crate::guest_mem::write_u64(t.base, head, node);
-            crate::guest_mem::write_u64(t.base, head + 8, 8);
-            crate::guest_mem::write_u64(t.base, head + 16, 0);
-            crate::guest_mem::write_u64(t.base, node, head);
-            crate::guest_mem::write_u32(t.base, futex_addr, super::FUTEX_WAITERS | 2);
+            let status = thread_impl::sys_exit(&mut t.vm, t.base, 7);
+            assert_eq!(status, STATUS_FAULT);
+            assert_eq!(
+                unsafe { crate::guest_mem::read_u32(t.base, futex_addr) },
+                thread_impl::FUTEX_WAITERS | thread_impl::FUTEX_OWNER_DIED
+            );
+            assert_eq!(ps.threads[1].state, THREAD_RUNNING);
+            assert_eq!(ps.threads[1].blocked_addr, 0);
         }
 
-        let child_ptr = unsafe {
-            crate::alloc::alloc_zeroed(
-                core::mem::size_of::<ThreadState>() as u32,
-                core::mem::align_of::<ThreadState>() as u32,
-            )
-        };
-        assert_ne!(child_ptr, 0);
-        let child = unsafe { &mut *(child_ptr as *mut ThreadState) };
-        child.tid = 2;
-        child.process_ptr = t.vm.process_ptr;
-        child.robust_list_head = head;
-        child.robust_list_len = super::ROBUST_LIST_HEAD_LEN;
+        #[test]
+        fn contract_exit_group_cleans_up_other_thread_robust_futexes() {
+            let mut t = TestVm::new();
+            let head = t.scratch + 0x700;
+            let node = head + 0x40;
+            let futex_addr = node + 8;
 
-        let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
-        ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, child_ptr, 0, 0);
-        ps.thread_count.store(2, Ordering::Release);
+            unsafe {
+                crate::guest_mem::write_u64(t.base, head, node);
+                crate::guest_mem::write_u64(t.base, head + 8, 8);
+                crate::guest_mem::write_u64(t.base, head + 16, 0);
+                crate::guest_mem::write_u64(t.base, node, head);
+                crate::guest_mem::write_u32(t.base, futex_addr, thread_impl::FUTEX_WAITERS | 2);
+            }
 
-        let status = super::sys_exit_group(&mut t.vm, t.base, 9);
-        assert_eq!(status, STATUS_FAULT);
-        assert_eq!(
-            unsafe { crate::guest_mem::read_u32(t.base, futex_addr) },
-            super::FUTEX_WAITERS | super::FUTEX_OWNER_DIED
-        );
-        assert_eq!(ps.thread_count.load(Ordering::Acquire), 0);
-        assert_eq!(ps.threads[0].state, THREAD_NONE);
-        assert_eq!(ps.threads[1].state, THREAD_NONE);
-    }
+            let child_ptr = unsafe {
+                crate::alloc::alloc_zeroed(
+                    core::mem::size_of::<ThreadState>() as u32,
+                    core::mem::align_of::<ThreadState>() as u32,
+                )
+            };
+            assert_ne!(child_ptr, 0);
+            let child = unsafe { &mut *(child_ptr as *mut ThreadState) };
+            child.tid = 2;
+            child.process_ptr = t.vm.process_ptr;
+            child.robust_list_head = head;
+            child.robust_list_len = thread_impl::ROBUST_LIST_HEAD_LEN;
 
-    #[test]
-    fn exit_group_marks_process_dead() {
-        let mut t = TestVm::new();
-        let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
-        ps.thread_count.store(2, Ordering::Release);
-        ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, 0xCAFE_BABEu32, 0, 0);
+            let ps =
+                unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+            ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, child_ptr, 0, 0);
+            ps.thread_count.store(2, Ordering::Release);
 
-        let status = super::sys_exit_group(&mut t.vm, t.base, 9);
-        assert_eq!(status, STATUS_FAULT);
-        assert_eq!(t.vm.exit_code, 9);
-        assert_eq!(ps.thread_count.load(Ordering::Acquire), 0);
-        assert_eq!(ps.threads[0].state, THREAD_NONE);
-        assert_eq!(ps.threads[1].state, THREAD_NONE);
-    }
+            let status = thread_impl::sys_exit_group(&mut t.vm, t.base, 9);
+            assert_eq!(status, STATUS_FAULT);
+            assert_eq!(
+                unsafe { crate::guest_mem::read_u32(t.base, futex_addr) },
+                thread_impl::FUTEX_WAITERS | thread_impl::FUTEX_OWNER_DIED
+            );
+            assert_eq!(ps.thread_count.load(Ordering::Acquire), 0);
+            assert_eq!(ps.threads[0].state, THREAD_NONE);
+            assert_eq!(ps.threads[1].state, THREAD_NONE);
+        }
 
-    #[test]
-    fn init_main_thread_records_running_slot() {
-        let mut t = TestVm::new();
-        let vm_ptr = &mut t.vm as *mut ThreadState as u32;
-        super::init_main_thread(vm_ptr, t.base);
+        #[test]
+        fn contract_exit_group_marks_process_dead() {
+            let mut t = TestVm::new();
+            let ps =
+                unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+            ps.thread_count.store(2, Ordering::Release);
+            ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, 0xCAFE_BABEu32, 0, 0);
 
-        let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
-        assert_eq!(ps.thread_count.load(Ordering::Acquire), 1);
-        assert_eq!(ps.threads[0].tid, 1);
-        assert_eq!(ps.threads[0].state, THREAD_RUNNING);
-        assert_eq!(ps.threads[0].thread_ptr, vm_ptr);
+            let status = thread_impl::sys_exit_group(&mut t.vm, t.base, 9);
+            assert_eq!(status, STATUS_FAULT);
+            assert_eq!(t.vm.exit_code, 9);
+            assert_eq!(ps.thread_count.load(Ordering::Acquire), 0);
+            assert_eq!(ps.threads[0].state, THREAD_NONE);
+            assert_eq!(ps.threads[1].state, THREAD_NONE);
+        }
+
+        #[test]
+        fn contract_init_main_thread_records_running_slot() {
+            let mut t = TestVm::new();
+            let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+            thread_impl::init_main_thread(vm_ptr, t.base);
+
+            let ps =
+                unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+            assert_eq!(ps.thread_count.load(Ordering::Acquire), 1);
+            assert_eq!(ps.threads[0].tid, 1);
+            assert_eq!(ps.threads[0].state, THREAD_RUNNING);
+            assert_eq!(ps.threads[0].thread_ptr, vm_ptr);
+        }
+
+        #[test]
+        fn contract_discard_exec_ignores_invalid_stale_slots() {
+            let mut t = TestVm::new();
+            let ps =
+                unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+            ps.thread_count.store(2, Ordering::Release);
+            ps.threads[1] = ThreadRecord::new(0, THREAD_RUNNING, 0, 0x6e69_622f, 0);
+
+            let discarded = thread_impl::discard_other_threads_for_exec(&t.vm, t.base);
+            assert_eq!(discarded, 1);
+            assert_eq!(ps.thread_count.load(Ordering::Acquire), 1);
+            assert_eq!(ps.threads[1].state, THREAD_NONE);
+        }
     }
 }

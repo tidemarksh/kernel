@@ -70,7 +70,9 @@ fn current_dir_ino(base: u32, vm: &ThreadState) -> u32 {
 }
 
 fn process_fs_ring_base(base: u32, vm: &ThreadState) -> u32 {
-    process_state(base, vm).map(|ps| ps.fs_ring_base).unwrap_or(0)
+    process_state(base, vm)
+        .map(|ps| ps.fs_ring_base)
+        .unwrap_or(0)
 }
 
 fn set_current_dir_ino(base: u32, vm: &ThreadState, ino: u32) {
@@ -765,6 +767,7 @@ pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64,
             unsafe {
                 guest_mem::read_bytes(base, buf, &mut tmp[..to_write]);
             }
+            crate::runtime_test_support::append_guest_output(&tmp[..to_write]);
             if let Ok(s) = core::str::from_utf8(&tmp[..to_write]) {
                 eprint!("{s}");
             } else {
@@ -817,6 +820,7 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
                 unsafe {
                     guest_mem::read_bytes(base, iov_base, &mut tmp[..to_write]);
                 }
+                crate::runtime_test_support::append_guest_output(&tmp[..to_write]);
                 if let Ok(s) = core::str::from_utf8(&tmp[..to_write]) {
                     eprint!("{s}");
                 } else {
@@ -1393,7 +1397,10 @@ mod tests {
         assert_eq!(super::resume_from_fs(vm_ptr, t.base), 0);
 
         let mut out = [0u8; 8];
-        assert_eq!(super::sys_read(&mut t.vm, t.base, fd as u64, buf_addr, 8), 8);
+        assert_eq!(
+            super::sys_read(&mut t.vm, t.base, fd as u64, buf_addr, 8),
+            8
+        );
         unsafe {
             crate::guest_mem::read_bytes(t.base, buf_addr, &mut out);
         }

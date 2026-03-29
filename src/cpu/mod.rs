@@ -41,7 +41,17 @@ pub unsafe fn exec(
     jit_bitmap: Option<&JitBitmap>,
     mut trace_buf: Option<&mut TraceBuffer>,
 ) -> i32 {
-    unsafe { exec_at_base(vm, budget, ram_base(vm), cache, hot_counts, jit_bitmap, trace_buf) }
+    unsafe {
+        exec_at_base(
+            vm,
+            budget,
+            ram_base(vm),
+            cache,
+            hot_counts,
+            jit_bitmap,
+            trace_buf,
+        )
+    }
 }
 
 /// Execute up to `budget` guest instructions from a caller-specified RAM base.

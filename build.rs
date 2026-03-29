@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 struct LtpManifest {
     conform: Vec<String>,
@@ -23,6 +23,7 @@ impl LtpManifest {
 struct LtpTestTarget {
     binary_name: String,
     rel_dir: PathBuf,
+    rel_path: PathBuf,
 }
 
 fn main() {
@@ -118,7 +119,9 @@ fn build_riscv_tests(out_dir: &Path) {
 
 fn build_ltp_tests(out_dir: &Path, pass_required: &[String], pass_optional: &[String]) {
     let ltp_root = Path::new("tests/ltp-tests");
-    if (pass_required.is_empty() && pass_optional.is_empty()) || !ltp_root.join("configure.ac").exists() {
+    if (pass_required.is_empty() && pass_optional.is_empty())
+        || !ltp_root.join("configure.ac").exists()
+    {
         return;
     }
 
@@ -129,8 +132,9 @@ fn build_ltp_tests(out_dir: &Path, pass_required: &[String], pass_optional: &[St
         .collect::<Vec<_>>();
     let test_targets =
         resolve_ltp_test_targets(ltp_root, &tests).expect("failed to resolve LTP test targets");
-    let ltp_out = out_dir.join("ltp");
-    std::fs::create_dir_all(&ltp_out).unwrap();
+    let helper_targets = discover_ltp_helper_targets(ltp_root, &test_targets)
+        .expect("failed to resolve LTP helper targets");
+    let build_targets = merge_ltp_targets(&test_targets, &helper_targets);
     let ltp_work = out_dir.join("ltp-tests-work");
 
     if let Err(err) = prepare_ltp_workspace(ltp_root, &ltp_work) {
@@ -170,8 +174,10 @@ fn build_ltp_tests(out_dir: &Path, pass_required: &[String], pass_optional: &[St
 
     let ltp_lib_dir = ltp_work.join("lib");
     let ltp_wldflags = format!("-L{} -static -no-pie", ltp_lib_dir.display());
+    let ltp_out = out_dir.join("ltp");
+    std::fs::create_dir_all(&ltp_out).unwrap();
 
-    for target in test_targets {
+    for target in build_targets {
         let test_dir = ltp_work.join(&target.rel_dir);
         if let Err(err) = run_command(
             Command::new("make")
@@ -303,7 +309,10 @@ fn sanitize_rust_ident(name: &str) -> String {
     ident
 }
 
-fn resolve_ltp_test_targets(ltp_root: &Path, tests: &[String]) -> Result<Vec<LtpTestTarget>, String> {
+fn resolve_ltp_test_targets(
+    ltp_root: &Path,
+    tests: &[String],
+) -> Result<Vec<LtpTestTarget>, String> {
     let mut targets = Vec::with_capacity(tests.len());
     for selector in tests {
         targets.push(resolve_ltp_test_target(ltp_root, selector)?);
@@ -323,7 +332,11 @@ fn resolve_ltp_test_target(ltp_root: &Path, selector: &str) -> Result<LtpTestTar
             .parent()
             .ok_or_else(|| format!("{} has no parent directory", rel_path.display()))?
             .to_path_buf();
-        return Ok(LtpTestTarget { binary_name, rel_dir });
+        return Ok(LtpTestTarget {
+            binary_name,
+            rel_dir,
+            rel_path,
+        });
     }
 
     let rel_path = find_ltp_test_source(ltp_root, selector)?;
@@ -332,7 +345,164 @@ fn resolve_ltp_test_target(ltp_root: &Path, selector: &str) -> Result<LtpTestTar
         .parent()
         .ok_or_else(|| format!("{} has no parent directory", rel_path.display()))?
         .to_path_buf();
-    Ok(LtpTestTarget { binary_name, rel_dir })
+    Ok(LtpTestTarget {
+        binary_name,
+        rel_dir,
+        rel_path,
+    })
+}
+
+fn discover_ltp_helper_targets(
+    ltp_root: &Path,
+    test_targets: &[LtpTestTarget],
+) -> Result<Vec<LtpTestTarget>, String> {
+    let mut helpers = BTreeMap::new();
+
+    for target in test_targets {
+        let source_path = ltp_root.join(&target.rel_path);
+        for helper in scan_ltp_helpers(&source_path)? {
+            let helper_target = resolve_ltp_test_target(ltp_root, &helper)?;
+            helpers
+                .entry(helper_target.binary_name.clone())
+                .or_insert(helper_target);
+        }
+    }
+
+    Ok(helpers.into_values().collect())
+}
+
+fn merge_ltp_targets(
+    test_targets: &[LtpTestTarget],
+    helper_targets: &[LtpTestTarget],
+) -> Vec<LtpTestTarget> {
+    let mut merged = BTreeMap::new();
+
+    for target in test_targets.iter().chain(helper_targets.iter()) {
+        merged
+            .entry(target.binary_name.clone())
+            .or_insert_with(|| LtpTestTarget {
+                binary_name: target.binary_name.clone(),
+                rel_dir: target.rel_dir.clone(),
+                rel_path: target.rel_path.clone(),
+            });
+    }
+
+    merged.into_values().collect()
+}
+
+fn scan_ltp_helpers(source_path: &Path) -> Result<Vec<String>, String> {
+    let text =
+        fs::read_to_string(source_path).map_err(|e| format!("{}: {}", source_path.display(), e))?;
+    let defines = scan_string_defines(&text);
+    let mut helpers = Vec::new();
+    scan_tst_get_path_helpers(text.as_str(), &mut helpers);
+    scan_execlp_helpers(text.as_str(), &defines, &mut helpers);
+    scan_resource_file_helpers(text.as_str(), &defines, &mut helpers);
+    Ok(helpers)
+}
+
+fn scan_tst_get_path_helpers(text: &str, helpers: &mut Vec<String>) {
+    let mut rest = text;
+    let needle = "tst_get_path(\"";
+    while let Some(idx) = rest.find(needle) {
+        rest = &rest[idx + needle.len()..];
+        let Some(end) = rest.find('"') else {
+            break;
+        };
+        let helper = &rest[..end];
+        push_helper(helpers, helper);
+        rest = &rest[end + 1..];
+    }
+}
+
+fn scan_string_defines(text: &str) -> BTreeMap<String, String> {
+    let mut defines = BTreeMap::new();
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("#define ") {
+            continue;
+        }
+        let mut parts = trimmed["#define ".len()..].split_whitespace();
+        let Some(name) = parts.next() else {
+            continue;
+        };
+        let Some(value) = parts.next() else {
+            continue;
+        };
+        if let Some(helper) = parse_helper_token(value, &BTreeMap::new()) {
+            defines.insert(name.to_string(), helper);
+        }
+    }
+
+    defines
+}
+
+fn scan_execlp_helpers(text: &str, defines: &BTreeMap<String, String>, helpers: &mut Vec<String>) {
+    for needle in ["SAFE_EXECLP(", "execlp("] {
+        let mut rest = text;
+        while let Some(idx) = rest.find(needle) {
+            rest = &rest[idx + needle.len()..];
+            let Some(end) = rest.find(',') else {
+                break;
+            };
+            let token = rest[..end].trim();
+            if let Some(helper) = parse_helper_token(token, defines) {
+                push_helper(helpers, &helper);
+            }
+            rest = &rest[end + 1..];
+        }
+    }
+}
+
+fn scan_resource_file_helpers(
+    text: &str,
+    defines: &BTreeMap<String, String>,
+    helpers: &mut Vec<String>,
+) {
+    let mut rest = text;
+    let needle = ".resource_files";
+
+    while let Some(idx) = rest.find(needle) {
+        rest = &rest[idx + needle.len()..];
+        let Some(open_brace) = rest.find('{') else {
+            break;
+        };
+        rest = &rest[open_brace + 1..];
+        let Some(close_brace) = rest.find('}') else {
+            break;
+        };
+        let entries = &rest[..close_brace];
+        for token in entries.split(',') {
+            let token = token.trim();
+            if token.is_empty() || token == "NULL" {
+                continue;
+            }
+            if let Some(helper) = parse_helper_token(token, defines) {
+                push_helper(helpers, &helper);
+            }
+        }
+        rest = &rest[close_brace + 1..];
+    }
+}
+
+fn parse_helper_token(token: &str, defines: &BTreeMap<String, String>) -> Option<String> {
+    let token = token.trim();
+    if token.len() >= 2 && token.starts_with('"') && token.ends_with('"') {
+        return Some(token[1..token.len() - 1].to_string());
+    }
+    defines.get(token).cloned()
+}
+
+fn push_helper(helpers: &mut Vec<String>, helper: &str) {
+    if !helper.is_empty()
+        && helper
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+        && !helpers.iter().any(|existing| existing == helper)
+    {
+        helpers.push(helper.to_string());
+    }
 }
 
 fn selector_binary_name(selector: &str) -> Result<String, String> {
@@ -348,10 +518,21 @@ fn selector_binary_name(selector: &str) -> Result<String, String> {
 fn find_ltp_test_source(ltp_root: &Path, test_name: &str) -> Result<PathBuf, String> {
     let mut matches = Vec::new();
     let needle = format!("{}.c", test_name);
-    find_ltp_test_source_recursive(&ltp_root.join("testcases"), &needle, &mut matches)?;
+    for dir in [
+        ltp_root.join("testcases"),
+        ltp_root.join("lib/newlib_tests"),
+    ] {
+        if dir.exists() {
+            find_ltp_test_source_recursive(&dir, &needle, &mut matches)?;
+        }
+    }
 
     match matches.len() {
-        0 => Err(format!("LTP test {} not found under {}", test_name, ltp_root.display())),
+        0 => Err(format!(
+            "LTP test {} not found under {}",
+            test_name,
+            ltp_root.display()
+        )),
         1 => matches[0]
             .strip_prefix(ltp_root)
             .map(Path::to_path_buf)
@@ -391,29 +572,40 @@ fn prepare_ltp_workspace(src: &Path, dst: &Path) -> Result<(), String> {
         std::fs::remove_dir_all(dst).map_err(|e| e.to_string())?;
     }
     std::fs::create_dir_all(dst).map_err(|e| e.to_string())?;
+    copy_ltp_tree(src, dst)
+}
 
-    let mut archive = Command::new("git")
-        .arg("-C")
-        .arg(src)
-        .args(["archive", "--format=tar", "HEAD"])
-        .stdout(Stdio::piped())
-        .spawn()
-        .map_err(|e| e.to_string())?;
+fn copy_ltp_tree(src: &Path, dst: &Path) -> Result<(), String> {
+    for entry in fs::read_dir(src).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let file_type = entry.file_type().map_err(|e| e.to_string())?;
 
-    let archive_stdout = archive.stdout.take().ok_or("git archive stdout missing")?;
-    let tar_status = Command::new("tar")
-        .args(["-x", "-C"])
-        .arg(dst)
-        .stdin(archive_stdout)
-        .status()
-        .map_err(|e| e.to_string())?;
-    let archive_status = archive.wait().map_err(|e| e.to_string())?;
+        if name.to_str() == Some(".git") {
+            continue;
+        }
 
-    if !archive_status.success() {
-        return Err(format!("git archive exited with {}", archive_status));
-    }
-    if !tar_status.success() {
-        return Err(format!("tar exited with {}", tar_status));
+        let dst_path = dst.join(&name);
+        if file_type.is_dir() {
+            fs::create_dir_all(&dst_path).map_err(|e| e.to_string())?;
+            copy_ltp_tree(&path, &dst_path)?;
+            continue;
+        }
+
+        if file_type.is_symlink() {
+            let target = fs::read_link(&path).map_err(|e| e.to_string())?;
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&target, &dst_path).map_err(|e| e.to_string())?;
+            #[cfg(not(unix))]
+            {
+                let resolved = path.parent().unwrap_or(src).join(&target);
+                fs::copy(&resolved, &dst_path).map_err(|e| e.to_string())?;
+            }
+            continue;
+        }
+
+        fs::copy(&path, &dst_path).map_err(|e| e.to_string())?;
     }
 
     Ok(())

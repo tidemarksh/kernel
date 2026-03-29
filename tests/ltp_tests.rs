@@ -8,13 +8,21 @@
 mod support;
 
 fn run_ltp(name: &str, elf_bytes: &[u8]) -> Result<(), String> {
-    let (code, pc) = support::run_elf_no_cache(elf_bytes)?;
+    let (code, pc, output) = support::run_elf_with_output(elf_bytes)?;
+    let output_text = String::from_utf8_lossy(&output);
+    if output_text.contains("TBROK") || output_text.contains("TFAIL") {
+        return Err(format!("{name} reported failure:\n{output_text}"));
+    }
+    if output_text.contains("TCONF") || code == 32 {
+        return Err(format!("{name} TCONF"));
+    }
     if code == 0 {
         Ok(())
-    } else if code == 32 {
-        Err(format!("{} TCONF", name))
     } else {
-        Err(format!("{} exit_code={}, last_pc=0x{:x}", name, code, pc))
+        Err(format!(
+            "{} exit_code={}, last_pc=0x{:x}\n{}",
+            name, code, pc, output_text
+        ))
     }
 }
 

@@ -291,6 +291,30 @@ pub fn sys_rt_sigprocmask(
     0
 }
 
+/// rt_sigpending: return blocked pending signals visible to the caller.
+pub fn sys_rt_sigpending(vm: &ThreadState, base: u32, set_addr: u64, sigsetsize: u64) -> i64 {
+    if sigsetsize != 8 {
+        return EINVAL;
+    }
+    if set_addr == 0 || crate::syscall::memory::range_has_prot_none(set_addr, 8) {
+        return EFAULT;
+    }
+
+    let pid = pid_from_vm(vm, base);
+    let mut pending = vm.sig_pending;
+    if pid > 0 {
+        let idx = (pid - 1) as usize;
+        if idx < MAX_PROCESSES {
+            pending |= process_pending()[idx];
+        }
+    }
+
+    unsafe {
+        guest_mem::write_u64(base, set_addr, pending & vm.sig_mask);
+    }
+    0
+}
+
 /// sigaltstack: get/set alternate signal stack.
 /// ss in a0, old_ss in a1.
 pub fn sys_sigaltstack(vm: &mut ThreadState, base: u32, ss_addr: u64, old_ss_addr: u64) -> i64 {
@@ -495,6 +519,7 @@ pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
                 _ => {
                     // Terminate
                     vm.exit_code = 128 + sig as i32; // convention: 128 + signal
+                    vm.term_signal = sig as i32;
                     vm.status = STATUS_FAULT;
                 }
             }
@@ -558,6 +583,11 @@ mod tests {
         );
         assert_eq!(ret, 0);
         assert_eq!(t.vm.sig_mask & (1 << 9), 1 << 9);
+        t.vm.sig_pending = 1 << 9;
+        let pending_addr = t.scratch + 0x80;
+        let pending_ret = super::sys_rt_sigpending(&t.vm, t.base, pending_addr, 8);
+        assert_eq!(pending_ret, 0);
+        assert_eq!(unsafe { crate::guest_mem::read_u64(t.base, pending_addr) }, 1 << 9);
 
         // rt_sigaction: set handler for SIGUSR1
         let act_addr = t.scratch + 0x200;

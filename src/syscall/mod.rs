@@ -30,13 +30,23 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
     let a3 = vm.x[13];
     let a4 = vm.x[14];
     let a5 = vm.x[15];
-
     let result: i64 = match nr {
         // identity
         SYS_GETPID => identity::sys_getpid(vm, base),
         SYS_GETPPID => identity::sys_getppid(vm, base),
         SYS_GETTID => identity::sys_gettid(vm),
-        SYS_GETUID | SYS_GETEUID | SYS_GETGID | SYS_GETEGID => identity::sys_getuid(),
+        SYS_GETUID => identity::sys_getuid(vm),
+        SYS_GETEUID => identity::sys_geteuid(vm),
+        SYS_GETGID => identity::sys_getgid(vm),
+        SYS_GETEGID => identity::sys_getegid(vm),
+        SYS_GETRESUID => identity::sys_getresuid(vm, base, a0, a1, a2),
+        SYS_GETRESGID => identity::sys_getresgid(vm, base, a0, a1, a2),
+        SYS_SETUID => identity::sys_setuid(vm, a0 as i64),
+        SYS_SETGID => identity::sys_setgid(vm, a0 as i64),
+        SYS_SETREUID => identity::sys_setreuid(vm, a0 as i64, a1 as i64),
+        SYS_SETREGID => identity::sys_setregid(vm, a0 as i64, a1 as i64),
+        SYS_SETRESUID => identity::sys_setresuid(vm, a0 as i64, a1 as i64, a2 as i64),
+        SYS_SETRESGID => identity::sys_setresgid(vm, a0 as i64, a1 as i64, a2 as i64),
         SYS_UNAME => identity::sys_uname(vm, base, a0),
         SYS_SYSINFO => identity::sys_sysinfo(vm, base, a0),
         SYS_GETRANDOM => identity::sys_getrandom(vm, base, a0, a1, a2),
@@ -48,7 +58,13 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         114 => time::sys_clock_getres(vm, base, a0, a1), // clock_getres
         SYS_NANOSLEEP => return time::sys_nanosleep(vm, base, a0, a1),
         SYS_SCHED_GETAFFINITY => time::sys_sched_getaffinity(vm, base, a0 as i64, a1, a2),
-        SYS_SCHED_YIELD => time::sys_sched_yield(),
+        SYS_SCHED_YIELD => {
+            let ret = time::sys_sched_yield(vm);
+            if vm.status == abi::STATUS_SLEEP {
+                return abi::STATUS_SLEEP;
+            }
+            ret as i64
+        }
         SYS_TIMES => 0, // stub: return 0 clock ticks
 
         // memory
@@ -63,6 +79,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         // signal
         SYS_RT_SIGACTION => signal::sys_rt_sigaction(vm, base, a0, a1, a2, a3),
         SYS_RT_SIGPROCMASK => signal::sys_rt_sigprocmask(vm, base, a0, a1, a2, a3),
+        SYS_RT_SIGPENDING => signal::sys_rt_sigpending(vm, base, a0, a1),
         SYS_SIGALTSTACK => signal::sys_sigaltstack(vm, base, a0, a1),
         SYS_RT_SIGRETURN => {
             signal::sys_rt_sigreturn(vm, base);
@@ -247,7 +264,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
                 }
                 ret
             } else {
-                let ret = process::sys_fork(vm, base);
+                let ret = process::sys_fork(vm, base, a0, a1, a2, a3, a4);
                 if vm.status == abi::STATUS_EXECVE_SPAWN {
                     return abi::STATUS_EXECVE_SPAWN;
                 }
@@ -261,7 +278,20 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             }
             ret
         }
-        SYS_WAIT4 => process::sys_wait4(vm, base, a0 as i64, a1, a2, a3),
+        SYS_WAIT4 => {
+            let ret = process::sys_wait4(vm, base, a0 as i64, a1, a2, a3);
+            if vm.status == abi::STATUS_WAIT4 {
+                return abi::STATUS_WAIT4;
+            }
+            ret
+        }
+        SYS_WAITID => {
+            let ret = process::sys_waitid(vm, base, a0 as u32, a1 as i64, a2, a3, a4);
+            if vm.status == abi::STATUS_WAIT4 {
+                return abi::STATUS_WAIT4;
+            }
+            ret
+        }
         SYS_FUTEX => {
             let ret = thread::sys_futex(vm, base, a0, a1, a2, a3, a4, vm.x[15]);
             if vm.status == abi::STATUS_FUTEX_WAIT {
