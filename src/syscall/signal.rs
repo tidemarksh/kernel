@@ -81,6 +81,18 @@ pub fn process_pending_ptr() -> u32 {
     unsafe { core::ptr::read(core::ptr::addr_of!(PROCESS_PENDING_PTR)) as u32 }
 }
 
+pub fn signal_slots_bytes() -> u32 {
+    core::mem::size_of::<[*mut [SigAction; MAX_SIGNALS]; MAX_PROCESSES]>() as u32
+}
+
+pub fn process_pending_bytes() -> u32 {
+    core::mem::size_of::<[u64; MAX_PROCESSES]>() as u32
+}
+
+pub fn signal_action_table_bytes() -> u32 {
+    core::mem::size_of::<[SigAction; MAX_SIGNALS]>() as u32
+}
+
 pub fn attach_process_signal_state(sig_slots_ptr: u32, process_pending_ptr: u32) {
     unsafe {
         core::ptr::write(
@@ -184,6 +196,33 @@ pub fn fork_from_parent(parent_pid: i32, child_pid: i32) {
     let child = sigactions_for(child_pid);
     child.copy_from_slice(parent);
     process_pending()[child_idx] = 0;
+}
+
+/// Move per-process signal state from one PID slot to another.
+/// Used when runtime canonicalizes a provisional child PID before the child runs.
+pub fn reassign_process_pid(old_pid: i32, new_pid: i32) {
+    if old_pid <= 0 || new_pid <= 0 || old_pid == new_pid {
+        return;
+    }
+
+    let old_idx = (old_pid - 1) as usize;
+    let new_idx = (new_pid - 1) as usize;
+    if old_idx >= MAX_PROCESSES || new_idx >= MAX_PROCESSES {
+        return;
+    }
+
+    let old_slot = sig_slots()[old_idx];
+    if !old_slot.is_null() {
+        sig_slots()[new_idx] = old_slot;
+        sig_slots()[old_idx] = core::ptr::null_mut();
+        process_pending()[new_idx] = process_pending()[old_idx];
+        process_pending()[old_idx] = 0;
+        return;
+    }
+
+    if sig_slots()[new_idx].is_null() {
+        init_for_process(new_pid);
+    }
 }
 
 /// Reset signal dispositions on execve: caught signals (handler != SIG_DFL
@@ -517,10 +556,12 @@ pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
                 SIGCHLD | SIGURG | SIGWINCH => {} // ignore by default
                 SIGCONT => {}                     // ignore (no job control)
                 _ => {
-                    // Terminate
-                    vm.exit_code = 128 + sig as i32; // convention: 128 + signal
-                    vm.term_signal = sig as i32;
-                    vm.status = STATUS_FAULT;
+                    crate::syscall::thread::terminate_process(
+                        vm,
+                        base,
+                        128 + sig as i32,
+                        sig as i32,
+                    );
                 }
             }
         }
@@ -670,6 +711,11 @@ mod tests {
             128 + crate::abi::SIGTERM,
             "exit_code should be 128 + SIGTERM"
         );
+        assert_eq!(t.vm.term_signal, crate::abi::SIGTERM);
+        let ps =
+            unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const crate::types::ProcessState) };
+        assert_eq!(ps.thread_count.load(core::sync::atomic::Ordering::Acquire), 0);
+        assert_eq!(ps.threads[0].state, crate::types::THREAD_NONE);
 
         // The pending bit should be cleared.
         assert_eq!(

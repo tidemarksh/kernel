@@ -2,7 +2,7 @@
 //!
 //! clone(CLONE_VM | CLONE_THREAD) → STATUS_CLONE_SPAWN → TS spawns Worker.
 //! futex(WAIT/WAKE) uses guest Memory Atomics directly.
-//! futex(CMP_REQUEUE) requires kernel Worker.
+//! futex(CMP_REQUEUE) reuses the shared thread registry as the wait queue.
 //!
 //! Semantics:
 //! https://man7.org/linux/man-pages/man2/clone.2.html
@@ -43,13 +43,13 @@ unsafe fn thread_record(vm: &ThreadState, base: u32) -> Option<&mut ThreadRecord
     Some(&mut ps.threads[(vm.tid - 1) as usize])
 }
 
-fn thread_state_from_guest_ptr(base: u32, thread_ptr: u32) -> Option<*mut ThreadState> {
+fn thread_state_from_record_ptr(thread_ptr: u32) -> Option<*mut ThreadState> {
     if thread_ptr == 0 {
         return None;
     }
 
     let align = core::mem::align_of::<ThreadState>();
-    let absolute = (base as usize).checked_add(thread_ptr as usize)?;
+    let absolute = thread_ptr as usize;
     if (absolute & (align - 1)) != 0 {
         return None;
     }
@@ -78,7 +78,7 @@ fn wake_futex_waiters_by_process_ptr(process_ptr: u32, base: u32, addr: u32, max
         return 0;
     }
 
-    unsafe {
+    let woken = unsafe {
         let ps = &mut *((base as u64 + process_ptr as u64) as *mut ProcessState);
         let mut woken = 0;
         for record in ps.threads.iter_mut() {
@@ -93,6 +93,55 @@ fn wake_futex_waiters_by_process_ptr(process_ptr: u32, base: u32, addr: u32, max
             woken += 1;
         }
         woken
+    };
+    if woken > 0 {
+        notify_futex_addr(base, addr, woken);
+    }
+    woken
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[link(wasm_import_module = "env")]
+unsafe extern "C" {
+    fn tidemark_memory_atomic_notify(ptr: *mut i32, max_wake: u32) -> u32;
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+fn notify_futex_addr(base: u32, addr: u32, max_wake: u32) {
+    unsafe {
+        let ptr = (base as u64 + addr as u64) as usize as *mut i32;
+        let _ = tidemark_memory_atomic_notify(ptr, max_wake);
+    }
+}
+
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+fn notify_futex_addr(_base: u32, _addr: u32, _max_wake: u32) {}
+
+fn requeue_futex_waiters_by_process_ptr(
+    process_ptr: u32,
+    base: u32,
+    addr: u32,
+    new_addr: u32,
+    max_requeue: u32,
+) -> u32 {
+    if process_ptr == 0 || max_requeue == 0 || addr == new_addr {
+        return 0;
+    }
+
+    unsafe {
+        let ps = &mut *((base as u64 + process_ptr as u64) as *mut ProcessState);
+        let mut requeued = 0;
+        for record in ps.threads.iter_mut() {
+            if requeued >= max_requeue {
+                break;
+            }
+            if record.state != THREAD_BLOCKED_FUTEX || record.blocked_addr != addr {
+                continue;
+            }
+            record.blocked_addr = new_addr;
+            requeued += 1;
+        }
+        requeued
     }
 }
 
@@ -210,11 +259,14 @@ pub fn discard_other_threads_for_exec(vm: &ThreadState, base: u32) -> u32 {
                 continue;
             }
             let has_valid_thread =
-                record.tid > 0 && thread_state_from_guest_ptr(base, record.thread_ptr).is_some();
+                record.tid > 0 && thread_state_from_record_ptr(record.thread_ptr).is_some();
             if !has_valid_thread {
                 *record = ThreadRecord::empty();
                 discarded += 1;
                 continue;
+            }
+            if let Some(thread_vm) = thread_state_from_record_ptr(record.thread_ptr) {
+                crate::fs::fd_table::clear_blocked_ofd_pin(&mut *thread_vm);
             }
             if record.clear_child_tid != 0 {
                 clear_tid_and_wake(vm.process_ptr, base, record.clear_child_tid as u64);
@@ -281,6 +333,7 @@ pub fn sys_exit(vm: &mut ThreadState, base: u32, exit_code: u64) -> i32 {
     cleanup_robust_futexes(vm.process_ptr, base, vm.tid as u32, vm.robust_list_head);
     vm.robust_list_head = 0;
     vm.robust_list_len = 0;
+    crate::fs::fd_table::clear_blocked_ofd_pin(vm);
     let remaining_threads = decrement_thread_count(vm, base);
 
     // clear_child_tid: write 0 and wake futex waiters
@@ -303,12 +356,9 @@ pub fn sys_exit(vm: &mut ThreadState, base: u32, exit_code: u64) -> i32 {
     STATUS_FAULT
 }
 
-/// exit_group: terminate all threads in the process.
-/// Marks the entire process dead so runtime/process teardown can proceed.
-/// https://man7.org/linux/man-pages/man2/exit_group.2.html
-pub fn sys_exit_group(vm: &mut ThreadState, base: u32, exit_code: u64) -> i32 {
-    vm.exit_code = exit_code as i32;
-    vm.term_signal = 0;
+pub fn terminate_process(vm: &mut ThreadState, base: u32, exit_code: i32, term_signal: i32) -> i32 {
+    vm.exit_code = exit_code;
+    vm.term_signal = term_signal;
 
     if crate::syscall::process::vfork_active() {
         vm.status = STATUS_FAULT;
@@ -324,7 +374,7 @@ pub fn sys_exit_group(vm: &mut ThreadState, base: u32, exit_code: u64) -> i32 {
                 if record.state == THREAD_NONE || record.state == THREAD_DEAD {
                     continue;
                 }
-                let thread_vm_ptr = thread_state_from_guest_ptr(base, record.thread_ptr);
+                let thread_vm_ptr = thread_state_from_record_ptr(record.thread_ptr);
                 let robust_head = if record.tid == vm.tid {
                     vm.robust_list_head
                 } else if let Some(thread_vm) = thread_vm_ptr {
@@ -342,6 +392,7 @@ pub fn sys_exit_group(vm: &mut ThreadState, base: u32, exit_code: u64) -> i32 {
                     thread_vm.robust_list_head = 0;
                     thread_vm.robust_list_len = 0;
                     thread_vm.clear_child_tid = 0;
+                    crate::fs::fd_table::clear_blocked_ofd_pin(thread_vm);
                 }
                 if record.clear_child_tid != 0 {
                     clear_tid_and_wake(vm.process_ptr, base, record.clear_child_tid as u64);
@@ -353,6 +404,7 @@ pub fn sys_exit_group(vm: &mut ThreadState, base: u32, exit_code: u64) -> i32 {
     }
 
     crate::fs::fd_table::close_all_for_process(base, vm);
+    crate::fs::fd_table::clear_blocked_ofd_pin(vm);
 
     if vm.clear_child_tid != 0 {
         clear_tid_and_wake(vm.process_ptr, base, vm.clear_child_tid);
@@ -363,6 +415,13 @@ pub fn sys_exit_group(vm: &mut ThreadState, base: u32, exit_code: u64) -> i32 {
 
     vm.status = STATUS_FAULT;
     STATUS_FAULT
+}
+
+/// exit_group: terminate all threads in the process.
+/// Marks the entire process dead so runtime/process teardown can proceed.
+/// https://man7.org/linux/man-pages/man2/exit_group.2.html
+pub fn sys_exit_group(vm: &mut ThreadState, base: u32, exit_code: u64) -> i32 {
+    terminate_process(vm, base, exit_code as i32, 0)
 }
 
 /// clone: create a new thread or process.
@@ -464,6 +523,8 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
         child.clone_child_tidptr = 0;
         child.clone_child_tid = 0;
         child.clone_pending = 0;
+        child.blocked_fd = 0;
+        child.blocked_ofd_id = 0;
 
         if parent.clone_child_stack != 0 {
             child.x[2] = parent.clone_child_stack;
@@ -567,9 +628,9 @@ pub fn sys_futex(
     addr: u64,
     op: u64,
     val: u64,
-    _timeout: u64,
-    _addr2: u64,
-    _val3: u64,
+    timeout_or_requeue: u64,
+    addr2: u64,
+    val3: u64,
 ) -> i64 {
     let futex_op = (op & 0x7F) as u32; // mask out FUTEX_PRIVATE_FLAG
 
@@ -587,7 +648,7 @@ pub fn sys_futex(
                 }
             }
             vm.futex_wait_addr = addr;
-            vm.futex_wait_timeout = _timeout;
+            vm.futex_wait_timeout = timeout_or_requeue;
             // Value matches — block. Return STATUS_FUTEX_WAIT for TS to Atomics.wait.
             vm.x[10] = addr; // stash addr for TS
             vm.status = STATUS_FUTEX_WAIT;
@@ -608,6 +669,45 @@ pub fn sys_futex(
             #[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
             let external = 0u32;
             return (local + external) as i64;
+        }
+        FUTEX_CMP_REQUEUE => {
+            if (val as i64) < 0 || (timeout_or_requeue as i64) < 0 {
+                return EINVAL;
+            }
+
+            let current = unsafe { guest_mem::read_u32(base, addr) };
+            if current != val3 as u32 {
+                return EAGAIN;
+            }
+
+            let wake_count = val.min(u32::MAX as u64) as u32;
+            let requeue_count = timeout_or_requeue.min(u32::MAX as u64) as u32;
+
+            let local_wake =
+                wake_futex_waiters_by_process_ptr(vm.process_ptr, base, addr as u32, wake_count);
+            #[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
+            let external_wake =
+                crate::runtime_test_support::wake_plain_fork_futex_waits(addr as u32, wake_count);
+            #[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
+            let external_wake = 0u32;
+
+            let local_requeue = requeue_futex_waiters_by_process_ptr(
+                vm.process_ptr,
+                base,
+                addr as u32,
+                addr2 as u32,
+                requeue_count,
+            );
+            #[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
+            let external_requeue = crate::runtime_test_support::requeue_plain_fork_futex_waits(
+                addr as u32,
+                addr2 as u32,
+                requeue_count,
+            );
+            #[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
+            let external_requeue = 0u32;
+
+            (local_wake + external_wake + local_requeue + external_requeue) as i64
         }
         _ => ENOSYS,
     }
@@ -749,6 +849,26 @@ mod tests {
         }
 
         #[test]
+        fn contract_thread_record_ptr_is_absolute_even_with_nonzero_guest_base() {
+            let child_ptr = unsafe {
+                crate::alloc::alloc_zeroed(
+                    core::mem::size_of::<ThreadState>() as u32,
+                    core::mem::align_of::<ThreadState>() as u32,
+                )
+            };
+            assert_ne!(child_ptr, 0);
+
+            let resolved = thread_impl::thread_state_from_record_ptr(child_ptr);
+            assert_eq!(resolved, Some(child_ptr as *mut ThreadState));
+
+            // A non-zero guest base must not be added here. thread_ptr stores an
+            // absolute pointer in the shared WASM linear memory.
+            let fake_guest_base = 0x10_0000u32;
+            let wrong_absolute = fake_guest_base as usize + child_ptr as usize;
+            assert_ne!(wrong_absolute as u32, child_ptr);
+        }
+
+        #[test]
         fn contract_futex_wake_unblocks_waiting_thread_record() {
             let mut t = TestVm::new();
             let addr = t.scratch + 0x500;
@@ -763,6 +883,86 @@ mod tests {
             assert_eq!(ret, 1, "futex_wake should report one woken waiter");
             assert_eq!(ps.threads[1].state, THREAD_RUNNING);
             assert_eq!(ps.threads[1].blocked_addr, 0);
+        }
+
+        #[test]
+        fn contract_futex_cmp_requeue_moves_remaining_waiters() {
+            let mut t = TestVm::new();
+            let from_addr = t.scratch + 0x520;
+            let to_addr = t.scratch + 0x524;
+            unsafe {
+                crate::guest_mem::write_u32(t.base, from_addr, 7);
+            }
+            let ps =
+                unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+            ps.thread_count.store(3, Ordering::Release);
+            ps.threads[1] =
+                ThreadRecord::new(2, THREAD_BLOCKED_FUTEX, 0x1000, 0, from_addr as u32);
+            ps.threads[2] =
+                ThreadRecord::new(3, THREAD_BLOCKED_FUTEX, 0x2000, 0, from_addr as u32);
+
+            let ret = thread_impl::sys_futex(
+                &mut t.vm,
+                t.base,
+                from_addr,
+                FUTEX_CMP_REQUEUE as u64,
+                1,
+                1,
+                to_addr,
+                7,
+            );
+
+            assert_eq!(ret, 2);
+            assert_eq!(ps.threads[1].state, THREAD_RUNNING);
+            assert_eq!(ps.threads[1].blocked_addr, 0);
+            assert_eq!(ps.threads[2].state, THREAD_BLOCKED_FUTEX);
+            assert_eq!(ps.threads[2].blocked_addr, to_addr as u32);
+        }
+
+        #[test]
+        fn contract_futex_cmp_requeue_validates_counts_and_compare_value() {
+            let mut t = TestVm::new();
+            let from_addr = t.scratch + 0x600;
+            let to_addr = t.scratch + 0x604;
+            unsafe {
+                crate::guest_mem::write_u32(t.base, from_addr, 11);
+            }
+
+            let invalid_wake = thread_impl::sys_futex(
+                &mut t.vm,
+                t.base,
+                from_addr,
+                FUTEX_CMP_REQUEUE as u64,
+                u64::MAX,
+                1,
+                to_addr,
+                11,
+            );
+            assert_eq!(invalid_wake, EINVAL);
+
+            let invalid_requeue = thread_impl::sys_futex(
+                &mut t.vm,
+                t.base,
+                from_addr,
+                FUTEX_CMP_REQUEUE as u64,
+                1,
+                u64::MAX,
+                to_addr,
+                11,
+            );
+            assert_eq!(invalid_requeue, EINVAL);
+
+            let mismatched = thread_impl::sys_futex(
+                &mut t.vm,
+                t.base,
+                from_addr,
+                FUTEX_CMP_REQUEUE as u64,
+                1,
+                1,
+                to_addr,
+                12,
+            );
+            assert_eq!(mismatched, EAGAIN);
         }
 
         #[test]

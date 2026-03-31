@@ -23,7 +23,7 @@
 //!                                      //             last close in a process decrements)
 //!     offset:       i64,               // offset 16 — current file offset
 //!     ino:          u32,               // offset 24 — inode number (MemFS)
-//!     _pad:         u32,               // offset 28
+//!     flock_state:  u32,               // offset 28 — LOCK_SH/LOCK_EX advisory lock
 //! };
 //!
 //! fcntl commands (https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/fcntl.h):
@@ -46,8 +46,20 @@ const F_GETFL: u64 = 3;
 const F_SETFL: u64 = 4;
 const F_DUPFD_CLOEXEC: u64 = 1030;
 const OPEN_ACCESS_MODE_MASK: i32 = 0x3;
+const LOCK_SH: u32 = 0x1;
+const LOCK_EX: u32 = 0x2;
+const LOCK_NB: u32 = 0x4;
+const LOCK_UN: u32 = 0x8;
 
 pub const FD_CLOEXEC: u32 = 1;
+const EFD_SEMAPHORE: i32 = 0x1;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BackendCleanup {
+    Pipe { pipe_idx: u32, is_read_end: bool },
+    Epoll { epoll_idx: u32 },
+    Socket { socket_idx: u32 },
+}
 
 /// Pointer to OFD table in kernel Worker linear memory.
 static mut OFD_TABLE_PTR: *mut [OpenFileDesc; MAX_FDS] = core::ptr::null_mut();
@@ -61,6 +73,10 @@ fn ofd_table() -> &'static mut [OpenFileDesc; MAX_FDS] {
 
 pub fn ofd_table_ptr() -> u32 {
     unsafe { core::ptr::read(core::ptr::addr_of!(OFD_TABLE_PTR)) as u32 }
+}
+
+pub fn ofd_table_bytes() -> u32 {
+    core::mem::size_of::<[OpenFileDesc; MAX_FDS]>() as u32
 }
 
 pub fn attach_ofd_table_ptr(ptr: u32) {
@@ -108,7 +124,7 @@ unsafe fn get_fd_entry(base: u32, vm: &ThreadState, fd: u64) -> Option<&mut FdEn
         return None;
     }
     let entry = &mut (*ps).fd_table[fd as usize];
-    if entry.ofd_id == 0 {
+    if entry.ofd_id == 0 || entry.ofd_id as usize >= MAX_FDS {
         return None;
     }
     Some(entry)
@@ -151,7 +167,7 @@ unsafe fn alloc_ofd(fd_type: i32, status_flags: i32) -> u32 {
                 refcount: 1,
                 offset: 0,
                 ino: 0,
-                _pad: 0,
+                flock_state: 0,
             };
             return i as u32;
         }
@@ -159,21 +175,48 @@ unsafe fn alloc_ofd(fd_type: i32, status_flags: i32) -> u32 {
     0
 }
 
-fn cleanup_ofd(ofd_id: usize) {
-    let ofd = &mut ofd_table()[ofd_id];
+fn backend_cleanup_for_ofd(ofd: &OpenFileDesc) -> Option<BackendCleanup> {
     if ofd.fd_type == FD_TYPE_PIPE {
-        let pipe_idx = ofd.ino;
-        let is_read = ofd.host_fd >= 0;
-        crate::syscall::pipe::pipe_close(pipe_idx, is_read);
+        Some(BackendCleanup::Pipe {
+            pipe_idx: ofd.ino,
+            is_read_end: ofd.host_fd >= 0,
+        })
+    } else if ofd.fd_type == FD_TYPE_EPOLL {
+        Some(BackendCleanup::Epoll { epoll_idx: ofd.ino })
     } else if ofd.fd_type == FD_TYPE_SOCKET {
-        crate::syscall::socket::socket_close(ofd.ino);
+        Some(BackendCleanup::Socket {
+            socket_idx: ofd.ino,
+        })
+    } else {
+        None
     }
+}
+
+fn clear_ofd(ofd: &mut OpenFileDesc) {
     ofd.fd_type = 0;
     ofd.host_fd = -1;
     ofd.status_flags = 0;
     ofd.refcount = 0;
     ofd.offset = 0;
     ofd.ino = 0;
+    ofd.flock_state = 0;
+}
+
+pub fn run_backend_cleanup(cleanup: BackendCleanup) {
+    match cleanup {
+        BackendCleanup::Pipe {
+            pipe_idx,
+            is_read_end,
+        } => {
+            let _ = crate::syscall::pipe::pipe_close_outcome(pipe_idx, is_read_end);
+        }
+        BackendCleanup::Epoll { epoll_idx } => {
+            crate::syscall::epoll::close_epoll(epoll_idx);
+        }
+        BackendCleanup::Socket { socket_idx } => {
+            crate::syscall::socket::socket_close(socket_idx);
+        }
+    }
 }
 
 /// Increment the OFD refcount for an additional process holding this OFD.
@@ -187,19 +230,107 @@ pub fn retain_ofd_id(ofd_id: u32) {
     }
 }
 
-/// Drop one process-level reference to an OFD and run backend cleanup on last close.
-pub fn release_ofd_id(ofd_id: u32) {
-    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+pub fn blocked_status_uses_ofd_pin(status: i32) -> bool {
+    matches!(
+        status,
+        STATUS_PIPE_WAIT | STATUS_SOCKET_RECV | STATUS_SOCKET_SEND | STATUS_FLOCK_WAIT
+    )
+}
+
+pub fn clear_blocked_ofd_pin(vm: &mut ThreadState) {
+    let ofd_id = vm.blocked_ofd_id;
+    vm.blocked_fd = 0;
+    vm.blocked_ofd_id = 0;
+    if ofd_id != 0 {
+        release_ofd_id(ofd_id);
+    }
+}
+
+pub fn pin_blocked_fd(base: u32, vm: &mut ThreadState, fd: u64) {
+    let Some(ofd_id) = get_ofd_id(base, vm, fd) else {
+        clear_blocked_ofd_pin(vm);
         return;
+    };
+    let blocked_fd = fd as u32;
+    if vm.blocked_ofd_id == ofd_id && vm.blocked_fd == blocked_fd {
+        return;
+    }
+    clear_blocked_ofd_pin(vm);
+    retain_ofd_id(ofd_id);
+    vm.blocked_fd = blocked_fd;
+    vm.blocked_ofd_id = ofd_id;
+}
+
+pub fn patch_blocked_fd_entry_for_resume(base: u32, vm: &ThreadState) -> Option<FdEntry> {
+    unsafe {
+        let ofd_id = vm.blocked_ofd_id;
+        let fd = vm.blocked_fd as usize;
+        if ofd_id == 0 || fd >= MAX_FDS {
+            return None;
+        }
+
+        let ps = get_process_state(base, vm);
+        if ps.is_null() {
+            return None;
+        }
+
+        let entry = &mut (*ps).fd_table[fd];
+        let saved = *entry;
+        if saved.ofd_id != ofd_id {
+            entry.ofd_id = ofd_id;
+        }
+        Some(saved)
+    }
+}
+
+pub fn restore_blocked_fd_entry(base: u32, vm: &ThreadState, saved: Option<FdEntry>) {
+    unsafe {
+        let Some(saved) = saved else {
+            return;
+        };
+        let fd = vm.blocked_fd as usize;
+        if fd >= MAX_FDS {
+            return;
+        }
+
+        let ps = get_process_state(base, vm);
+        if ps.is_null() {
+            return;
+        }
+
+        (*ps).fd_table[fd] = saved;
+    }
+}
+
+/// Drop one process-level reference to an OFD and report the backend cleanup
+/// that must run when this was the final process hold.
+///
+/// The OFD slot itself is cleared immediately; callers may run the returned
+/// backend cleanup locally today or defer it to the canonical owner kernel.
+pub fn release_ofd_id_deferred(ofd_id: u32) -> Option<BackendCleanup> {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return None;
     }
     let slot = ofd_id as usize;
     let ofd = &mut ofd_table()[slot];
     if ofd.refcount <= 0 {
-        return;
+        return None;
     }
     ofd.refcount -= 1;
-    if ofd.refcount <= 0 {
-        cleanup_ofd(slot);
+    if ofd.refcount > 0 {
+        return None;
+    }
+
+    crate::syscall::epoll::release_interest_for_ofd(ofd_id);
+    let cleanup = backend_cleanup_for_ofd(ofd);
+    clear_ofd(ofd);
+    cleanup
+}
+
+/// Drop one process-level reference to an OFD and run backend cleanup on last close.
+pub fn release_ofd_id(ofd_id: u32) {
+    if let Some(cleanup) = release_ofd_id_deferred(ofd_id) {
+        run_backend_cleanup(cleanup);
     }
 }
 
@@ -227,13 +358,14 @@ pub fn open_pipe(
 ) -> i64 {
     unsafe {
         let fd_type = FD_TYPE_PIPE;
+        let access_mode = if is_read_end { O_RDONLY } else { O_WRONLY };
         // Encode pipe_idx and read/write flag in host_fd field
         let host_fd = if is_read_end {
             pipe_idx as i32
         } else {
             -(pipe_idx as i32) - 1
         };
-        let ofd_id = alloc_ofd(fd_type, flags & O_NONBLOCK);
+        let ofd_id = alloc_ofd(fd_type, access_mode | (flags & O_NONBLOCK));
         if ofd_id == 0 {
             return EMFILE;
         }
@@ -275,7 +407,7 @@ pub fn is_pipe_write(ofd: &OpenFileDesc) -> bool {
 /// Open a socket FD. `socket_idx` is the index into the socket table.
 pub fn open_socket(vm: &mut ThreadState, base: u32, socket_idx: u32, flags: i32) -> i64 {
     unsafe {
-        let ofd_id = alloc_ofd(FD_TYPE_SOCKET, flags & O_NONBLOCK);
+        let ofd_id = alloc_ofd(FD_TYPE_SOCKET, O_RDWR | (flags & O_NONBLOCK));
         if ofd_id == 0 {
             return EMFILE;
         }
@@ -306,7 +438,7 @@ pub fn open_socket(vm: &mut ThreadState, base: u32, socket_idx: u32, flags: i32)
 /// Open an epoll FD. epoll_idx is the index into the epoll instance table.
 pub fn open_epoll(vm: &mut ThreadState, base: u32, epoll_idx: u32, flags: i32) -> i64 {
     unsafe {
-        let ofd_id = alloc_ofd(FD_TYPE_EPOLL, 0);
+        let ofd_id = alloc_ofd(FD_TYPE_EPOLL, O_RDWR);
         if ofd_id == 0 {
             return EMFILE;
         }
@@ -327,6 +459,93 @@ pub fn open_epoll(vm: &mut ThreadState, base: u32, epoll_idx: u32, flags: i32) -
             fd_flags: cloexec,
         };
         newfd as i64
+    }
+}
+
+/// Open an eventfd FD backed by the OFD table. The counter lives in `offset`
+/// so dup/fork continue to share the same eventfd object.
+pub fn open_eventfd(vm: &mut ThreadState, base: u32, initval: u64, flags: i32) -> i64 {
+    unsafe {
+        let ofd_id = alloc_ofd(FD_TYPE_EVENTFD, O_RDWR | (flags & O_NONBLOCK));
+        if ofd_id == 0 {
+            return EMFILE;
+        }
+        ofd_table()[ofd_id as usize].host_fd = if flags & EFD_SEMAPHORE != 0 { 1 } else { 0 };
+        ofd_table()[ofd_id as usize].offset = initval as i64;
+
+        let cloexec = if flags & O_CLOEXEC != 0 {
+            FD_CLOEXEC
+        } else {
+            0
+        };
+        let newfd = match find_free_fd(base, vm, 0) {
+            Some(fd) => fd,
+            None => return EMFILE,
+        };
+        let ps = get_process_state(base, vm);
+        (*ps).fd_table[newfd] = FdEntry {
+            ofd_id,
+            fd_flags: cloexec,
+        };
+        newfd as i64
+    }
+}
+
+/// Open `/dev/null` as a synthetic character device.
+pub fn open_devnull(vm: &mut ThreadState, base: u32, flags: i32) -> i64 {
+    unsafe {
+        let ofd_id = alloc_ofd(
+            FD_TYPE_DEVNULL,
+            flags & (OPEN_ACCESS_MODE_MASK | O_APPEND | O_NONBLOCK),
+        );
+        if ofd_id == 0 {
+            return EMFILE;
+        }
+
+        let cloexec = if flags & O_CLOEXEC != 0 {
+            FD_CLOEXEC
+        } else {
+            0
+        };
+        let newfd = match find_free_fd(base, vm, 0) {
+            Some(fd) => fd,
+            None => return EMFILE,
+        };
+        let ps = get_process_state(base, vm);
+        (*ps).fd_table[newfd] = FdEntry {
+            ofd_id,
+            fd_flags: cloexec,
+        };
+        newfd as i64
+    }
+}
+
+#[derive(Clone, Copy)]
+struct FlockRequest {
+    mode: u32,
+    nonblocking: bool,
+}
+
+fn parse_flock_request(operation: u64) -> Option<FlockRequest> {
+    let op = operation as u32;
+    if op & !(LOCK_SH | LOCK_EX | LOCK_NB | LOCK_UN) != 0 {
+        return None;
+    }
+    let mode = op & (LOCK_SH | LOCK_EX | LOCK_UN);
+    if mode.count_ones() != 1 {
+        return None;
+    }
+    Some(FlockRequest {
+        mode,
+        nonblocking: op & LOCK_NB != 0,
+    })
+}
+
+fn flock_conflicts(held_mode: u32, requested_mode: u32) -> bool {
+    match requested_mode {
+        LOCK_SH => held_mode == LOCK_EX,
+        LOCK_EX => held_mode == LOCK_SH || held_mode == LOCK_EX,
+        _ => false,
     }
 }
 
@@ -468,6 +687,60 @@ pub fn sys_fcntl(vm: &mut ThreadState, base: u32, fd: u64, cmd: u64, arg: u64) -
     }
 }
 
+/// flock(fd, operation)
+///
+/// BSD advisory locks are associated with the open file description, so dup()
+/// and fork() share the same lock state.
+pub fn sys_flock(vm: &mut ThreadState, base: u32, fd: u64, operation: u64) -> i64 {
+    unsafe {
+        let entry = match get_fd_entry(base, vm, fd) {
+            Some(e) => *e,
+            None => return EBADF,
+        };
+        let request = match parse_flock_request(operation) {
+            Some(req) => req,
+            None => return EINVAL,
+        };
+
+        let ofd_id = entry.ofd_id as usize;
+        let ofd = ofd_table()[ofd_id];
+        if ofd.fd_type != FD_TYPE_FILE {
+            return EBADF;
+        }
+
+        if request.mode == LOCK_UN {
+            ofd_table()[ofd_id].flock_state = 0;
+            return 0;
+        }
+
+        let mut conflict = false;
+        for idx in 1..MAX_FDS {
+            if idx == ofd_id {
+                continue;
+            }
+            let other = ofd_table()[idx];
+            if other.refcount <= 0 || other.fd_type != FD_TYPE_FILE || other.ino != ofd.ino {
+                continue;
+            }
+            if flock_conflicts(other.flock_state, request.mode) {
+                conflict = true;
+                break;
+            }
+        }
+
+        if conflict {
+            if request.nonblocking {
+                return EAGAIN;
+            }
+            vm.status = STATUS_FLOCK_WAIT;
+            return 0;
+        }
+
+        ofd_table()[ofd_id].flock_state = request.mode;
+        0
+    }
+}
+
 /// close(fd)
 /// Only the last FD alias in the current process drops the OFD process refcount.
 pub fn sys_close(vm: &mut ThreadState, base: u32, fd: u64) -> i64 {
@@ -482,7 +755,7 @@ pub fn sys_close(vm: &mut ThreadState, base: u32, fd: u64) -> i64 {
         }
 
         let entry = &mut (*ps).fd_table[fd as usize];
-        if entry.ofd_id == 0 {
+        if entry.ofd_id == 0 || entry.ofd_id as usize >= MAX_FDS {
             return EBADF;
         }
 
@@ -538,6 +811,14 @@ pub fn get_ofd(base: u32, vm: &ThreadState, fd: u64) -> Option<OpenFileDesc> {
         let entry = get_fd_entry(base, vm, fd)?;
         let ofd = &ofd_table()[entry.ofd_id as usize];
         Some(*ofd)
+    }
+}
+
+/// Get the internal OFD id for a file descriptor.
+pub fn get_ofd_id(base: u32, vm: &ThreadState, fd: u64) -> Option<u32> {
+    unsafe {
+        let entry = get_fd_entry(base, vm, fd)?;
+        Some(entry.ofd_id)
     }
 }
 
@@ -633,6 +914,7 @@ pub fn set_offset(base: u32, vm: &ThreadState, fd: u64, offset: u64) {
 mod tests {
     use crate::abi::*;
     use crate::test_helpers::TestVm;
+    use core::sync::atomic::Ordering;
 
     #[test]
     fn fd_table_syscalls() {
@@ -736,33 +1018,157 @@ mod tests {
         assert_eq!(t.sys_close(fd), 0);
         assert!(!super::inode_has_write_open(ino));
     }
+
+    #[test]
+    fn deferred_pipe_cleanup_separates_last_close_from_backend_close() {
+        let mut t = TestVm::new();
+        let pipefd_addr = t.scratch + 0x1800;
+        assert_eq!(
+            crate::syscall::pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0),
+            0
+        );
+
+        let read_fd = unsafe { crate::guest_mem::read_u32(t.base, pipefd_addr) } as u64;
+        let ofd_id = unsafe {
+            let ps = super::get_process_state(t.base, &t.vm);
+            (*ps).fd_table[read_fd as usize].ofd_id
+        };
+        let pipe_idx = super::get_ofd_by_id(ofd_id)
+            .expect("pipe OFD should exist")
+            .ino;
+        let slot = crate::syscall::pipe::slot_addr(pipe_idx);
+
+        let cleanup = super::release_ofd_id_deferred(ofd_id);
+        assert_eq!(
+            cleanup,
+            Some(super::BackendCleanup::Pipe {
+                pipe_idx,
+                is_read_end: true,
+            })
+        );
+        assert!(super::get_ofd_by_id(ofd_id).is_none());
+        assert_eq!(
+            crate::syscall::pipe::read_open_ptr(slot).load(Ordering::Acquire),
+            1
+        );
+
+        super::run_backend_cleanup(cleanup.expect("cleanup action should exist"));
+        assert_eq!(
+            crate::syscall::pipe::read_open_ptr(slot).load(Ordering::Acquire),
+            0
+        );
+    }
+
+    #[test]
+    fn deferred_epoll_cleanup_separates_last_close_from_backend_close() {
+        let mut t = TestVm::new();
+        let epfd = crate::syscall::epoll::sys_epoll_create1(&mut t.vm, t.base, 0);
+        assert!(epfd >= 3);
+
+        let ofd_id = unsafe {
+            let ps = super::get_process_state(t.base, &t.vm);
+            (*ps).fd_table[epfd as usize].ofd_id
+        };
+        let epoll_idx = super::get_ofd_by_id(ofd_id)
+            .expect("epoll OFD should exist")
+            .ino;
+
+        let cleanup = super::release_ofd_id_deferred(ofd_id);
+        assert_eq!(cleanup, Some(super::BackendCleanup::Epoll { epoll_idx }));
+        assert!(super::get_ofd_by_id(ofd_id).is_none());
+        assert!(crate::syscall::epoll::epoll_slot_allocated(epoll_idx));
+
+        super::run_backend_cleanup(cleanup.expect("cleanup action should exist"));
+        assert!(!crate::syscall::epoll::epoll_slot_allocated(epoll_idx));
+    }
+
+    #[test]
+    fn flock_rejects_invalid_operations() {
+        let mut t = TestVm::new();
+        let fd = t.sys_openat(b"/flock-invalid.txt", O_CREAT | O_RDWR);
+        assert!(fd >= 3);
+
+        assert_eq!(t.sys_flock(fd as u64, super::LOCK_NB as u64), EINVAL);
+        assert_eq!(
+            t.sys_flock(fd as u64, (super::LOCK_SH | super::LOCK_EX) as u64),
+            EINVAL
+        );
+    }
+
+    #[test]
+    fn flock_is_shared_by_dup_and_conflicts_across_distinct_ofds() {
+        let mut t = TestVm::new();
+        let fd = t.sys_openat(b"/flock.txt", O_CREAT | O_RDWR);
+        assert!(fd >= 3);
+        let dup_fd = t.sys_dup(fd as u64);
+        assert!(dup_fd >= 3);
+        let other_fd = t.sys_openat(b"/flock.txt", O_RDWR);
+        assert!(other_fd >= 3);
+
+        assert_eq!(t.sys_flock(fd as u64, super::LOCK_EX as u64), 0);
+        assert_eq!(
+            t.sys_flock(other_fd as u64, (super::LOCK_EX | super::LOCK_NB) as u64),
+            EAGAIN
+        );
+
+        assert_eq!(t.sys_flock(dup_fd as u64, super::LOCK_UN as u64), 0);
+        assert_eq!(t.sys_flock(other_fd as u64, super::LOCK_EX as u64), 0);
+    }
+
+    #[test]
+    fn flock_blocks_without_lock_nb() {
+        let mut t = TestVm::new();
+        let fd = t.sys_openat(b"/flock-block.txt", O_CREAT | O_RDWR);
+        assert!(fd >= 3);
+        let other_fd = t.sys_openat(b"/flock-block.txt", O_RDWR);
+        assert!(other_fd >= 3);
+
+        assert_eq!(t.sys_flock(fd as u64, super::LOCK_EX as u64), 0);
+        assert_eq!(t.sys_flock(other_fd as u64, super::LOCK_SH as u64), 0);
+        assert_eq!(t.vm.status, STATUS_FLOCK_WAIT);
+
+        assert_eq!(t.sys_flock(fd as u64, super::LOCK_UN as u64), 0);
+        t.vm.status = STATUS_OK;
+        assert_eq!(t.sys_flock(other_fd as u64, super::LOCK_SH as u64), 0);
+        assert_ne!(t.vm.status, STATUS_FLOCK_WAIT);
+    }
 }
 
-/// Initialize stdin/stdout/stderr FDs for a new process.
-pub unsafe fn init_stdio(base: u32, vm: &ThreadState) {
+/// Initialize stdin/stdout/stderr bridges for a new process.
+///
+/// Runtime owns the hidden peer ends:
+/// - stdin: runtime writes, guest reads
+/// - stdout/stderr: guest writes, runtime reads
+pub unsafe fn init_stdio(base: u32, vm: &mut ThreadState) {
     let ps = get_process_state(base, vm);
     if ps.is_null() {
         return;
     }
 
-    // FD 0: stdin (placeholder, type DEVNULL for now)
-    let ofd0 = alloc_ofd(FD_TYPE_DEVNULL, 0);
-    (*ps).fd_table[0] = FdEntry {
-        ofd_id: ofd0,
-        fd_flags: 0,
+    let Some(stdin_slot) = crate::syscall::pipe::alloc_pipe_slot() else {
+        return;
+    };
+    let Some(stdout_slot) = crate::syscall::pipe::alloc_pipe_slot() else {
+        crate::syscall::pipe::pipe_close(stdin_slot, true);
+        crate::syscall::pipe::pipe_close(stdin_slot, false);
+        return;
+    };
+    let Some(stderr_slot) = crate::syscall::pipe::alloc_pipe_slot() else {
+        crate::syscall::pipe::pipe_close(stdin_slot, true);
+        crate::syscall::pipe::pipe_close(stdin_slot, false);
+        crate::syscall::pipe::pipe_close(stdout_slot, true);
+        crate::syscall::pipe::pipe_close(stdout_slot, false);
+        return;
     };
 
-    // FD 1: stdout
-    let ofd1 = alloc_ofd(FD_TYPE_STDOUT, 0);
-    (*ps).fd_table[1] = FdEntry {
-        ofd_id: ofd1,
-        fd_flags: 0,
-    };
+    let fd0 = open_pipe(vm, base, stdin_slot, true, 0);
+    let fd1 = open_pipe(vm, base, stdout_slot, false, 0);
+    let fd2 = open_pipe(vm, base, stderr_slot, false, 0);
+    if fd0 != 0 || fd1 != 1 || fd2 != 2 {
+        return;
+    }
 
-    // FD 2: stderr
-    let ofd2 = alloc_ofd(FD_TYPE_STDERR, 0);
-    (*ps).fd_table[2] = FdEntry {
-        ofd_id: ofd2,
-        fd_flags: 0,
-    };
+    (*ps).stdin_pipe_slot = stdin_slot;
+    (*ps).stdout_pipe_slot = stdout_slot;
+    (*ps).stderr_pipe_slot = stderr_slot;
 }

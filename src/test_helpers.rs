@@ -95,7 +95,7 @@ impl TestVm {
             // Allocate per-process signal disposition table for PID 42.
             crate::syscall::signal::init_for_process(42);
 
-            crate::fs::fd_table::init_stdio(base, &vm);
+            crate::fs::fd_table::init_stdio(base, &mut vm);
 
             // Scratch area for test data (64KB, above shadow stack)
             let scratch = crate::alloc::alloc_zeroed(0x10000, 16) as u64;
@@ -250,6 +250,10 @@ impl TestVm {
 
     pub fn sys_fcntl(&mut self, fd: u64, cmd: u64, arg: u64) -> i64 {
         crate::fs::fd_table::sys_fcntl(&mut self.vm, self.base, fd, cmd, arg)
+    }
+
+    pub fn sys_flock(&mut self, fd: u64, operation: u64) -> i64 {
+        crate::fs::fd_table::sys_flock(&mut self.vm, self.base, fd, operation)
     }
 }
 

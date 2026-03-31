@@ -19,6 +19,22 @@ use crate::abi::*;
 use crate::fs::fd_table;
 use crate::types::ThreadState;
 
+#[inline(always)]
+fn debug_return(vm: &ThreadState, nr: u64, result: i64, status: i32) -> i32 {
+    crate::runtime_test_support::record_syscall(vm as *const ThreadState as u32, nr, result, status);
+    status
+}
+
+#[inline(always)]
+fn record_memory_trace(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64, result: i64) {
+    match nr {
+        SYS_BRK | SYS_MMAP | SYS_MUNMAP | SYS_MSYNC | SYS_MREMAP | SYS_MPROTECT => {
+            crate::runtime_test_support::record_memory_syscall(nr, a0, a1, a2, a3, result);
+        }
+        _ => {}
+    }
+}
+
 /// Dispatch a syscall. Called from ECALL handler in cpu::exec.
 /// Returns STATUS_OK if the syscall completed synchronously,
 /// or a blocking STATUS (STATUS_FS, STATUS_SLEEP, etc.) if JS must wait.
@@ -56,12 +72,15 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_GETITIMER => time::sys_getitimer(vm, base, a0, a1),
         SYS_SETITIMER => time::sys_setitimer(vm, base, a0, a1, a2),
         114 => time::sys_clock_getres(vm, base, a0, a1), // clock_getres
-        SYS_NANOSLEEP => return time::sys_nanosleep(vm, base, a0, a1),
+        SYS_NANOSLEEP => {
+            let status = time::sys_nanosleep(vm, base, a0, a1);
+            return debug_return(vm, nr, vm.x[10] as i64, status);
+        }
         SYS_SCHED_GETAFFINITY => time::sys_sched_getaffinity(vm, base, a0 as i64, a1, a2),
         SYS_SCHED_YIELD => {
             let ret = time::sys_sched_yield(vm);
             if vm.status == abi::STATUS_SLEEP {
-                return abi::STATUS_SLEEP;
+                return debug_return(vm, nr, ret as i64, abi::STATUS_SLEEP);
             }
             ret as i64
         }
@@ -90,23 +109,38 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_OPENAT => {
             let r = fs::dispatch_openat(vm, base, a0, a1, a2, a3);
             if vm.status == abi::STATUS_FS {
-                return abi::STATUS_FS;
+                return debug_return(vm, nr, r, abi::STATUS_FS);
             }
             r
         }
-        SYS_READ => fs::sys_read(vm, base, a0, a1, a2),
+        SYS_READ => {
+            let r = fs::sys_read(vm, base, a0, a1, a2);
+            if vm.status == abi::STATUS_PIPE_WAIT {
+                return debug_return(vm, nr, r, abi::STATUS_PIPE_WAIT);
+            }
+            if vm.status == abi::STATUS_SOCKET_RECV {
+                return debug_return(vm, nr, r, abi::STATUS_SOCKET_RECV);
+            }
+            r
+        }
         SYS_PREAD64 => fs::sys_pread64(vm, base, a0, a1, a2, a3),
         SYS_WRITE | SYS_WRITEV => {
             let r = fs::dispatch_write(vm, base, a0, a1, a2, nr);
             if vm.status == abi::STATUS_FS {
-                return abi::STATUS_FS;
+                return debug_return(vm, nr, r, abi::STATUS_FS);
+            }
+            if vm.status == abi::STATUS_PIPE_WAIT {
+                return debug_return(vm, nr, r, abi::STATUS_PIPE_WAIT);
+            }
+            if vm.status == abi::STATUS_SOCKET_SEND {
+                return debug_return(vm, nr, r, abi::STATUS_SOCKET_SEND);
             }
             r
         }
         SYS_PWRITE64 => {
             let r = fs::dispatch_pwrite64(vm, base, a0, a1, a2, a3);
             if vm.status == abi::STATUS_FS {
-                return abi::STATUS_FS;
+                return debug_return(vm, nr, r, abi::STATUS_FS);
             }
             r
         }
@@ -115,35 +149,35 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_FSTAT => {
             let r = fs::dispatch_fstat(vm, base, a0, a1);
             if vm.status == abi::STATUS_FS {
-                return abi::STATUS_FS;
+                return debug_return(vm, nr, r, abi::STATUS_FS);
             }
             r
         }
         SYS_LSEEK => {
             let r = fs::dispatch_lseek(vm, base, a0, a1 as i64, a2);
             if vm.status == abi::STATUS_FS {
-                return abi::STATUS_FS;
+                return debug_return(vm, nr, r, abi::STATUS_FS);
             }
             r
         }
         SYS_GETDENTS64 => {
             let r = fs::dispatch_getdents64(vm, base, a0, a1, a2);
             if vm.status == abi::STATUS_FS {
-                return abi::STATUS_FS;
+                return debug_return(vm, nr, r, abi::STATUS_FS);
             }
             r
         }
         SYS_MKDIRAT => {
             let r = fs::dispatch_mkdirat(vm, base, a0, a1, a2);
             if vm.status == abi::STATUS_FS {
-                return abi::STATUS_FS;
+                return debug_return(vm, nr, r, abi::STATUS_FS);
             }
             r
         }
         SYS_UNLINKAT => {
             let r = fs::dispatch_unlinkat(vm, base, a0, a1, a2);
             if vm.status == abi::STATUS_FS {
-                return abi::STATUS_FS;
+                return debug_return(vm, nr, r, abi::STATUS_FS);
             }
             r
         }
@@ -156,14 +190,14 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_TRUNCATE => {
             let r = fs::dispatch_truncate(vm, base, a0, a1);
             if vm.status == abi::STATUS_FS {
-                return abi::STATUS_FS;
+                return debug_return(vm, nr, r, abi::STATUS_FS);
             }
             r
         }
         SYS_FTRUNCATE => {
             let r = fs::dispatch_ftruncate(vm, base, a0, a1);
             if vm.status == abi::STATUS_FS {
-                return abi::STATUS_FS;
+                return debug_return(vm, nr, r, abi::STATUS_FS);
             }
             r
         }
@@ -174,6 +208,13 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_DUP => fd_table::sys_dup(vm, base, a0),
         SYS_DUP3 => fd_table::sys_dup3(vm, base, a0, a1, a2),
         SYS_FCNTL => fd_table::sys_fcntl(vm, base, a0, a1, a2),
+        SYS_FLOCK => {
+            let r = fd_table::sys_flock(vm, base, a0, a1);
+            if vm.status == abi::STATUS_FLOCK_WAIT {
+                return debug_return(vm, nr, r, abi::STATUS_FLOCK_WAIT);
+            }
+            r
+        }
         SYS_CLOSE => fd_table::sys_close(vm, base, a0),
 
         // pipe
@@ -186,22 +227,28 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_CONNECT => {
             let r = socket::sys_connect(vm, base, a0, a1, a2);
             if vm.status == abi::STATUS_CONNECT {
-                return abi::STATUS_CONNECT;
+                return debug_return(vm, nr, r, abi::STATUS_CONNECT);
             }
             r
         }
-        SYS_ACCEPT4 => socket::sys_accept4(vm, base, a0, a1, a2, a3),
+        SYS_ACCEPT4 => {
+            let r = socket::sys_accept4(vm, base, a0, a1, a2, a3);
+            if vm.status == abi::STATUS_SOCKET_RECV {
+                return debug_return(vm, nr, r, abi::STATUS_SOCKET_RECV);
+            }
+            r
+        }
         SYS_SENDTO => {
             let r = socket::sys_sendto(vm, base, a0, a1, a2, a3, a4, a5);
             if vm.status == abi::STATUS_SOCKET_SEND {
-                return abi::STATUS_SOCKET_SEND;
+                return debug_return(vm, nr, r, abi::STATUS_SOCKET_SEND);
             }
             r
         }
         SYS_RECVFROM => {
             let r = socket::sys_recvfrom(vm, base, a0, a1, a2, a3, a4, a5);
             if vm.status == abi::STATUS_SOCKET_RECV {
-                return abi::STATUS_SOCKET_RECV;
+                return debug_return(vm, nr, r, abi::STATUS_SOCKET_RECV);
             }
             r
         }
@@ -216,7 +263,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_EPOLL_PWAIT => {
             let r = epoll::sys_epoll_pwait(vm, base, a0, a1, a2, a3 as i64, a4);
             if vm.status == abi::STATUS_EPOLL_WAIT {
-                return abi::STATUS_EPOLL_WAIT;
+                return debug_return(vm, nr, r, abi::STATUS_EPOLL_WAIT);
             }
             r
         }
@@ -256,17 +303,18 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             // CLONE_VM | CLONE_THREAD → new thread (thread.rs)
             // neither → plain fork (process.rs)
             if a0 & CLONE_VFORK != 0 {
-                return process::sys_vfork(vm, base);
+                let status = process::sys_vfork(vm, base);
+                return debug_return(vm, nr, vm.x[10] as i64, status);
             } else if a0 & CLONE_VM != 0 && a0 & CLONE_THREAD != 0 {
                 let ret = thread::sys_clone(vm, base, a0, a1, a2, a3, a4);
                 if vm.status == abi::STATUS_CLONE_SPAWN {
-                    return abi::STATUS_CLONE_SPAWN;
+                    return debug_return(vm, nr, ret, abi::STATUS_CLONE_SPAWN);
                 }
                 ret
             } else {
                 let ret = process::sys_fork(vm, base, a0, a1, a2, a3, a4);
                 if vm.status == abi::STATUS_EXECVE_SPAWN {
-                    return abi::STATUS_EXECVE_SPAWN;
+                    return debug_return(vm, nr, ret, abi::STATUS_EXECVE_SPAWN);
                 }
                 ret
             }
@@ -274,33 +322,39 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_EXECVE => {
             let ret = process::sys_execve(vm, base, a0, a1, a2);
             if vm.status == abi::STATUS_EXECVE_SPAWN {
-                return abi::STATUS_EXECVE_SPAWN;
+                return debug_return(vm, nr, ret, abi::STATUS_EXECVE_SPAWN);
             }
             ret
         }
         SYS_WAIT4 => {
             let ret = process::sys_wait4(vm, base, a0 as i64, a1, a2, a3);
             if vm.status == abi::STATUS_WAIT4 {
-                return abi::STATUS_WAIT4;
+                return debug_return(vm, nr, ret, abi::STATUS_WAIT4);
             }
             ret
         }
         SYS_WAITID => {
             let ret = process::sys_waitid(vm, base, a0 as u32, a1 as i64, a2, a3, a4);
             if vm.status == abi::STATUS_WAIT4 {
-                return abi::STATUS_WAIT4;
+                return debug_return(vm, nr, ret, abi::STATUS_WAIT4);
             }
             ret
         }
         SYS_FUTEX => {
             let ret = thread::sys_futex(vm, base, a0, a1, a2, a3, a4, vm.x[15]);
             if vm.status == abi::STATUS_FUTEX_WAIT {
-                return abi::STATUS_FUTEX_WAIT;
+                return debug_return(vm, nr, ret, abi::STATUS_FUTEX_WAIT);
             }
             ret
         }
-        SYS_EXIT => return thread::sys_exit(vm, base, a0),
-        SYS_EXIT_GROUP => return thread::sys_exit_group(vm, base, a0),
+        SYS_EXIT => {
+            let status = thread::sys_exit(vm, base, a0);
+            return debug_return(vm, nr, vm.exit_code as i64, status);
+        }
+        SYS_EXIT_GROUP => {
+            let status = thread::sys_exit_group(vm, base, a0);
+            return debug_return(vm, nr, vm.exit_code as i64, status);
+        }
         SYS_PRCTL => 0,
         SYS_UMASK => 0o022, // return previous umask
         SYS_RSEQ => EINVAL,
@@ -310,10 +364,12 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         _ => ENOSYS,
     };
 
+    record_memory_trace(nr, a0, a1, a2, a3, result);
     vm.x[10] = result as u64;
 
     // Check and deliver pending signals at syscall return boundary
     signal::check_pending(vm, base);
-
+    let status = vm.status;
+    crate::runtime_test_support::record_syscall(vm as *const ThreadState as u32, nr, result, status);
     abi::STATUS_OK
 }

@@ -3,6 +3,9 @@
 //! Shared circular buffer for socket data plane. Each socket gets two
 //! buffers (send + recv). Producer writes via `write()`, consumer reads
 //! via `read()`, using head/tail indices.
+//! Socket ownership, accept/connect lifecycle, and cross-process wakeups stay
+//! in `syscall::socket`; this module is intentionally limited to the payload
+//! data plane plus attach/export of the backing pool pointer/bitmap.
 //!
 //! Reference: https://man7.org/linux/man-pages/man7/socket.7.html
 //!
@@ -66,6 +69,10 @@ pub fn net_buffer_state() -> (u32, u64) {
             core::ptr::read(core::ptr::addr_of!(NET_BUF_USED)),
         )
     }
+}
+
+pub fn net_buffer_pool_bytes() -> u32 {
+    MAX_NET_BUFFERS as u32 * NET_BUF_SIZE
 }
 
 pub fn attach_net_buffer_state(base: u32, used: u64) {

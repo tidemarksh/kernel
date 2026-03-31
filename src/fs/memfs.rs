@@ -39,7 +39,7 @@ pub const S_IFREG: u32 = 0o100000;
 pub const S_IFLNK: u32 = 0o120000;
 pub const S_IFCHR: u32 = 0o020000;
 
-const MAX_INODES: usize = 4096;
+const MAX_INODES: usize = 16384;
 const MAX_NAME_LEN: usize = 255;
 const INITIAL_DATA_SIZE: u32 = 256 * 1024;
 
@@ -91,6 +91,42 @@ fn fs() -> &'static mut MemFsHeader {
 
 pub fn memfs_ptr() -> u32 {
     unsafe { core::ptr::read(core::ptr::addr_of!(MEMFS_PTR)) as u32 }
+}
+
+pub fn memfs_header_bytes() -> u32 {
+    core::mem::size_of::<MemFsHeader>() as u32
+}
+
+pub fn memfs_inodes_ptr() -> u32 {
+    fs().inodes as u32
+}
+
+pub fn memfs_inodes_bytes() -> u32 {
+    (MAX_INODES * core::mem::size_of::<Inode>()) as u32
+}
+
+pub fn memfs_first_child_ptr() -> u32 {
+    fs().first_child as u32
+}
+
+pub fn memfs_first_child_bytes() -> u32 {
+    (MAX_INODES * core::mem::size_of::<u32>()) as u32
+}
+
+pub fn memfs_dir_entries_ptr() -> u32 {
+    fs().dir_entries as u32
+}
+
+pub fn memfs_dir_entries_bytes() -> u32 {
+    (MAX_INODES * core::mem::size_of::<DirEntry>()) as u32
+}
+
+pub fn memfs_data_ptr() -> u32 {
+    fs().data as u32
+}
+
+pub fn memfs_data_bytes() -> u32 {
+    fs().data_cap
 }
 
 pub fn attach_memfs_ptr(ptr: u32) {
@@ -168,6 +204,30 @@ pub fn init() {
             core::ptr::addr_of_mut!(MEMFS_PTR),
             header_ptr as *mut MemFsHeader,
         );
+    }
+}
+
+pub fn reset() {
+    let ptr = memfs_ptr();
+    if ptr == 0 {
+        init();
+        return;
+    }
+
+    let h = fs();
+    unsafe {
+        core::ptr::write_bytes(h.inodes, 0, MAX_INODES);
+        core::ptr::write_bytes(h.first_child, 0, MAX_INODES);
+        core::ptr::write_bytes(h.dir_entries, 0, MAX_INODES);
+        core::ptr::write_bytes(h.data, 0, h.data_cap as usize);
+
+        h.inode_count = 2; // 0=unused, 1=root
+        h.dir_entry_count = 1; // 0=unused
+        h.data_used = 8;
+
+        let root = &mut *h.inodes.add(1);
+        root.mode = S_IFDIR | 0o755;
+        root.nlink = 2;
     }
 }
 
@@ -268,6 +328,10 @@ pub fn resolve_path(path: &[u8]) -> u32 {
         if component.is_empty() || component == b"." {
             continue;
         }
+        if component == b".." {
+            ino = parent_ino(ino);
+            continue;
+        }
         ino = lookup(ino, component);
         if ino == 0 {
             return 0;
@@ -290,6 +354,10 @@ pub fn resolve_path_from(start_ino: u32, path: &[u8]) -> u32 {
     let mut ino = start_ino;
     for component in path.split(|&b| b == b'/') {
         if component.is_empty() || component == b"." {
+            continue;
+        }
+        if component == b".." {
+            ino = parent_ino(ino);
             continue;
         }
         ino = lookup(ino, component);
@@ -365,6 +433,16 @@ fn find_parent_name(child_ino: u32, name_buf: &mut [u8; MAX_NAME_LEN + 1]) -> Op
     }
 
     None
+}
+
+pub fn parent_ino(ino: u32) -> u32 {
+    if ino <= 1 {
+        return 1;
+    }
+    let mut name_buf = [0u8; MAX_NAME_LEN + 1];
+    find_parent_name(ino, &mut name_buf)
+        .map(|(parent, _)| parent)
+        .unwrap_or(1)
 }
 
 fn write_path_inner(ino: u32, buf: &mut [u8]) -> Option<usize> {
@@ -578,6 +656,15 @@ pub fn read_file(ino: u32, offset: u64, buf: &mut [u8]) -> i64 {
         core::ptr::copy_nonoverlapping(fs().data.add(base), buf.as_mut_ptr(), n);
     }
     n as i64
+}
+
+pub fn file_data_ptr(ino: u32) -> Option<u32> {
+    let idx = ino as usize;
+    let ins = inodes();
+    if idx >= ins.len() || ins[idx].mode & S_IFMT != S_IFREG || ins[idx].size == 0 {
+        return None;
+    }
+    Some(fs().data as u32 + ins[idx].data_offset)
 }
 
 pub fn truncate(ino: u32, size: u64) -> i64 {
@@ -841,6 +928,20 @@ mod tests {
         let mut buf = [0u8; 64];
         let n = read_link(exe_ino, &mut buf);
         assert_eq!(&buf[..n], b"/init");
+    }
+
+    #[test]
+    fn resolve_dotdot_components() {
+        let _ = TestVm::new();
+        let tmp = create_dir(1, b"tmp", 0o755);
+        let hello = create_dir(tmp, b"hello", 0o755);
+        let file = create_file(tmp, b"module.txt", 0o644);
+        assert!(hello > 0);
+        assert!(file > 0);
+
+        assert_eq!(resolve_path(b"/tmp/hello/.."), tmp);
+        assert_eq!(resolve_path_from(hello, b".."), tmp);
+        assert_eq!(resolve_path_from(hello, b"../module.txt"), file);
     }
 
     #[test]

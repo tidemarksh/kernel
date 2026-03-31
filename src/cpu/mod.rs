@@ -349,8 +349,8 @@ pub unsafe fn exec_at_base(
 /// imports the per-process shared Memory as memory index 0. The base of
 /// guest memory is the base of WASM linear memory.
 #[inline(always)]
-fn ram_base(_vm: &ThreadState) -> u32 {
-    0
+fn ram_base(vm: &ThreadState) -> u32 {
+    vm.guest_base
 }
 
 // =============================================================================

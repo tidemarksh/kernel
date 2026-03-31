@@ -71,11 +71,11 @@ pub struct ThreadState {
     pub fault_pc: u64,
     pub fault_addr: u64,
 
-    // --- Process pointer ---
-    /// Points to ProcessState in guest Memory (shared with other threads)
+    // --- Guest/process pointers ---
+    /// Base offset of the guest address space inside the shared WASM memory.
+    pub guest_base: u32,
+    /// Guest-relative pointer to ProcessState in guest Memory.
     pub process_ptr: u32,
-
-    _pad: [u8; 4],
 
     // --- Runtime handoff scratch ---
     /// Pending clone flags for `STATUS_CLONE_SPAWN` handoff. Zero = inactive.
@@ -119,6 +119,12 @@ pub struct ThreadState {
     pub futex_wait_addr: u64,
     /// Guest pointer to FUTEX_WAIT timeout timespec (0 = infinite wait).
     pub futex_wait_timeout: u64,
+    /// epoll_wait timeout in milliseconds (-1 = infinite wait).
+    pub epoll_timeout_ms: i64,
+    /// FD number captured for a blocked OFD-backed syscall resume.
+    pub blocked_fd: u32,
+    /// Retained OFD id captured for a blocked syscall resume. 0 = inactive.
+    pub blocked_ofd_id: u32,
 }
 
 // =============================================================================
@@ -156,6 +162,12 @@ pub struct ProcessState {
     pub ppid: i32,
     /// Current working directory inode in MemFS. 0 means "/" for legacy callers.
     pub cwd_ino: u32,
+    /// Hidden stdin pipe slot (runtime owns the write side).
+    pub stdin_pipe_slot: u32,
+    /// Hidden stdout pipe slot (runtime owns the read side).
+    pub stdout_pipe_slot: u32,
+    /// Hidden stderr pipe slot (runtime owns the read side).
+    pub stderr_pipe_slot: u32,
     /// Per-process FS request/completion ring in shared WebAssembly.Memory.
     pub fs_ring_base: u32,
     /// Thread registry
@@ -179,7 +191,7 @@ pub const THREAD_DEAD: i32 = 7;
 pub struct ThreadRecord {
     pub tid: i32,
     pub state: i32,
-    pub thread_ptr: u32, // pointer to ThreadState in guest Memory
+    pub thread_ptr: u32, // absolute pointer to ThreadState in WASM linear memory
     pub clear_child_tid: u32,
     pub blocked_addr: u32,
     _pad: [u8; 12],
@@ -231,7 +243,8 @@ pub struct OpenFileDesc {
     pub offset: i64,
     /// Cached inode number for direct SAB page cache read
     pub ino: u32,
-    pub _pad: u32,
+    /// Advisory BSD flock state (LOCK_SH/LOCK_EX). 0 = unlocked.
+    pub flock_state: u32,
 }
 
 // =============================================================================

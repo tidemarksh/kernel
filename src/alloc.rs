@@ -64,11 +64,11 @@ pub unsafe fn alloc(size: u32, align: u32) -> u32 {
     let aligned = (unsafe { HEAP_PTR } + align - 1) & !(align - 1);
     let end = aligned + size;
     // Check against WASM memory size
-    let mem_size = unsafe { core::arch::wasm32::memory_size(0) } as u32 * 65536;
-    if end > mem_size {
+    let mem_size = (core::arch::wasm32::memory_size(0) as u64) * 65536;
+    if end as u64 > mem_size {
         // Try to grow
-        let pages_needed = ((end - mem_size) + 65535) / 65536;
-        let result = unsafe { core::arch::wasm32::memory_grow(0, pages_needed as usize) };
+        let pages_needed = (((end as u64 - mem_size) + 65535) / 65536) as usize;
+        let result = core::arch::wasm32::memory_grow(0, pages_needed);
         if result == usize::MAX {
             return 0; // OOM
         }

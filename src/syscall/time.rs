@@ -78,7 +78,7 @@ pub fn init() {
                 base_time_nsec: 0,
                 base_time_set: 0,
                 _pad: 0,
-                monotonic_ticks: 0,
+                monotonic_ticks: 1,
                 itimers: [[ItimerState {
                     interval_sec: 0,
                     interval_usec: 0,
@@ -93,6 +93,10 @@ pub fn init() {
 
 pub fn time_state_ptr() -> u32 {
     unsafe { core::ptr::read(core::ptr::addr_of!(TIME_STATE)) as u32 }
+}
+
+pub fn time_state_bytes() -> u32 {
+    core::mem::size_of::<TimeState>() as u32
 }
 
 pub fn attach_time_state_ptr(ptr: u32) {
@@ -379,6 +383,19 @@ mod tests {
         );
         let sec = unsafe { crate::guest_mem::read_u64(t.base, tp) };
         assert!(sec >= 2, "CLOCK_MONOTONIC should reflect monotonic ticks");
+    }
+
+    #[test]
+    fn clock_gettime_monotonic_is_nonzero_at_startup() {
+        let mut t = TestVm::new();
+        let tp = t.scratch;
+        assert_eq!(
+            super::sys_clock_gettime(&t.vm, t.base, super::CLOCK_MONOTONIC, tp),
+            0
+        );
+        let sec = unsafe { crate::guest_mem::read_u64(t.base, tp) };
+        let nsec = unsafe { crate::guest_mem::read_u64(t.base, tp + 8) };
+        assert!(sec > 0 || nsec > 0);
     }
 
     #[test]

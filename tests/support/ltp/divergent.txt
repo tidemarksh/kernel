@@ -1,4 +1,4 @@
-# Intentionally divergent tests documented in internal design note.
+# Intentionally divergent tests tracked in the local design notes.
 testcases/kernel/syscalls/clock_gettime/clock_gettime01.c virtual clock design; skip per DIVERGENT policy
 testcases/kernel/syscalls/clock_gettime/clock_gettime02.c virtual clock design; skip per DIVERGENT policy
 testcases/kernel/syscalls/clock_gettime/clock_gettime03.c virtual clock design; skip per DIVERGENT policy

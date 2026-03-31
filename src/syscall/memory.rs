@@ -55,6 +55,9 @@ impl AddressSpaceSnapshot {
 /// Pointer to AddressSpaceState in kernel Worker linear memory (allocated via alloc.rs).
 static mut MEM_STATE: *mut AddressSpaceState = core::ptr::null_mut();
 
+pub const DEFAULT_STACK_SIZE: u64 = 1024 * 1024;
+const MIN_STACK_SIZE: u64 = 64 * 1024;
+
 fn ms() -> &'static mut AddressSpaceState {
     unsafe {
         let p = core::ptr::read(core::ptr::addr_of!(MEM_STATE));
@@ -113,6 +116,8 @@ pub fn has_prot_none() -> bool {
 pub(crate) fn snapshot_for_plain_fork() -> AddressSpaceSnapshot {
     let s = ms();
     AddressSpaceSnapshot {
+        // Plain-fork handoff snapshots only address-space metadata; kernel-owned
+        // objects are reattached by the runtime from the canonical owner.
         vmas: s.vmas.clone(),
         brk_base: s.brk_base,
         brk_current: s.brk_current,
@@ -178,6 +183,22 @@ pub fn range_has_prot_none(start: u64, len: u64) -> bool {
     false
 }
 
+pub fn guest_range_accessible(base: u32, start: u64, len: u64) -> bool {
+    if len == 0 {
+        return true;
+    }
+    let Some(end) = start.checked_add(len) else {
+        return false;
+    };
+    let guest_limit = ((core::arch::wasm32::memory_size(0) as u64) * 65536)
+        .saturating_sub(base as u64)
+        .min(0x8000_0000);
+    if start > u32::MAX as u64 || end > guest_limit || end > u32::MAX as u64 {
+        return false;
+    }
+    !range_has_prot_none(start, len)
+}
+
 // =========================================================================
 // brk
 // =========================================================================
@@ -185,6 +206,94 @@ pub fn range_has_prot_none(start: u64, len: u64) -> bool {
 /// Return current brk address (for ProcessState allocation in guest Memory).
 pub fn current_brk() -> u64 {
     ms().brk_current
+}
+
+fn ensure_memory_capacity_for_guest_range(base: u32, guest_end: u64) -> bool {
+    let Some(needed) = (base as u64).checked_add(guest_end) else {
+        return false;
+    };
+    if needed > 0x1_0000_0000 {
+        return false;
+    }
+
+    let mem_size = (core::arch::wasm32::memory_size(0) as u64) * 65536;
+    if needed <= mem_size {
+        return true;
+    }
+
+    let deficit = needed - mem_size;
+    let grow_unit = 16u64 * 65536; // 1 MB
+    let grow_bytes = ((deficit + grow_unit - 1) / grow_unit) * grow_unit;
+    let pages = (grow_bytes / 65536) as usize;
+    core::arch::wasm32::memory_grow(0, pages as usize) != usize::MAX
+}
+
+pub fn ensure_guest_memory_capacity(base: u32, guest_end: u64) -> bool {
+    ensure_memory_capacity_for_guest_range(base, guest_end)
+}
+
+fn page_align_up(len: u64) -> u64 {
+    (len + PAGE_SIZE - 1) & !(PAGE_SIZE - 1)
+}
+
+fn map_fixed_anonymous(base: u32, start: u64, length: u64, prot: i32) -> i64 {
+    if start & (PAGE_SIZE - 1) != 0 || length == 0 {
+        return EINVAL;
+    }
+    let len = page_align_up(length);
+    let Some(end) = start.checked_add(len) else {
+        return ENOMEM;
+    };
+    if end > 0x8000_0000 {
+        return ENOMEM;
+    }
+
+    let s = ms();
+    remove_overlap(s, start, end);
+
+    unsafe {
+        if !ensure_memory_capacity_for_guest_range(base, end) {
+            return ENOMEM;
+        }
+        guest_mem::zero_mem(base, start, len as usize);
+    }
+
+    s.vmas.push(Vma {
+        start,
+        end,
+        prot,
+        flags: (MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED) as i32,
+        fd: -1,
+        _pad: 0,
+        offset: 0,
+    });
+    s.vmas.sort_by_key(|v| v.start);
+    recompute_prot_none(s);
+    start as i64
+}
+
+/// Reserve the initial process stack and a guard page below it.
+/// Returns the logical stack top used for argv/env/auxv placement.
+pub fn map_initial_stack(base: u32, guest_limit: u64, stack_size: u64) -> i64 {
+    let guest_limit = guest_limit.min(0x8000_0000);
+    let usable = page_align_up(stack_size.max(MIN_STACK_SIZE));
+    if guest_limit <= usable + PAGE_SIZE {
+        return ENOMEM;
+    }
+
+    let stack_start = guest_limit - usable;
+    let guard_start = stack_start - PAGE_SIZE;
+
+    let guard = map_fixed_anonymous(base, guard_start, PAGE_SIZE, PROT_NONE);
+    if guard < 0 {
+        return guard;
+    }
+    let stack = map_fixed_anonymous(base, stack_start, usable, PROT_READ | PROT_WRITE);
+    if stack < 0 {
+        return stack;
+    }
+
+    (guest_limit - PAGE_SIZE) as i64
 }
 
 /// Grow brk to `new_brk`, return new brk as i64. Used by process_create to
@@ -198,17 +307,8 @@ pub fn grow_brk(base: u32, new_brk: u64) -> i64 {
         return s.brk_current as i64;
     }
     unsafe {
-        let needed = (base as u64 + new_brk) as u32;
-        let mem_size = core::arch::wasm32::memory_size(0) as u32 * 65536;
-        if needed > mem_size {
-            // §6.10: grow in 1MB (16 page) units to amortize grow cost.
-            let deficit = needed - mem_size;
-            let grow_unit = 16u32 * 65536; // 1 MB
-            let grow_bytes = ((deficit + grow_unit - 1) / grow_unit) * grow_unit;
-            let pages = grow_bytes / 65536;
-            if core::arch::wasm32::memory_grow(0, pages as usize) == usize::MAX {
-                return s.brk_current as i64;
-            }
+        if !ensure_memory_capacity_for_guest_range(base, new_brk) {
+            return s.brk_current as i64;
         }
         guest_mem::zero_mem(base, s.brk_current, (new_brk - s.brk_current) as usize);
     }
@@ -233,16 +333,8 @@ pub fn sys_brk(_vm: &mut ThreadState, base: u32, addr: u64) -> i64 {
 
     // Ensure WASM memory is large enough (§6.10: grow in 1MB units)
     unsafe {
-        let needed = addr as u32;
-        let mem_size = core::arch::wasm32::memory_size(0) as u32 * 65536;
-        if needed > mem_size {
-            let deficit = needed - mem_size;
-            let grow_unit = 16u32 * 65536; // 1 MB
-            let grow_bytes = ((deficit + grow_unit - 1) / grow_unit) * grow_unit;
-            let pages = grow_bytes / 65536;
-            if core::arch::wasm32::memory_grow(0, pages as usize) == usize::MAX {
-                return s.brk_current as i64;
-            }
+        if !ensure_memory_capacity_for_guest_range(base, addr) {
+            return s.brk_current as i64;
         }
 
         // Zero new region if growing
@@ -304,8 +396,24 @@ pub fn sys_mmap(
         }
         remove_overlap(s, addr, addr + len);
         addr
-    } else if addr != 0 && addr + len <= 0x8000_0000 && !overlaps(s, addr, addr + len) {
+    } else if addr != 0
+        && addr >= mmap_floor(s)
+        && addr + len <= 0x8000_0000
+        && !overlaps(s, addr, addr + len)
+    {
         addr
+    } else if addr != 0 {
+        let hole = find_hole_from(s, mmap_floor(s), len);
+        if hole == 0 {
+            return ENOMEM;
+        }
+        hole
+    } else if is_anon && prot as i32 == PROT_NONE {
+        let hole = find_hole_high(s, len);
+        if hole == 0 {
+            return ENOMEM;
+        }
+        hole
     } else {
         let hole = find_hole(s, len);
         if hole == 0 {
@@ -314,24 +422,21 @@ pub fn sys_mmap(
         hole
     };
 
-    // Ensure WASM memory covers the mapped region (§6.10: 1MB grow units)
-    unsafe {
-        let needed = (start + len) as u32;
-        let mem_size = core::arch::wasm32::memory_size(0) as u32 * 65536;
-        if needed > mem_size {
-            let deficit = needed - mem_size;
-            let grow_unit = 16u32 * 65536; // 1 MB
-            let grow_bytes = ((deficit + grow_unit - 1) / grow_unit) * grow_unit;
-            let pages = grow_bytes / 65536;
-            if core::arch::wasm32::memory_grow(0, pages as usize) == usize::MAX {
+    let needs_materialization = !is_anon || prot as i32 != PROT_NONE;
+    if needs_materialization {
+        // PROT_NONE reservations do not require backing linear-memory pages yet.
+        unsafe {
+            if !ensure_memory_capacity_for_guest_range(base, start + len) {
                 return ENOMEM;
             }
         }
     }
 
     if is_anon {
-        unsafe {
-            guest_mem::zero_mem(base, start, len as usize);
+        if prot as i32 != PROT_NONE {
+            unsafe {
+                guest_mem::zero_mem(base, start, len as usize);
+            }
         }
     } else if fd >= 0 {
         // File-backed mmap: eager-populate the mapping. For now MAP_PRIVATE and
@@ -449,16 +554,8 @@ pub fn sys_mremap(
     let grow_end = old_addr + new_len;
     if !overlaps_except(s, old_addr + old_len, grow_end, idx) {
         unsafe {
-            let needed = grow_end as u32;
-            let mem_size = core::arch::wasm32::memory_size(0) as u32 * 65536;
-            if needed > mem_size {
-                let deficit = needed - mem_size;
-                let grow_unit = 16u32 * 65536;
-                let grow_bytes = ((deficit + grow_unit - 1) / grow_unit) * grow_unit;
-                let pages = grow_bytes / 65536;
-                if core::arch::wasm32::memory_grow(0, pages as usize) == usize::MAX {
-                    return ENOMEM;
-                }
+            if !ensure_memory_capacity_for_guest_range(base, grow_end) {
+                return ENOMEM;
             }
             guest_mem::zero_mem(base, old_addr + old_len, (new_len - old_len) as usize);
         }
@@ -472,19 +569,11 @@ pub fn sys_mremap(
     }
 
     unsafe {
-        let needed = (new_start + new_len) as u32;
-        let mem_size = core::arch::wasm32::memory_size(0) as u32 * 65536;
-        if needed > mem_size {
-            let deficit = needed - mem_size;
-            let grow_unit = 16u32 * 65536;
-            let grow_bytes = ((deficit + grow_unit - 1) / grow_unit) * grow_unit;
-            let pages = grow_bytes / 65536;
-            if core::arch::wasm32::memory_grow(0, pages as usize) == usize::MAX {
-                return ENOMEM;
-            }
+        if !ensure_memory_capacity_for_guest_range(base, new_start + new_len) {
+            return ENOMEM;
         }
-        let src = old_addr as u32 as *const u8;
-        let dst = new_start as u32 as *mut u8;
+        let src = (base as u64 + old_addr) as u32 as *const u8;
+        let dst = (base as u64 + new_start) as u32 as *mut u8;
         let src_start = old_addr;
         let src_end = old_addr + old_len;
         let dst_start = new_start;
@@ -517,7 +606,7 @@ pub fn sys_mremap(
 
 /// mprotect: change VMA protection flags. Splits VMAs at boundaries if needed.
 /// Sets has_prot_none flag for SIGSEGV detection.
-pub fn sys_mprotect(_vm: &mut ThreadState, _base: u32, addr: u64, length: u64, prot: u64) -> i64 {
+pub fn sys_mprotect(_vm: &mut ThreadState, base: u32, addr: u64, length: u64, prot: u64) -> i64 {
     if addr & (PAGE_SIZE - 1) != 0 {
         return EINVAL;
     }
@@ -550,6 +639,16 @@ pub fn sys_mprotect(_vm: &mut ThreadState, _base: u32, addr: u64, length: u64, p
             });
             s.vmas[i].end = end;
         }
+        let was_prot_none = s.vmas[i].prot == PROT_NONE;
+        let segment = s.vmas[i];
+        if prot as i32 != PROT_NONE && was_prot_none && (segment.flags as u64 & MAP_ANONYMOUS) != 0 {
+            unsafe {
+                if !ensure_memory_capacity_for_guest_range(base, segment.end) {
+                    return ENOMEM;
+                }
+                guest_mem::zero_mem(base, segment.start, (segment.end - segment.start) as usize);
+            }
+        }
         s.vmas[i].prot = prot as i32;
         i += 1;
     }
@@ -563,20 +662,70 @@ pub fn sys_mprotect(_vm: &mut ThreadState, _base: u32, addr: u64, length: u64, p
 // VMA table helpers
 // =========================================================================
 
+fn mmap_floor(s: &AddressSpaceState) -> u64 {
+    ((s.brk_current.max(s.brk_base) + 0x1F_FFFF) & !0xF_FFFF).max(0x20_0000)
+}
+
 fn find_hole(s: &mut AddressSpaceState, len: u64) -> u64 {
-    let mut candidate = s.mmap_next;
+    let floor = mmap_floor(s);
+    let hole = find_hole_from(s, s.mmap_next.max(floor), len);
+    if hole != 0 {
+        s.mmap_next = hole + len;
+        return hole;
+    }
+
+    let hole = find_hole_from(s, floor, len);
+    if hole != 0 {
+        s.mmap_next = hole + len;
+    }
+    hole
+}
+
+fn find_hole_from(s: &AddressSpaceState, start: u64, len: u64) -> u64 {
+    let mut candidate = (start + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
     loop {
         if candidate + len > 0x8000_0000 {
             return 0;
         }
         if !overlaps(s, candidate, candidate + len) {
-            s.mmap_next = candidate + len;
             return candidate;
         }
         for v in s.vmas.iter() {
             if v.start < candidate + len && v.end > candidate {
                 candidate = (v.end + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
                 break;
+            }
+        }
+    }
+}
+
+fn find_hole_high(s: &AddressSpaceState, len: u64) -> u64 {
+    let floor = mmap_floor(s);
+    if len == 0 || len > 0x8000_0000 - floor {
+        return 0;
+    }
+
+    let mut candidate = (0x8000_0000 - len) & !(PAGE_SIZE - 1);
+    loop {
+        if candidate < floor {
+            return 0;
+        }
+
+        let mut overlap = None;
+        for v in s.vmas.iter().rev() {
+            if v.start < candidate + len && v.end > candidate {
+                overlap = Some(v.start);
+                break;
+            }
+        }
+
+        match overlap {
+            None => return candidate,
+            Some(start) => {
+                if start < len {
+                    return 0;
+                }
+                candidate = (start - len) & !(PAGE_SIZE - 1);
             }
         }
     }
@@ -915,5 +1064,103 @@ mod tests {
             ret, EBADF as i64,
             "mmap with !MAP_ANONYMOUS and fd=-1 should return EBADF"
         );
+    }
+
+    #[test]
+    fn prot_none_reservation_does_not_grow_linear_memory() {
+        let mut t = TestVm::new();
+        let before = core::arch::wasm32::memory_size(0);
+        let addr = t.sys_mmap(0, 128 * 1024 * 1024, PROT_NONE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+        let after = core::arch::wasm32::memory_size(0);
+
+        assert!(addr > 0);
+        assert_eq!(before, after);
+        assert!(super::has_prot_none());
+    }
+
+    #[test]
+    fn prot_none_reservation_keeps_rw_mmaps_low() {
+        let mut t = TestVm::new();
+
+        let reserve =
+            t.sys_mmap(0, 512 * 1024 * 1024, PROT_NONE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+        assert!(reserve > 0);
+
+        let mapped = t.sys_mmap(
+            0,
+            4096,
+            PROT_READ | PROT_WRITE,
+            MAP_ANONYMOUS | MAP_PRIVATE,
+            -1,
+            0,
+        );
+        assert!(mapped > 0);
+        assert!(
+            (mapped as u64) < reserve as u64,
+            "RW mapping should stay below high PROT_NONE reservation: reserve=0x{:x} mapped=0x{:x}",
+            reserve,
+            mapped,
+        );
+    }
+
+    #[test]
+    fn failed_hint_probe_reuses_low_hole_after_munmap() {
+        let mut t = TestVm::new();
+        let bad_hint = 0x9000_0000;
+        let len = 64 * 1024 * 1024;
+
+        let first = t.sys_mmap(bad_hint, len, PROT_NONE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+        assert!(first > 0);
+        assert_eq!(t.sys_munmap(first as u64, len), 0);
+
+        let second = t.sys_mmap(bad_hint, len, PROT_NONE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+        assert_eq!(second, first);
+    }
+
+    #[test]
+    fn mmap_stays_above_expanded_brk_region() {
+        let mut t = TestVm::new();
+        let grown = t.sys_brk(0x40_0000);
+        assert_eq!(grown, 0x40_0000);
+
+        let mapped = t.sys_mmap(
+            0,
+            4096,
+            PROT_READ | PROT_WRITE,
+            MAP_ANONYMOUS | MAP_PRIVATE,
+            -1,
+            0,
+        );
+        assert!(mapped > 0);
+
+        let floor = (((grown as u64) + 0x1F_FFFF) & !0x1F_FFFF).max(0x20_0000);
+        assert!(
+            (mapped as u64) >= floor,
+            "mmap should stay above current brk floor: brk=0x{:x} floor=0x{:x} mapped=0x{:x}",
+            grown,
+            floor,
+            mapped,
+        );
+    }
+
+    #[test]
+    fn initial_stack_maps_guard_and_writable_stack() {
+        let t = TestVm::new();
+        let guest_limit = 0x80_0000;
+        let stack_top = super::map_initial_stack(t.base, guest_limit, 1024 * 1024);
+        assert_eq!(stack_top, (guest_limit - PAGE_SIZE) as i64);
+
+        let guard_addr = guest_limit - 1024 * 1024 - PAGE_SIZE / 2;
+        let stack_addr = guest_limit - PAGE_SIZE - 64;
+        assert!(super::is_prot_none(guard_addr));
+        assert!(!super::is_prot_none(stack_addr));
+
+        unsafe {
+            crate::guest_mem::write_u64(t.base, stack_addr, 0xDEAD_BEEF_CAFE_BABEu64);
+            assert_eq!(
+                crate::guest_mem::read_u64(t.base, stack_addr),
+                0xDEAD_BEEF_CAFE_BABEu64
+            );
+        }
     }
 }

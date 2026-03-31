@@ -29,6 +29,7 @@ use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 
 const PIPE_BUF_SIZE: u32 = 4096;
 const PIPE_SLOT_SIZE: u32 = 32 + PIPE_BUF_SIZE; // 4128 bytes
+const EFD_SEMAPHORE: u64 = 0x1;
 
 // Field offsets within a pipe slot
 const OFF_HEAD: u32 = 0;
@@ -77,6 +78,10 @@ pub fn pipe_state() -> (u32, u64) {
     }
 }
 
+pub fn pipe_region_bytes() -> u32 {
+    MAX_PIPES as u32 * PIPE_SLOT_SIZE
+}
+
 pub fn attach_pipe_state(base: u32, used: u64) {
     unsafe {
         core::ptr::write(core::ptr::addr_of_mut!(SAB_PIPE_BASE), base);
@@ -104,7 +109,14 @@ fn data_ptr(slot: u32) -> *mut u8 {
     (slot + OFF_DATA) as *mut u8
 }
 
-fn alloc_pipe_slot() -> Option<u32> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PipeCloseOutcome {
+    pub read_open: i32,
+    pub write_open: i32,
+    pub slot_released: bool,
+}
+
+pub fn alloc_pipe_slot() -> Option<u32> {
     unsafe {
         let used = core::ptr::read(core::ptr::addr_of!(PIPE_USED));
         for i in 0..MAX_PIPES {
@@ -274,7 +286,7 @@ pub fn pipe_writable(pipe_idx: u32) -> bool {
 }
 
 /// Close one end of a pipe (kernel Worker control plane).
-pub fn pipe_close(pipe_idx: u32, is_read_end: bool) {
+pub fn pipe_close_outcome(pipe_idx: u32, is_read_end: bool) -> PipeCloseOutcome {
     let addr = slot_addr(pipe_idx);
 
     if is_read_end {
@@ -283,19 +295,35 @@ pub fn pipe_close(pipe_idx: u32, is_read_end: bool) {
         write_open_ptr(addr).fetch_sub(1, Ordering::Release);
     }
 
-    if read_open_ptr(addr).load(Ordering::Acquire) <= 0
-        && write_open_ptr(addr).load(Ordering::Acquire) <= 0
-    {
+    let read_open = read_open_ptr(addr).load(Ordering::Acquire);
+    let write_open = write_open_ptr(addr).load(Ordering::Acquire);
+    let slot_released = read_open <= 0 && write_open <= 0;
+    if slot_released {
         free_pipe_slot(pipe_idx);
     }
+
+    PipeCloseOutcome {
+        read_open,
+        write_open,
+        slot_released,
+    }
+}
+
+/// Close one end of a pipe (kernel Worker control plane).
+pub fn pipe_close(pipe_idx: u32, is_read_end: bool) {
+    let _ = pipe_close_outcome(pipe_idx, is_read_end);
 }
 
 // =========================================================================
 // eventfd2
 // =========================================================================
 
-pub fn sys_eventfd2(_vm: &mut ThreadState, _base: u32, _initval: u64, _flags: u64) -> i64 {
-    ENOSYS
+pub fn sys_eventfd2(vm: &mut ThreadState, base: u32, initval: u64, flags: u64) -> i64 {
+    let supported = EFD_SEMAPHORE | O_NONBLOCK as u64 | O_CLOEXEC as u64;
+    if flags & !supported != 0 {
+        return EINVAL;
+    }
+    fd_table::open_eventfd(vm, base, initval & 0xffff_ffff, flags as i32)
 }
 
 // =========================================================================
@@ -332,6 +360,32 @@ mod tests {
         let idx = alloc_pipe_slot().unwrap();
         pipe_close(idx, true); // close read end
         assert_eq!(pipe_write(idx, b"data"), EPIPE);
+    }
+
+    #[test]
+    fn pipe_close_outcome_reports_remaining_open_ends() {
+        let _ = TestVm::new();
+        let idx = alloc_pipe_slot().unwrap();
+
+        let first = pipe_close_outcome(idx, true);
+        assert_eq!(
+            first,
+            PipeCloseOutcome {
+                read_open: 0,
+                write_open: 1,
+                slot_released: false,
+            }
+        );
+
+        let second = pipe_close_outcome(idx, false);
+        assert_eq!(
+            second,
+            PipeCloseOutcome {
+                read_open: 0,
+                write_open: 0,
+                slot_released: true,
+            }
+        );
     }
 
     #[test]
@@ -378,5 +432,57 @@ mod tests {
         let mut buf = [0u8; 2];
         assert_eq!(t.sys_read(read_fd, &mut buf), 2);
         assert_eq!(&buf, b"ok");
+    }
+
+    #[test]
+    fn sys_pipe2_reports_read_write_access_modes() {
+        let mut t = TestVm::new();
+        let pipefd_addr = t.scratch + 0x1400;
+
+        assert_eq!(super::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+
+        let read_fd = unsafe { crate::guest_mem::read_u32(t.base, pipefd_addr) } as i64;
+        let write_fd = unsafe { crate::guest_mem::read_u32(t.base, pipefd_addr + 4) } as i64;
+
+        assert_eq!(
+            t.sys_fcntl(read_fd as u64, 3, 0) & OPEN_ACCESS_MODE_MASK as i64,
+            O_RDONLY as i64,
+        );
+        assert_eq!(
+            t.sys_fcntl(write_fd as u64, 3, 0) & OPEN_ACCESS_MODE_MASK as i64,
+            O_WRONLY as i64,
+        );
+    }
+
+    #[test]
+    fn eventfd_roundtrip_and_nonblock_flags() {
+        let mut t = TestVm::new();
+        let fd = super::sys_eventfd2(
+            &mut t.vm,
+            t.base,
+            2,
+            (O_CLOEXEC | O_NONBLOCK) as u64,
+        );
+        assert!(fd >= 3);
+        assert_eq!(t.sys_fcntl(fd as u64, 1, 0), 1);
+        assert_ne!(t.sys_fcntl(fd as u64, 3, 0) & O_NONBLOCK as i64, 0);
+
+        let buf_addr = t.scratch + 0x1800;
+        unsafe {
+            crate::guest_mem::write_u64(t.base, buf_addr, 3);
+        }
+        assert_eq!(
+            crate::syscall::fs::sys_write(&mut t.vm, t.base, fd as u64, buf_addr, 8, SYS_WRITE),
+            8
+        );
+        assert_eq!(
+            crate::syscall::fs::sys_read(&mut t.vm, t.base, fd as u64, buf_addr, 8),
+            8
+        );
+        assert_eq!(unsafe { crate::guest_mem::read_u64(t.base, buf_addr) }, 5);
+        assert_eq!(
+            crate::syscall::fs::sys_read(&mut t.vm, t.base, fd as u64, buf_addr, 8),
+            EAGAIN
+        );
     }
 }

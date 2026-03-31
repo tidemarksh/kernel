@@ -12,10 +12,28 @@ target = "wasm32-unknown-unknown"
 # --global-base=50331648: place kernel static data at 48MB to avoid overlap with
 #   guest ELF segments (Go BSS extends to ~45MB). Kernel heap (alloc.rs) starts
 #   above this, at the heapBase passed to kernel_init.
-rustflags = ["-C", "link-args=--import-memory --global-base=50331648"]
+rustflags = [
+  "-C",
+  "target-feature=+atomics,+bulk-memory,+mutable-globals",
+  "-C",
+  "link-arg=--import-memory",
+  "-C",
+  "link-arg=--shared-memory",
+  "-C",
+  "link-arg=--max-memory=4294967296",
+  "-C",
+  "link-arg=--export-memory",
+  "-C",
+  "link-arg=--global-base=50331648",
+]
 
 [alias]
 xtask = "run -p xtask --target x86_64-unknown-linux-gnu --target-dir target --"
 
 [target.wasm32-wasip1]
 runner = ["wasmtime", "--dir=/"]
+
+[unstable]
+# Shared-memory wasm requires core/alloc to be rebuilt with the same atomics
+# and bulk-memory features as the kernel crate itself.
+build-std = ["core", "alloc"]

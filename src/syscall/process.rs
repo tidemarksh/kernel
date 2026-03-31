@@ -2,7 +2,7 @@
 //!
 //! vfork: parent suspends (STATUS_VFORK_WAIT), child runs in parent's memory.
 //! execve: normal path replaces the current process in place; vfork+execve exports
-//! handoff data so TS can create the post-exec child Worker in runtime harness.
+//! handoff data so TS can create the post-exec child Worker in the runtime harness.
 //! fork: guest Memory full copy → STATUS_EXECVE_SPAWN.
 //! wait4: retrieve child exit status.
 //!
@@ -24,7 +24,7 @@ use alloc_crate::{vec, vec::Vec};
 // =========================================================================
 
 const MAX_CHILDREN: usize = 64;
-const EXECVE_RAM_LIMIT: u64 = 0x8000_0000;
+pub const EXECVE_RAM_LIMIT: u64 = 0x8000_0000;
 const EXECVE_PATH_MAX: usize = 4096;
 const EXECVE_NAME_MAX: usize = 255;
 
@@ -51,8 +51,53 @@ struct VforkSnapshot {
     pc: u64,
     f: [u64; 32],
     fcsr: u32,
+    status: i32,
+    exit_code: i32,
+    term_signal: i32,
+    tid: i32,
+    uid: u32,
+    euid: u32,
+    gid: u32,
+    egid: u32,
+    tls_base: u64,
+    clear_child_tid: u64,
+    robust_list_head: u64,
+    robust_list_len: u64,
     sig_mask: u64,
     sig_pending: u64,
+    sigaltstack_sp: u64,
+    sigaltstack_size: u64,
+    sigaltstack_flags: i32,
+    lr_addr: u64,
+    lr_val: u64,
+    insn_budget: i32,
+    fault_pc: u64,
+    fault_addr: u64,
+    guest_base: u32,
+    process_ptr: u32,
+    clone_flags: u64,
+    clone_child_stack: u64,
+    clone_tls: u64,
+    clone_child_tidptr: u64,
+    clone_child_tid: i32,
+    clone_pending: i32,
+    spawn_kind: u32,
+    spawn_flags: u32,
+    spawn_child_pid: i32,
+    spawn_path: u64,
+    spawn_argv: u64,
+    spawn_envp: u64,
+    wait_pid: i64,
+    wait_kind: u32,
+    wait_idtype: u32,
+    wait_wstatus_addr: u64,
+    wait_options: u64,
+    wait_rusage_addr: u64,
+    futex_wait_addr: u64,
+    futex_wait_timeout: u64,
+    epoll_timeout_ms: i64,
+    blocked_fd: u32,
+    blocked_ofd_id: u32,
     child_pid: i32,
 }
 
@@ -60,7 +105,8 @@ struct ExecveImage {
     path_bytes: Vec<u8>,
     argv: Vec<Vec<u8>>,
     envp: Vec<Vec<u8>>,
-    elf_bytes: Vec<u8>,
+    elf_ptr: u32,
+    elf_len: u32,
     elf: crate::elf::ElfLoadResult,
 }
 
@@ -74,6 +120,83 @@ struct ProcessRuntimeState {
 }
 
 static mut PROCESS_RUNTIME_STATE: *mut ProcessRuntimeState = core::ptr::null_mut();
+
+fn empty_vfork_snapshot() -> VforkSnapshot {
+    VforkSnapshot {
+        x: [0; 32],
+        pc: 0,
+        f: [0; 32],
+        fcsr: 0,
+        status: 0,
+        exit_code: 0,
+        term_signal: 0,
+        tid: 0,
+        uid: 0,
+        euid: 0,
+        gid: 0,
+        egid: 0,
+        tls_base: 0,
+        clear_child_tid: 0,
+        robust_list_head: 0,
+        robust_list_len: 0,
+        sig_mask: 0,
+        sig_pending: 0,
+        sigaltstack_sp: 0,
+        sigaltstack_size: 0,
+        sigaltstack_flags: 0,
+        lr_addr: 0,
+        lr_val: 0,
+        insn_budget: 0,
+        fault_pc: 0,
+        fault_addr: 0,
+        guest_base: 0,
+        process_ptr: 0,
+        clone_flags: 0,
+        clone_child_stack: 0,
+        clone_tls: 0,
+        clone_child_tidptr: 0,
+        clone_child_tid: 0,
+        clone_pending: 0,
+        spawn_kind: 0,
+        spawn_flags: 0,
+        spawn_child_pid: 0,
+        spawn_path: 0,
+        spawn_argv: 0,
+        spawn_envp: 0,
+        wait_pid: 0,
+        wait_kind: 0,
+        wait_idtype: 0,
+        wait_wstatus_addr: 0,
+        wait_options: 0,
+        wait_rusage_addr: 0,
+        futex_wait_addr: 0,
+        futex_wait_timeout: 0,
+        epoll_timeout_ms: 0,
+        blocked_fd: 0,
+        blocked_ofd_id: 0,
+        child_pid: 0,
+    }
+}
+
+fn seeded_process_table() -> [ProcessEntry; MAX_PROCESSES] {
+    let mut table = [ProcessEntry {
+        pid: 0,
+        ppid: 0,
+        pgid: 0,
+        sid: 0,
+        did_exec: false,
+    }; MAX_PROCESSES];
+    // Seed PID 1 so process-group queries against init work in both
+    // runtime code and LTP process-group tests.
+    table[0] = ProcessEntry {
+        pid: 1,
+        ppid: 0,
+        pgid: 1,
+        sid: 1,
+        did_exec: false,
+    };
+    table
+}
 
 fn prs() -> &'static mut ProcessRuntimeState {
     unsafe {
@@ -115,34 +238,8 @@ pub fn init() {
                 }; MAX_CHILDREN],
                 next_pid: 3,
                 vfork_active: 0,
-                process_table: {
-                    let mut table = [ProcessEntry {
-                        pid: 0,
-                        ppid: 0,
-                        pgid: 0,
-                        sid: 0,
-                        did_exec: false,
-                    }; MAX_PROCESSES];
-                    // Seed PID 1 so process-group queries against init work in both
-                    // runtime code and LTP process-group tests.
-                    table[0] = ProcessEntry {
-                        pid: 1,
-                        ppid: 0,
-                        pgid: 1,
-                        sid: 1,
-                        did_exec: false,
-                    };
-                    table
-                },
-                vfork_snapshot: VforkSnapshot {
-                    x: [0; 32],
-                    pc: 0,
-                    f: [0; 32],
-                    fcsr: 0,
-                    sig_mask: 0,
-                    sig_pending: 0,
-                    child_pid: 0,
-                },
+                process_table: seeded_process_table(),
+                vfork_snapshot: empty_vfork_snapshot(),
             },
         );
         core::ptr::write(core::ptr::addr_of_mut!(PROCESS_RUNTIME_STATE), state);
@@ -151,6 +248,10 @@ pub fn init() {
 
 pub fn process_runtime_state_ptr() -> u32 {
     unsafe { core::ptr::read(core::ptr::addr_of!(PROCESS_RUNTIME_STATE)) as u32 }
+}
+
+pub fn process_runtime_state_bytes() -> u32 {
+    core::mem::size_of::<ProcessRuntimeState>() as u32
 }
 
 pub fn attach_process_runtime_state_ptr(ptr: u32) {
@@ -183,6 +284,17 @@ pub fn vfork_child_pid() -> i32 {
     } else {
         prs().vfork_snapshot.child_pid
     }
+}
+
+fn set_next_pid_floor(next_pid: i32) {
+    prs().next_pid = prs().next_pid.max(next_pid.max(3));
+}
+
+fn current_process_state_mut(vm: &ThreadState, base: u32) -> Option<&'static mut ProcessState> {
+    if vm.process_ptr == 0 {
+        return None;
+    }
+    unsafe { Some(&mut *((base as u64 + vm.process_ptr as u64) as *mut ProcessState)) }
 }
 
 fn process_idx(pid: i32) -> Option<usize> {
@@ -274,6 +386,165 @@ fn alloc_pid() -> i32 {
     pid
 }
 
+pub fn current_process_pid(vm: &ThreadState, base: u32) -> i32 {
+    crate::syscall::signal::pid_from_vm(vm, base)
+}
+
+pub fn current_process_ppid(vm: &ThreadState, base: u32) -> i32 {
+    current_process_state_mut(vm, base).map(|ps| ps.ppid).unwrap_or(0)
+}
+
+pub fn current_process_pgid(vm: &ThreadState, base: u32) -> i32 {
+    ensure_current_process(vm, base)
+        .map(|slot| slot.pgid)
+        .unwrap_or_else(|| current_process_pid(vm, base))
+}
+
+pub fn current_process_sid(vm: &ThreadState, base: u32) -> i32 {
+    ensure_current_process(vm, base)
+        .map(|slot| slot.sid)
+        .unwrap_or_else(|| current_process_pid(vm, base))
+}
+
+pub fn current_process_did_exec(vm: &ThreadState, base: u32) -> bool {
+    let pid = current_process_pid(vm, base);
+    process_entry(pid).map(|slot| slot.did_exec).unwrap_or(false)
+}
+
+pub fn upsert_process_entry(pid: i32, ppid: i32, pgid: i32, sid: i32, did_exec: bool) {
+    let Some(idx) = process_idx(pid) else {
+        return;
+    };
+    reserve_pid(pid);
+    processes()[idx] = ProcessEntry {
+        pid,
+        ppid,
+        pgid,
+        sid,
+        did_exec,
+    };
+}
+
+pub fn remove_process_entry(pid: i32) {
+    let Some(idx) = process_idx(pid) else {
+        return;
+    };
+    processes()[idx] = ProcessEntry {
+        pid: 0,
+        ppid: 0,
+        pgid: 0,
+        sid: 0,
+        did_exec: false,
+    };
+}
+
+pub fn rewrite_child_pid(
+    vm: &mut ThreadState,
+    base: u32,
+    old_pid: i32,
+    new_pid: i32,
+    next_pid: i32,
+) {
+    if old_pid <= 0 || new_pid <= 0 {
+        set_next_pid_floor(next_pid);
+        return;
+    }
+
+    if old_pid != new_pid {
+        for child in children().iter_mut() {
+            if child.pid == old_pid {
+                child.pid = new_pid;
+            }
+            if child.parent_pid == old_pid {
+                child.parent_pid = new_pid;
+            }
+        }
+
+        let old_idx = process_idx(old_pid);
+        let new_idx = process_idx(new_pid);
+        if let (Some(old_idx), Some(new_idx)) = (old_idx, new_idx) {
+            let old_entry = processes()[old_idx];
+            if old_entry.pid == old_pid {
+                processes()[new_idx] = ProcessEntry {
+                    pid: new_pid,
+                    ..old_entry
+                };
+                processes()[old_idx] = ProcessEntry {
+                    pid: 0,
+                    ppid: 0,
+                    pgid: 0,
+                    sid: 0,
+                    did_exec: false,
+                };
+            }
+        }
+
+        if prs().vfork_snapshot.child_pid == old_pid {
+            prs().vfork_snapshot.child_pid = new_pid;
+        }
+
+        if let Some(ps) = current_process_state_mut(vm, base) {
+            if ps.pid == old_pid {
+                ps.pid = new_pid;
+            }
+            if ps.ppid == old_pid {
+                ps.ppid = new_pid;
+            }
+        }
+
+        if vm.spawn_child_pid == old_pid {
+            vm.spawn_child_pid = new_pid;
+        }
+        if vm.clone_child_tid == old_pid {
+            vm.clone_child_tid = new_pid;
+        }
+        if vm.x[10] == old_pid as u64 {
+            vm.x[10] = new_pid as u64;
+        }
+
+        crate::syscall::signal::reassign_process_pid(old_pid, new_pid);
+    }
+
+    set_next_pid_floor(next_pid);
+}
+
+pub fn reset_process_lifecycle(
+    vm: &mut ThreadState,
+    base: u32,
+    pid: i32,
+    ppid: i32,
+    next_pid: i32,
+    pgid: i32,
+    sid: i32,
+    did_exec: bool,
+) {
+    let old_pid = current_process_pid(vm, base);
+
+    prs().children = [empty_child_entry(); MAX_CHILDREN];
+    prs().next_pid = next_pid.max(pid + 1).max(3);
+    prs().vfork_active = 0;
+    prs().vfork_snapshot = empty_vfork_snapshot();
+    prs().process_table = seeded_process_table();
+
+    if let Some(slot) = process_idx(pid).map(|idx| &mut processes()[idx]) {
+        *slot = ProcessEntry {
+            pid,
+            ppid,
+            pgid,
+            sid,
+            did_exec,
+        };
+    }
+
+    if let Some(ps) = current_process_state_mut(vm, base) {
+        ps.pid = pid;
+        ps.ppid = ppid;
+    }
+    crate::syscall::thread::init_main_thread(vm as *mut ThreadState as u32, base);
+
+    crate::syscall::signal::reassign_process_pid(old_pid, pid);
+}
+
 fn set_spawn_handoff(
     vm: &mut ThreadState,
     kind: u32,
@@ -311,6 +582,15 @@ fn current_effective_uid(_vm: &ThreadState) -> u32 {
 
 fn current_effective_gid(_vm: &ThreadState) -> u32 {
     _vm.egid
+}
+
+fn reattach_guest_thread_count(vm: &mut ThreadState, base: u32) {
+    if let Some(ps) = current_process_state_mut(vm, base) {
+        let tc_ptr = core::ptr::addr_of!(ps.thread_count);
+        unsafe {
+            guest_mem::init(core::ptr::null(), tc_ptr);
+        }
+    }
 }
 
 fn read_guest_cstr_bytes(base: u32, addr: u64) -> Result<Vec<u8>, i64> {
@@ -451,15 +731,16 @@ fn load_execve_image(
     if fd_table::inode_has_write_open(ino) {
         return Err(ETXTBSY);
     }
-    let mut elf_bytes = vec![0u8; st.size as usize];
-    let nread = memfs::read_file(ino, 0, &mut elf_bytes);
-    if nread != elf_bytes.len() as i64 {
-        return Err(EIO);
-    }
+    let elf_len = match u32::try_from(st.size) {
+        Ok(len) if len > 0 => len,
+        _ => return Err(ENOEXEC),
+    };
+    let elf_ptr = match memfs::file_data_ptr(ino) {
+        Some(ptr) => ptr,
+        None => return Err(EIO),
+    };
 
-    let elf = match unsafe {
-        crate::elf::inspect_elf(elf_bytes.as_ptr() as u32, elf_bytes.len() as u32, ram_size)
-    } {
+    let elf = match unsafe { crate::elf::inspect_elf(elf_ptr, elf_len, ram_size) } {
         Ok(result) => result,
         Err(_) => return Err(ENOEXEC),
     };
@@ -475,7 +756,8 @@ fn load_execve_image(
         path_bytes,
         argv,
         envp,
-        elf_bytes,
+        elf_ptr,
+        elf_len,
         elf,
     })
 }
@@ -531,23 +813,88 @@ fn ensure_guest_memory_capacity(base: u32, guest_end: u64) -> bool {
 
 fn current_guest_memory_limit(base: u32) -> u64 {
     let heap_base = crate::alloc::heap_base() as u64;
-    if heap_base > base as u64 {
+    let limit = if heap_base > base as u64 {
         heap_base - base as u64
     } else {
         ((core::arch::wasm32::memory_size(0) as u64) * 65536).saturating_sub(base as u64)
+    };
+    limit.min(EXECVE_RAM_LIMIT)
+}
+
+fn retain_process_ofds(base: u32, process_ptr: u32) {
+    let ps = unsafe { &*((base as u64 + process_ptr as u64) as *const ProcessState) };
+    let mut seen = [false; MAX_FDS];
+    for entry in ps.fd_table.iter() {
+        if entry.ofd_id == 0 || entry.ofd_id as usize >= MAX_FDS || seen[entry.ofd_id as usize] {
+            continue;
+        }
+        seen[entry.ofd_id as usize] = true;
+        fd_table::retain_ofd_id(entry.ofd_id);
     }
+}
+
+fn clone_process_state_for_vfork(
+    vm: &ThreadState,
+    base: u32,
+    parent_pid: i32,
+    child_pid: i32,
+) -> Option<u32> {
+    let parent_ps_addr = vm.process_ptr as u64;
+    if parent_ps_addr == 0 {
+        return None;
+    }
+
+    let ps_size = core::mem::size_of::<ProcessState>() as u64;
+    let ps_align = core::mem::align_of::<ProcessState>() as u64;
+    let brk = crate::syscall::memory::current_brk();
+    let child_ps_addr = (brk + ps_align - 1) & !(ps_align - 1);
+    if crate::syscall::memory::grow_brk(base, child_ps_addr + ps_size) < (child_ps_addr + ps_size) as i64
+    {
+        return None;
+    }
+
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            (base as u64 + parent_ps_addr) as *const u8,
+            (base as u64 + child_ps_addr) as *mut u8,
+            ps_size as usize,
+        );
+    }
+
+    let child_ps = unsafe { &mut *((base as u64 + child_ps_addr) as *mut ProcessState) };
+    child_ps.pid = child_pid;
+    child_ps.ppid = parent_pid;
+    child_ps.thread_count
+        .store(1, core::sync::atomic::Ordering::Release);
+    for record in child_ps.threads.iter_mut() {
+        *record = crate::types::ThreadRecord::empty();
+    }
+    if vm.tid > 0 && vm.tid as usize <= MAX_THREADS {
+        child_ps.threads[(vm.tid - 1) as usize] = crate::types::ThreadRecord::new(
+            vm.tid,
+            crate::types::THREAD_RUNNING,
+            vm as *const ThreadState as u32,
+            vm.clear_child_tid as u32,
+            0,
+        );
+    }
+
+    retain_process_ofds(base, child_ps_addr as u32);
+    Some(child_ps_addr as u32)
 }
 
 pub fn complete_execve_in_place(vm: &mut ThreadState, base: u32, ram_size: u64) -> i64 {
     if vm.spawn_kind != SPAWN_KIND_EXECVE {
         return EINVAL;
     }
+    crate::runtime_test_support::record_execve_stage(1, base as u64, ram_size);
 
     let ExecveImage {
         path_bytes,
         argv,
         envp,
-        elf_bytes,
+        elf_ptr,
+        elf_len,
         elf,
     } = match load_execve_image(
         vm,
@@ -560,6 +907,7 @@ pub fn complete_execve_in_place(vm: &mut ThreadState, base: u32, ram_size: u64) 
         Ok(image) => image,
         Err(errno) => return errno,
     };
+    crate::runtime_test_support::record_execve_stage(2, elf.brk_start, elf.entry);
 
     let ps_addr = vm.process_ptr as u64;
     let old_pid = unsafe {
@@ -580,6 +928,24 @@ pub fn complete_execve_in_place(vm: &mut ThreadState, base: u32, ram_size: u64) 
             ps_addr + core::mem::offset_of!(ProcessState, cwd_ino) as u64,
         )
     };
+    let old_stdin_pipe_slot = unsafe {
+        guest_mem::read_u32(
+            base,
+            ps_addr + core::mem::offset_of!(ProcessState, stdin_pipe_slot) as u64,
+        )
+    };
+    let old_stdout_pipe_slot = unsafe {
+        guest_mem::read_u32(
+            base,
+            ps_addr + core::mem::offset_of!(ProcessState, stdout_pipe_slot) as u64,
+        )
+    };
+    let old_stderr_pipe_slot = unsafe {
+        guest_mem::read_u32(
+            base,
+            ps_addr + core::mem::offset_of!(ProcessState, stderr_pipe_slot) as u64,
+        )
+    };
     let old_fs_ring_base = unsafe {
         guest_mem::read_u32(
             base,
@@ -595,11 +961,20 @@ pub fn complete_execve_in_place(vm: &mut ThreadState, base: u32, ram_size: u64) 
         entry.ofd_id = unsafe { guest_mem::read_u32(base, entry_off) };
         entry.fd_flags = unsafe { guest_mem::read_u32(base, entry_off + 4) };
     }
-    let target_pid = vm.spawn_child_pid;
-    let is_vfork_exec = target_pid != old_pid;
-    if is_vfork_exec {
+    // A vfork child inherits the parent's ThreadState scratch. Clear any
+    // retained blocked-syscall OFD pin before rebuilding the process image so
+    // post-exec blocked resumes cannot patch the new fd table with stale OFD
+    // ids from the pre-exec image.
+    fd_table::clear_blocked_ofd_pin(vm);
+    let target_pid = if vm.spawn_child_pid != 0 {
+        vm.spawn_child_pid
+    } else {
+        old_pid
+    };
+    if target_pid <= 0 {
         return EINVAL;
     }
+    let target_ppid = if target_pid != old_pid { old_pid } else { old_ppid };
 
     let mut inherited_fds = [FdEntry {
         ofd_id: 0,
@@ -619,34 +994,45 @@ pub fn complete_execve_in_place(vm: &mut ThreadState, base: u32, ram_size: u64) 
     // keeps execve off the system allocator after load_elf()/memory reset.
     let mut argv_ptrs = vec![0u64; argv.len()];
     let mut envp_ptrs = vec![0u64; envp.len()];
-    let stack_top = current_guest_memory_limit(base).saturating_sub(PAGE_SIZE);
+    let guest_limit = current_guest_memory_limit(base);
 
     let ps_size = core::mem::size_of::<ProcessState>() as u64;
     let ps_align = core::mem::align_of::<ProcessState>() as u64;
     let new_ps_addr = (elf.brk_start + ps_align - 1) & !(ps_align - 1);
+    crate::runtime_test_support::record_execve_stage(3, guest_limit, new_ps_addr + ps_size);
     if !ensure_guest_memory_capacity(base, new_ps_addr + ps_size) {
+        crate::runtime_test_support::record_execve_stage(11, guest_limit, new_ps_addr + ps_size);
         return ENOMEM;
     }
 
     crate::syscall::thread::discard_other_threads_for_exec(vm, base);
     let elf_result = match unsafe {
-        crate::elf::load_elf(
-            base,
-            ram_size,
-            elf_bytes.as_ptr() as u32,
-            elf_bytes.len() as u32,
-        )
+        crate::elf::load_elf(base, ram_size, elf_ptr, elf_len)
     } {
         Ok(result) => result,
         Err(_) => return ENOEXEC,
     };
+    crate::runtime_test_support::record_execve_stage(4, elf_result.brk_start, elf_result.entry);
     crate::syscall::memory::reset_for_execve(base, elf_result.brk_start);
+    let stack_top = crate::syscall::memory::map_initial_stack(
+        base,
+        guest_limit,
+        crate::syscall::memory::DEFAULT_STACK_SIZE,
+    );
+    if stack_top < 0 {
+        crate::runtime_test_support::record_execve_stage(12, guest_limit, stack_top as u64);
+        return ENOMEM;
+    }
+    let stack_top = stack_top as u64;
+    crate::runtime_test_support::record_execve_stage(5, guest_limit, stack_top);
 
     let brk = crate::syscall::memory::current_brk();
     let ps_addr = (brk + ps_align - 1) & !(ps_align - 1);
     if crate::syscall::memory::grow_brk(base, ps_addr + ps_size) < (ps_addr + ps_size) as i64 {
+        crate::runtime_test_support::record_execve_stage(13, brk, ps_addr + ps_size);
         return ENOMEM;
     }
+    crate::runtime_test_support::record_execve_stage(6, brk, ps_addr + ps_size);
     unsafe {
         guest_mem::zero_mem(base, ps_addr, ps_size as usize);
     }
@@ -680,11 +1066,17 @@ pub fn complete_execve_in_place(vm: &mut ThreadState, base: u32, ram_size: u64) 
     let pid_off = core::mem::offset_of!(ProcessState, pid) as u64;
     let ppid_off = core::mem::offset_of!(ProcessState, ppid) as u64;
     let cwd_off = core::mem::offset_of!(ProcessState, cwd_ino) as u64;
+    let stdin_pipe_off = core::mem::offset_of!(ProcessState, stdin_pipe_slot) as u64;
+    let stdout_pipe_off = core::mem::offset_of!(ProcessState, stdout_pipe_slot) as u64;
+    let stderr_pipe_off = core::mem::offset_of!(ProcessState, stderr_pipe_slot) as u64;
     let fs_ring_off = core::mem::offset_of!(ProcessState, fs_ring_base) as u64;
     unsafe {
         guest_mem::write_u32(base, ps_addr + pid_off, target_pid as u32);
-        guest_mem::write_u32(base, ps_addr + ppid_off, old_ppid as u32);
+        guest_mem::write_u32(base, ps_addr + ppid_off, target_ppid as u32);
         guest_mem::write_u32(base, ps_addr + cwd_off, old_cwd);
+        guest_mem::write_u32(base, ps_addr + stdin_pipe_off, old_stdin_pipe_slot);
+        guest_mem::write_u32(base, ps_addr + stdout_pipe_off, old_stdout_pipe_slot);
+        guest_mem::write_u32(base, ps_addr + stderr_pipe_off, old_stderr_pipe_slot);
         guest_mem::write_u32(base, ps_addr + fs_ring_off, old_fs_ring_base);
     }
 
@@ -737,16 +1129,22 @@ pub fn complete_execve_in_place(vm: &mut ThreadState, base: u32, ram_size: u64) 
     vm.clone_child_tidptr = 0;
     vm.clone_child_tid = 0;
     vm.clone_pending = 0;
+    vm.futex_wait_addr = 0;
+    vm.futex_wait_timeout = 0;
+    vm.epoll_timeout_ms = 0;
+    vm.blocked_fd = 0;
+    vm.blocked_ofd_id = 0;
     clear_wait4_state(vm);
     clear_spawn_handoff(vm);
 
     crate::syscall::thread::init_main_thread(vm as *mut ThreadState as u32, base);
     crate::syscall::signal::reset_on_execve(target_pid);
     install_proc_self_exe(&path_bytes);
-    if let Some(slot) = ensure_process(target_pid, old_ppid) {
+    if let Some(slot) = ensure_process(target_pid, target_ppid) {
         slot.did_exec = true;
     }
 
+    crate::runtime_test_support::record_execve_stage(7, vm.pc, vm.x[2]);
     0
 }
 
@@ -989,18 +1387,73 @@ pub fn sys_vfork(vm: &mut ThreadState, base: u32) -> i32 {
     } else {
         0
     };
+    let child_process_ptr = if child_pid > 0 {
+        match clone_process_state_for_vfork(vm, base, parent_pid, child_pid) {
+            Some(ptr) => ptr,
+            None => return STATUS_FAULT,
+        }
+    } else {
+        vm.process_ptr
+    };
     // Snapshot parent registers
     prs().vfork_snapshot = VforkSnapshot {
         x: vm.x,
         pc: vm.pc,
         f: vm.f,
         fcsr: vm.fcsr,
+        status: vm.status,
+        exit_code: vm.exit_code,
+        term_signal: vm.term_signal,
+        tid: vm.tid,
+        uid: vm.uid,
+        euid: vm.euid,
+        gid: vm.gid,
+        egid: vm.egid,
+        tls_base: vm.tls_base,
+        clear_child_tid: vm.clear_child_tid,
+        robust_list_head: vm.robust_list_head,
+        robust_list_len: vm.robust_list_len,
         sig_mask: vm.sig_mask,
         sig_pending: vm.sig_pending,
+        sigaltstack_sp: vm.sigaltstack_sp,
+        sigaltstack_size: vm.sigaltstack_size,
+        sigaltstack_flags: vm.sigaltstack_flags,
+        lr_addr: vm.lr_addr,
+        lr_val: vm.lr_val,
+        insn_budget: vm.insn_budget,
+        fault_pc: vm.fault_pc,
+        fault_addr: vm.fault_addr,
+        guest_base: vm.guest_base,
+        process_ptr: vm.process_ptr,
+        clone_flags: vm.clone_flags,
+        clone_child_stack: vm.clone_child_stack,
+        clone_tls: vm.clone_tls,
+        clone_child_tidptr: vm.clone_child_tidptr,
+        clone_child_tid: vm.clone_child_tid,
+        clone_pending: vm.clone_pending,
+        spawn_kind: vm.spawn_kind,
+        spawn_flags: vm.spawn_flags,
+        spawn_child_pid: vm.spawn_child_pid,
+        spawn_path: vm.spawn_path,
+        spawn_argv: vm.spawn_argv,
+        spawn_envp: vm.spawn_envp,
+        wait_pid: vm.wait_pid,
+        wait_kind: vm.wait_kind,
+        wait_idtype: vm.wait_idtype,
+        wait_wstatus_addr: vm.wait_wstatus_addr,
+        wait_options: vm.wait_options,
+        wait_rusage_addr: vm.wait_rusage_addr,
+        futex_wait_addr: vm.futex_wait_addr,
+        futex_wait_timeout: vm.futex_wait_timeout,
+        epoll_timeout_ms: vm.epoll_timeout_ms,
+        blocked_fd: vm.blocked_fd,
+        blocked_ofd_id: vm.blocked_ofd_id,
         child_pid,
     };
     prs().vfork_active = 1;
     vm.sig_pending = 0;
+    vm.process_ptr = child_process_ptr;
+    reattach_guest_thread_count(vm, base);
 
     // Child returns 0 from clone
     vm.x[10] = 0;
@@ -1018,15 +1471,69 @@ pub fn vfork_parent_resume(vm: &mut ThreadState, child_pid: i32) {
     }
     let snap = prs().vfork_snapshot;
     prs().vfork_active = 0;
+    if vm.process_ptr != 0 && vm.process_ptr != snap.process_ptr {
+        crate::fs::fd_table::close_all_for_process(vm.guest_base, vm);
+    }
     vm.x = snap.x;
     vm.pc = snap.pc;
     vm.f = snap.f;
     vm.fcsr = snap.fcsr;
+    vm.status = snap.status;
+    vm.exit_code = snap.exit_code;
+    vm.term_signal = snap.term_signal;
+    vm.tid = snap.tid;
+    vm.uid = snap.uid;
+    vm.euid = snap.euid;
+    vm.gid = snap.gid;
+    vm.egid = snap.egid;
+    vm.tls_base = snap.tls_base;
+    vm.clear_child_tid = snap.clear_child_tid;
+    vm.robust_list_head = snap.robust_list_head;
+    vm.robust_list_len = snap.robust_list_len;
     vm.sig_mask = snap.sig_mask;
     vm.sig_pending = snap.sig_pending;
+    vm.sigaltstack_sp = snap.sigaltstack_sp;
+    vm.sigaltstack_size = snap.sigaltstack_size;
+    vm.sigaltstack_flags = snap.sigaltstack_flags;
+    vm.lr_addr = snap.lr_addr;
+    vm.lr_val = snap.lr_val;
+    vm.insn_budget = snap.insn_budget;
+    vm.fault_pc = snap.fault_pc;
+    vm.fault_addr = snap.fault_addr;
+    vm.guest_base = snap.guest_base;
+    vm.process_ptr = snap.process_ptr;
+    vm.clone_flags = snap.clone_flags;
+    vm.clone_child_stack = snap.clone_child_stack;
+    vm.clone_tls = snap.clone_tls;
+    vm.clone_child_tidptr = snap.clone_child_tidptr;
+    vm.clone_child_tid = snap.clone_child_tid;
+    vm.clone_pending = snap.clone_pending;
+    vm.spawn_kind = snap.spawn_kind;
+    vm.spawn_flags = snap.spawn_flags;
+    vm.spawn_child_pid = snap.spawn_child_pid;
+    vm.spawn_path = snap.spawn_path;
+    vm.spawn_argv = snap.spawn_argv;
+    vm.spawn_envp = snap.spawn_envp;
+    vm.wait_pid = snap.wait_pid;
+    vm.wait_kind = snap.wait_kind;
+    vm.wait_idtype = snap.wait_idtype;
+    vm.wait_wstatus_addr = snap.wait_wstatus_addr;
+    vm.wait_options = snap.wait_options;
+    vm.wait_rusage_addr = snap.wait_rusage_addr;
+    vm.futex_wait_addr = snap.futex_wait_addr;
+    vm.futex_wait_timeout = snap.futex_wait_timeout;
+    vm.epoll_timeout_ms = snap.epoll_timeout_ms;
+    vm.blocked_fd = snap.blocked_fd;
+    vm.blocked_ofd_id = snap.blocked_ofd_id;
+    reattach_guest_thread_count(vm, vm.guest_base);
     vm.x[10] = child_pid as u64; // parent's clone returns child PID
     clear_spawn_handoff(vm);
     vm.status = STATUS_OK;
+}
+
+pub fn clear_vfork_runtime_state() {
+    prs().vfork_active = 0;
+    prs().vfork_snapshot = empty_vfork_snapshot();
 }
 
 // =========================================================================
@@ -1044,6 +1551,10 @@ pub fn sys_execve(
     argv_addr: u64,
     envp_addr: u64,
 ) -> i64 {
+    crate::runtime_test_support::record_execve_stage(0, 0, 0);
+    if let Ok(path) = read_guest_cstr_bytes(base, path_addr) {
+        crate::runtime_test_support::record_execve_path(&path);
+    }
     let current_pid = match ensure_current_process(vm, base) {
         Some(slot) => slot.pid,
         None => return ESRCH,
@@ -1164,13 +1675,12 @@ pub fn sys_wait4(
     vm.wait_wstatus_addr = wstatus_addr;
     vm.wait_options = options;
     vm.wait_rusage_addr = rusage_addr;
-    vm.x[10] = 0;
     vm.status = STATUS_WAIT4;
     0
 }
 
 /// waitid: wait for child state change and write siginfo_t.
-/// Minimal Phase 5 surface: P_ALL/P_PID/P_PGID with WEXITED/WNOHANG.
+/// Minimal runtime-harness surface: P_ALL/P_PID/P_PGID with WEXITED/WNOHANG/WNOWAIT.
 pub fn sys_waitid(
     vm: &mut ThreadState,
     base: u32,
@@ -1185,7 +1695,7 @@ pub fn sys_waitid(
         vm.status = STATUS_OK;
         return EFAULT;
     }
-    if options & WEXITED == 0 || options & !(WEXITED | WNOHANG) != 0 {
+    if options & WEXITED == 0 || options & !(WEXITED | WNOHANG | WNOWAIT) != 0 {
         clear_wait4_state(vm);
         vm.status = STATUS_OK;
         return EINVAL;
@@ -1204,6 +1714,7 @@ pub fn sys_waitid(
     }
 
     let wnohang = (options & WNOHANG) != 0;
+    let wnowait = (options & WNOWAIT) != 0;
     let mut has_matching_child = false;
 
     for child in children().iter_mut() {
@@ -1215,7 +1726,9 @@ pub fn sys_waitid(
         if child.exited {
             let child_pid = child.pid;
             let wait_status = child.wait_status;
-            *child = empty_child_entry();
+            if !wnowait {
+                *child = empty_child_entry();
+            }
             write_waitid_siginfo(base, infop_addr, child_pid, wait_status);
             clear_wait4_state(vm);
             vm.status = STATUS_OK;
@@ -1242,7 +1755,6 @@ pub fn sys_waitid(
     vm.wait_wstatus_addr = infop_addr;
     vm.wait_options = options;
     vm.wait_rusage_addr = rusage_addr;
-    vm.x[10] = 0;
     vm.status = STATUS_WAIT4;
     0
 }
@@ -1271,7 +1783,6 @@ pub fn resume_wait4(vm_ptr: u32, base: u32) -> i64 {
             )
         };
         if vm.status == STATUS_WAIT4 {
-            vm.x[10] = 0;
             return 0;
         }
 
@@ -1287,7 +1798,8 @@ pub fn resume_wait4(vm_ptr: u32, base: u32) -> i64 {
 // =========================================================================
 
 /// Plain fork: guest Memory full copy → STATUS_EXECVE_SPAWN.
-/// TS creates new Worker with copied Memory.
+/// TS creates new Worker with copied Memory, then reattaches kernel-owned
+/// objects (OFD/MemFS/control state) from the canonical owner separately.
 pub fn sys_fork(
     vm: &mut ThreadState,
     base: u32,
@@ -1334,6 +1846,7 @@ const ECHILD: i64 = -10;
 const ESRCH: i64 = -3;
 // WNOHANG flag
 const WNOHANG: u64 = 1;
+const WNOWAIT: u64 = 0x01000000;
 const WEXITED: u64 = 4;
 const P_ALL: u32 = 0;
 const P_PID: u32 = 1;
@@ -1499,6 +2012,13 @@ mod tests {
             t.vm.x[1] = 0xBEEF;
             t.vm.pc = 0x2000;
             t.vm.sig_pending = 1 << (SIGTERM - 1);
+            t.vm.fault_pc = 0x4444;
+            t.vm.fault_addr = 0x5555;
+            t.vm.blocked_fd = 17;
+            t.vm.blocked_ofd_id = 23;
+            t.vm.epoll_timeout_ms = 99;
+            t.vm.clone_pending = 1;
+            t.vm.clone_child_tid = 77;
 
             process_impl::sys_vfork(&mut t.vm, t.base);
             assert_eq!(t.vm.sig_pending, 0, "vfork child should not inherit pending signals");
@@ -1506,6 +2026,13 @@ mod tests {
             // Child modifies state
             t.vm.x[1] = 0xFFFF;
             t.vm.pc = 0x9999;
+            t.vm.fault_pc = 0xAAAA;
+            t.vm.fault_addr = 0xBBBB;
+            t.vm.blocked_fd = 0;
+            t.vm.blocked_ofd_id = 0;
+            t.vm.epoll_timeout_ms = -1;
+            t.vm.clone_pending = 0;
+            t.vm.clone_child_tid = 0;
 
             // Resume parent with child_pid=42
             process_impl::vfork_parent_resume(&mut t.vm, 42);
@@ -1513,6 +2040,13 @@ mod tests {
             assert_eq!(t.vm.pc, 0x2000, "parent pc should be restored");
             assert_eq!(t.vm.x[10], 42, "parent a0 should be child PID");
             assert_eq!(t.vm.sig_pending, 1 << (SIGTERM - 1));
+            assert_eq!(t.vm.fault_pc, 0x4444);
+            assert_eq!(t.vm.fault_addr, 0x5555);
+            assert_eq!(t.vm.blocked_fd, 17);
+            assert_eq!(t.vm.blocked_ofd_id, 23);
+            assert_eq!(t.vm.epoll_timeout_ms, 99);
+            assert_eq!(t.vm.clone_pending, 1);
+            assert_eq!(t.vm.clone_child_tid, 77);
             assert_eq!(t.vm.status, STATUS_OK);
         }
 
@@ -1551,6 +2085,32 @@ mod tests {
             assert_eq!(t.vm.spawn_kind, SPAWN_KIND_NONE);
             assert_eq!(t.vm.spawn_child_pid, 0);
             assert_eq!(t.vm.pc, 0x1000);
+        }
+
+        #[test]
+        fn contract_execve_preserves_host_stdio_slots() {
+            let mut t = TestVm::new();
+            let ps_addr = t.vm.process_ptr as u64;
+            let stdin_pipe_off = core::mem::offset_of!(ProcessState, stdin_pipe_slot) as u64;
+            let stdout_pipe_off = core::mem::offset_of!(ProcessState, stdout_pipe_slot) as u64;
+            let stderr_pipe_off = core::mem::offset_of!(ProcessState, stderr_pipe_slot) as u64;
+            let old_stdin = unsafe { guest_mem::read_u32(t.base, ps_addr + stdin_pipe_off) };
+            let old_stdout = unsafe { guest_mem::read_u32(t.base, ps_addr + stdout_pipe_off) };
+            let old_stderr = unsafe { guest_mem::read_u32(t.base, ps_addr + stderr_pipe_off) };
+            assert!(old_stdin != 0 && old_stdout != 0 && old_stderr != 0);
+
+            let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+            let path_addr = install_exec_file(&t, b"test", &elf);
+            let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+            assert_eq!(ret, 0);
+
+            let new_ps_addr = t.vm.process_ptr as u64;
+            let new_stdin = unsafe { guest_mem::read_u32(t.base, new_ps_addr + stdin_pipe_off) };
+            let new_stdout = unsafe { guest_mem::read_u32(t.base, new_ps_addr + stdout_pipe_off) };
+            let new_stderr = unsafe { guest_mem::read_u32(t.base, new_ps_addr + stderr_pipe_off) };
+            assert_eq!(new_stdin, old_stdin);
+            assert_eq!(new_stdout, old_stdout);
+            assert_eq!(new_stderr, old_stderr);
         }
 
         #[test]
@@ -1606,10 +2166,10 @@ mod tests {
         // Linux-visible semantics tests that are not covered by the permanent
         // contract suite.
         //
-        // Temporary until runtime harness / runtime-backed LTP:
+        // Temporary until the runtime-backed LTP harness:
         // - execve(2) post-reload process-state semantics
         //
-        // Explicit Phase 5 exception:
+        // Explicit kernel-only harness exception:
         // - nested process-group / setsid success-paths
         //   (upstream LTP has only setsid01 error-path coverage)
         #[test]
@@ -1730,6 +2290,72 @@ mod tests {
         }
 
         #[test]
+        fn semantics_execve_clears_blocked_resume_scratch() {
+            let mut t = TestVm::new();
+            let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+            let stdout_ofd = ps.fd_table[1].ofd_id;
+            assert!(stdout_ofd > 0, "stdout must be initialized");
+
+            crate::fs::fd_table::retain_ofd_id(stdout_ofd);
+            t.vm.blocked_fd = 1;
+            t.vm.blocked_ofd_id = stdout_ofd;
+            t.vm.futex_wait_addr = 0x1234;
+            t.vm.futex_wait_timeout = 0x5678;
+            t.vm.epoll_timeout_ms = 99;
+
+            let before = crate::fs::fd_table::get_ofd_by_id(stdout_ofd)
+                .expect("stdout OFD should exist before execve");
+            assert_eq!(before.refcount, 2);
+
+            let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+            let path_addr = install_exec_file(&t, b"test", &elf);
+
+            let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+            assert_eq!(ret, 0);
+            assert_eq!(t.vm.blocked_fd, 0);
+            assert_eq!(t.vm.blocked_ofd_id, 0);
+            assert_eq!(t.vm.futex_wait_addr, 0);
+            assert_eq!(t.vm.futex_wait_timeout, 0);
+            assert_eq!(t.vm.epoll_timeout_ms, 0);
+
+            let after = crate::fs::fd_table::get_ofd_by_id(stdout_ofd)
+                .expect("stdout OFD should survive execve");
+            assert_eq!(after.refcount, 1);
+        }
+
+        #[test]
+        fn semantics_vfork_execve_preserves_stdio_fds() {
+            let mut t = TestVm::new();
+            let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+            let old_fd0 = ps.fd_table[0].ofd_id;
+            let old_fd1 = ps.fd_table[1].ofd_id;
+            let old_fd2 = ps.fd_table[2].ofd_id;
+            assert!(old_fd0 != 0 && old_fd1 != 0 && old_fd2 != 0);
+
+            let status = process_impl::sys_vfork(&mut t.vm, t.base);
+            assert_eq!(status, STATUS_VFORK_WAIT);
+
+            let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+            let path_addr = install_exec_file(&t, b"test", &elf);
+            let child_pid = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+            assert!(child_pid > 0);
+            assert_eq!(t.vm.status, STATUS_EXECVE_SPAWN);
+
+            process_impl::clear_vfork_runtime_state();
+            let ret = process_impl::complete_execve_in_place(
+                &mut t.vm,
+                t.base,
+                process_impl::EXECVE_RAM_LIMIT,
+            );
+            assert_eq!(ret, 0);
+
+            let new_ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+            assert_eq!(new_ps.fd_table[0].ofd_id, old_fd0);
+            assert_eq!(new_ps.fd_table[1].ofd_id, old_fd1);
+            assert_eq!(new_ps.fd_table[2].ofd_id, old_fd2);
+        }
+
+        #[test]
         fn semantics_execve_failure_preserves_thread_group_and_altstack() {
             let mut t = TestVm::new();
             let ps_before = t.vm.process_ptr;
@@ -1752,6 +2378,29 @@ mod tests {
                 unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
             assert_eq!(ps.thread_count.load(Ordering::Acquire), 2);
             assert_eq!(ps.threads[1].state, THREAD_RUNNING);
+        }
+
+        #[test]
+        fn contract_reset_process_lifecycle_reinitializes_thread_registry() {
+            let mut t = TestVm::new();
+            let ps =
+                unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+            ps.thread_count.store(3, Ordering::Release);
+            ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, 0xFEED_BEEFu32, 0, 0);
+            ps.threads[2] = ThreadRecord::new(3, THREAD_RUNNING, 0xCAFE_BABEu32, 0, 0);
+
+            process_impl::reset_process_lifecycle(&mut t.vm, t.base, 7, 1, 8, 7, 7, true);
+
+            let ps =
+                unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+            assert_eq!(ps.pid, 7);
+            assert_eq!(ps.ppid, 1);
+            assert_eq!(ps.thread_count.load(Ordering::Acquire), 1);
+            assert_eq!(ps.threads[0].tid, t.vm.tid);
+            assert_eq!(ps.threads[0].state, THREAD_RUNNING);
+            assert_eq!(ps.threads[0].thread_ptr, &t.vm as *const _ as u32);
+            assert_eq!(ps.threads[1].state, THREAD_NONE);
+            assert_eq!(ps.threads[2].state, THREAD_NONE);
         }
 
         #[test]
@@ -1810,6 +2459,53 @@ mod tests {
 
             assert_eq!(process_impl::sys_setsid(&t.vm, t.base), 42);
             assert_eq!(process_impl::sys_getpgid(&t.vm, t.base, 0), 42);
+        }
+
+        #[test]
+        fn semantics_waitid_wnowait_reports_without_reaping() {
+            let mut t = TestVm::new();
+            let info_addr = t.scratch + 0x1000;
+
+            process_impl::record_child(42, 77);
+            process_impl::record_child_exit(77, 9 << 8);
+
+            let ret = process_impl::sys_waitid(
+                &mut t.vm,
+                t.base,
+                P_PID,
+                77,
+                info_addr,
+                WEXITED | WNOWAIT,
+                0,
+            );
+            assert_eq!(ret, 0);
+            assert_eq!(unsafe { guest_mem::read_u32(t.base, info_addr + SIGINFO_OFF_SI_PID) }, 77);
+            assert_eq!(
+                unsafe { guest_mem::read_u32(t.base, info_addr + SIGINFO_OFF_SI_STATUS) },
+                9
+            );
+
+            let ret = process_impl::sys_waitid(
+                &mut t.vm,
+                t.base,
+                P_PID,
+                77,
+                info_addr,
+                WEXITED,
+                0,
+            );
+            assert_eq!(ret, 0);
+
+            let ret = process_impl::sys_waitid(
+                &mut t.vm,
+                t.base,
+                P_PID,
+                77,
+                info_addr,
+                WEXITED | WNOHANG,
+                0,
+            );
+            assert_eq!(ret, ECHILD);
         }
 
     }
