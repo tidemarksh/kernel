@@ -1,0 +1,81 @@
+[package]
+name = "tidemark-kernel-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+build = "build.rs"
+
+[dependencies]
+tidemark-kernel = { path = "../kernel", features = ["harness"] }
+
+[[test]]
+name = "abi_exports"
+path = "tests/abi/exports.rs"
+
+[[test]]
+name = "syscall_time"
+path = "tests/syscall/time.rs"
+
+[[test]]
+name = "syscall_identity"
+path = "tests/syscall/identity.rs"
+
+[[test]]
+name = "syscall_pipe"
+path = "tests/syscall/pipe.rs"
+
+[[test]]
+name = "syscall_fs"
+path = "tests/syscall/fs.rs"
+
+[[test]]
+name = "syscall_epoll"
+path = "tests/syscall/epoll.rs"
+
+[[test]]
+name = "syscall_socket"
+path = "tests/syscall/socket.rs"
+
+[[test]]
+name = "syscall_memory"
+path = "tests/syscall/memory.rs"
+
+[[test]]
+name = "syscall_process"
+path = "tests/syscall/process.rs"
+
+[[test]]
+name = "syscall_thread"
+path = "tests/syscall/thread.rs"
+
+[[test]]
+name = "syscall_signal"
+path = "tests/syscall/signal.rs"
+
+[[test]]
+name = "fs_memfs"
+path = "tests/fs/memfs.rs"
+
+[[test]]
+name = "fs_fd_table"
+path = "tests/fs/fd_table.rs"
+
+[[test]]
+name = "fs_ring_buffer"
+path = "tests/fs/ring_buffer.rs"
+
+[[test]]
+name = "net_ring_buffer"
+path = "tests/net/ring_buffer.rs"
+
+[[test]]
+name = "cpu_block_cache"
+path = "tests/cpu/block_cache.rs"
+
+[[test]]
+name = "riscv_tests"
+path = "tests/riscv/mod.rs"
+
+[[test]]
+name = "ltp"
+path = "tests/ltp.rs"

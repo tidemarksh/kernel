@@ -1,0 +1,192 @@
+//! Bump allocator for kernel Worker's WASM linear memory.
+//!
+//! Used to allocate ProcessState, ThreadState, OFD table, Vec<Vma>, etc.
+//! Free is a no-op (kernel objects are long-lived).
+//! Implements GlobalAlloc to enable `extern crate alloc` (Vec, etc.).
+
+use core::alloc::{GlobalAlloc, Layout};
+
+static mut HEAP_BASE: u32 = 0;
+static mut HEAP_PTR: u32 = 0;
+
+/// Global allocator backed by the bump allocator.
+struct BumpAlloc;
+
+unsafe impl GlobalAlloc for BumpAlloc {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let ptr = unsafe { alloc(layout.size() as u32, layout.align() as u32) };
+        if ptr == 0 {
+            core::ptr::null_mut()
+        } else {
+            ptr as *mut u8
+        }
+    }
+    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
+        // No-op: bump allocator does not free.
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[global_allocator]
+static ALLOCATOR: BumpAlloc = BumpAlloc;
+
+/// Initialize the allocator. `base` is the first usable byte after WASM data segments.
+///
+/// Monotonic: heap pointer never rewinds. If it has already advanced past `base`,
+/// the heap continues from the current position. This prevents overlapping
+/// allocations when subsystems are re-initialized in a shared WASM instance.
+///
+/// # Safety
+/// Must be called before any allocation.
+pub unsafe fn init(base: u32) {
+    unsafe {
+        let effective = if HEAP_PTR > base { HEAP_PTR } else { base };
+        HEAP_BASE = effective;
+        HEAP_PTR = effective;
+    }
+}
+
+/// Reset the allocator to a known floor for a fresh test harness instance.
+///
+/// Test binaries run many isolated kernel setups in one WASM process. Those
+/// setups intentionally discard all kernel-owned allocations between cases, so
+/// rewinding the kernel bump allocator is correct there and keeps the guest
+/// address-space ceiling stable across the suite.
+#[cfg(any(test, feature = "harness"))]
+pub unsafe fn reset(base: u32) {
+    unsafe {
+        HEAP_BASE = base;
+        HEAP_PTR = base;
+    }
+}
+
+/// Allocate `size` bytes aligned to `align`. Returns 0 on failure.
+///
+/// # Safety
+/// Caller must ensure the WASM linear memory is large enough.
+pub unsafe fn alloc(size: u32, align: u32) -> u32 {
+    let aligned = (unsafe { HEAP_PTR } + align - 1) & !(align - 1);
+    let end = aligned + size;
+    // Check against WASM memory size
+    let mem_size = (core::arch::wasm32::memory_size(0) as u64) * 65536;
+    if end as u64 > mem_size {
+        // Try to grow
+        let pages_needed = (((end as u64 - mem_size) + 65535) / 65536) as usize;
+        let result = core::arch::wasm32::memory_grow(0, pages_needed);
+        if result == usize::MAX {
+            return 0; // OOM
+        }
+    }
+    unsafe { HEAP_PTR = end };
+    aligned
+}
+
+/// Convenience: allocate a zeroed region.
+///
+/// # Safety
+/// Same as `alloc`.
+pub unsafe fn alloc_zeroed(size: u32, align: u32) -> u32 {
+    let ptr = unsafe { alloc(size, align) };
+    if ptr != 0 {
+        unsafe { core::ptr::write_bytes(ptr as *mut u8, 0, size as usize) };
+    }
+    ptr
+}
+
+/// Convenience: allocate space for a type T, zeroed.
+///
+/// # Safety
+/// Same as `alloc`.
+pub unsafe fn alloc_type<T>() -> u32 {
+    unsafe {
+        alloc_zeroed(
+            core::mem::size_of::<T>() as u32,
+            core::mem::align_of::<T>() as u32,
+        )
+    }
+}
+
+/// Return current heap usage in bytes.
+pub fn heap_used() -> u32 {
+    unsafe { HEAP_PTR - HEAP_BASE }
+}
+
+/// Return the heap base address.
+pub fn heap_base() -> u32 {
+    unsafe { HEAP_BASE }
+}
+
+/// Return current heap pointer (first unallocated byte).
+pub fn heap_ptr() -> u32 {
+    unsafe { HEAP_PTR }
+}
+
+pub fn attach_heap_state(base: u32, ptr: u32) {
+    unsafe {
+        HEAP_BASE = base;
+        HEAP_PTR = ptr;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Test that alloc returns a non-zero pointer.
+    #[test]
+    fn alloc_returns_nonzero() {
+        unsafe {
+            // Ensure sufficient WASM pages are available.
+            let current_pages = core::arch::wasm32::memory_size(0);
+            if current_pages < 256 {
+                core::arch::wasm32::memory_grow(0, 256 - current_pages);
+            }
+            super::init(0x20_0000);
+
+            let ptr = super::alloc(64, 8);
+            assert!(ptr != 0, "alloc should return a non-zero pointer");
+        }
+    }
+
+    /// Test that sequential allocations return non-overlapping regions.
+    #[test]
+    fn sequential_allocs_non_overlapping() {
+        unsafe {
+            let current_pages = core::arch::wasm32::memory_size(0);
+            if current_pages < 256 {
+                core::arch::wasm32::memory_grow(0, 256 - current_pages);
+            }
+            super::init(0x20_0000);
+
+            let p1 = super::alloc(128, 8);
+            let p2 = super::alloc(128, 8);
+            assert!(p1 != 0, "first alloc should succeed");
+            assert!(p2 != 0, "second alloc should succeed");
+            // The second allocation must start at or after p1 + 128 (no overlap).
+            assert!(
+                p2 >= p1 + 128,
+                "allocations should not overlap: p1={:#x}, p2={:#x}",
+                p1,
+                p2
+            );
+        }
+    }
+
+    /// Test that alloc_zeroed returns memory filled with zeroes.
+    #[test]
+    fn alloc_zeroed_is_zeroed() {
+        unsafe {
+            let current_pages = core::arch::wasm32::memory_size(0);
+            if current_pages < 256 {
+                core::arch::wasm32::memory_grow(0, 256 - current_pages);
+            }
+            super::init(0x20_0000);
+
+            let ptr = super::alloc_zeroed(256, 8);
+            assert!(ptr != 0, "alloc_zeroed should return a non-zero pointer");
+
+            let slice = core::slice::from_raw_parts(ptr as *const u8, 256);
+            for (i, &byte) in slice.iter().enumerate() {
+                assert_eq!(byte, 0, "byte at offset {} should be zero, got {}", i, byte);
+            }
+        }
+    }
+}

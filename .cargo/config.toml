@@ -1,5 +1,5 @@
 [build]
-target = "wasm32-unknown-unknown"
+target = "wasm32-wasip1"
 
 [target.wasm32-unknown-unknown]
 # Import shared linear memory from the runtime and place kernel static data
@@ -20,16 +20,15 @@ rustflags = [
 ]
 
 [alias]
-xtask = "run -p xtask --target x86_64-unknown-linux-gnu --target-dir target --"
 # The no_std kernel artifact for wasm32-unknown-unknown needs core/alloc from
-# build-std. Keep that scoped to explicit kernel build aliases so host xtask
-# and wasm32-wasip1 tests continue to use their normal std toolchains.
-build-kernel = "build -Z build-std=core,alloc --target wasm32-unknown-unknown"
-build-kernel-release = "build -Z build-std=core,alloc --target wasm32-unknown-unknown --release"
-test-kernel = "xtask test"
-test-kernel-lib = "xtask test-lib"
-test-kernel-riscv = "xtask test-binary riscv_tests"
-test-kernel-ltp = "xtask test-binary ltp_tests"
+# build-std. Keep that scoped to explicit kernel build aliases so the test
+# package can use the wasm32-wasip1 toolchain directly under `cargo test`.
+build-kernel = "build -p tidemark-kernel -Z build-std=core,alloc --target wasm32-unknown-unknown"
+build-kernel-release = "build -p tidemark-kernel -Z build-std=core,alloc --target wasm32-unknown-unknown --release"
+test-kernel = "test"
+test-kernel-lib = "test -p tidemark-kernel --lib"
+test-kernel-riscv = "test -p tidemark-kernel-tests --test riscv_tests"
+test-kernel-ltp = "test -p tidemark-kernel-tests --test ltp ltp_"
 
 [target.wasm32-wasip1]
-runner = ["wasmtime", "--dir=/"]
+runner = ["bash", "../scripts/wasm-test-runner.sh"]

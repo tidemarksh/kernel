@@ -1,6 +1,6 @@
-[submodule "tests/riscv-tests/src"]
-	path = tests/riscv-tests/src
+[submodule "vendor/riscv-tests"]
+	path = vendor/riscv-tests
 	url = https://github.com/riscv-software-src/riscv-tests.git
-[submodule "tests/ltp-tests"]
-	path = tests/ltp-tests
+[submodule "vendor/ltp"]
+	path = vendor/ltp
 	url = https://github.com/linux-test-project/ltp.git

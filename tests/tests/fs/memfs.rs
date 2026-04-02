@@ -1,0 +1,151 @@
+use tidemark_kernel::fs::memfs;
+use tidemark_kernel::harness::TestVm;
+
+#[test]
+fn create_and_read() {
+    let _t = TestVm::new();
+    let ino = memfs::create_file(1, b"hello.txt", 0o644);
+    assert!(ino > 0);
+    assert_eq!(memfs::write_file(ino, 0, b"Hello, world!"), 13);
+
+    let mut buf = [0u8; 32];
+    let n = memfs::read_file(ino, 0, &mut buf);
+    assert_eq!(n, 13);
+    assert_eq!(&buf[..13], b"Hello, world!");
+}
+
+#[test]
+fn directory_tree() {
+    let _t = TestVm::new();
+    let dir = memfs::create_dir(1, b"src", 0o755);
+    assert!(dir > 0);
+    let file = memfs::create_file(dir, b"main.rs", 0o644);
+    assert!(file > 0);
+
+    assert_eq!(memfs::resolve_path(b"/src/main.rs"), file);
+    assert_eq!(memfs::resolve_path(b"/src"), dir);
+    assert_eq!(memfs::resolve_path(b"/nonexistent"), 0);
+}
+
+#[test]
+fn unlink_file() {
+    let _t = TestVm::new();
+    let ino = memfs::create_file(1, b"tmp.txt", 0o644);
+    assert!(ino > 0);
+    assert_eq!(memfs::resolve_path(b"/tmp.txt"), ino);
+    assert_eq!(memfs::unlink(1, b"tmp.txt"), 0);
+    assert_eq!(memfs::resolve_path(b"/tmp.txt"), 0);
+}
+
+#[test]
+fn stat_file() {
+    let _t = TestVm::new();
+    let ino = memfs::create_file(1, b"data.bin", 0o644);
+    memfs::write_file(ino, 0, &[0u8; 1024]);
+    let st = memfs::stat(ino).unwrap();
+    assert_eq!(st.size, 1024);
+    assert_eq!(st.mode & memfs::S_IFREG, memfs::S_IFREG);
+}
+
+#[test]
+fn readdir_entries() {
+    let _t = TestVm::new();
+    memfs::create_file(1, b"a.txt", 0o644);
+    memfs::create_file(1, b"b.txt", 0o644);
+    memfs::create_dir(1, b"sub", 0o755);
+    let mut count = 0;
+    memfs::readdir(1, |_name, _ino| {
+        count += 1;
+    });
+    assert_eq!(count, 3);
+}
+
+#[test]
+fn truncate_file() {
+    let _t = TestVm::new();
+    let ino = memfs::create_file(1, b"f.txt", 0o644);
+    memfs::write_file(ino, 0, b"Hello, world!");
+    assert_eq!(memfs::stat(ino).unwrap().size, 13);
+    memfs::truncate(ino, 5);
+    assert_eq!(memfs::stat(ino).unwrap().size, 5);
+    let mut buf = [0u8; 16];
+    let n = memfs::read_file(ino, 0, &mut buf);
+    assert_eq!(n, 5);
+    assert_eq!(&buf[..5], b"Hello");
+}
+
+#[test]
+fn write_at_offset() {
+    let _t = TestVm::new();
+    let ino = memfs::create_file(1, b"sparse.bin", 0o644);
+    memfs::write_file(ino, 100, b"data");
+    assert_eq!(memfs::stat(ino).unwrap().size, 104);
+    let mut buf = [0u8; 4];
+    memfs::read_file(ino, 100, &mut buf);
+    assert_eq!(&buf, b"data");
+}
+
+#[test]
+fn symlink_create_and_read() {
+    let _t = TestVm::new();
+    let ino = memfs::create_symlink(1, b"mylink", b"/target/path");
+    assert!(ino > 0);
+
+    let st = memfs::stat(ino).unwrap();
+    assert_eq!(st.mode & memfs::S_IFMT, memfs::S_IFLNK);
+    assert_eq!(st.size, 12);
+
+    let mut buf = [0u8; 64];
+    let n = memfs::read_link(ino, &mut buf);
+    assert_eq!(n, 12);
+    assert_eq!(&buf[..12], b"/target/path");
+}
+
+#[test]
+fn symlink_resolve_and_readlinkat() {
+    let _t = TestVm::new();
+    let proc_dir = memfs::create_dir(1, b"proc", 0o755);
+    assert!(proc_dir > 0);
+    let self_dir = memfs::create_dir(proc_dir, b"self", 0o755);
+    assert!(self_dir > 0);
+    let exe_ino = memfs::create_symlink(self_dir, b"exe", b"/init");
+    assert!(exe_ino > 0);
+
+    assert_eq!(memfs::resolve_path(b"/proc/self/exe"), exe_ino);
+
+    let mut buf = [0u8; 64];
+    let n = memfs::read_link(exe_ino, &mut buf);
+    assert_eq!(&buf[..n], b"/init");
+}
+
+#[test]
+fn resolve_dotdot_components() {
+    let _t = TestVm::new();
+    let tmp = memfs::create_dir(1, b"tmp", 0o755);
+    let hello = memfs::create_dir(tmp, b"hello", 0o755);
+    let file = memfs::create_file(tmp, b"module.txt", 0o644);
+    assert!(hello > 0);
+    assert!(file > 0);
+
+    assert_eq!(memfs::resolve_path(b"/tmp/hello/.."), tmp);
+    assert_eq!(memfs::resolve_path_from(hello, b".."), tmp);
+    assert_eq!(memfs::resolve_path_from(hello, b"../module.txt"), file);
+}
+
+#[test]
+fn file_and_symlink_do_not_change_parent_nlink() {
+    let _t = TestVm::new();
+    let root_before = memfs::stat(1).unwrap().nlink;
+
+    let file_ino = memfs::create_file(1, b"tmp.txt", 0o644);
+    assert!(file_ino > 0);
+    assert_eq!(memfs::stat(1).unwrap().nlink, root_before);
+
+    let link_ino = memfs::create_symlink(1, b"tmp.link", b"/tmp.txt");
+    assert!(link_ino > 0);
+    assert_eq!(memfs::stat(1).unwrap().nlink, root_before);
+
+    assert_eq!(memfs::unlink(1, b"tmp.txt"), 0);
+    assert_eq!(memfs::unlink(1, b"tmp.link"), 0);
+    assert_eq!(memfs::stat(1).unwrap().nlink, root_before);
+}
