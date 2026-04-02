@@ -17,11 +17,300 @@ use self::block_cache::BlockCache;
 use self::trace::{HotCounts, JitBitmap, TraceBuffer};
 use crate::abi;
 use crate::guest_mem;
-use crate::types::ThreadState;
+use crate::types::{ProcessState, ThreadState};
+use core::sync::atomic::{AtomicI32, AtomicI64, Ordering};
 
-// LR/SC reservation state (per-hart, single-threaded).
-static mut RESV_ADDR: u64 = 0;
-static mut RESV_VALID: bool = false;
+#[derive(Clone, Copy)]
+struct JalrTrace {
+    pc: u64,
+    rs1_value: u64,
+    target: u64,
+    rd: u32,
+    rs1: u32,
+}
+
+static mut LAST_JALR_TRACE: JalrTrace = JalrTrace {
+    pc: 0,
+    rs1_value: 0,
+    target: 0,
+    rd: 0,
+    rs1: 0,
+};
+
+#[derive(Clone, Copy)]
+struct ZeroRegTrace {
+    pc: u64,
+    raw: u32,
+    reg: u32,
+    prev_value: u64,
+    sp: u64,
+    g: u64,
+}
+
+static mut LAST_ZERO_REG_TRACE: ZeroRegTrace = ZeroRegTrace {
+    pc: 0,
+    raw: 0,
+    reg: 0,
+    prev_value: 0,
+    sp: 0,
+    g: 0,
+};
+
+#[derive(Clone, Copy)]
+struct RegWriteTrace {
+    pc: u64,
+    raw: u32,
+    source: u32,
+    prev_value: u64,
+    value: u64,
+    rs1: u32,
+    rs1_value: u64,
+}
+
+static mut LAST_G_WRITE_TRACE: RegWriteTrace = RegWriteTrace {
+    pc: 0,
+    raw: 0,
+    source: 0,
+    prev_value: 0,
+    value: 0,
+    rs1: 0,
+    rs1_value: 0,
+};
+
+static mut LAST_SP_WRITE_TRACE: RegWriteTrace = RegWriteTrace {
+    pc: 0,
+    raw: 0,
+    source: 0,
+    prev_value: 0,
+    value: 0,
+    rs1: 0,
+    rs1_value: 0,
+};
+
+const EXEC_TRACE_LEN: usize = 64;
+static mut RECENT_EXEC_TRACE_PC: [u64; EXEC_TRACE_LEN] = [0; EXEC_TRACE_LEN];
+static mut RECENT_EXEC_TRACE_RAW: [u32; EXEC_TRACE_LEN] = [0; EXEC_TRACE_LEN];
+static mut RECENT_EXEC_TRACE_STEP: [u32; EXEC_TRACE_LEN] = [0; EXEC_TRACE_LEN];
+static mut RECENT_EXEC_TRACE_SP: [u64; EXEC_TRACE_LEN] = [0; EXEC_TRACE_LEN];
+static mut RECENT_EXEC_TRACE_RA: [u64; EXEC_TRACE_LEN] = [0; EXEC_TRACE_LEN];
+static mut RECENT_EXEC_TRACE_A0: [u64; EXEC_TRACE_LEN] = [0; EXEC_TRACE_LEN];
+static mut RECENT_EXEC_TRACE_G: [u64; EXEC_TRACE_LEN] = [0; EXEC_TRACE_LEN];
+static mut RECENT_EXEC_TRACE_NEXT: u32 = 0;
+
+const REG_WRITE_SOURCE_STEP: u32 = 1;
+const REG_WRITE_SOURCE_VM_RESTORE: u32 = 2;
+const REG_WRITE_SOURCE_BLOCK: u32 = 3;
+
+#[inline(always)]
+fn note_exec_trace(pc: u64, raw: u32, step: u64, x: &[u64; 32]) {
+    unsafe {
+        let slot = (RECENT_EXEC_TRACE_NEXT as usize) % EXEC_TRACE_LEN;
+        RECENT_EXEC_TRACE_PC[slot] = pc;
+        RECENT_EXEC_TRACE_RAW[slot] = raw;
+        RECENT_EXEC_TRACE_STEP[slot] = step as u32;
+        RECENT_EXEC_TRACE_SP[slot] = x[2];
+        RECENT_EXEC_TRACE_RA[slot] = x[1];
+        RECENT_EXEC_TRACE_A0[slot] = x[10];
+        RECENT_EXEC_TRACE_G[slot] = x[27];
+        RECENT_EXEC_TRACE_NEXT = RECENT_EXEC_TRACE_NEXT.wrapping_add(1);
+    }
+}
+
+pub fn recent_exec_trace_len() -> u32 {
+    EXEC_TRACE_LEN as u32
+}
+
+pub fn recent_exec_trace(index: u32) -> (u64, u32, u32, u64, u64, u64, u64) {
+    unsafe {
+        let len = EXEC_TRACE_LEN as u32;
+        let available = RECENT_EXEC_TRACE_NEXT.min(len);
+        if index >= available {
+            return (0, 0, 0, 0, 0, 0, 0);
+        }
+        let base = RECENT_EXEC_TRACE_NEXT.wrapping_sub(available) as usize;
+        let slot = (base + index as usize) % EXEC_TRACE_LEN;
+        (
+            RECENT_EXEC_TRACE_PC[slot],
+            RECENT_EXEC_TRACE_RAW[slot],
+            RECENT_EXEC_TRACE_STEP[slot],
+            RECENT_EXEC_TRACE_SP[slot],
+            RECENT_EXEC_TRACE_RA[slot],
+            RECENT_EXEC_TRACE_A0[slot],
+            RECENT_EXEC_TRACE_G[slot],
+        )
+    }
+}
+
+#[inline(always)]
+fn note_jalr(pc: u64, rd: usize, rs1: usize, rs1_value: u64, target: u64) {
+    if rs1 == 1 || target < 0x1000 {
+        unsafe {
+            LAST_JALR_TRACE = JalrTrace {
+                pc,
+                rs1_value,
+                target,
+                rd: rd as u32,
+                rs1: rs1 as u32,
+            };
+        }
+    }
+}
+
+pub fn last_jalr_trace() -> (u64, u64, u64, u32, u32) {
+    unsafe {
+        let trace = LAST_JALR_TRACE;
+        (
+            trace.pc,
+            trace.rs1_value,
+            trace.target,
+            trace.rd,
+            trace.rs1,
+        )
+    }
+}
+
+#[inline(always)]
+fn note_zero_reg_transition(pc: u64, raw: u32, prev_sp: u64, prev_g: u64, x: &[u64; 32]) {
+    unsafe {
+        if prev_g != 0 && x[27] == 0 {
+            LAST_ZERO_REG_TRACE = ZeroRegTrace {
+                pc,
+                raw,
+                reg: 27,
+                prev_value: prev_g,
+                sp: x[2],
+                g: x[27],
+            };
+            return;
+        }
+        if prev_sp != 0 && x[2] == 0 {
+            LAST_ZERO_REG_TRACE = ZeroRegTrace {
+                pc,
+                raw,
+                reg: 2,
+                prev_value: prev_sp,
+                sp: x[2],
+                g: x[27],
+            };
+        }
+    }
+}
+
+pub fn last_zero_reg_trace() -> (u64, u32, u32, u64, u64, u64) {
+    unsafe {
+        let trace = LAST_ZERO_REG_TRACE;
+        (
+            trace.pc,
+            trace.raw,
+            trace.reg,
+            trace.prev_value,
+            trace.sp,
+            trace.g,
+        )
+    }
+}
+
+#[inline(always)]
+fn note_special_reg_transitions(
+    pc: u64,
+    raw: u32,
+    source: u32,
+    prev_sp: u64,
+    prev_g: u64,
+    x: &[u64; 32],
+) {
+    unsafe {
+        let rs1 = if raw == 0 { 0 } else { decode::rs1(raw) as u32 };
+        let rs1_value = if raw == 0 { 0 } else { x[rs1 as usize] };
+        if prev_g != x[27] {
+            LAST_G_WRITE_TRACE = RegWriteTrace {
+                pc,
+                raw,
+                source,
+                prev_value: prev_g,
+                value: x[27],
+                rs1,
+                rs1_value,
+            };
+        }
+        if prev_sp != x[2] {
+            LAST_SP_WRITE_TRACE = RegWriteTrace {
+                pc,
+                raw,
+                source,
+                prev_value: prev_sp,
+                value: x[2],
+                rs1,
+                rs1_value,
+            };
+        }
+    }
+}
+
+pub fn last_g_write_trace() -> (u64, u32, u32, u64, u64, u32, u64) {
+    unsafe {
+        let trace = LAST_G_WRITE_TRACE;
+        (
+            trace.pc,
+            trace.raw,
+            trace.source,
+            trace.prev_value,
+            trace.value,
+            trace.rs1,
+            trace.rs1_value,
+        )
+    }
+}
+
+pub fn last_sp_write_trace() -> (u64, u32, u32, u64, u64, u32, u64) {
+    unsafe {
+        let trace = LAST_SP_WRITE_TRACE;
+        (
+            trace.pc,
+            trace.raw,
+            trace.source,
+            trace.prev_value,
+            trace.value,
+            trace.rs1,
+            trace.rs1_value,
+        )
+    }
+}
+
+#[inline(always)]
+fn guest_memory_limit(base: u32) -> u64 {
+    ((core::arch::wasm32::memory_size(0) as u64) * 65536).saturating_sub(base as u64)
+}
+
+#[inline(always)]
+fn guest_range_in_bounds(base: u32, addr: u64, len: u64) -> bool {
+    let limit = guest_memory_limit(base);
+    addr.checked_add(len).is_some_and(|end| end <= limit)
+}
+
+#[inline(always)]
+unsafe fn deliver_sync_sigsegv(
+    vm: &mut ThreadState,
+    x: &mut [u64; 32],
+    f: &mut [u64; 32],
+    fcsr: &mut u32,
+    pc: &mut u64,
+    base: u32,
+    addr: u64,
+    accerr: bool,
+) -> bool {
+    vm.x = *x;
+    vm.f = *f;
+    vm.pc = *pc;
+    vm.fcsr = *fcsr;
+    crate::syscall::signal::queue_sigsegv(vm, *pc, addr, accerr);
+    crate::syscall::signal::check_pending(vm, base);
+    *x = vm.x;
+    *f = vm.f;
+    *pc = vm.pc;
+    *fcsr = vm.fcsr;
+    vm.status == abi::STATUS_OK
+}
 
 /// Execute up to `budget` guest instructions.
 /// Returns remaining budget (negative = overrun).
@@ -83,6 +372,8 @@ pub unsafe fn exec_at_base(
                 // Budget boundary: check pending signals (RISC-V ISA spec + Linux semantics)
                 // WASM has no async interrupts, so check at budget boundaries in addition
                 // to syscall return boundaries.
+                let prev_sp = x[2];
+                let prev_g = x[27];
                 vm.x = x;
                 vm.f = f;
                 vm.pc = pc;
@@ -92,6 +383,7 @@ pub unsafe fn exec_at_base(
                     f = vm.f;
                     pc = vm.pc;
                     fcsr = vm.fcsr;
+                    note_special_reg_transitions(pc, 0, REG_WRITE_SOURCE_VM_RESTORE, prev_sp, prev_g, &x);
                     if vm.status != abi::STATUS_OK {
                         return remaining;
                     }
@@ -99,8 +391,19 @@ pub unsafe fn exec_at_base(
                 break;
             }
             remaining -= 1;
+            let prev_sp = x[2];
+            let prev_g = x[27];
+            let instr_pc = pc;
 
             // Fetch instruction
+            crate::syscall::signal::note_pc(vm, pc);
+            if !guest_range_in_bounds(base, pc, 2) {
+                let fault_addr = pc;
+                if !deliver_sync_sigsegv(vm, &mut x, &mut f, &mut fcsr, &mut pc, base, fault_addr, false) {
+                    return remaining;
+                }
+                continue;
+            }
             let raw16 = guest_mem::read_u16(base, pc);
             let (raw, step): (u32, u64) = if (raw16 & 3) != 3 {
                 // Compressed (RVC)
@@ -111,12 +414,20 @@ pub unsafe fn exec_at_base(
                     vm.f = f;
                     vm.pc = pc;
                     vm.fcsr = fcsr;
-                    crate::syscall::signal::send_signal(vm, abi::SIGILL);
+                    crate::syscall::signal::queue_sigill(vm, pc);
                     crate::syscall::signal::check_pending(vm, base);
                     x = vm.x;
                     f = vm.f;
                     pc = vm.pc;
                     fcsr = vm.fcsr;
+                    note_special_reg_transitions(
+                        instr_pc,
+                        raw16 as u32,
+                        REG_WRITE_SOURCE_VM_RESTORE,
+                        prev_sp,
+                        prev_g,
+                        &x,
+                    );
                     if vm.status != abi::STATUS_OK {
                         return remaining;
                     }
@@ -125,6 +436,13 @@ pub unsafe fn exec_at_base(
                 }
                 (expanded, 2)
             } else {
+                if !guest_range_in_bounds(base, pc, 4) {
+                    let fault_addr = pc;
+                    if !deliver_sync_sigsegv(vm, &mut x, &mut f, &mut fcsr, &mut pc, base, fault_addr, false) {
+                        return remaining;
+                    }
+                    continue;
+                }
                 (guest_mem::read_u32(base, pc), 4)
             };
 
@@ -144,6 +462,7 @@ pub unsafe fn exec_at_base(
             }
 
             let opcode = decode::opcode(raw);
+            note_exec_trace(instr_pc, raw, step, &x);
 
             match opcode {
                 decode::OP_OP_IMM => exec_op_imm(&mut x, raw, &mut pc, step),
@@ -151,28 +470,40 @@ pub unsafe fn exec_at_base(
                 decode::OP_OP => exec_op(&mut x, raw, &mut pc, step),
                 decode::OP_OP_32 => exec_op_32(&mut x, raw, &mut pc, step),
                 decode::OP_LOAD => {
-                    if crate::syscall::memory::has_prot_none() {
-                        let addr = (x[decode::rs1(raw)] as i64 + decode::imm_i(raw)) as u64;
-                        if crate::syscall::memory::is_prot_none(addr) {
-                            crate::syscall::signal::send_signal(vm, crate::abi::SIGSEGV);
-                            vm.status = abi::STATUS_FAULT;
-                            vm.fault_pc = pc;
-                            vm.fault_addr = addr;
-                            break;
+                    let addr = (x[decode::rs1(raw)] as i64 + decode::imm_i(raw)) as u64;
+                    let width = match decode::funct3(raw) {
+                        0 | 4 => 1,
+                        1 | 5 => 2,
+                        2 | 6 => 4,
+                        3 => 8,
+                        _ => 0,
+                    };
+                    let accerr = crate::syscall::memory::has_prot_none()
+                        && crate::syscall::memory::is_prot_none(addr);
+                    if (width != 0 && !guest_range_in_bounds(base, addr, width)) || accerr {
+                        if !deliver_sync_sigsegv(vm, &mut x, &mut f, &mut fcsr, &mut pc, base, addr, accerr) {
+                            return remaining;
                         }
+                        continue;
                     }
                     exec_load(&mut x, raw, base, &mut pc, step);
                 }
                 decode::OP_STORE => {
-                    if crate::syscall::memory::has_prot_none() {
-                        let addr = (x[decode::rs1(raw)] as i64 + decode::imm_s(raw)) as u64;
-                        if crate::syscall::memory::is_prot_none(addr) {
-                            crate::syscall::signal::send_signal(vm, crate::abi::SIGSEGV);
-                            vm.status = abi::STATUS_FAULT;
-                            vm.fault_pc = pc;
-                            vm.fault_addr = addr;
-                            break;
+                    let addr = (x[decode::rs1(raw)] as i64 + decode::imm_s(raw)) as u64;
+                    let width = match decode::funct3(raw) {
+                        0 => 1,
+                        1 => 2,
+                        2 => 4,
+                        3 => 8,
+                        _ => 0,
+                    };
+                    let accerr = crate::syscall::memory::has_prot_none()
+                        && crate::syscall::memory::is_prot_none(addr);
+                    if (width != 0 && !guest_range_in_bounds(base, addr, width)) || accerr {
+                        if !deliver_sync_sigsegv(vm, &mut x, &mut f, &mut fcsr, &mut pc, base, addr, accerr) {
+                            return remaining;
                         }
+                        continue;
                     }
                     exec_store(&x, raw, base, &mut pc, step);
                 }
@@ -234,6 +565,7 @@ pub unsafe fn exec_at_base(
                     let rd = decode::rd(raw);
                     let rs1v = decode::rs1(raw);
                     let target = ((x[rs1v] as i64 + decode::imm_i(raw)) as u64) & !1;
+                    note_jalr(pc, rd, rs1v, x[rs1v], target);
                     if rd != 0 {
                         x[rd] = pc + step;
                     }
@@ -273,11 +605,20 @@ pub unsafe fn exec_at_base(
                                 f = vm.f;
                                 pc = vm.pc;
                                 fcsr = vm.fcsr;
+                                note_special_reg_transitions(
+                                    instr_pc,
+                                    raw,
+                                    REG_WRITE_SOURCE_VM_RESTORE,
+                                    prev_sp,
+                                    prev_g,
+                                    &x,
+                                );
                                 if status != abi::STATUS_OK {
                                     vm.status = status;
                                     return remaining;
                                 }
                                 x[0] = 0;
+                                note_zero_reg_transition(instr_pc, raw, prev_sp, prev_g, &x);
                                 continue;
                             }
                             1 => {
@@ -302,10 +643,56 @@ pub unsafe fn exec_at_base(
                     pc += step;
                 }
                 decode::OP_AMO => {
-                    exec_amo(&mut x, raw, base, &mut pc, step);
+                    let addr = x[decode::rs1(raw)];
+                    let width = match decode::funct3(raw) {
+                        2 => 4,
+                        3 => 8,
+                        _ => 0,
+                    };
+                    let accerr = crate::syscall::memory::has_prot_none()
+                        && crate::syscall::memory::is_prot_none(addr);
+                    if (width != 0 && !guest_range_in_bounds(base, addr, width)) || accerr {
+                        if !deliver_sync_sigsegv(vm, &mut x, &mut f, &mut fcsr, &mut pc, base, addr, accerr) {
+                            return remaining;
+                        }
+                        continue;
+                    }
+                    exec_amo(vm, &mut x, raw, base, &mut pc, step);
                 }
-                decode::OP_LOAD_FP => exec_load_fp(&mut f, &x, raw, base, &mut pc, step),
-                decode::OP_STORE_FP => exec_store_fp(&f, &x, raw, base, &mut pc, step),
+                decode::OP_LOAD_FP => {
+                    let addr = (x[decode::rs1(raw)] as i64 + decode::imm_i(raw)) as u64;
+                    let width = match decode::funct3(raw) {
+                        2 => 4,
+                        3 => 8,
+                        _ => 0,
+                    };
+                    let accerr = crate::syscall::memory::has_prot_none()
+                        && crate::syscall::memory::is_prot_none(addr);
+                    if (width != 0 && !guest_range_in_bounds(base, addr, width)) || accerr {
+                        if !deliver_sync_sigsegv(vm, &mut x, &mut f, &mut fcsr, &mut pc, base, addr, accerr) {
+                            return remaining;
+                        }
+                        continue;
+                    }
+                    exec_load_fp(&mut f, &x, raw, base, &mut pc, step);
+                }
+                decode::OP_STORE_FP => {
+                    let addr = (x[decode::rs1(raw)] as i64 + decode::imm_s(raw)) as u64;
+                    let width = match decode::funct3(raw) {
+                        2 => 4,
+                        3 => 8,
+                        _ => 0,
+                    };
+                    let accerr = crate::syscall::memory::has_prot_none()
+                        && crate::syscall::memory::is_prot_none(addr);
+                    if (width != 0 && !guest_range_in_bounds(base, addr, width)) || accerr {
+                        if !deliver_sync_sigsegv(vm, &mut x, &mut f, &mut fcsr, &mut pc, base, addr, accerr) {
+                            return remaining;
+                        }
+                        continue;
+                    }
+                    exec_store_fp(&f, &x, raw, base, &mut pc, step);
+                }
                 decode::OP_OP_FP => exec_op_fp(&mut x, &mut f, raw, &mut pc, step, &mut fcsr),
                 decode::OP_FMADD | decode::OP_FMSUB | decode::OP_FNMSUB | decode::OP_FNMADD => {
                     exec_fma(&mut f, raw, opcode, &mut pc, step, &mut fcsr);
@@ -316,12 +703,20 @@ pub unsafe fn exec_at_base(
                     vm.f = f;
                     vm.pc = pc;
                     vm.fcsr = fcsr;
-                    crate::syscall::signal::send_signal(vm, abi::SIGILL);
+                    crate::syscall::signal::queue_sigill(vm, pc);
                     crate::syscall::signal::check_pending(vm, base);
                     x = vm.x;
                     f = vm.f;
                     pc = vm.pc;
                     fcsr = vm.fcsr;
+                    note_special_reg_transitions(
+                        instr_pc,
+                        raw,
+                        REG_WRITE_SOURCE_VM_RESTORE,
+                        prev_sp,
+                        prev_g,
+                        &x,
+                    );
                     if vm.status != abi::STATUS_OK {
                         return remaining;
                     }
@@ -332,6 +727,8 @@ pub unsafe fn exec_at_base(
 
             // Enforce x0 = 0
             x[0] = 0;
+            note_special_reg_transitions(instr_pc, raw, REG_WRITE_SOURCE_STEP, prev_sp, prev_g, &x);
+            note_zero_reg_transition(instr_pc, raw, prev_sp, prev_g, &x);
         }
 
         vm.x = x;
@@ -372,6 +769,9 @@ unsafe fn exec_block(
 
         for i in 0..len {
             let op = blk.ops[i];
+            let prev_sp = x[2];
+            let prev_g = x[27];
+            let op_pc = cur_pc;
             let rd = op.rd();
             let r1 = op.rs1();
             let r2 = op.rs2();
@@ -622,6 +1022,7 @@ unsafe fn exec_block(
                         cur_pc + step
                     };
                     x[0] = 0;
+                    note_special_reg_transitions(op_pc, 0, REG_WRITE_SOURCE_BLOCK, prev_sp, prev_g, x);
                     return blk.total_budget as i32;
                 }
                 10 => {
@@ -631,15 +1032,19 @@ unsafe fn exec_block(
                     }
                     *pc = (cur_pc as i64 + imm) as u64;
                     x[0] = 0;
+                    note_special_reg_transitions(op_pc, 0, REG_WRITE_SOURCE_BLOCK, prev_sp, prev_g, x);
                     return blk.total_budget as i32;
                 }
                 11 => {
                     // JALR (terminator)
+                    let target = ((x[r1] as i64 + imm) as u64) & !1;
+                    note_jalr(cur_pc, rd, r1, x[r1], target);
                     if rd != 0 {
                         x[rd] = cur_pc + step;
                     }
-                    *pc = ((x[r1] as i64 + imm) as u64) & !1;
+                    *pc = target;
                     x[0] = 0;
+                    note_special_reg_transitions(op_pc, 0, REG_WRITE_SOURCE_BLOCK, prev_sp, prev_g, x);
                     return blk.total_budget as i32;
                 }
                 13 => {} // FENCE — no-op
@@ -647,10 +1052,12 @@ unsafe fn exec_block(
                     // Unsupported (FP, AMO, SYSTEM) — bail to interpreter
                     *pc = cur_pc;
                     x[0] = 0;
+                    note_special_reg_transitions(op_pc, 0, REG_WRITE_SOURCE_BLOCK, prev_sp, prev_g, x);
                     return i as i32;
                 }
             }
             x[0] = 0;
+            note_special_reg_transitions(op_pc, 0, REG_WRITE_SOURCE_BLOCK, prev_sp, prev_g, x);
             cur_pc += step;
         }
 
@@ -1888,102 +2295,792 @@ unsafe fn exec_fma(
 }
 
 #[inline(always)]
-unsafe fn exec_amo(x: &mut [u64; 32], raw: u32, base: u32, pc: &mut u64, step: u64) {
-    unsafe {
-        let rd = decode::rd(raw);
-        let rs1 = decode::rs1(raw);
-        let rs2 = decode::rs2(raw);
-        let funct5 = decode::funct5(raw);
-        let f3 = decode::funct3(raw);
-        let is_word = f3 == 2;
-        let addr = x[rs1];
+unsafe fn process_reservation_state(process_ptr: u32, base: u32) -> &'static ProcessState {
+    unsafe { &*(((base as u64) + process_ptr as u64) as *const ProcessState) }
+}
 
-        match funct5 {
-            0x02 => {
-                // LR — load reserved, set reservation
-                let old = if is_word {
-                    guest_mem::read_i32(base, addr) as i64 as u64
-                } else {
-                    guest_mem::read_u64(base, addr)
-                };
-                if rd != 0 {
-                    x[rd] = old;
-                }
-                // Set reservation: addr and size
-                RESV_ADDR = addr;
-                RESV_VALID = true;
-            }
-            0x03 => {
-                // SC — store conditional, check reservation
-                if RESV_VALID && RESV_ADDR == addr {
-                    if is_word {
-                        guest_mem::write_u32(base, addr, x[rs2] as u32);
-                    } else {
-                        guest_mem::write_u64(base, addr, x[rs2]);
-                    }
-                    if rd != 0 {
-                        x[rd] = 0;
-                    } // success
-                } else {
-                    if rd != 0 {
-                        x[rd] = 1;
-                    } // failure
-                }
-                RESV_VALID = false;
-            }
-            _ => {
-                // AMO: read-modify-write
-                // For .W: read 32-bit sign-extended, operate on 32-bit values,
-                // write back 32-bit, return sign-extended old value (RISC-V ISA spec §8.4).
-                let old = if is_word {
-                    guest_mem::read_i32(base, addr) as i64 as u64
-                } else {
-                    guest_mem::read_u64(base, addr)
-                };
-                let src = if is_word {
-                    x[rs2] as i32 as i64 as u64
-                } else {
-                    x[rs2]
-                };
-                let new_val = match funct5 {
-                    0x01 => src,                                           // AMOSWAP
-                    0x00 => old.wrapping_add(src),                         // AMOADD
-                    0x04 => old ^ src,                                     // AMOXOR
-                    0x0C => old & src,                                     // AMOAND
-                    0x08 => old | src,                                     // AMOOR
-                    0x10 => core::cmp::min(old as i64, src as i64) as u64, // AMOMIN
-                    0x14 => core::cmp::max(old as i64, src as i64) as u64, // AMOMAX
-                    0x18 => {
-                        if is_word {
-                            // AMOMINU
-                            core::cmp::min(old as u32, src as u32) as i32 as i64 as u64
-                        } else {
-                            core::cmp::min(old, src)
-                        }
-                    }
-                    0x1C => {
-                        if is_word {
-                            // AMOMAXU
-                            core::cmp::max(old as u32, src as u32) as i32 as i64 as u64
-                        } else {
-                            core::cmp::max(old, src)
-                        }
-                    }
-                    _ => old,
-                };
-                if is_word {
-                    guest_mem::write_u32(base, addr, new_val as u32);
-                } else {
-                    guest_mem::write_u64(base, addr, new_val);
-                }
-                if rd != 0 {
-                    x[rd] = old;
-                }
-                // AMO store invalidates any reservation (RISC-V ISA spec §8.4)
-                RESV_VALID = false;
+#[inline(always)]
+unsafe fn exec_amo(
+    vm: &mut ThreadState,
+    x: &mut [u64; 32],
+    raw: u32,
+    base: u32,
+    pc: &mut u64,
+    step: u64,
+) {
+    let rd = decode::rd(raw);
+    let rs1 = decode::rs1(raw);
+    let rs2 = decode::rs2(raw);
+    let amo_op = decode::funct5(raw);
+    let funct3 = decode::funct3(raw);
+    let addr = x[rs1];
+    let host_ptr = (base + addr as u32) as usize;
+
+    match funct3 {
+        2 => {
+            if (host_ptr & 3) == 0 {
+                unsafe { exec_amo32_atomic(vm, host_ptr, x, rd, rs2, amo_op, addr, base) };
+            } else {
+                unsafe { exec_amo32_nonatomic(vm, base, x, rd, rs2, amo_op, addr) };
             }
         }
-        *pc += step;
+        3 => {
+            if (host_ptr & 7) == 0 {
+                unsafe { exec_amo64_atomic(vm, host_ptr, x, rd, rs2, amo_op, addr, base) };
+            } else {
+                unsafe { exec_amo64_nonatomic(vm, base, x, rd, rs2, amo_op, addr) };
+            }
+        }
+        _ => {}
+    }
+    *pc += step;
+}
+
+#[inline(always)]
+unsafe fn exec_amo32_atomic(
+    vm: &mut ThreadState,
+    host_ptr: usize,
+    x: &mut [u64; 32],
+    rd: usize,
+    rs2: usize,
+    amo_op: u32,
+    addr: u64,
+    base: u32,
+) {
+    let a = unsafe { &*(host_ptr as *const AtomicI32) };
+    match amo_op {
+        0x02 => {
+            let gen_idx = ((addr >> 3) % 64) as usize;
+            let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+            while ps.reservation_lock[gen_idx]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            loop {
+                let g = ps.reservation_gen[gen_idx].load(Ordering::SeqCst);
+                if g & 1 == 0 {
+                    break;
+                }
+                core::hint::spin_loop();
+            }
+            let val = a.load(Ordering::SeqCst);
+            vm.lr_addr = addr;
+            vm.lr_val = val as u32 as u64;
+            vm.lr_gen = ps.reservation_gen[gen_idx].load(Ordering::SeqCst);
+            vm.lr_gen_end = 0;
+            ps.reservation_lock[gen_idx].store(0, Ordering::Release);
+            if rd != 0 {
+                x[rd] = val as i64 as u64;
+            }
+        }
+        0x03 => {
+            if vm.lr_addr == addr {
+                let gen_idx = ((addr >> 3) % 64) as usize;
+                let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+                while ps.reservation_lock[gen_idx]
+                    .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                    .is_err()
+                {
+                    core::hint::spin_loop();
+                }
+                let generation = ps.reservation_gen[gen_idx].load(Ordering::SeqCst);
+                if generation != vm.lr_gen {
+                    vm.lr_addr = u64::MAX;
+                    if rd != 0 {
+                        x[rd] = 1;
+                    }
+                } else {
+                    a.store(x[rs2] as i32, Ordering::SeqCst);
+                    ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
+                    vm.lr_addr = u64::MAX;
+                    if rd != 0 {
+                        x[rd] = 0;
+                    }
+                }
+                ps.reservation_lock[gen_idx].store(0, Ordering::Release);
+            } else {
+                vm.lr_addr = u64::MAX;
+                if rd != 0 {
+                    x[rd] = 1;
+                }
+            }
+        }
+        0x01 => {
+            let gen_idx = ((addr >> 3) % 64) as usize;
+            let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+            while ps.reservation_lock[gen_idx]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            let old = a.swap(x[rs2] as i32, Ordering::SeqCst);
+            ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
+            ps.reservation_lock[gen_idx].store(0, Ordering::Release);
+            if rd != 0 {
+                x[rd] = old as i64 as u64;
+            }
+        }
+        0x00 => {
+            let gen_idx = ((addr >> 3) % 64) as usize;
+            let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+            while ps.reservation_lock[gen_idx]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            let old = a.fetch_add(x[rs2] as i32, Ordering::SeqCst);
+            ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
+            ps.reservation_lock[gen_idx].store(0, Ordering::Release);
+            if rd != 0 {
+                x[rd] = old as i64 as u64;
+            }
+        }
+        0x04 => {
+            let gen_idx = ((addr >> 3) % 64) as usize;
+            let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+            while ps.reservation_lock[gen_idx]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            let old = a.fetch_xor(x[rs2] as i32, Ordering::SeqCst);
+            ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
+            ps.reservation_lock[gen_idx].store(0, Ordering::Release);
+            if rd != 0 {
+                x[rd] = old as i64 as u64;
+            }
+        }
+        0x0C => {
+            let gen_idx = ((addr >> 3) % 64) as usize;
+            let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+            while ps.reservation_lock[gen_idx]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            let old = a.fetch_and(x[rs2] as i32, Ordering::SeqCst);
+            ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
+            ps.reservation_lock[gen_idx].store(0, Ordering::Release);
+            if rd != 0 {
+                x[rd] = old as i64 as u64;
+            }
+        }
+        0x08 => {
+            let gen_idx = ((addr >> 3) % 64) as usize;
+            let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+            while ps.reservation_lock[gen_idx]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            let old = a.fetch_or(x[rs2] as i32, Ordering::SeqCst);
+            ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
+            ps.reservation_lock[gen_idx].store(0, Ordering::Release);
+            if rd != 0 {
+                x[rd] = old as i64 as u64;
+            }
+        }
+        0x10 => {
+            let gen_idx = ((addr >> 3) % 64) as usize;
+            let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+            while ps.reservation_lock[gen_idx]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            let old = a.fetch_min(x[rs2] as i32, Ordering::SeqCst);
+            ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
+            ps.reservation_lock[gen_idx].store(0, Ordering::Release);
+            if rd != 0 {
+                x[rd] = old as i64 as u64;
+            }
+        }
+        0x14 => {
+            let gen_idx = ((addr >> 3) % 64) as usize;
+            let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+            while ps.reservation_lock[gen_idx]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            let old = a.fetch_max(x[rs2] as i32, Ordering::SeqCst);
+            ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
+            ps.reservation_lock[gen_idx].store(0, Ordering::Release);
+            if rd != 0 {
+                x[rd] = old as i64 as u64;
+            }
+        }
+        0x18 => {
+            let gen_idx = ((addr >> 3) % 64) as usize;
+            let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+            while ps.reservation_lock[gen_idx]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            let au = unsafe { &*(host_ptr as *const core::sync::atomic::AtomicU32) };
+            let old = au.fetch_min(x[rs2] as u32, Ordering::SeqCst);
+            ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
+            ps.reservation_lock[gen_idx].store(0, Ordering::Release);
+            if rd != 0 {
+                x[rd] = old as i32 as i64 as u64;
+            }
+        }
+        0x1C => {
+            let gen_idx = ((addr >> 3) % 64) as usize;
+            let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+            while ps.reservation_lock[gen_idx]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            let au = unsafe { &*(host_ptr as *const core::sync::atomic::AtomicU32) };
+            let old = au.fetch_max(x[rs2] as u32, Ordering::SeqCst);
+            ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
+            ps.reservation_lock[gen_idx].store(0, Ordering::Release);
+            if rd != 0 {
+                x[rd] = old as i32 as i64 as u64;
+            }
+        }
+        _ => {}
+    }
+}
+
+#[inline(always)]
+unsafe fn exec_amo32_nonatomic(
+    vm: &mut ThreadState,
+    base: u32,
+    x: &mut [u64; 32],
+    rd: usize,
+    rs2: usize,
+    amo_op: u32,
+    addr: u64,
+) {
+    match amo_op {
+        0x02 => {
+            let gen_idx = ((addr >> 3) % 64) as usize;
+            let end_idx = (((addr + 3) >> 3) % 64) as usize;
+            let (first, second) = if gen_idx <= end_idx { (gen_idx, end_idx) } else { (end_idx, gen_idx) };
+            let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+            while ps.reservation_lock[first]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            if first != second {
+                while ps.reservation_lock[second]
+                    .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                    .is_err()
+                {
+                    core::hint::spin_loop();
+                }
+            }
+            let ptr = (base + addr as u32) as *const u32;
+            let val = unsafe { ptr.read_unaligned() as i32 };
+            vm.lr_addr = addr;
+            vm.lr_val = val as u32 as u64;
+            vm.lr_gen = ps.reservation_gen[gen_idx].load(Ordering::SeqCst);
+            vm.lr_gen_end = if end_idx != gen_idx {
+                ps.reservation_gen[end_idx].load(Ordering::SeqCst)
+            } else {
+                0
+            };
+            if first != second {
+                ps.reservation_lock[second].store(0, Ordering::Release);
+            }
+            ps.reservation_lock[first].store(0, Ordering::Release);
+            if rd != 0 {
+                x[rd] = val as i64 as u64;
+            }
+        }
+        0x03 => {
+            if vm.lr_addr == addr {
+                let gen_idx = ((addr >> 3) % 64) as usize;
+                let end_idx = (((addr + 3) >> 3) % 64) as usize;
+                let (first, second) = if gen_idx <= end_idx { (gen_idx, end_idx) } else { (end_idx, gen_idx) };
+                let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+                while ps.reservation_lock[first]
+                    .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                    .is_err()
+                {
+                    core::hint::spin_loop();
+                }
+                if first != second {
+                    while ps.reservation_lock[second]
+                        .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                        .is_err()
+                    {
+                        core::hint::spin_loop();
+                    }
+                }
+                let generation = ps.reservation_gen[gen_idx].load(Ordering::SeqCst);
+                let end_gen = if end_idx != gen_idx {
+                    ps.reservation_gen[end_idx].load(Ordering::SeqCst)
+                } else {
+                    0
+                };
+                if generation != vm.lr_gen || (end_idx != gen_idx && end_gen != vm.lr_gen_end) {
+                    vm.lr_addr = u64::MAX;
+                    if rd != 0 {
+                        x[rd] = 1;
+                    }
+                } else {
+                    let ptr = (base + addr as u32) as *mut u32;
+                    unsafe { ptr.write_unaligned(x[rs2] as u32) };
+                    ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
+                    if end_idx != gen_idx {
+                        ps.reservation_gen[end_idx].fetch_add(2, Ordering::SeqCst);
+                    }
+                    vm.lr_addr = u64::MAX;
+                    if rd != 0 {
+                        x[rd] = 0;
+                    }
+                }
+                if first != second {
+                    ps.reservation_lock[second].store(0, Ordering::Release);
+                }
+                ps.reservation_lock[first].store(0, Ordering::Release);
+            } else {
+                vm.lr_addr = u64::MAX;
+                if rd != 0 {
+                    x[rd] = 1;
+                }
+            }
+        }
+        _ => {
+            let gen_idx = ((addr >> 3) % 64) as usize;
+            let end_idx = (((addr + 3) >> 3) % 64) as usize;
+            let (first, second) = if gen_idx <= end_idx { (gen_idx, end_idx) } else { (end_idx, gen_idx) };
+            let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+            while ps.reservation_lock[first]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            if first != second {
+                while ps.reservation_lock[second]
+                    .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                    .is_err()
+                {
+                    core::hint::spin_loop();
+                }
+            }
+            let rptr = (base + addr as u32) as *const u32;
+            let old = unsafe { rptr.read_unaligned() as i32 };
+            let src = x[rs2] as i32;
+            let new_val = match amo_op {
+                0x01 => src,
+                0x00 => old.wrapping_add(src),
+                0x04 => old ^ src,
+                0x0C => old & src,
+                0x08 => old | src,
+                0x10 => if old < src { old } else { src },
+                0x14 => if old > src { old } else { src },
+                0x18 => if (old as u32) < (src as u32) { old } else { src },
+                0x1C => if (old as u32) > (src as u32) { old } else { src },
+                _ => old,
+            };
+            let wptr = (base + addr as u32) as *mut u32;
+            unsafe { wptr.write_unaligned(new_val as u32) };
+            ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
+            if end_idx != gen_idx {
+                ps.reservation_gen[end_idx].fetch_add(2, Ordering::SeqCst);
+            }
+            if first != second {
+                ps.reservation_lock[second].store(0, Ordering::Release);
+            }
+            ps.reservation_lock[first].store(0, Ordering::Release);
+            if rd != 0 {
+                x[rd] = old as i64 as u64;
+            }
+        }
+    }
+}
+
+#[inline(always)]
+unsafe fn exec_amo64_atomic(
+    vm: &mut ThreadState,
+    host_ptr: usize,
+    x: &mut [u64; 32],
+    rd: usize,
+    rs2: usize,
+    amo_op: u32,
+    addr: u64,
+    base: u32,
+) {
+    let a = unsafe { &*(host_ptr as *const AtomicI64) };
+    match amo_op {
+        0x02 => {
+            let gen_idx = ((addr >> 3) % 64) as usize;
+            let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+            while ps.reservation_lock[gen_idx]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            loop {
+                let g = ps.reservation_gen[gen_idx].load(Ordering::SeqCst);
+                if g & 1 == 0 {
+                    break;
+                }
+                core::hint::spin_loop();
+            }
+            let val = a.load(Ordering::SeqCst);
+            vm.lr_addr = addr;
+            vm.lr_val = val as u64;
+            vm.lr_gen = ps.reservation_gen[gen_idx].load(Ordering::SeqCst);
+            vm.lr_gen_end = 0;
+            ps.reservation_lock[gen_idx].store(0, Ordering::Release);
+            if rd != 0 {
+                x[rd] = val as u64;
+            }
+        }
+        0x03 => {
+            if vm.lr_addr == addr {
+                let gen_idx = ((addr >> 3) % 64) as usize;
+                let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+                while ps.reservation_lock[gen_idx]
+                    .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                    .is_err()
+                {
+                    core::hint::spin_loop();
+                }
+                let generation = ps.reservation_gen[gen_idx].load(Ordering::SeqCst);
+                if generation != vm.lr_gen {
+                    vm.lr_addr = u64::MAX;
+                    if rd != 0 {
+                        x[rd] = 1;
+                    }
+                } else {
+                    a.store(x[rs2] as i64, Ordering::SeqCst);
+                    ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
+                    vm.lr_addr = u64::MAX;
+                    if rd != 0 {
+                        x[rd] = 0;
+                    }
+                }
+                ps.reservation_lock[gen_idx].store(0, Ordering::Release);
+            } else {
+                vm.lr_addr = u64::MAX;
+                if rd != 0 {
+                    x[rd] = 1;
+                }
+            }
+        }
+        0x01 => {
+            let gen_idx = ((addr >> 3) % 64) as usize;
+            let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+            while ps.reservation_lock[gen_idx]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            let old = a.swap(x[rs2] as i64, Ordering::SeqCst);
+            ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
+            ps.reservation_lock[gen_idx].store(0, Ordering::Release);
+            if rd != 0 {
+                x[rd] = old as u64;
+            }
+        }
+        0x00 => {
+            let gen_idx = ((addr >> 3) % 64) as usize;
+            let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+            while ps.reservation_lock[gen_idx]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            let old = a.fetch_add(x[rs2] as i64, Ordering::SeqCst);
+            ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
+            ps.reservation_lock[gen_idx].store(0, Ordering::Release);
+            if rd != 0 {
+                x[rd] = old as u64;
+            }
+        }
+        0x04 => {
+            let gen_idx = ((addr >> 3) % 64) as usize;
+            let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+            while ps.reservation_lock[gen_idx]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            let old = a.fetch_xor(x[rs2] as i64, Ordering::SeqCst);
+            ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
+            ps.reservation_lock[gen_idx].store(0, Ordering::Release);
+            if rd != 0 {
+                x[rd] = old as u64;
+            }
+        }
+        0x0C => {
+            let gen_idx = ((addr >> 3) % 64) as usize;
+            let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+            while ps.reservation_lock[gen_idx]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            let old = a.fetch_and(x[rs2] as i64, Ordering::SeqCst);
+            ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
+            ps.reservation_lock[gen_idx].store(0, Ordering::Release);
+            if rd != 0 {
+                x[rd] = old as u64;
+            }
+        }
+        0x08 => {
+            let gen_idx = ((addr >> 3) % 64) as usize;
+            let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+            while ps.reservation_lock[gen_idx]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            let old = a.fetch_or(x[rs2] as i64, Ordering::SeqCst);
+            ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
+            ps.reservation_lock[gen_idx].store(0, Ordering::Release);
+            if rd != 0 {
+                x[rd] = old as u64;
+            }
+        }
+        0x10 => {
+            let gen_idx = ((addr >> 3) % 64) as usize;
+            let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+            while ps.reservation_lock[gen_idx]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            let old = a.fetch_min(x[rs2] as i64, Ordering::SeqCst);
+            ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
+            ps.reservation_lock[gen_idx].store(0, Ordering::Release);
+            if rd != 0 {
+                x[rd] = old as u64;
+            }
+        }
+        0x14 => {
+            let gen_idx = ((addr >> 3) % 64) as usize;
+            let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+            while ps.reservation_lock[gen_idx]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            let old = a.fetch_max(x[rs2] as i64, Ordering::SeqCst);
+            ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
+            ps.reservation_lock[gen_idx].store(0, Ordering::Release);
+            if rd != 0 {
+                x[rd] = old as u64;
+            }
+        }
+        0x18 => {
+            let gen_idx = ((addr >> 3) % 64) as usize;
+            let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+            while ps.reservation_lock[gen_idx]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            let au = unsafe { &*(host_ptr as *const core::sync::atomic::AtomicU64) };
+            let old = au.fetch_min(x[rs2], Ordering::SeqCst);
+            ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
+            ps.reservation_lock[gen_idx].store(0, Ordering::Release);
+            if rd != 0 {
+                x[rd] = old;
+            }
+        }
+        0x1C => {
+            let gen_idx = ((addr >> 3) % 64) as usize;
+            let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+            while ps.reservation_lock[gen_idx]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            let au = unsafe { &*(host_ptr as *const core::sync::atomic::AtomicU64) };
+            let old = au.fetch_max(x[rs2], Ordering::SeqCst);
+            ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
+            ps.reservation_lock[gen_idx].store(0, Ordering::Release);
+            if rd != 0 {
+                x[rd] = old;
+            }
+        }
+        _ => {}
+    }
+}
+
+#[inline(always)]
+unsafe fn exec_amo64_nonatomic(
+    vm: &mut ThreadState,
+    base: u32,
+    x: &mut [u64; 32],
+    rd: usize,
+    rs2: usize,
+    amo_op: u32,
+    addr: u64,
+) {
+    match amo_op {
+        0x02 => {
+            let gen_idx = ((addr >> 3) % 64) as usize;
+            let end_idx = (((addr + 7) >> 3) % 64) as usize;
+            let (first, second) = if gen_idx <= end_idx { (gen_idx, end_idx) } else { (end_idx, gen_idx) };
+            let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+            while ps.reservation_lock[first]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            if first != second {
+                while ps.reservation_lock[second]
+                    .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                    .is_err()
+                {
+                    core::hint::spin_loop();
+                }
+            }
+            let ptr = (base + addr as u32) as *const u64;
+            let val = unsafe { ptr.read_unaligned() };
+            vm.lr_addr = addr;
+            vm.lr_val = val;
+            vm.lr_gen = ps.reservation_gen[gen_idx].load(Ordering::SeqCst);
+            vm.lr_gen_end = if end_idx != gen_idx {
+                ps.reservation_gen[end_idx].load(Ordering::SeqCst)
+            } else {
+                0
+            };
+            if first != second {
+                ps.reservation_lock[second].store(0, Ordering::Release);
+            }
+            ps.reservation_lock[first].store(0, Ordering::Release);
+            if rd != 0 {
+                x[rd] = val;
+            }
+        }
+        0x03 => {
+            if vm.lr_addr == addr {
+                let gen_idx = ((addr >> 3) % 64) as usize;
+                let end_idx = (((addr + 7) >> 3) % 64) as usize;
+                let (first, second) = if gen_idx <= end_idx { (gen_idx, end_idx) } else { (end_idx, gen_idx) };
+                let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+                while ps.reservation_lock[first]
+                    .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                    .is_err()
+                {
+                    core::hint::spin_loop();
+                }
+                if first != second {
+                    while ps.reservation_lock[second]
+                        .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                        .is_err()
+                    {
+                        core::hint::spin_loop();
+                    }
+                }
+                let generation = ps.reservation_gen[gen_idx].load(Ordering::SeqCst);
+                let end_gen = if end_idx != gen_idx {
+                    ps.reservation_gen[end_idx].load(Ordering::SeqCst)
+                } else {
+                    0
+                };
+                if generation != vm.lr_gen || (end_idx != gen_idx && end_gen != vm.lr_gen_end) {
+                    vm.lr_addr = u64::MAX;
+                    if rd != 0 {
+                        x[rd] = 1;
+                    }
+                } else {
+                    let ptr = (base + addr as u32) as *mut u64;
+                    unsafe { ptr.write_unaligned(x[rs2]) };
+                    ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
+                    if end_idx != gen_idx {
+                        ps.reservation_gen[end_idx].fetch_add(2, Ordering::SeqCst);
+                    }
+                    vm.lr_addr = u64::MAX;
+                    if rd != 0 {
+                        x[rd] = 0;
+                    }
+                }
+                if first != second {
+                    ps.reservation_lock[second].store(0, Ordering::Release);
+                }
+                ps.reservation_lock[first].store(0, Ordering::Release);
+            } else {
+                vm.lr_addr = u64::MAX;
+                if rd != 0 {
+                    x[rd] = 1;
+                }
+            }
+        }
+        _ => {
+            let gen_idx = ((addr >> 3) % 64) as usize;
+            let end_idx = (((addr + 7) >> 3) % 64) as usize;
+            let (first, second) = if gen_idx <= end_idx { (gen_idx, end_idx) } else { (end_idx, gen_idx) };
+            let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
+            while ps.reservation_lock[first]
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            if first != second {
+                while ps.reservation_lock[second]
+                    .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                    .is_err()
+                {
+                    core::hint::spin_loop();
+                }
+            }
+            let rptr = (base + addr as u32) as *const u64;
+            let old = unsafe { rptr.read_unaligned() };
+            let src = x[rs2];
+            let new_val = match amo_op {
+                0x01 => src,
+                0x00 => old.wrapping_add(src),
+                0x04 => old ^ src,
+                0x0C => old & src,
+                0x08 => old | src,
+                0x10 => if (old as i64) < (src as i64) { old } else { src },
+                0x14 => if (old as i64) > (src as i64) { old } else { src },
+                0x18 => if old < src { old } else { src },
+                0x1C => if old > src { old } else { src },
+                _ => old,
+            };
+            let wptr = (base + addr as u32) as *mut u64;
+            unsafe { wptr.write_unaligned(new_val) };
+            ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
+            if end_idx != gen_idx {
+                ps.reservation_gen[end_idx].fetch_add(2, Ordering::SeqCst);
+            }
+            if first != second {
+                ps.reservation_lock[second].store(0, Ordering::Release);
+            }
+            ps.reservation_lock[first].store(0, Ordering::Release);
+            if rd != 0 {
+                x[rd] = old;
+            }
+        }
     }
 }
 
@@ -2093,6 +3190,8 @@ fn mulhu(a: u64, b: u64) -> u64 {
 mod tests {
     use crate::abi::STATUS_FAULT;
     use crate::test_helpers::TestVm;
+    use core::sync::atomic::Ordering;
+    use super::exec_amo;
 
     /// Test that executing an invalid instruction (all zeros) causes STATUS_FAULT.
     ///
@@ -2132,5 +3231,60 @@ mod tests {
             128 + crate::abi::SIGILL,
             "exit_code should be 128 + SIGILL"
         );
+    }
+
+    fn encode_amo(funct5: u32, rd: u32, rs1: u32, rs2: u32, funct3: u32) -> u32 {
+        (funct5 << 27) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | 0x2f
+    }
+
+    #[test]
+    fn lr_sc_reservation_is_invalidated_by_intervening_store() {
+        let mut t = TestVm::new();
+        let ps =
+            unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const crate::types::ProcessState) };
+        ps.thread_count.store(2, Ordering::Release);
+        unsafe {
+            crate::guest_mem::init(
+                core::ptr::addr_of!(ps.reservation_gen) as *const core::sync::atomic::AtomicU32,
+                core::ptr::addr_of!(ps.reservation_lock) as *const core::sync::atomic::AtomicU32,
+                core::ptr::addr_of!(ps.thread_count),
+            );
+        }
+
+        let addr = t.scratch + 0x200;
+        unsafe { crate::guest_mem::write_u32(t.base, addr, 1) };
+
+        let mut x = [0u64; 32];
+        x[10] = addr;
+        x[11] = 9;
+        x[27] = 0xdead_beef;
+        let mut pc = 0u64;
+
+        unsafe {
+            exec_amo(
+                &mut t.vm,
+                &mut x,
+                encode_amo(0x02, 5, 10, 0, 2),
+                t.base,
+                &mut pc,
+                4,
+            );
+        }
+        unsafe { crate::guest_mem::write_u32(t.base, addr, 2) };
+        unsafe {
+            exec_amo(
+                &mut t.vm,
+                &mut x,
+                encode_amo(0x03, 6, 10, 11, 2),
+                t.base,
+                &mut pc,
+                4,
+            );
+        }
+
+        assert_eq!(x[5], 1, "lr should read the original word");
+        assert_eq!(x[6], 1, "sc should fail after an intervening store");
+        assert_eq!(unsafe { crate::guest_mem::read_u32(t.base, addr) }, 2);
+        assert_eq!(x[27], 0xdead_beef, "lr/sc must not clobber unrelated registers");
     }
 }

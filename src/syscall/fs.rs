@@ -38,17 +38,25 @@
 use crate::abi::*;
 use crate::fs::{fd_table, memfs, ring_buffer};
 use crate::guest_mem;
+use crate::types::OpenFileDesc;
 use crate::syscall::signal;
 use crate::types::{ProcessState, ThreadState};
 
 const AT_FDCWD: i32 = -100;
 const AT_REMOVEDIR: u64 = 0x200;
 const AT_SYMLINK_NOFOLLOW: u64 = 0x100;
+const AT_EMPTY_PATH: u64 = 0x1000;
+const PENDING_FS_PATH_MAX: usize = 4096;
 const DT_UNKNOWN: u8 = 0;
 const DT_DIR: u8 = 4;
 const DT_REG: u8 = 8;
 const TMPFS_MAGIC: u64 = 0x0102_1994;
 const EVENTFD_COUNTER_MAX: u64 = u64::MAX - 1;
+const S_IFIFO: u32 = 0o010000;
+const S_IFSOCK: u32 = 0o140000;
+pub const FS_EFFECT_MEMFS_MUTATION: u32 = 1 << 0;
+pub const FS_EFFECT_SHARED_OFD_STATE: u32 = 1 << 1;
+pub const FS_EFFECT_MEMFS_FILE_DATA: u32 = 1 << 2;
 
 // =========================================================================
 // Path resolution helper
@@ -117,6 +125,173 @@ pub fn process_pending_requests(vm_ptr: u32, base: u32) {
         if ring_base != 0 {
             ring_buffer::process_requests(ring_base, vm_ptr, base);
         }
+    }
+}
+
+fn classify_pending_request_effects(request: &ring_buffer::FsRequestInfo) -> u32 {
+    match request.opcode {
+        ring_buffer::FS_OP_OPENAT => {
+            if request.flags & (O_CREAT as u32) != 0 {
+                FS_EFFECT_MEMFS_MUTATION
+            } else if request.flags & (O_TRUNC as u32) != 0 {
+                FS_EFFECT_MEMFS_FILE_DATA
+            } else {
+                0
+            }
+        }
+        ring_buffer::FS_OP_WRITE => {
+            let mut effects = FS_EFFECT_MEMFS_FILE_DATA;
+            if request.flags & ring_buffer::FS_REQ_FLAG_PWRITE == 0 {
+                effects |= FS_EFFECT_SHARED_OFD_STATE;
+            }
+            effects
+        }
+        ring_buffer::FS_OP_CLOSE => FS_EFFECT_SHARED_OFD_STATE,
+        ring_buffer::FS_OP_GETDENTS | ring_buffer::FS_OP_LSEEK => FS_EFFECT_SHARED_OFD_STATE,
+        ring_buffer::FS_OP_TRUNCATE => FS_EFFECT_MEMFS_FILE_DATA,
+        ring_buffer::FS_OP_MKDIR | ring_buffer::FS_OP_UNLINK => FS_EFFECT_MEMFS_MUTATION,
+        _ => 0,
+    }
+}
+
+pub fn pending_request_effects(vm_ptr: u32, base: u32) -> u32 {
+    unsafe {
+        let vm = &*(vm_ptr as *const ThreadState);
+        let ring_base = process_fs_ring_base(base, vm);
+        if ring_base == 0 {
+            return 0;
+        }
+        match ring_buffer::peek_request_info(ring_base) {
+            Some(request) => classify_pending_request_effects(&request),
+            None => 0,
+        }
+    }
+}
+
+fn pending_request_target_ino_inner(
+    vm: &ThreadState,
+    base: u32,
+    request: &ring_buffer::FsRequestInfo,
+) -> u32 {
+    match request.opcode {
+        ring_buffer::FS_OP_WRITE => {
+            if request.fd <= 0 {
+                return 0;
+            }
+            fd_table::get_ofd(base, vm, request.fd as u64).map_or(0, |ofd| ofd.ino)
+        }
+        ring_buffer::FS_OP_CLOSE | ring_buffer::FS_OP_GETDENTS | ring_buffer::FS_OP_LSEEK => 0,
+        ring_buffer::FS_OP_TRUNCATE => {
+            if request.fd > 0 {
+                return fd_table::get_ofd(base, vm, request.fd as u64).map_or(0, |ofd| ofd.ino);
+            }
+            if request.path_ptr == 0 {
+                return 0;
+            }
+            resolve_at(vm, AT_FDCWD as u64, request.path_ptr, base).unwrap_or(0)
+        }
+        ring_buffer::FS_OP_OPENAT => {
+            if request.flags & (O_TRUNC as u32) == 0 || request.flags & (O_CREAT as u32) != 0 {
+                return 0;
+            }
+            if request.path_ptr == 0 {
+                return 0;
+            }
+            resolve_at(vm, request.fd as u64, request.path_ptr, base).unwrap_or(0)
+        }
+        _ => 0,
+    }
+}
+
+pub fn pending_request_target_ino(vm_ptr: u32, base: u32) -> u32 {
+    unsafe {
+        let vm = &*(vm_ptr as *const ThreadState);
+        let ring_base = process_fs_ring_base(base, vm);
+        if ring_base == 0 {
+            return 0;
+        }
+        match ring_buffer::peek_request_info(ring_base) {
+            Some(request) => pending_request_target_ino_inner(vm, base, &request),
+            None => 0,
+        }
+    }
+}
+
+pub fn pending_request_opcode(vm_ptr: u32, base: u32) -> u32 {
+    unsafe {
+        let vm = &*(vm_ptr as *const ThreadState);
+        let ring_base = process_fs_ring_base(base, vm);
+        if ring_base == 0 {
+            return 0;
+        }
+        match ring_buffer::peek_request_info(ring_base) {
+            Some(request) => request.opcode,
+            None => 0,
+        }
+    }
+}
+
+fn pending_request_path_ptr_inner(request: &ring_buffer::FsRequestInfo) -> u64 {
+    match request.opcode {
+        ring_buffer::FS_OP_OPENAT
+        | ring_buffer::FS_OP_MKDIR
+        | ring_buffer::FS_OP_UNLINK
+        | ring_buffer::FS_OP_TRUNCATE => request.path_ptr,
+        _ => 0,
+    }
+}
+
+pub fn pending_request_path_ptr(vm_ptr: u32, base: u32) -> u64 {
+    unsafe {
+        let vm = &*(vm_ptr as *const ThreadState);
+        let ring_base = process_fs_ring_base(base, vm);
+        if ring_base == 0 {
+            return 0;
+        }
+        match ring_buffer::peek_request_info(ring_base) {
+            Some(request) => pending_request_path_ptr_inner(&request),
+            None => 0,
+        }
+    }
+}
+
+pub fn pending_request_path_len(vm_ptr: u32, base: u32) -> u32 {
+    unsafe {
+        let vm = &*(vm_ptr as *const ThreadState);
+        let ring_base = process_fs_ring_base(base, vm);
+        if ring_base == 0 {
+            return 0;
+        }
+        let Some(request) = ring_buffer::peek_request_info(ring_base) else {
+            return 0;
+        };
+        let path_ptr = pending_request_path_ptr_inner(&request);
+        if path_ptr == 0 {
+            return 0;
+        }
+        let guest_limit = ((core::arch::wasm32::memory_size(0) as u64) * 65536)
+            .saturating_sub(base as u64);
+        if path_ptr >= guest_limit || path_ptr > u32::MAX as u64 {
+            return 0;
+        }
+        let mut len = 0u32;
+        while (len as usize) < PENDING_FS_PATH_MAX {
+            let Some(cur) = path_ptr.checked_add(len as u64) else {
+                return 0;
+            };
+            if cur >= guest_limit || cur > u32::MAX as u64 {
+                return 0;
+            }
+            if crate::syscall::memory::range_has_prot_none(cur, 1) {
+                return 0;
+            }
+            let byte = guest_mem::read_u8(base, cur);
+            if byte == 0 {
+                return len;
+            }
+            len += 1;
+        }
+        len
     }
 }
 
@@ -690,6 +865,9 @@ pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) 
     }
 
     if ofd.fd_type == FD_TYPE_PIPE {
+        if !fd_table::is_pipe_read(&ofd) {
+            return EBADF;
+        }
         let mut tmp = [0u8; 4096];
         let to_read = (count as usize).min(tmp.len());
         let n = super::pipe::pipe_read(ofd.ino, &mut tmp[..to_read]);
@@ -814,12 +992,36 @@ pub fn sys_pwrite64(
         return count as i64;
     }
 
+    write_regular_file_from_guest(base, buf, count, ofd.ino as u32, offset)
+}
+
+fn write_regular_file_from_guest(
+    base: u32,
+    guest_addr: u64,
+    len: u64,
+    ino: u32,
+    start_offset: u64,
+) -> i64 {
     let mut tmp = [0u8; 4096];
-    let to_write = (count as usize).min(tmp.len());
-    unsafe {
-        guest_mem::read_bytes(base, buf, &mut tmp[..to_write]);
+    let mut total = 0u64;
+    while total < len {
+        let to_write = ((len - total) as usize).min(tmp.len());
+        unsafe {
+            guest_mem::read_bytes(base, guest_addr + total, &mut tmp[..to_write]);
+        }
+        let n = memfs::write_file(ino, start_offset + total, &tmp[..to_write]);
+        if n < 0 {
+            return if total > 0 { total as i64 } else { n };
+        }
+        if n == 0 {
+            break;
+        }
+        total += n as u64;
+        if (n as usize) < to_write {
+            break;
+        }
     }
-    memfs::write_file(ofd.ino as u32, offset, &tmp[..to_write])
+    total as i64
 }
 
 // =========================================================================
@@ -831,13 +1033,43 @@ pub fn sys_pwrite64(
 fn trace_write_attempt(
     fd: u64,
     nr: u64,
+    buf_addr: u64,
     count: u64,
     result: i64,
+    ofd_id: u32,
     ofd_type: i32,
+    ofd_ino: u32,
     status_flags: i32,
+    pipe_read_open: i32,
+    pipe_write_open: i32,
+    bytes: Option<&[u8]>,
 ) -> i64 {
-    crate::runtime_test_support::record_write_attempt(fd, nr, count, result, ofd_type, status_flags);
+    crate::runtime_test_support::record_write_attempt(
+        fd,
+        nr,
+        buf_addr,
+        count,
+        result,
+        ofd_id,
+        ofd_type,
+        ofd_ino,
+        status_flags,
+        pipe_read_open,
+        pipe_write_open,
+        bytes,
+    );
     result
+}
+
+fn trace_pipe_open_state(ofd: &OpenFileDesc) -> (i32, i32) {
+    if ofd.fd_type == FD_TYPE_PIPE {
+        (
+            super::pipe::debug_read_open(ofd.ino),
+            super::pipe::debug_write_open(ofd.ino),
+        )
+    } else {
+        (0, 0)
+    }
 }
 
 pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64, nr: u64) -> i64 {
@@ -847,11 +1079,15 @@ pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64,
 
     let ofd = match fd_table::get_ofd(base, vm, fd) {
         Some(o) => o,
-        None => return trace_write_attempt(fd, nr, count, EBADF, FD_TYPE_NONE, 0),
+        None => return trace_write_attempt(fd, nr, buf, count, EBADF, 0, FD_TYPE_NONE, 0, 0, 0, 0, None),
     };
+    let ofd_id = fd_table::get_ofd_id(base, vm, fd).unwrap_or(0);
+    let (pipe_read_open, pipe_write_open) = trace_pipe_open_state(&ofd);
 
     if ofd.fd_type == FD_TYPE_DEVNULL {
-        return trace_write_attempt(fd, nr, count, count as i64, ofd.fd_type, ofd.status_flags);
+        return trace_write_attempt(
+            fd, nr, buf, count, count as i64, ofd_id, ofd.fd_type, ofd.ino, ofd.status_flags, 0, 0, None,
+        );
     }
 
     if ofd.fd_type == FD_TYPE_STDOUT || ofd.fd_type == FD_TYPE_STDERR {
@@ -871,15 +1107,47 @@ pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64,
             return trace_write_attempt(
                 fd,
                 nr,
+                buf,
                 count,
                 to_write as i64,
+                ofd_id,
                 ofd.fd_type,
+                ofd.ino,
                 ofd.status_flags,
+                0,
+                0,
+                Some(&tmp[..to_write]),
             );
         }
     }
 
     if ofd.fd_type == FD_TYPE_PIPE {
+        if !fd_table::is_pipe_write(&ofd) {
+            let mut tmp = [0u8; 64];
+            let to_trace = (count as usize).min(tmp.len());
+            if to_trace > 0 && crate::syscall::memory::guest_range_accessible(base, buf, to_trace as u64) {
+                unsafe {
+                    guest_mem::read_bytes(base, buf, &mut tmp[..to_trace]);
+                }
+                return trace_write_attempt(
+                    fd,
+                    nr,
+                    buf,
+                    count,
+                    EBADF,
+                    ofd_id,
+                    ofd.fd_type,
+                    ofd.ino,
+                    ofd.status_flags,
+                    pipe_read_open,
+                    pipe_write_open,
+                    Some(&tmp[..to_trace]),
+                );
+            }
+            return trace_write_attempt(
+                fd, nr, buf, count, EBADF, ofd_id, ofd.fd_type, ofd.ino, ofd.status_flags, pipe_read_open, pipe_write_open, None,
+            );
+        }
         let mut tmp = [0u8; 4096];
         let to_write = (count as usize).min(tmp.len());
         unsafe {
@@ -892,32 +1160,36 @@ pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64,
         if n == EAGAIN && ofd.status_flags & O_NONBLOCK == 0 {
             fd_table::pin_blocked_fd(base, vm, fd);
             vm.status = STATUS_PIPE_WAIT;
-            return trace_write_attempt(fd, nr, count, 0, ofd.fd_type, ofd.status_flags);
+            return trace_write_attempt(
+                fd, nr, buf, count, 0, ofd_id, ofd.fd_type, ofd.ino, ofd.status_flags, pipe_read_open, pipe_write_open, Some(&tmp[..to_write]),
+            );
         }
-        return trace_write_attempt(fd, nr, count, n, ofd.fd_type, ofd.status_flags);
+        return trace_write_attempt(
+            fd, nr, buf, count, n, ofd_id, ofd.fd_type, ofd.ino, ofd.status_flags, pipe_read_open, pipe_write_open, Some(&tmp[..to_write]),
+        );
     }
 
     if ofd.fd_type == FD_TYPE_EVENTFD {
         if count < 8 {
-            return trace_write_attempt(fd, nr, count, EINVAL, ofd.fd_type, ofd.status_flags);
+            return trace_write_attempt(fd, nr, buf, count, EINVAL, ofd_id, ofd.fd_type, ofd.ino, ofd.status_flags, 0, 0, None);
         }
         let value = unsafe { guest_mem::read_u64(base, buf) };
         if value == u64::MAX {
-            return trace_write_attempt(fd, nr, count, EINVAL, ofd.fd_type, ofd.status_flags);
+            return trace_write_attempt(fd, nr, buf, count, EINVAL, ofd_id, ofd.fd_type, ofd.ino, ofd.status_flags, 0, 0, None);
         }
 
         let counter = fd_table::get_offset(base, vm, fd);
         if counter > EVENTFD_COUNTER_MAX.saturating_sub(value) {
             if ofd.status_flags & O_NONBLOCK != 0 {
-                return trace_write_attempt(fd, nr, count, EAGAIN, ofd.fd_type, ofd.status_flags);
+                return trace_write_attempt(fd, nr, buf, count, EAGAIN, ofd_id, ofd.fd_type, ofd.ino, ofd.status_flags, 0, 0, None);
             }
             fd_table::pin_blocked_fd(base, vm, fd);
             vm.status = STATUS_PIPE_WAIT;
-            return trace_write_attempt(fd, nr, count, 0, ofd.fd_type, ofd.status_flags);
+            return trace_write_attempt(fd, nr, buf, count, 0, ofd_id, ofd.fd_type, ofd.ino, ofd.status_flags, 0, 0, None);
         }
 
         fd_table::set_offset(base, vm, fd, counter + value);
-        return trace_write_attempt(fd, nr, count, 8, ofd.fd_type, ofd.status_flags);
+        return trace_write_attempt(fd, nr, buf, count, 8, ofd_id, ofd.fd_type, ofd.ino, ofd.status_flags, 0, 0, None);
     }
 
     if ofd.fd_type == FD_TYPE_SOCKET {
@@ -928,28 +1200,34 @@ pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64,
         if n == EAGAIN && ofd.status_flags & O_NONBLOCK == 0 {
             fd_table::pin_blocked_fd(base, vm, fd);
             vm.status = STATUS_SOCKET_SEND;
-            return trace_write_attempt(fd, nr, count, 0, ofd.fd_type, ofd.status_flags);
+            return trace_write_attempt(fd, nr, buf, count, 0, ofd_id, ofd.fd_type, ofd.ino, ofd.status_flags, 0, 0, None);
         }
-        return trace_write_attempt(fd, nr, count, n, ofd.fd_type, ofd.status_flags);
+        return trace_write_attempt(fd, nr, buf, count, n, ofd_id, ofd.fd_type, ofd.ino, ofd.status_flags, 0, 0, None);
     }
 
-    let mut tmp = [0u8; 4096];
-    let to_write = (count as usize).min(tmp.len());
-    unsafe {
-        guest_mem::read_bytes(base, buf, &mut tmp[..to_write]);
+    let mut trace = [0u8; 64];
+    let to_trace = (count as usize).min(trace.len());
+    if to_trace > 0 {
+        unsafe {
+            guest_mem::read_bytes(base, buf, &mut trace[..to_trace]);
+        }
     }
-    let n = memfs::write_file(ofd.ino as u32, ofd.offset as u64, &tmp[..to_write]);
+    let n = write_regular_file_from_guest(base, buf, count, ofd.ino as u32, ofd.offset as u64);
     if n > 0 {
         fd_table::advance_offset(base, vm, fd, n as u64);
     }
-    trace_write_attempt(fd, nr, count, n, ofd.fd_type, ofd.status_flags)
+    trace_write_attempt(
+        fd, nr, buf, count, n, ofd_id, ofd.fd_type, ofd.ino, ofd.status_flags, 0, 0, Some(&trace[..to_trace]),
+    )
 }
 
 fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u64) -> i64 {
     let ofd = match fd_table::get_ofd(base, vm, fd) {
         Some(o) => o,
-        None => return trace_write_attempt(fd, SYS_WRITEV, iovcnt, EBADF, FD_TYPE_NONE, 0),
+        None => return trace_write_attempt(fd, SYS_WRITEV, iov_addr, iovcnt, EBADF, 0, FD_TYPE_NONE, 0, 0, 0, 0, None),
     };
+    let ofd_id = fd_table::get_ofd_id(base, vm, fd).unwrap_or(0);
+    let (pipe_read_open, pipe_write_open) = trace_pipe_open_state(&ofd);
 
     if ofd.fd_type == FD_TYPE_DEVNULL {
         let mut total = 0u64;
@@ -959,10 +1237,16 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
         return trace_write_attempt(
             fd,
             SYS_WRITEV,
+            iov_addr,
             iovcnt,
             total as i64,
+            ofd_id,
             ofd.fd_type,
+            ofd.ino,
             ofd.status_flags,
+            0,
+            0,
+            None,
         );
     }
 
@@ -991,10 +1275,16 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
         return trace_write_attempt(
             fd,
             SYS_WRITEV,
+            iov_addr,
             iovcnt,
             total as i64,
+            ofd_id,
             ofd.fd_type,
+            ofd.ino,
             ofd.status_flags,
+            0,
+            0,
+            None,
         );
     }
 
@@ -1007,6 +1297,22 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
         }
 
         if ofd.fd_type == FD_TYPE_PIPE {
+            if !fd_table::is_pipe_write(&ofd) {
+                return trace_write_attempt(
+                    fd,
+                    SYS_WRITEV,
+                    iov_addr,
+                    iovcnt,
+                    EBADF,
+                    ofd_id,
+                    ofd.fd_type,
+                    ofd.ino,
+                    ofd.status_flags,
+                    pipe_read_open,
+                    pipe_write_open,
+                    None,
+                );
+            }
             let mut tmp = [0u8; 4096];
             let to_write = (iov_len as usize).min(tmp.len());
             unsafe {
@@ -1019,19 +1325,31 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
                     return trace_write_attempt(
                         fd,
                         SYS_WRITEV,
+                        iov_addr,
                         iovcnt,
                         EPIPE,
+                        ofd_id,
                         ofd.fd_type,
+                        ofd.ino,
                         ofd.status_flags,
+                        pipe_read_open,
+                        pipe_write_open,
+                        None,
                     );
                 }
                 return trace_write_attempt(
                     fd,
                     SYS_WRITEV,
+                    iov_addr,
                     iovcnt,
                     total,
+                    ofd_id,
                     ofd.fd_type,
+                    ofd.ino,
                     ofd.status_flags,
+                    pipe_read_open,
+                    pipe_write_open,
+                    None,
                 );
             }
             if n == EAGAIN && ofd.status_flags & O_NONBLOCK == 0 {
@@ -1040,10 +1358,16 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
                 return trace_write_attempt(
                     fd,
                     SYS_WRITEV,
+                    iov_addr,
                     iovcnt,
                     if total > 0 { total } else { 0 },
+                    ofd_id,
                     ofd.fd_type,
+                    ofd.ino,
                     ofd.status_flags,
+                    pipe_read_open,
+                    pipe_write_open,
+                    None,
                 );
             }
             if n < 0 {
@@ -1051,19 +1375,31 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
                     return trace_write_attempt(
                         fd,
                         SYS_WRITEV,
+                        iov_addr,
                         iovcnt,
                         total,
+                        ofd_id,
                         ofd.fd_type,
+                        ofd.ino,
                         ofd.status_flags,
+                        pipe_read_open,
+                        pipe_write_open,
+                        None,
                     );
                 }
                 return trace_write_attempt(
                     fd,
                     SYS_WRITEV,
+                    iov_addr,
                     iovcnt,
                     n,
+                    ofd_id,
                     ofd.fd_type,
+                    ofd.ino,
                     ofd.status_flags,
+                    pipe_read_open,
+                    pipe_write_open,
+                    None,
                 );
             }
             total += n;
@@ -1074,10 +1410,16 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
                 return trace_write_attempt(
                     fd,
                     SYS_WRITEV,
+                    iov_addr,
                     iovcnt,
                     if total > 0 { total } else { EPIPE },
+                    ofd_id,
                     ofd.fd_type,
+                    ofd.ino,
                     ofd.status_flags,
+                    0,
+                    0,
+                    None,
                 );
             }
             if n == EAGAIN && ofd.status_flags & O_NONBLOCK == 0 {
@@ -1086,31 +1428,38 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
                 return trace_write_attempt(
                     fd,
                     SYS_WRITEV,
+                    iov_addr,
                     iovcnt,
                     if total > 0 { total } else { 0 },
+                    ofd_id,
                     ofd.fd_type,
+                    ofd.ino,
                     ofd.status_flags,
+                    0,
+                    0,
+                    None,
                 );
             }
             if n < 0 {
                 return trace_write_attempt(
                     fd,
                     SYS_WRITEV,
+                    iov_addr,
                     iovcnt,
                     if total > 0 { total } else { n },
+                    ofd_id,
                     ofd.fd_type,
+                    ofd.ino,
                     ofd.status_flags,
+                    0,
+                    0,
+                    None,
                 );
             }
             total += n;
         } else {
-            let mut tmp = [0u8; 4096];
-            let to_write = (iov_len as usize).min(tmp.len());
-            unsafe {
-                guest_mem::read_bytes(base, iov_base, &mut tmp[..to_write]);
-            }
             let current_offset = fd_table::get_offset(base, vm, fd);
-            let n = memfs::write_file(ofd.ino as u32, current_offset, &tmp[..to_write]);
+            let n = write_regular_file_from_guest(base, iov_base, iov_len, ofd.ino as u32, current_offset);
             if n > 0 {
                 fd_table::advance_offset(base, vm, fd, n as u64);
             }
@@ -1119,25 +1468,37 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
                     return trace_write_attempt(
                         fd,
                         SYS_WRITEV,
+                        iov_addr,
                         iovcnt,
                         total,
+                        ofd_id,
                         ofd.fd_type,
+                        ofd.ino,
                         ofd.status_flags,
+                        0,
+                        0,
+                        None,
                     );
                 }
                 return trace_write_attempt(
                     fd,
                     SYS_WRITEV,
+                    iov_addr,
                     iovcnt,
                     n,
+                    ofd_id,
                     ofd.fd_type,
+                    ofd.ino,
                     ofd.status_flags,
+                    0,
+                    0,
+                    None,
                 );
             }
             total += n;
         }
     }
-    trace_write_attempt(fd, SYS_WRITEV, iovcnt, total, ofd.fd_type, ofd.status_flags)
+    trace_write_attempt(fd, SYS_WRITEV, iov_addr, iovcnt, total, ofd_id, ofd.fd_type, ofd.ino, ofd.status_flags, 0, 0, None)
 }
 
 // =========================================================================
@@ -1154,18 +1515,44 @@ pub fn sys_fstat(vm: &mut ThreadState, base: u32, fd: u64, stat_buf: u64) -> i64
         write_devnull_stat(base, stat_buf, vm.uid, vm.gid);
         return 0;
     }
-    if ofd.fd_type == FD_TYPE_EVENTFD || ofd.fd_type == FD_TYPE_EPOLL {
-        unsafe {
-            guest_mem::zero_mem(base, stat_buf, 128);
-            guest_mem::write_u64(base, stat_buf + 0, 1);
-            guest_mem::write_u64(base, stat_buf + 8, fd);
-            guest_mem::write_u32(base, stat_buf + 16, 0o600);
-            guest_mem::write_u32(base, stat_buf + 20, 1);
-            guest_mem::write_u32(base, stat_buf + 24, vm.uid);
-            guest_mem::write_u32(base, stat_buf + 28, vm.gid);
-            guest_mem::write_u64(base, stat_buf + 56, 8);
+    match ofd.fd_type {
+        FD_TYPE_PIPE => {
+            write_synthetic_stat(
+                base,
+                stat_buf,
+                ofd.ino as u64,
+                S_IFIFO | 0o600,
+                vm.uid,
+                vm.gid,
+                0,
+            );
+            return 0;
         }
-        return 0;
+        FD_TYPE_SOCKET => {
+            write_synthetic_stat(
+                base,
+                stat_buf,
+                ofd.ino as u64,
+                S_IFSOCK | 0o600,
+                vm.uid,
+                vm.gid,
+                0,
+            );
+            return 0;
+        }
+        FD_TYPE_EVENTFD | FD_TYPE_EPOLL => {
+            write_synthetic_stat(
+                base,
+                stat_buf,
+                fd,
+                S_IFIFO | 0o600,
+                vm.uid,
+                vm.gid,
+                0,
+            );
+            return 0;
+        }
+        _ => {}
     }
     write_stat(base, stat_buf, ofd.ino as u32)
 }
@@ -1179,7 +1566,7 @@ pub fn sys_newfstatat(
     stat_buf: u64,
     flags: u64,
 ) -> i64 {
-    if flags & !AT_SYMLINK_NOFOLLOW != 0 {
+    if flags & !(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH) != 0 {
         return EINVAL;
     }
 
@@ -1187,6 +1574,15 @@ pub fn sys_newfstatat(
     let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf[1..]) };
     let raw_path = &path_buf[1..1 + len];
     let path = trim_trailing_slashes(raw_path);
+    if path.is_empty() {
+        if flags & AT_EMPTY_PATH == 0 {
+            return ENOENT;
+        }
+        if dirfd as i64 == AT_FDCWD as i64 {
+            return write_stat(base, stat_buf, current_dir_ino(base, vm));
+        }
+        return sys_fstat(vm, base, dirfd, stat_buf);
+    }
     if path == b"/dev/null" {
         write_devnull_stat(base, stat_buf, vm.uid, vm.gid);
         return 0;
@@ -1221,17 +1617,21 @@ fn write_stat(base: u32, stat_buf: u64, ino: u32) -> i64 {
 }
 
 fn write_devnull_stat(base: u32, stat_buf: u64, uid: u32, gid: u32) {
+    write_synthetic_stat(base, stat_buf, 1, memfs::S_IFCHR | 0o666, uid, gid, 0);
+}
+
+fn write_synthetic_stat(base: u32, stat_buf: u64, ino: u64, mode: u32, uid: u32, gid: u32, size: u64) {
     unsafe {
         guest_mem::zero_mem(base, stat_buf, 128);
         guest_mem::write_u64(base, stat_buf + 0, 1); // st_dev
-        guest_mem::write_u64(base, stat_buf + 8, 1); // st_ino
-        guest_mem::write_u32(base, stat_buf + 16, memfs::S_IFCHR | 0o666); // st_mode
+        guest_mem::write_u64(base, stat_buf + 8, ino); // st_ino
+        guest_mem::write_u32(base, stat_buf + 16, mode); // st_mode
         guest_mem::write_u32(base, stat_buf + 20, 1); // st_nlink
         guest_mem::write_u32(base, stat_buf + 24, uid); // st_uid
         guest_mem::write_u32(base, stat_buf + 28, gid); // st_gid
-        guest_mem::write_u64(base, stat_buf + 48, 0); // st_size
+        guest_mem::write_u64(base, stat_buf + 48, size); // st_size
         guest_mem::write_u32(base, stat_buf + 56, 4096u32); // st_blksize
-        guest_mem::write_u64(base, stat_buf + 64, 0); // st_blocks
+        guest_mem::write_u64(base, stat_buf + 64, (size + 511) / 512); // st_blocks
     }
 }
 
@@ -1590,6 +1990,7 @@ pub fn sys_truncate(_vm: &mut ThreadState, base: u32, path_addr: u64, length: u6
 
 #[cfg(test)]
 mod tests {
+    use crate::alloc_crate::{string::String, vec, vec::Vec};
     use crate::abi::*;
     use crate::fs::{fd_table, memfs};
     use crate::test_helpers::TestVm;
@@ -1679,6 +2080,11 @@ mod tests {
         let ret = super::dispatch_write(&mut t.vm, t.base, fd as u64, buf_addr, 8, SYS_WRITE);
         assert_eq!(ret, 0);
         assert_eq!(t.vm.status, STATUS_FS);
+        let expected_ino = crate::fs::fd_table::get_ofd(t.base, &t.vm, fd as u64)
+            .map(|ofd| ofd.ino)
+            .unwrap_or(0);
+        assert!(expected_ino > 0);
+        assert_eq!(super::pending_request_target_ino(vm_ptr, t.base), expected_ino);
         super::process_pending_requests(vm_ptr, t.base);
         assert_eq!(super::resume_from_fs(vm_ptr, t.base), 8);
 
@@ -1746,7 +2152,7 @@ mod tests {
 
         let bytes = t.guest_mem(dents_buf, n as usize);
         let mut offset = 0usize;
-        let mut names = alloc::vec::Vec::new();
+        let mut names = Vec::new();
         while offset < bytes.len() {
             let reclen = u16::from_le_bytes([bytes[offset + 16], bytes[offset + 17]]) as usize;
             assert!(reclen >= 24);
@@ -1755,7 +2161,7 @@ mod tests {
                 .iter()
                 .position(|byte| *byte == 0)
                 .expect("dirent name must be NUL-terminated");
-            names.push(alloc::string::String::from_utf8_lossy(&name_field[..nul]).into_owned());
+            names.push(String::from_utf8_lossy(&name_field[..nul]).into_owned());
             for byte in &name_field[nul..] {
                 assert_eq!(*byte, 0, "dirent padding must be zero-filled");
             }
@@ -1765,10 +2171,7 @@ mod tests {
         names.sort();
         assert_eq!(
             names,
-            alloc::vec![
-                alloc::string::String::from("alpha.txt"),
-                alloc::string::String::from("beta.cfg"),
-            ]
+            vec![String::from("alpha.txt"), String::from("beta.cfg"),]
         );
     }
 
@@ -1816,6 +2219,66 @@ mod tests {
             9999,
         );
         assert_eq!(ret, EINVAL);
+    }
+
+    #[test]
+    fn newfstatat_empty_path_requires_at_empty_path() {
+        let mut t = TestVm::new();
+
+        let fd = t.sys_openat(b"/plain", O_CREAT | O_RDWR);
+        assert!(fd >= 3);
+
+        let empty_addr = t.write_path(0xF000, b"");
+        let stat_addr = t.scratch + 0x3000;
+        let ret = super::sys_newfstatat(&mut t.vm, t.base, fd as u64, empty_addr, stat_addr, 0);
+        assert_eq!(ret, ENOENT);
+    }
+
+    #[test]
+    fn newfstatat_empty_path_stats_referenced_fd() {
+        let mut t = TestVm::new();
+
+        let fd = t.sys_openat(b"/plain", O_CREAT | O_RDWR);
+        assert!(fd >= 3);
+
+        let empty_addr = t.write_path(0xF000, b"");
+        let stat_addr = t.scratch + 0x3000;
+        let ret = super::sys_newfstatat(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            empty_addr,
+            stat_addr,
+            super::AT_EMPTY_PATH,
+        );
+        assert_eq!(ret, 0);
+        let ino = unsafe { crate::guest_mem::read_u64(t.base, stat_addr + 8) };
+        let mode = unsafe { crate::guest_mem::read_u32(t.base, stat_addr + 16) };
+        assert_eq!(ino, 2);
+        assert_eq!(mode & memfs::S_IFMT, memfs::S_IFREG);
+    }
+
+    #[test]
+    fn newfstatat_empty_path_at_fdcwd_stats_cwd() {
+        let mut t = TestVm::new();
+
+        assert_eq!(t.sys_mkdirat(b"/work"), 0);
+        let cwd_addr = t.write_path(0xF100, b"/work");
+        assert_eq!(super::sys_chdir(&mut t.vm, t.base, cwd_addr), 0);
+
+        let empty_addr = t.write_path(0xF200, b"");
+        let stat_addr = t.scratch + 0x3000;
+        let ret = super::sys_newfstatat(
+            &mut t.vm,
+            t.base,
+            (-100i64) as u64,
+            empty_addr,
+            stat_addr,
+            super::AT_EMPTY_PATH,
+        );
+        assert_eq!(ret, 0);
+        let mode = unsafe { crate::guest_mem::read_u32(t.base, stat_addr + 16) };
+        assert_eq!(mode & memfs::S_IFMT, memfs::S_IFDIR);
     }
 
     #[test]
@@ -2129,5 +2592,28 @@ mod tests {
         );
         let size = unsafe { crate::guest_mem::read_u64(t.base, stat_addr + 48) };
         assert_eq!(size, 0);
+    }
+
+    #[test]
+    fn fstat_pipe_returns_fifo_mode() {
+        let mut t = TestVm::new();
+
+        let pipefd_addr = t.scratch + 0x3500;
+        assert_eq!(crate::syscall::pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+        let rd = unsafe { crate::guest_mem::read_u32(t.base, pipefd_addr) } as i64;
+        let stat_addr = t.scratch + 0x3600;
+        assert_eq!(t.sys_fstat(rd, stat_addr), 0);
+        let mode = unsafe { crate::guest_mem::read_u32(t.base, stat_addr + 16) };
+        assert_eq!(mode & memfs::S_IFMT, super::S_IFIFO);
+    }
+
+    #[test]
+    fn stdio_pipe_ends_enforce_read_write_direction() {
+        let mut t = TestVm::new();
+
+        let mut buf = [0u8; 8];
+        assert_eq!(t.sys_write_data(0, b"stdin"), EBADF);
+        assert_eq!(t.sys_read(1, &mut buf), EBADF);
+        assert_eq!(t.sys_read(2, &mut buf), EBADF);
     }
 }

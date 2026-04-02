@@ -8,16 +8,51 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 /// Reservation table pointers (set once during process init).
 static mut RESERVATION_GEN: *const AtomicU32 = core::ptr::null();
+/// Granule spinlocks for LR/SC + ordinary store serialization.
+static mut RESERVATION_LOCK: *const AtomicU32 = core::ptr::null();
 /// Pointer to thread_count in ProcessState. null = single-thread (skip seqlock).
 static mut THREAD_COUNT: *const AtomicU32 = core::ptr::null();
+static mut LAST_ACCESS_ADDR: u64 = 0;
+static mut LAST_ACCESS_LEN: u32 = 0;
+static mut LAST_ACCESS_KIND: u32 = 0;
+
+const ACCESS_READ: u32 = 1;
+const ACCESS_WRITE: u32 = 2;
+const ACCESS_ZERO: u32 = 3;
+
+#[inline(always)]
+fn record_access(addr: u64, len: u32, kind: u32) {
+    unsafe {
+        LAST_ACCESS_ADDR = addr;
+        LAST_ACCESS_LEN = len;
+        LAST_ACCESS_KIND = kind;
+    }
+}
+
+pub fn last_access_addr() -> u64 {
+    unsafe { LAST_ACCESS_ADDR }
+}
+
+pub fn last_access_len() -> u32 {
+    unsafe { LAST_ACCESS_LEN }
+}
+
+pub fn last_access_kind() -> u32 {
+    unsafe { LAST_ACCESS_KIND }
+}
 
 /// Initialize reservation table pointers.
 ///
 /// # Safety
 /// Must be called once before any guest memory access.
-pub unsafe fn init(reservation_gen: *const AtomicU32, thread_count: *const AtomicU32) {
+pub unsafe fn init(
+    reservation_gen: *const AtomicU32,
+    reservation_lock: *const AtomicU32,
+    thread_count: *const AtomicU32,
+) {
     unsafe {
         RESERVATION_GEN = reservation_gen;
+        RESERVATION_LOCK = reservation_lock;
         THREAD_COUNT = thread_count;
     }
 }
@@ -87,16 +122,19 @@ unsafe fn read_gen(slot: usize) -> u32 {
 
 #[inline(always)]
 pub unsafe fn read_u8(base: u32, addr: u64) -> u8 {
+    record_access(addr, 1, ACCESS_READ);
     unsafe { *((base + addr as u32) as *const u8) }
 }
 
 #[inline(always)]
 pub unsafe fn read_u16(base: u32, addr: u64) -> u16 {
+    record_access(addr, 2, ACCESS_READ);
     unsafe { ((base + addr as u32) as *const u16).read_unaligned() }
 }
 
 #[inline(always)]
 pub unsafe fn read_u32(base: u32, addr: u64) -> u32 {
+    record_access(addr, 4, ACCESS_READ);
     let ptr = (base + addr as u32) as usize;
     if (ptr & 3) == 0 {
         unsafe { (*(ptr as *const AtomicU32)).load(Ordering::Relaxed) }
@@ -107,6 +145,7 @@ pub unsafe fn read_u32(base: u32, addr: u64) -> u32 {
 
 #[inline(always)]
 pub unsafe fn read_u64(base: u32, addr: u64) -> u64 {
+    record_access(addr, 8, ACCESS_READ);
     let ptr = (base + addr as u32) as usize;
     if (ptr & 7) == 0 {
         unsafe { (*(ptr as *const core::sync::atomic::AtomicU64)).load(Ordering::Relaxed) }
@@ -136,6 +175,7 @@ pub unsafe fn read_bytes(base: u32, addr: u64, buf: &mut [u8]) {
     if buf.is_empty() {
         return;
     }
+    record_access(addr, buf.len() as u32, ACCESS_READ);
     let src = (base + addr as u32) as *const u8;
     debug_assert!(
         !src.is_null(),
@@ -158,12 +198,92 @@ unsafe fn bump_gen(slot: usize) {
 }
 
 #[inline(always)]
+unsafe fn lock_slot(slot: usize) {
+    let p = unsafe { RESERVATION_LOCK };
+    if p.is_null() {
+        return;
+    }
+    let lock = unsafe { &*p.add(slot) };
+    while lock.compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
+        core::hint::spin_loop();
+    }
+}
+
+#[inline(always)]
+unsafe fn unlock_slot(slot: usize) {
+    let p = unsafe { RESERVATION_LOCK };
+    if p.is_null() {
+        return;
+    }
+    unsafe { (&*p.add(slot)).store(0, Ordering::Release) };
+}
+
+#[inline(always)]
+fn stripe_mask(addr: u64, len: usize) -> u64 {
+    if len == 0 {
+        return 0;
+    }
+    let granules = ((addr + len as u64 - 1) >> 3) - (addr >> 3) + 1;
+    if granules >= 64 {
+        return u64::MAX;
+    }
+    let start = ((addr >> 3) & 63) as u32;
+    let end = (((addr + len as u64 - 1) >> 3) & 63) as u32;
+    let start_mask = if start == 0 { u64::MAX } else { !((1u64 << start) - 1) };
+    let end_mask = if end >= 63 { u64::MAX } else { (1u64 << (end + 1)) - 1 };
+    if start <= end {
+        start_mask & end_mask
+    } else {
+        start_mask | end_mask
+    }
+}
+
+#[inline(always)]
+unsafe fn lock_mask(mask: u64) {
+    for slot in 0..64 {
+        if mask & (1u64 << slot) != 0 {
+            unsafe { lock_slot(slot) };
+        }
+    }
+}
+
+#[inline(always)]
+unsafe fn unlock_mask(mask: u64) {
+    for slot in (0..64).rev() {
+        if mask & (1u64 << slot) != 0 {
+            unsafe { unlock_slot(slot) };
+        }
+    }
+}
+
+#[inline(always)]
+unsafe fn seqlock_begin_mask(mask: u64) {
+    for slot in 0..64 {
+        if mask & (1u64 << slot) != 0 {
+            unsafe { bump_gen(slot) };
+        }
+    }
+}
+
+#[inline(always)]
+unsafe fn seqlock_end_mask(mask: u64) {
+    for slot in 0..64 {
+        if mask & (1u64 << slot) != 0 {
+            unsafe { bump_gen(slot) };
+        }
+    }
+}
+
+#[inline(always)]
 pub unsafe fn write_u8(base: u32, addr: u64, val: u8) {
+    record_access(addr, 1, ACCESS_WRITE);
     if unsafe { is_multi_threaded() } {
         let slot = ((addr >> 3) & 63) as usize;
+        unsafe { lock_slot(slot) };
         unsafe { bump_gen(slot) }; // odd  → write-in-progress
         unsafe { *((base + addr as u32) as *mut u8) = val };
         unsafe { bump_gen(slot) }; // even → write-complete
+        unsafe { unlock_slot(slot) };
     } else {
         unsafe { *((base + addr as u32) as *mut u8) = val };
     }
@@ -171,11 +291,14 @@ pub unsafe fn write_u8(base: u32, addr: u64, val: u8) {
 
 #[inline(always)]
 pub unsafe fn write_u16(base: u32, addr: u64, val: u16) {
+    record_access(addr, 2, ACCESS_WRITE);
     if unsafe { is_multi_threaded() } {
-        let slot = ((addr >> 3) & 63) as usize;
-        unsafe { bump_gen(slot) }; // odd  → write-in-progress
+        let mask = stripe_mask(addr, 2);
+        unsafe { lock_mask(mask) };
+        unsafe { seqlock_begin_mask(mask) };
         unsafe { ((base + addr as u32) as *mut u16).write_unaligned(val) };
-        unsafe { bump_gen(slot) }; // even → write-complete
+        unsafe { seqlock_end_mask(mask) };
+        unsafe { unlock_mask(mask) };
     } else {
         unsafe { ((base + addr as u32) as *mut u16).write_unaligned(val) };
     }
@@ -183,16 +306,19 @@ pub unsafe fn write_u16(base: u32, addr: u64, val: u16) {
 
 #[inline(always)]
 pub unsafe fn write_u32(base: u32, addr: u64, val: u32) {
+    record_access(addr, 4, ACCESS_WRITE);
     let ptr = (base + addr as u32) as usize;
     if unsafe { is_multi_threaded() } {
-        let slot = ((addr >> 3) & 63) as usize;
-        unsafe { bump_gen(slot) }; // odd  → write-in-progress
+        let mask = stripe_mask(addr, 4);
+        unsafe { lock_mask(mask) };
+        unsafe { seqlock_begin_mask(mask) };
         if (ptr & 3) == 0 {
             unsafe { (*(ptr as *const AtomicU32)).store(val, Ordering::Relaxed) };
         } else {
             unsafe { (ptr as *mut u32).write_unaligned(val) };
         }
-        unsafe { bump_gen(slot) }; // even → write-complete
+        unsafe { seqlock_end_mask(mask) };
+        unsafe { unlock_mask(mask) };
     } else {
         if (ptr & 3) == 0 {
             unsafe { (*(ptr as *const AtomicU32)).store(val, Ordering::Relaxed) };
@@ -204,10 +330,12 @@ pub unsafe fn write_u32(base: u32, addr: u64, val: u32) {
 
 #[inline(always)]
 pub unsafe fn write_u64(base: u32, addr: u64, val: u64) {
+    record_access(addr, 8, ACCESS_WRITE);
     let ptr = (base + addr as u32) as usize;
     if unsafe { is_multi_threaded() } {
-        let slot = ((addr >> 3) & 63) as usize;
-        unsafe { bump_gen(slot) }; // odd  → write-in-progress
+        let mask = stripe_mask(addr, 8);
+        unsafe { lock_mask(mask) };
+        unsafe { seqlock_begin_mask(mask) };
         if (ptr & 7) == 0 {
             unsafe {
                 (*(ptr as *const core::sync::atomic::AtomicU64)).store(val, Ordering::Relaxed)
@@ -215,7 +343,8 @@ pub unsafe fn write_u64(base: u32, addr: u64, val: u64) {
         } else {
             unsafe { (ptr as *mut u64).write_unaligned(val) };
         }
-        unsafe { bump_gen(slot) }; // even → write-complete
+        unsafe { seqlock_end_mask(mask) };
+        unsafe { unlock_mask(mask) };
     } else {
         if (ptr & 7) == 0 {
             unsafe {
@@ -231,6 +360,7 @@ pub unsafe fn write_bytes(base: u32, addr: u64, data: &[u8]) {
     if data.is_empty() {
         return;
     }
+    record_access(addr, data.len() as u32, ACCESS_WRITE);
     let dst = (base + addr as u32) as *mut u8;
     debug_assert!(
         !dst.is_null(),
@@ -238,35 +368,12 @@ pub unsafe fn write_bytes(base: u32, addr: u64, data: &[u8]) {
         data.len()
     );
     if unsafe { is_multi_threaded() } && !data.is_empty() {
-        let start_slot = ((addr >> 3) & 63) as usize;
-        let end_slot = (((addr + data.len() as u64 - 1) >> 3) & 63) as usize;
-        // bump all slots to odd → write-in-progress
-        if start_slot <= end_slot {
-            for s in start_slot..=end_slot {
-                unsafe { bump_gen(s) };
-            }
-        } else {
-            for s in start_slot..64 {
-                unsafe { bump_gen(s) };
-            }
-            for s in 0..=end_slot {
-                unsafe { bump_gen(s) };
-            }
-        }
+        let mask = stripe_mask(addr, data.len());
+        unsafe { lock_mask(mask) };
+        unsafe { seqlock_begin_mask(mask) };
         unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len()) };
-        // bump all slots to even → write-complete
-        if start_slot <= end_slot {
-            for s in start_slot..=end_slot {
-                unsafe { bump_gen(s) };
-            }
-        } else {
-            for s in start_slot..64 {
-                unsafe { bump_gen(s) };
-            }
-            for s in 0..=end_slot {
-                unsafe { bump_gen(s) };
-            }
-        }
+        unsafe { seqlock_end_mask(mask) };
+        unsafe { unlock_mask(mask) };
     } else {
         unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len()) };
     }
@@ -276,37 +383,15 @@ pub unsafe fn zero_mem(base: u32, addr: u64, len: usize) {
     if len == 0 {
         return;
     }
+    record_access(addr, len.min(u32::MAX as usize) as u32, ACCESS_ZERO);
     if unsafe { is_multi_threaded() } && len > 0 {
-        let start_slot = ((addr >> 3) & 63) as usize;
-        let end_slot = (((addr + len as u64 - 1) >> 3) & 63) as usize;
-        // bump all slots to odd → write-in-progress
-        if start_slot <= end_slot {
-            for s in start_slot..=end_slot {
-                unsafe { bump_gen(s) };
-            }
-        } else {
-            for s in start_slot..64 {
-                unsafe { bump_gen(s) };
-            }
-            for s in 0..=end_slot {
-                unsafe { bump_gen(s) };
-            }
-        }
+        let mask = stripe_mask(addr, len);
+        unsafe { lock_mask(mask) };
+        unsafe { seqlock_begin_mask(mask) };
         let dst = (base + addr as u32) as *mut u8;
         unsafe { core::ptr::write_bytes(dst, 0, len) };
-        // bump all slots to even → write-complete
-        if start_slot <= end_slot {
-            for s in start_slot..=end_slot {
-                unsafe { bump_gen(s) };
-            }
-        } else {
-            for s in start_slot..64 {
-                unsafe { bump_gen(s) };
-            }
-            for s in 0..=end_slot {
-                unsafe { bump_gen(s) };
-            }
-        }
+        unsafe { seqlock_end_mask(mask) };
+        unsafe { unlock_mask(mask) };
     } else {
         let dst = (base + addr as u32) as *mut u8;
         unsafe { core::ptr::write_bytes(dst, 0, len) };
@@ -347,7 +432,12 @@ mod tests {
             let thread_count = AtomicU32::new(2); // >1 enables multi-threaded path
 
             // Initialize guest_mem with our reservation table and thread count.
-            super::init(gen_table.as_ptr(), &thread_count as *const AtomicU32);
+            let lock_table: [AtomicU32; 64] = core::array::from_fn(|_| AtomicU32::new(0));
+            super::init(
+                gen_table.as_ptr(),
+                lock_table.as_ptr(),
+                &thread_count as *const AtomicU32,
+            );
 
             let base: u32 = 0;
             // Pick an address that maps to a known slot.
@@ -381,7 +471,7 @@ mod tests {
             );
 
             // Reset to single-threaded so subsequent tests are not affected.
-            super::init(core::ptr::null(), core::ptr::null());
+            super::init(core::ptr::null(), core::ptr::null(), core::ptr::null());
         }
     }
 }

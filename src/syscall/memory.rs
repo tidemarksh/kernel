@@ -135,15 +135,21 @@ pub(crate) fn restore_after_plain_fork(snapshot: &AddressSpaceSnapshot) {
     s.has_prot_none = snapshot.has_prot_none;
 }
 
-pub fn reset_for_execve(base: u32, brk_start: u64) {
+pub fn reset_for_execve_with_flush(base: u32, brk_start: u64, flush_shared: bool) {
     let mmap_start = ((brk_start + 0x1F_FFFF) & !0xF_FFFF).max(0x20_0000);
+    if flush_shared {
+        flush_shared_mappings_in_range(base, 0, u64::MAX);
+    }
     let s = ms();
-    flush_shared_mappings_in_range(base, 0, u64::MAX);
     s.vmas.clear();
     s.brk_base = brk_start;
     s.brk_current = brk_start;
     s.mmap_next = mmap_start;
     s.has_prot_none = 0;
+}
+
+pub fn reset_for_execve(base: u32, brk_start: u64) {
+    reset_for_execve_with_flush(base, brk_start, true);
 }
 
 pub fn flush_shared_mappings(base: u32) {

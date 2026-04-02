@@ -70,9 +70,22 @@ fn optional_pattern(mut args: impl Iterator<Item = String>) -> Result<Option<Str
 fn print_help() {
     eprintln!("usage:");
     eprintln!("  cargo xtask test [test-name-regex]");
-    eprintln!("  cargo xtask ltp-conform [test-name-regex]");
-    eprintln!("  cargo xtask test-binary <binary> [test-name-regex]");
     eprintln!("  cargo xtask test-lib [test-name-regex]");
+    eprintln!("  cargo xtask test-binary <binary> [test-name-regex]");
+    eprintln!("  cargo xtask ltp-conform [test-name-regex]");
+    eprintln!();
+    eprintln!("canonical commands:");
+    eprintln!("  cargo build-kernel");
+    eprintln!("  cargo build-kernel-release");
+    eprintln!("  cargo test-kernel");
+    eprintln!("  cargo test-kernel-lib '<test-name-regex>'");
+    eprintln!("  cargo test-kernel-riscv '<test-name-regex>'");
+    eprintln!("  cargo test-kernel-ltp '<test-name-regex>'");
+    eprintln!();
+    eprintln!("note:");
+    eprintln!("  plain 'cargo test' is not a supported verification entrypoint here.");
+    eprintln!("  kernel tests require wasm32-wasip1 plus one fresh wasmtime process");
+    eprintln!("  per test, so use the xtask-based commands above.");
 }
 
 fn run_test_target(target: TestTarget<'_>, pattern: Option<&str>) -> Result<(), String> {
@@ -245,6 +258,6 @@ fn cargo_command() -> Command {
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .expect("xtask crate must live under kernel/")
+        .expect("xtask must live under kernel/")
         .to_path_buf()
 }

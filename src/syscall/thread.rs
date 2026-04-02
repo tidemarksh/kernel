@@ -23,6 +23,30 @@ const FUTEX_OWNER_DIED: u32 = 0x4000_0000;
 const FUTEX_TID_MASK: u32 = 0x3fff_ffff;
 const ROBUST_LIST_LIMIT: u32 = 2048;
 
+#[derive(Clone, Copy)]
+struct CloneSpawnTrace {
+    tid: i32,
+    pc: u64,
+    ra: u64,
+    sp: u64,
+    g: u64,
+}
+
+static mut LAST_CLONE_SPAWN: CloneSpawnTrace = CloneSpawnTrace {
+    tid: 0,
+    pc: 0,
+    ra: 0,
+    sp: 0,
+    g: 0,
+};
+
+pub fn last_clone_spawn() -> (i32, u64, u64, u64, u64) {
+    unsafe {
+        let t = LAST_CLONE_SPAWN;
+        (t.tid, t.pc, t.ra, t.sp, t.g)
+    }
+}
+
 pub fn init() {
     // clone handoff scratch lives in ThreadState (shared guest-visible memory),
     // so there is no thread subsystem global state to reset here.
@@ -107,7 +131,7 @@ unsafe extern "C" {
 }
 
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-fn notify_futex_addr(base: u32, addr: u32, max_wake: u32) {
+pub(crate) fn notify_futex_addr(base: u32, addr: u32, max_wake: u32) {
     unsafe {
         let ptr = (base as u64 + addr as u64) as usize as *mut i32;
         let _ = tidemark_memory_atomic_notify(ptr, max_wake);
@@ -115,7 +139,7 @@ fn notify_futex_addr(base: u32, addr: u32, max_wake: u32) {
 }
 
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-fn notify_futex_addr(_base: u32, _addr: u32, _max_wake: u32) {}
+pub(crate) fn notify_futex_addr(_base: u32, _addr: u32, _max_wake: u32) {}
 
 fn requeue_futex_waiters_by_process_ptr(
     process_ptr: u32,
@@ -230,8 +254,10 @@ pub fn init_main_thread(vm_ptr: u32, base: u32) {
                 ThreadRecord::new(vm.tid, THREAD_RUNNING, vm_ptr, vm.clear_child_tid as u32, 0);
         }
 
+        let gen_ptr = core::ptr::addr_of!(ps.reservation_gen) as *const core::sync::atomic::AtomicU32;
+        let lock_ptr = core::ptr::addr_of!(ps.reservation_lock) as *const core::sync::atomic::AtomicU32;
         let tc_ptr = core::ptr::addr_of!(ps.thread_count);
-        guest_mem::init(core::ptr::null(), tc_ptr);
+        guest_mem::init(gen_ptr, lock_ptr, tc_ptr);
     }
 }
 
@@ -510,21 +536,49 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
         }
 
         let child = &mut *(child_ptr as *mut ThreadState);
-        core::ptr::copy_nonoverlapping(parent as *const ThreadState, child, 1);
+        core::ptr::write_bytes(
+            child_ptr as *mut u8,
+            0,
+            core::mem::size_of::<ThreadState>(),
+        );
 
-        child.tid = parent.clone_child_tid;
+        // clone(2) creates a new thread with copied CPU state, but the rest of
+        // ThreadState is thread-local scratch and must start clean. Copying the
+        // whole parent struct leaks blocked-syscall, fault, signal, and handoff
+        // bookkeeping into the child and breaks Go's thread bootstrap.
+        child.x = parent.x;
+        child.x[0] = 0;
         child.x[10] = 0;
+        child.f = parent.f;
+        child.pc = parent.pc;
+        child.fcsr = parent.fcsr;
+        child.tid = parent.clone_child_tid;
+        child.uid = parent.uid;
+        child.euid = parent.euid;
+        child.gid = parent.gid;
+        child.egid = parent.egid;
+        child.tls_base = parent.tls_base;
+        child.clear_child_tid = 0;
+        child.robust_list_head = 0;
+        child.robust_list_len = 0;
+        child.sig_mask = parent.sig_mask;
+        child.sig_pending = 0;
+        child.sig_info_code = 0;
+        child.sigaltstack_sp = 0;
+        child.sigaltstack_size = 0;
+        child.sigaltstack_flags = 0;
+        child.lr_addr = u64::MAX;
+        child.lr_val = 0;
+        child.lr_gen = 0;
+        child.lr_gen_end = 0;
+        child.insn_budget = 0;
+        child.fault_pc = 0;
+        child.fault_addr = 0;
+        child.guest_base = parent.guest_base;
+        child.process_ptr = parent.process_ptr;
         child.status = STATUS_OK;
         child.exit_code = 0;
-        child.sig_pending = 0;
-        child.clone_flags = 0;
-        child.clone_child_stack = 0;
-        child.clone_tls = 0;
-        child.clone_child_tidptr = 0;
-        child.clone_child_tid = 0;
-        child.clone_pending = 0;
-        child.blocked_fd = 0;
-        child.blocked_ofd_id = 0;
+        child.term_signal = 0;
 
         if parent.clone_child_stack != 0 {
             child.x[2] = parent.clone_child_stack;
@@ -549,14 +603,6 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
             );
         }
 
-        // For CLONE_VM without CLONE_VFORK, the child does not inherit an
-        // alternate signal stack; pending signals are also thread-local.
-        if parent.clone_flags & CLONE_VM != 0 && parent.clone_flags & CLONE_VFORK == 0 {
-            child.sigaltstack_sp = 0;
-            child.sigaltstack_size = 0;
-            child.sigaltstack_flags = 0;
-        }
-
         let ps = &mut *((base as u64 + child.process_ptr as u64) as *mut ProcessState);
         ps.threads[(parent.clone_child_tid - 1) as usize] = ThreadRecord::new(
             parent.clone_child_tid,
@@ -565,6 +611,14 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
             child.clear_child_tid as u32,
             0,
         );
+
+        LAST_CLONE_SPAWN = CloneSpawnTrace {
+            tid: child.tid,
+            pc: child.pc,
+            ra: child.x[1],
+            sp: child.x[2],
+            g: child.x[27],
+        };
 
         parent.clone_flags = 0;
         parent.clone_child_stack = 0;
@@ -649,6 +703,7 @@ pub fn sys_futex(
             }
             vm.futex_wait_addr = addr;
             vm.futex_wait_timeout = timeout_or_requeue;
+            vm.futex_wait_expected = val as u32;
             // Value matches — block. Return STATUS_FUTEX_WAIT for TS to Atomics.wait.
             vm.x[10] = addr; // stash addr for TS
             vm.status = STATUS_FUTEX_WAIT;
@@ -729,6 +784,7 @@ pub fn resume_futex_wait_result(vm: &mut ThreadState, base: u32, result: i64) {
     }
     vm.futex_wait_addr = 0;
     vm.futex_wait_timeout = 0;
+    vm.futex_wait_expected = 0;
     vm.status = STATUS_OK;
     vm.x[10] = result as u64;
     crate::syscall::signal::check_pending(vm, base);

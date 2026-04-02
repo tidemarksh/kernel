@@ -53,6 +53,8 @@ pub struct ThreadState {
     pub sig_mask: u64,
     /// Pending signals (delivered at syscall return boundary)
     pub sig_pending: u64,
+    /// `siginfo.si_code` for the next delivered pending signal.
+    pub sig_info_code: i32,
     /// Alternate signal stack base
     pub sigaltstack_sp: u64,
     /// Alternate signal stack size
@@ -63,6 +65,8 @@ pub struct ThreadState {
     // --- LR/SC reservation (per-thread) ---
     pub lr_addr: u64,
     pub lr_val: u64,
+    pub lr_gen: u32,
+    pub lr_gen_end: u32,
 
     // --- Instruction budget ---
     pub insn_budget: i32,
@@ -119,8 +123,13 @@ pub struct ThreadState {
     pub futex_wait_addr: u64,
     /// Guest pointer to FUTEX_WAIT timeout timespec (0 = infinite wait).
     pub futex_wait_timeout: u64,
+    /// Expected futex word captured at FUTEX_WAIT entry.
+    pub futex_wait_expected: u32,
+    _pad2: u32,
     /// epoll_wait timeout in milliseconds (-1 = infinite wait).
     pub epoll_timeout_ms: i64,
+    /// maxevents captured for STATUS_EPOLL_WAIT retry.
+    pub epoll_maxevents: u32,
     /// FD number captured for a blocked OFD-backed syscall resume.
     pub blocked_fd: u32,
     /// Retained OFD id captured for a blocked syscall resume. 0 = inactive.
@@ -156,6 +165,10 @@ pub struct ProcessState {
     /// Number of active threads (clone increments, exit decrements).
     /// Used for seqlock optimization: thread_count == 1 → skip seqlock on stores.
     pub thread_count: AtomicU32,
+    /// Reservation generations for LR/SC invalidation across shared-memory threads.
+    pub reservation_gen: [AtomicU32; 64],
+    /// Reservation locks used to make SC/AMO checks atomic across workers.
+    pub reservation_lock: [AtomicU32; 64],
     /// Process ID
     pub pid: i32,
     /// Parent process ID

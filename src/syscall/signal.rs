@@ -21,7 +21,10 @@
 
 use crate::abi::*;
 use crate::guest_mem;
-use crate::types::{MAX_SIGNALS, SIG_DFL, SIG_IGN, SigAction, ThreadState};
+use crate::types::{
+    MAX_SIGNALS, ProcessState, SIG_DFL, SIG_IGN, SigAction, ThreadState, THREAD_DEAD,
+    THREAD_BLOCKED_FUTEX, THREAD_NONE,
+};
 
 // SA flags (https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/signal-defs.h)
 const SA_NOCLDSTOP: u64 = 0x00000001;
@@ -40,6 +43,11 @@ const SIG_SETMASK: u64 = 2;
 // sigaltstack flags
 const SS_ONSTACK: i32 = 1;
 const SS_DISABLE: i32 = 2;
+const SI_USER: i32 = 0;
+const SI_TKILL: i32 = -6;
+const ILL_ILLOPC: i32 = 1;
+const SEGV_MAPERR: i32 = 1;
+const SEGV_ACCERR: i32 = 2;
 
 /// Per-process signal disposition tables, allocated in kernel Worker linear memory.
 /// Each process gets its own [SigAction; MAX_SIGNALS] table, indexed by PID.
@@ -56,6 +64,42 @@ const SS_DISABLE: i32 = 2;
 static mut SIG_SLOTS_PTR: *mut [*mut [SigAction; MAX_SIGNALS]; MAX_PROCESSES] =
     core::ptr::null_mut();
 static mut PROCESS_PENDING_PTR: *mut [u64; MAX_PROCESSES] = core::ptr::null_mut();
+
+#[derive(Clone, Copy)]
+struct SignalTrace {
+    sig: u32,
+    frame_base: u64,
+    pc: u64,
+    ra: u64,
+    sp: u64,
+    g: u64,
+}
+
+static mut LAST_SIGNAL_DELIVERY: SignalTrace = SignalTrace {
+    sig: 0,
+    frame_base: 0,
+    pc: 0,
+    ra: 0,
+    sp: 0,
+    g: 0,
+};
+static mut LAST_SIGRETURN: SignalTrace = SignalTrace {
+    sig: 0,
+    frame_base: 0,
+    pc: 0,
+    ra: 0,
+    sp: 0,
+    g: 0,
+};
+static mut LAST_TRAMPOLINE_PC: u64 = 0;
+static mut LAST_TRAMPOLINE_HIT_TID: i32 = 0;
+static mut LAST_TRAMPOLINE_HIT_PC: u64 = 0;
+static mut SIGRETURN_COUNT: u32 = 0;
+
+const SYNC_FAULT_SIGNAL_MASK: u64 = (1u64 << (SIGILL - 1))
+    | (1u64 << (SIGBUS - 1))
+    | (1u64 << (SIGFPE - 1))
+    | (1u64 << (SIGSEGV - 1));
 
 #[inline(always)]
 fn sig_slots() -> &'static mut [*mut [SigAction; MAX_SIGNALS]; MAX_PROCESSES] {
@@ -87,6 +131,34 @@ pub fn signal_slots_bytes() -> u32 {
 
 pub fn process_pending_bytes() -> u32 {
     core::mem::size_of::<[u64; MAX_PROCESSES]>() as u32
+}
+
+pub fn last_signal_delivery() -> (u32, u64, u64, u64, u64, u64) {
+    unsafe {
+        let t = LAST_SIGNAL_DELIVERY;
+        (t.sig, t.frame_base, t.pc, t.ra, t.sp, t.g)
+    }
+}
+
+pub fn last_sigreturn() -> (u32, u64, u64, u64, u64, u64) {
+    unsafe {
+        let t = LAST_SIGRETURN;
+        (t.sig, t.frame_base, t.pc, t.ra, t.sp, t.g)
+    }
+}
+
+pub fn last_trampoline_hit() -> (i32, u64, u32) {
+    unsafe { (LAST_TRAMPOLINE_HIT_TID, LAST_TRAMPOLINE_HIT_PC, SIGRETURN_COUNT) }
+}
+
+#[inline(always)]
+pub fn note_pc(vm: &ThreadState, pc: u64) {
+    unsafe {
+        if LAST_TRAMPOLINE_PC != 0 && pc == LAST_TRAMPOLINE_PC {
+            LAST_TRAMPOLINE_HIT_TID = vm.tid;
+            LAST_TRAMPOLINE_HIT_PC = pc;
+        }
+    }
 }
 
 pub fn signal_action_table_bytes() -> u32 {
@@ -123,6 +195,17 @@ pub fn pid_from_vm(vm: &ThreadState, base: u32) -> i32 {
         let pid_offset = core::mem::offset_of!(crate::types::ProcessState, pid);
         guest_mem::read_i32(base, ps_ptr as u64 + pid_offset as u64)
     }
+}
+
+fn process_state_from_vm(vm: &ThreadState, base: u32) -> Option<&'static mut ProcessState> {
+    if vm.process_ptr == 0 {
+        return None;
+    }
+    let absolute = (base as u64 + vm.process_ptr as u64) as *mut ProcessState;
+    if absolute.is_null() {
+        return None;
+    }
+    unsafe { Some(&mut *absolute) }
 }
 
 /// Initialize signal subsystem. Must be called once at kernel init.
@@ -393,25 +476,40 @@ pub fn sys_sigaltstack(vm: &mut ThreadState, base: u32, ss_addr: u64, old_ss_add
 
 /// Signal frame layout on guest stack (RISC-V rt_sigframe).
 ///
-/// Linux uses a full ucontext with 32 GP regs + 32 FP regs + PC + signal mask.
-/// We use a simplified layout that preserves the same semantics:
-///
-/// offset  type    field
-/// +0      u64     saved_pc
-/// +8      u64     saved_sig_mask
-/// +16     u64     saved_x[0..31] (256 bytes)
-/// +272    u64     saved_f[0..31] (256 bytes)
-/// +528    u32     saved_fcsr
-/// +532    u32     _pad (alignment)
-/// +536    u8[8]   trampoline: li a7, SYS_RT_SIGRETURN; ecall
-/// Total: 544 bytes, 16-byte aligned
-const SIGFRAME_SIZE: u64 = 544;
-const SIGFRAME_OFF_PC: u64 = 0;
-const SIGFRAME_OFF_MASK: u64 = 8;
-const SIGFRAME_OFF_REGS: u64 = 16;
-const SIGFRAME_OFF_FREGS: u64 = 272;
-const SIGFRAME_OFF_FCSR: u64 = 528;
-const SIGFRAME_OFF_TRAMPOLINE: u64 = 536;
+/// Linux delivers signal handler arguments in registers, but the RISC-V ABI
+/// also gives the callee stack home slots for those arguments. Keep both the
+/// register arguments and their stack homes (`sp+8`, `sp+16`, `sp+24`) valid
+/// so any conforming handler entry sequence observes a complete call frame.
+const SIGFRAME_OFF_ABI_SIGNO: u64 = 8;
+const SIGFRAME_OFF_ABI_SIGINFO_PTR: u64 = 16;
+const SIGFRAME_OFF_ABI_UCONTEXT_PTR: u64 = 24;
+const SIGINFO_SIZE: u64 = 128;
+const SIGINFO_OFF_SIGNO: u64 = 0;
+const SIGINFO_OFF_ERRNO: u64 = 4;
+const SIGINFO_OFF_CODE: u64 = 8;
+const SIGINFO_OFF_ADDR: u64 = 16;
+
+const UCONTEXT_OFF_FLAGS: u64 = 0;
+const UCONTEXT_OFF_LINK: u64 = 8;
+const UCONTEXT_OFF_STACK: u64 = 16;
+const UCONTEXT_STACK_OFF_SP: u64 = 0;
+const UCONTEXT_STACK_OFF_FLAGS: u64 = 8;
+const UCONTEXT_STACK_OFF_SIZE: u64 = 16;
+const UCONTEXT_OFF_SIGMASK: u64 = 40;
+const UCONTEXT_SIGMASK_WORDS: u64 = 16;
+const UCONTEXT_OFF_PAD_CGO: u64 = 168;
+const UCONTEXT_OFF_MCONTEXT: u64 = 176;
+const MCONTEXT_OFF_REGS: u64 = 0;
+const MCONTEXT_OFF_FREGS: u64 = 256;
+const MCONTEXT_FREGS_BYTES: u64 = 528;
+const MCONTEXT_OFF_FCSR: u64 = 256;
+const UCONTEXT_SIZE: u64 = UCONTEXT_OFF_MCONTEXT + MCONTEXT_OFF_FREGS + MCONTEXT_FREGS_BYTES;
+
+const SIGFRAME_OFF_SIGINFO: u64 = 32;
+const SIGFRAME_OFF_UCONTEXT: u64 = SIGFRAME_OFF_SIGINFO + SIGINFO_SIZE;
+const SIGFRAME_OFF_ALTSTACK_FLAGS: u64 = SIGFRAME_OFF_UCONTEXT + UCONTEXT_SIZE;
+const SIGFRAME_OFF_TRAMPOLINE: u64 = SIGFRAME_OFF_ALTSTACK_FLAGS + 8;
+const SIGFRAME_SIZE: u64 = SIGFRAME_OFF_TRAMPOLINE + 8;
 
 /// RISC-V machine code: li a7, 139 (SYS_RT_SIGRETURN); ecall
 /// addi x17, x0, 139 → 0x08b00893
@@ -433,42 +531,79 @@ const TRAMPOLINE_CODE: [u8; 8] = [
 /// calls SYS_RT_SIGRETURN to restore the saved context.
 fn push_signal_frame(vm: &mut ThreadState, base: u32, sig: usize, action: &SigAction) {
     // Choose stack: use sigaltstack if SA_ONSTACK and stack is configured
-    let sp = if action.flags & SA_ONSTACK != 0
+    let use_altstack = action.flags & SA_ONSTACK != 0
         && vm.sigaltstack_flags != SS_DISABLE
         && vm.sigaltstack_size > 0
-    {
+        && vm.sigaltstack_flags & SS_ONSTACK == 0;
+    let sp = if use_altstack {
         vm.sigaltstack_sp + vm.sigaltstack_size
     } else {
-        vm.x[2] // current sp
+        vm.x[2]
     };
 
     // Align down to 16 bytes, then reserve frame
     let frame_base = (sp - SIGFRAME_SIZE) & !15;
+    let siginfo_base = frame_base + SIGFRAME_OFF_SIGINFO;
+    let ucontext_base = frame_base + SIGFRAME_OFF_UCONTEXT;
+    let regs_base = ucontext_base + UCONTEXT_OFF_MCONTEXT + MCONTEXT_OFF_REGS;
+    let fpregs_base = ucontext_base + UCONTEXT_OFF_MCONTEXT + MCONTEXT_OFF_FREGS;
+    let saved_altstack_flags = vm.sigaltstack_flags as u64;
 
     unsafe {
-        // Save PC
-        guest_mem::write_u64(base, frame_base + SIGFRAME_OFF_PC, vm.pc);
-        // Save signal mask
-        guest_mem::write_u64(base, frame_base + SIGFRAME_OFF_MASK, vm.sig_mask);
-        // Save integer registers
-        for i in 0..32 {
+        guest_mem::zero_mem(base, frame_base, SIGFRAME_SIZE as usize);
+
+        guest_mem::write_u32(base, siginfo_base + SIGINFO_OFF_SIGNO, sig as u32);
+        guest_mem::write_u32(base, siginfo_base + SIGINFO_OFF_ERRNO, 0);
+        guest_mem::write_u32(base, siginfo_base + SIGINFO_OFF_CODE, vm.sig_info_code as u32);
+        let sig_addr = match sig as i32 {
+            SIGILL | SIGBUS | SIGFPE | SIGSEGV => vm.fault_addr,
+            _ => 0,
+        };
+        guest_mem::write_u64(base, siginfo_base + SIGINFO_OFF_ADDR, sig_addr);
+
+        guest_mem::write_u64(base, ucontext_base + UCONTEXT_OFF_FLAGS, 0);
+        guest_mem::write_u64(base, ucontext_base + UCONTEXT_OFF_LINK, 0);
+        guest_mem::write_u64(
+            base,
+            ucontext_base + UCONTEXT_OFF_STACK + UCONTEXT_STACK_OFF_SP,
+            vm.sigaltstack_sp,
+        );
+        guest_mem::write_u32(
+            base,
+            ucontext_base + UCONTEXT_OFF_STACK + UCONTEXT_STACK_OFF_FLAGS,
+            vm.sigaltstack_flags as u32,
+        );
+        guest_mem::write_u64(
+            base,
+            ucontext_base + UCONTEXT_OFF_STACK + UCONTEXT_STACK_OFF_SIZE,
+            vm.sigaltstack_size,
+        );
+        guest_mem::write_u64(base, ucontext_base + UCONTEXT_OFF_SIGMASK, vm.sig_mask);
+        for word in 1..UCONTEXT_SIGMASK_WORDS {
+            guest_mem::write_u64(base, ucontext_base + UCONTEXT_OFF_SIGMASK + word * 8, 0);
+        }
+        guest_mem::write_u64(base, ucontext_base + UCONTEXT_OFF_PAD_CGO, 0);
+
+        guest_mem::write_u64(base, regs_base, vm.pc);
+        for i in 1..32 {
             guest_mem::write_u64(
                 base,
-                frame_base + SIGFRAME_OFF_REGS + i * 8,
+                regs_base + (i as u64) * 8,
                 vm.x[i as usize],
             );
         }
-        // Save FP registers
         for i in 0..32 {
             guest_mem::write_u64(
                 base,
-                frame_base + SIGFRAME_OFF_FREGS + i * 8,
+                fpregs_base + i * 8,
                 vm.f[i as usize],
             );
         }
-        // Save fcsr
-        guest_mem::write_u32(base, frame_base + SIGFRAME_OFF_FCSR, vm.fcsr);
-        // Write trampoline code
+        guest_mem::write_u32(base, fpregs_base + MCONTEXT_OFF_FCSR, vm.fcsr);
+        guest_mem::write_u64(base, frame_base + SIGFRAME_OFF_ABI_SIGNO, sig as u64);
+        guest_mem::write_u64(base, frame_base + SIGFRAME_OFF_ABI_SIGINFO_PTR, siginfo_base);
+        guest_mem::write_u64(base, frame_base + SIGFRAME_OFF_ABI_UCONTEXT_PTR, ucontext_base);
+        guest_mem::write_u64(base, frame_base + SIGFRAME_OFF_ALTSTACK_FLAGS, saved_altstack_flags);
         guest_mem::write_bytes(base, frame_base + SIGFRAME_OFF_TRAMPOLINE, &TRAMPOLINE_CODE);
     }
 
@@ -490,35 +625,76 @@ fn push_signal_frame(vm: &mut ThreadState, base: u32, sig: usize, action: &SigAc
             mask: 0,
         };
     }
+    if use_altstack {
+        vm.sigaltstack_flags |= SS_ONSTACK;
+    }
+
+    unsafe {
+        LAST_SIGNAL_DELIVERY = SignalTrace {
+            sig: sig as u32,
+            frame_base,
+            pc: vm.pc,
+            ra: vm.x[1],
+            sp: vm.x[2],
+            g: vm.x[27],
+        };
+        LAST_TRAMPOLINE_PC = frame_base + SIGFRAME_OFF_TRAMPOLINE;
+    }
 
     // Set up registers for handler entry
-    vm.x[2] = frame_base; // sp = frame base
-    vm.x[1] = frame_base + SIGFRAME_OFF_TRAMPOLINE; // ra = trampoline
-    vm.x[10] = sig as u64; // a0 = signal number
-    vm.pc = action.handler; // pc = handler
+    vm.x[2] = frame_base;
+    vm.x[1] = frame_base + SIGFRAME_OFF_TRAMPOLINE;
+    vm.x[10] = sig as u64;
+    vm.x[11] = siginfo_base;
+    vm.x[12] = ucontext_base;
+    vm.pc = action.handler;
 }
 
 /// rt_sigreturn: restore state from signal frame on stack.
 /// The frame is at the current sp (x2).
 pub fn sys_rt_sigreturn(vm: &mut ThreadState, base: u32) {
     let frame_base = vm.x[2];
+    let ucontext_base = frame_base + SIGFRAME_OFF_UCONTEXT;
+    let regs_base = ucontext_base + UCONTEXT_OFF_MCONTEXT + MCONTEXT_OFF_REGS;
+    let fpregs_base = ucontext_base + UCONTEXT_OFF_MCONTEXT + MCONTEXT_OFF_FREGS;
 
     unsafe {
-        // Restore PC
-        vm.pc = guest_mem::read_u64(base, frame_base + SIGFRAME_OFF_PC);
-        // Restore signal mask
-        vm.sig_mask = guest_mem::read_u64(base, frame_base + SIGFRAME_OFF_MASK);
-        // Restore integer registers
-        for i in 0..32 {
-            vm.x[i as usize] = guest_mem::read_u64(base, frame_base + SIGFRAME_OFF_REGS + i * 8);
+        vm.sig_mask = guest_mem::read_u64(base, ucontext_base + UCONTEXT_OFF_SIGMASK);
+        vm.pc = guest_mem::read_u64(base, regs_base);
+        vm.x[0] = 0;
+        for i in 1..32 {
+            vm.x[i as usize] = guest_mem::read_u64(base, regs_base + (i as u64) * 8);
         }
-        // Restore FP registers
         for i in 0..32 {
-            vm.f[i as usize] = guest_mem::read_u64(base, frame_base + SIGFRAME_OFF_FREGS + i * 8);
+            vm.f[i as usize] = guest_mem::read_u64(base, fpregs_base + i * 8);
         }
-        // Restore fcsr
-        vm.fcsr = guest_mem::read_u32(base, frame_base + SIGFRAME_OFF_FCSR);
+        vm.fcsr = guest_mem::read_u32(base, fpregs_base + MCONTEXT_OFF_FCSR);
+        vm.sigaltstack_flags = guest_mem::read_u64(base, frame_base + SIGFRAME_OFF_ALTSTACK_FLAGS) as i32;
+        LAST_SIGRETURN = SignalTrace {
+            sig: 0,
+            frame_base,
+            pc: vm.pc,
+            ra: vm.x[1],
+            sp: vm.x[2],
+            g: vm.x[27],
+        };
+        SIGRETURN_COUNT = SIGRETURN_COUNT.wrapping_add(1);
     }
+}
+
+/// Patch the currently active signal frame so rt_sigreturn restores a
+/// different a0 result to user code. This is used for interrupted blocking
+/// syscalls that must become -EINTR after the handler returns.
+pub fn patch_current_signal_frame_a0(vm: &ThreadState, base: u32, value: i64) -> bool {
+    let frame_base = vm.x[2];
+    if frame_base == 0 || vm.x[1] != frame_base + SIGFRAME_OFF_TRAMPOLINE {
+        return false;
+    }
+    let regs_base = frame_base + SIGFRAME_OFF_UCONTEXT + UCONTEXT_OFF_MCONTEXT + MCONTEXT_OFF_REGS;
+    unsafe {
+        guest_mem::write_u64(base, regs_base + (10u64 * 8), value as u64);
+    }
+    true
 }
 
 /// Check and deliver pending signals at syscall return boundary.
@@ -533,7 +709,12 @@ pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
         }
     }
 
-    let deliverable = vm.sig_pending & !vm.sig_mask;
+    let synchronous = if vm.sig_info_code != 0 {
+        vm.sig_pending & SYNC_FAULT_SIGNAL_MASK
+    } else {
+        0
+    };
+    let deliverable = (vm.sig_pending & !vm.sig_mask) | synchronous;
     if deliverable == 0 {
         return false;
     }
@@ -572,6 +753,8 @@ pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
         }
     }
 
+    vm.sig_info_code = 0;
+
     true
 }
 
@@ -583,9 +766,14 @@ pub fn send_signal(vm: &mut ThreadState, sig: i32) {
     vm.sig_pending |= 1u64 << (sig - 1);
 }
 
+pub fn send_signal_with_code(vm: &mut ThreadState, sig: i32, code: i32) {
+    send_signal(vm, sig);
+    vm.sig_info_code = code;
+}
+
 /// Queue a process-directed signal. Delivery happens when the target process
 /// next reaches a signal check boundary.
-pub fn send_signal_to_pid(pid: i32, sig: i32) -> i64 {
+pub fn send_signal_to_pid(vm: &mut ThreadState, base: u32, pid: i32, sig: i32) -> i64 {
     if pid <= 0 || sig <= 0 || sig as usize >= MAX_SIGNALS {
         return EINVAL;
     }
@@ -594,12 +782,73 @@ pub fn send_signal_to_pid(pid: i32, sig: i32) -> i64 {
         return ESRCH;
     }
     process_pending()[idx] |= 1u64 << (sig - 1);
+    if pid == pid_from_vm(vm, base) {
+        vm.sig_info_code = SI_USER;
+        if let Some(ps) = process_state_from_vm(vm, base) {
+            for record in ps.threads.iter() {
+                if record.state != THREAD_BLOCKED_FUTEX || record.blocked_addr == 0 {
+                    continue;
+                }
+                crate::syscall::thread::notify_futex_addr(base, record.blocked_addr, 1);
+            }
+        }
+    }
     0
+}
+
+/// Queue a thread-directed signal for a thread in the caller's current process.
+pub fn send_signal_to_tid(vm: &mut ThreadState, base: u32, tid: i32, sig: i32) -> i64 {
+    if tid <= 0 || sig <= 0 || sig as usize >= MAX_SIGNALS {
+        return EINVAL;
+    }
+    if tid == vm.tid {
+        send_signal(vm, sig);
+        vm.sig_info_code = SI_TKILL;
+        return 0;
+    }
+
+    let Some(ps) = process_state_from_vm(vm, base) else {
+        return ESRCH;
+    };
+
+    for record in ps.threads.iter() {
+        if record.tid != tid || record.thread_ptr == 0 {
+            continue;
+        }
+        if record.state == THREAD_NONE || record.state == THREAD_DEAD {
+            continue;
+        }
+        let target = unsafe { &mut *(record.thread_ptr as *mut ThreadState) };
+        target.sig_pending |= 1u64 << (sig - 1);
+        target.sig_info_code = SI_TKILL;
+        if record.state == THREAD_BLOCKED_FUTEX && record.blocked_addr != 0 {
+            crate::syscall::thread::notify_futex_addr(base, record.blocked_addr, 1);
+        }
+        return 0;
+    }
+
+    ESRCH
+}
+
+pub fn queue_sigill(vm: &mut ThreadState, pc: u64) {
+    vm.fault_pc = pc;
+    vm.fault_addr = pc;
+    send_signal_with_code(vm, SIGILL, ILL_ILLOPC);
+}
+
+pub fn queue_sigsegv(vm: &mut ThreadState, pc: u64, addr: u64, accerr: bool) {
+    vm.fault_pc = pc;
+    vm.fault_addr = addr;
+    send_signal_with_code(vm, SIGSEGV, if accerr { SEGV_ACCERR } else { SEGV_MAPERR });
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::abi::{CLONE_FS, CLONE_SIGHAND, CLONE_THREAD, CLONE_VM, SIGURG, SYS_RT_SIGRETURN};
+    use crate::syscall::thread as thread_impl;
     use crate::test_helpers::TestVm;
+    use crate::types::ThreadState;
 
     /// Signal syscalls: rt_sigprocmask, rt_sigaction, sigaltstack,
     /// plus per-process init_for_process, rt_sigaction per-process write,
@@ -762,7 +1011,7 @@ mod tests {
         let mut t = TestVm::new();
         super::sigactions_for(42)[crate::abi::SIGALRM as usize].handler = crate::types::SIG_IGN;
 
-        assert_eq!(super::send_signal_to_pid(42, crate::abi::SIGALRM), 0);
+        assert_eq!(super::send_signal_to_pid(&mut t.vm, t.base, 42, crate::abi::SIGALRM), 0);
         assert_eq!(
             t.vm.sig_pending, 0,
             "thread-local pending should stay empty before merge"
@@ -779,5 +1028,202 @@ mod tests {
             0,
             "SIGALRM should be cleared after delivery"
         );
+    }
+
+    #[test]
+    fn send_signal_to_tid_targets_requested_thread() {
+        let mut t = TestVm::new();
+        t.vm.tid = 1;
+
+        let flags = (CLONE_VM | CLONE_THREAD | CLONE_SIGHAND | CLONE_FS) as u64;
+        let child_tid = thread_impl::sys_clone(&mut t.vm, t.base, flags, 0x88000, 0, 0, 0) as i32;
+        assert!(child_tid > 0);
+
+        let child_ptr = thread_impl::spawn_from_clone(&t.vm as *const ThreadState as u32, t.base);
+        assert_ne!(child_ptr, 0);
+
+        assert_eq!(super::send_signal_to_tid(&mut t.vm, t.base, child_tid, SIGURG), 0);
+        assert_eq!(t.vm.sig_pending, 0, "caller should not receive the directed signal");
+
+        let child = unsafe { &*(child_ptr as *const ThreadState) };
+        assert_ne!(
+            child.sig_pending & (1u64 << (SIGURG - 1)),
+            0,
+            "target thread should receive the directed signal"
+        );
+        assert_eq!(child.sig_info_code, SI_TKILL);
+    }
+
+    #[test]
+    fn rt_sigreturn_dispatch_preserves_restored_registers() {
+        let mut t = TestVm::new();
+
+        let original_pc = 0x1234_5000;
+        let original_ra = 0xdead_beef;
+        let original_sp = 0x9fff0;
+        let original_a0 = 0x1122_3344_5566_7788;
+        let original_a1 = 0x2233_4455_6677_8899;
+        let original_a2 = 0x3344_5566_7788_99aa;
+        let original_a7 = 0x4455_6677_8899_aabb;
+        let original_sig_mask = 1u64 << (SIGALRM - 1);
+
+        t.vm.pc = original_pc;
+        t.vm.x[1] = original_ra;
+        t.vm.x[2] = original_sp;
+        t.vm.x[10] = original_a0;
+        t.vm.x[11] = original_a1;
+        t.vm.x[12] = original_a2;
+        t.vm.x[17] = original_a7;
+        t.vm.sig_mask = original_sig_mask;
+
+        let act_addr = t.scratch;
+        unsafe {
+            crate::guest_mem::write_u64(t.base, act_addr, 0x88_000);
+            crate::guest_mem::write_u64(t.base, act_addr + 8, SA_SIGINFO);
+            crate::guest_mem::write_u64(t.base, act_addr + 16, 0);
+        }
+        assert_eq!(
+            super::sys_rt_sigaction(&mut t.vm, t.base, crate::abi::SIGURG as u64, act_addr, 0, 8),
+            0
+        );
+
+        super::send_signal(&mut t.vm, crate::abi::SIGURG);
+        assert!(super::check_pending(&mut t.vm, t.base));
+        assert_eq!(t.vm.pc, 0x88_000, "signal delivery should jump to handler");
+        assert_ne!(t.vm.x[2], original_sp, "signal delivery should switch to frame stack");
+
+        t.vm.x[17] = SYS_RT_SIGRETURN;
+        let status = crate::syscall::dispatch(&mut t.vm, t.base);
+        assert_eq!(status, crate::abi::STATUS_OK);
+        assert_eq!(t.vm.pc, original_pc);
+        assert_eq!(t.vm.x[1], original_ra);
+        assert_eq!(t.vm.x[2], original_sp);
+        assert_eq!(t.vm.x[10], original_a0);
+        assert_eq!(t.vm.x[11], original_a1);
+        assert_eq!(t.vm.x[12], original_a2);
+        assert_eq!(t.vm.x[17], original_a7);
+        assert_eq!(t.vm.sig_mask, original_sig_mask);
+    }
+
+    #[test]
+    fn patch_current_signal_frame_a0_updates_rt_sigreturn_result() {
+        let mut t = TestVm::new();
+
+        t.vm.pc = 0x1234_5000;
+        t.vm.x[1] = 0xdead_beef;
+        t.vm.x[2] = 0x9fff0;
+        t.vm.x[10] = 5;
+
+        let act_addr = t.scratch;
+        unsafe {
+            crate::guest_mem::write_u64(t.base, act_addr, 0x88_000);
+            crate::guest_mem::write_u64(t.base, act_addr + 8, SA_SIGINFO);
+            crate::guest_mem::write_u64(t.base, act_addr + 16, 0);
+        }
+        assert_eq!(
+            super::sys_rt_sigaction(&mut t.vm, t.base, crate::abi::SIGURG as u64, act_addr, 0, 8),
+            0
+        );
+
+        super::send_signal(&mut t.vm, crate::abi::SIGURG);
+        assert!(super::check_pending(&mut t.vm, t.base));
+        assert!(super::patch_current_signal_frame_a0(&t.vm, t.base, crate::abi::EINTR));
+
+        t.vm.x[17] = SYS_RT_SIGRETURN;
+        let status = crate::syscall::dispatch(&mut t.vm, t.base);
+        assert_eq!(status, crate::abi::STATUS_OK);
+        assert_eq!(t.vm.x[10], crate::abi::EINTR as u64);
+    }
+
+    #[test]
+    fn signal_delivery_populates_riscv_arg_home_slots() {
+        let mut t = TestVm::new();
+        t.vm.x[2] = 0x9fff0;
+
+        let act_addr = t.scratch;
+        unsafe {
+            crate::guest_mem::write_u64(t.base, act_addr, 0x88_000);
+            crate::guest_mem::write_u64(t.base, act_addr + 8, SA_SIGINFO);
+            crate::guest_mem::write_u64(t.base, act_addr + 16, 0);
+        }
+        assert_eq!(
+            super::sys_rt_sigaction(&mut t.vm, t.base, crate::abi::SIGURG as u64, act_addr, 0, 8),
+            0
+        );
+
+        super::send_signal(&mut t.vm, crate::abi::SIGURG);
+        assert!(super::check_pending(&mut t.vm, t.base));
+
+        let frame_base = t.vm.x[2];
+        unsafe {
+            assert_eq!(
+                crate::guest_mem::read_u32(t.base, frame_base + SIGFRAME_OFF_ABI_SIGNO),
+                crate::abi::SIGURG as u32
+            );
+            assert_eq!(
+                crate::guest_mem::read_u64(t.base, frame_base + SIGFRAME_OFF_ABI_SIGINFO_PTR),
+                frame_base + SIGFRAME_OFF_SIGINFO
+            );
+            assert_eq!(
+                crate::guest_mem::read_u64(t.base, frame_base + SIGFRAME_OFF_ABI_UCONTEXT_PTR),
+                frame_base + SIGFRAME_OFF_UCONTEXT
+            );
+        }
+    }
+
+    #[test]
+    fn nested_sa_onstack_signal_keeps_current_stack() {
+        let mut t = TestVm::new();
+        let original_sp = 0x9fff0;
+        t.vm.x[2] = original_sp;
+        t.vm.sigaltstack_sp = 0x50000;
+        t.vm.sigaltstack_size = 8192;
+        t.vm.sigaltstack_flags = SS_ONSTACK;
+
+        let act_addr = t.scratch;
+        unsafe {
+            crate::guest_mem::write_u64(t.base, act_addr, 0x88_000);
+            crate::guest_mem::write_u64(t.base, act_addr + 8, SA_SIGINFO | SA_ONSTACK);
+            crate::guest_mem::write_u64(t.base, act_addr + 16, 0);
+        }
+        assert_eq!(
+            super::sys_rt_sigaction(&mut t.vm, t.base, crate::abi::SIGURG as u64, act_addr, 0, 8),
+            0
+        );
+
+        super::send_signal(&mut t.vm, crate::abi::SIGURG);
+        assert!(super::check_pending(&mut t.vm, t.base));
+
+        let expected_frame_base = (original_sp - SIGFRAME_SIZE) & !15;
+        let altstack_frame_base = ((t.vm.sigaltstack_sp + t.vm.sigaltstack_size) - SIGFRAME_SIZE) & !15;
+        assert_eq!(t.vm.x[2], expected_frame_base);
+        assert_ne!(t.vm.x[2], altstack_frame_base);
+    }
+
+    #[test]
+    fn synchronous_sigsegv_ignores_signal_mask() {
+        let mut t = TestVm::new();
+        let handler = 0x88_000;
+        let act_addr = t.scratch;
+        t.vm.x[2] = 0x9fff0;
+
+        unsafe {
+            crate::guest_mem::write_u64(t.base, act_addr, handler);
+            crate::guest_mem::write_u64(t.base, act_addr + 8, SA_SIGINFO);
+            crate::guest_mem::write_u64(t.base, act_addr + 16, 0);
+        }
+        assert_eq!(
+            super::sys_rt_sigaction(&mut t.vm, t.base, crate::abi::SIGSEGV as u64, act_addr, 0, 8),
+            0
+        );
+
+        t.vm.sig_mask = 1u64 << (crate::abi::SIGSEGV - 1);
+        super::queue_sigsegv(&mut t.vm, 0x1234, 0x5678, false);
+
+        assert!(super::check_pending(&mut t.vm, t.base));
+        assert_eq!(t.vm.pc, handler);
+        assert_eq!(t.vm.fault_pc, 0x1234);
+        assert_eq!(t.vm.fault_addr, 0x5678);
+        assert_eq!(t.vm.sig_pending & (1u64 << (crate::abi::SIGSEGV - 1)), 0);
     }
 }

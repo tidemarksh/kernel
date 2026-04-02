@@ -35,6 +35,15 @@ fn record_memory_trace(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64, result: i64)
     }
 }
 
+#[inline(always)]
+fn trace_fd_snapshot(base: u32, vm: &ThreadState, fd: u64) -> (u32, i32) {
+    let Some(ofd_id) = fd_table::get_ofd_id(base, vm, fd) else {
+        return (0, 0);
+    };
+    let ofd_type = fd_table::get_ofd(base, vm, fd).map(|ofd| ofd.fd_type).unwrap_or(0);
+    (ofd_id, ofd_type)
+}
+
 /// Dispatch a syscall. Called from ECALL handler in cpu::exec.
 /// Returns STATUS_OK if the syscall completed synchronously,
 /// or a blocking STATUS (STATUS_FS, STATUS_SLEEP, etc.) if JS must wait.
@@ -46,6 +55,8 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
     let a3 = vm.x[13];
     let a4 = vm.x[14];
     let a5 = vm.x[15];
+    let (arg0_ofd_id, arg0_ofd_type) = trace_fd_snapshot(base, vm, a0);
+    let (arg2_ofd_id, arg2_ofd_type) = trace_fd_snapshot(base, vm, a2);
     let result: i64 = match nr {
         // identity
         SYS_GETPID => identity::sys_getpid(vm, base),
@@ -270,10 +281,16 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_EVENTFD2 => pipe::sys_eventfd2(vm, base, a0, a1),
 
         // signal delivery
-        SYS_KILL => signal::send_signal_to_pid(a0 as i32, a1 as i32),
+        SYS_KILL => signal::send_signal_to_pid(vm, base, a0 as i32, a1 as i32),
         SYS_TKILL | SYS_TGKILL => {
+            let self_pid = signal::pid_from_vm(vm, base);
             let target_pid = if nr == SYS_TGKILL {
                 a0 as i32
+            } else {
+                self_pid
+            };
+            let target_tid = if nr == SYS_TGKILL {
+                a1 as i32
             } else {
                 a0 as i32
             };
@@ -282,12 +299,10 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             } else {
                 a1 as i32
             };
-            let self_pid = signal::pid_from_vm(vm, base);
-            if target_pid == self_pid {
-                signal::send_signal(vm, sig);
-                0
+            if target_pid != self_pid {
+                ESRCH
             } else {
-                signal::send_signal_to_pid(target_pid, sig)
+                signal::send_signal_to_tid(vm, base, target_tid, sig)
             }
         }
 
@@ -365,11 +380,27 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
     };
 
     record_memory_trace(nr, a0, a1, a2, a3, result);
-    vm.x[10] = result as u64;
+    if nr != SYS_RT_SIGRETURN {
+        vm.x[10] = result as u64;
+    }
 
     // Check and deliver pending signals at syscall return boundary
     signal::check_pending(vm, base);
     let status = vm.status;
+    crate::runtime_test_support::record_fd_syscall(
+        vm as *const ThreadState as u32,
+        nr,
+        a0,
+        arg0_ofd_id,
+        arg0_ofd_type,
+        a1,
+        a2,
+        arg2_ofd_id,
+        arg2_ofd_type,
+        a3,
+        result,
+        status,
+    );
     crate::runtime_test_support::record_syscall(vm as *const ThreadState as u32, nr, result, status);
     abi::STATUS_OK
 }

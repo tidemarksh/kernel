@@ -45,7 +45,7 @@ const F_SETFD: u64 = 2;
 const F_GETFL: u64 = 3;
 const F_SETFL: u64 = 4;
 const F_DUPFD_CLOEXEC: u64 = 1030;
-const OPEN_ACCESS_MODE_MASK: i32 = 0x3;
+pub(crate) const OPEN_ACCESS_MODE_MASK: i32 = 0x3;
 const LOCK_SH: u32 = 0x1;
 const LOCK_EX: u32 = 0x2;
 const LOCK_NB: u32 = 0x4;
@@ -56,7 +56,11 @@ const EFD_SEMAPHORE: i32 = 0x1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BackendCleanup {
-    Pipe { pipe_idx: u32, is_read_end: bool },
+    Pipe {
+        pipe_idx: u32,
+        is_read_end: bool,
+        ofd_id: u32,
+    },
     Epoll { epoll_idx: u32 },
     Socket { socket_idx: u32 },
 }
@@ -175,11 +179,12 @@ unsafe fn alloc_ofd(fd_type: i32, status_flags: i32) -> u32 {
     0
 }
 
-fn backend_cleanup_for_ofd(ofd: &OpenFileDesc) -> Option<BackendCleanup> {
+fn backend_cleanup_for_ofd(ofd_id: u32, ofd: &OpenFileDesc) -> Option<BackendCleanup> {
     if ofd.fd_type == FD_TYPE_PIPE {
         Some(BackendCleanup::Pipe {
             pipe_idx: ofd.ino,
             is_read_end: ofd.host_fd >= 0,
+            ofd_id,
         })
     } else if ofd.fd_type == FD_TYPE_EPOLL {
         Some(BackendCleanup::Epoll { epoll_idx: ofd.ino })
@@ -207,8 +212,16 @@ pub fn run_backend_cleanup(cleanup: BackendCleanup) {
         BackendCleanup::Pipe {
             pipe_idx,
             is_read_end,
+            ofd_id,
         } => {
-            let _ = crate::syscall::pipe::pipe_close_outcome(pipe_idx, is_read_end);
+            let outcome = crate::syscall::pipe::pipe_close_outcome(pipe_idx, is_read_end);
+            crate::runtime_test_support::record_pipe_close_event(
+                pipe_idx,
+                is_read_end,
+                ofd_id,
+                outcome.read_open,
+                outcome.write_open,
+            );
         }
         BackendCleanup::Epoll { epoll_idx } => {
             crate::syscall::epoll::close_epoll(epoll_idx);
@@ -322,7 +335,7 @@ pub fn release_ofd_id_deferred(ofd_id: u32) -> Option<BackendCleanup> {
     }
 
     crate::syscall::epoll::release_interest_for_ofd(ofd_id);
-    let cleanup = backend_cleanup_for_ofd(ofd);
+    let cleanup = backend_cleanup_for_ofd(ofd_id, ofd);
     clear_ofd(ofd);
     cleanup
 }
@@ -881,6 +894,32 @@ pub fn close_all_for_process(base: u32, vm: &ThreadState) {
     }
 }
 
+/// Drop this process's reference to every distinct OFD it still holds without
+/// mutating backend control planes. Used by runtime-owned vfork restore paths:
+/// the canonical owner kernel already accounts for pipe/epoll/socket cleanup,
+/// but the local kernel must still forget the transient child process holds so
+/// later parent-local close semantics do not retain stale process references.
+pub fn close_all_for_process_without_backend_cleanup(base: u32, vm: &ThreadState) {
+    unsafe {
+        let ps = get_process_state(base, vm);
+        if ps.is_null() {
+            return;
+        }
+
+        let mut released = [false; MAX_FDS];
+        for entry in (*ps).fd_table.iter_mut() {
+            let ofd_id = entry.ofd_id;
+            entry.ofd_id = 0;
+            entry.fd_flags = 0;
+            if ofd_id == 0 || released[ofd_id as usize] {
+                continue;
+            }
+            released[ofd_id as usize] = true;
+            let _ = release_ofd_id_deferred(ofd_id);
+        }
+    }
+}
+
 /// Get the current offset of the OFD associated with fd.
 pub fn get_offset(base: u32, vm: &ThreadState, fd: u64) -> u64 {
     unsafe {
@@ -1044,6 +1083,7 @@ mod tests {
             Some(super::BackendCleanup::Pipe {
                 pipe_idx,
                 is_read_end: true,
+                ofd_id,
             })
         );
         assert!(super::get_ofd_by_id(ofd_id).is_none());

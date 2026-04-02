@@ -2,16 +2,8 @@
 target = "wasm32-unknown-unknown"
 
 [target.wasm32-unknown-unknown]
-# --import-memory: use external Memory (shared with guest / provided by runtime)
-# --global-base=0x100000: place kernel data segments at 1MB, above __stack_first
-#   but below guest ELF segments (typically start at 0x10000 with 64KB alignment)
-# NOTE: Go ELF starts at vaddr 0x10000, so kernel data at 1MB overlaps.
-#   For shared memory mode, kernel Worker should use private memory (§6.1).
-#   For testing, we use --global-base high enough to avoid ELF conflicts.
-# --import-memory: runtime provides Memory (shared between threads, §6.1)
-# --global-base=50331648: place kernel static data at 48MB to avoid overlap with
-#   guest ELF segments (Go BSS extends to ~45MB). Kernel heap (alloc.rs) starts
-#   above this, at the heapBase passed to kernel_init.
+# Import shared linear memory from the runtime and place kernel static data
+# high enough to avoid overlap with guest binary segments.
 rustflags = [
   "-C",
   "target-feature=+atomics,+bulk-memory,+mutable-globals",
@@ -29,11 +21,15 @@ rustflags = [
 
 [alias]
 xtask = "run -p xtask --target x86_64-unknown-linux-gnu --target-dir target --"
+# The no_std kernel artifact for wasm32-unknown-unknown needs core/alloc from
+# build-std. Keep that scoped to explicit kernel build aliases so host xtask
+# and wasm32-wasip1 tests continue to use their normal std toolchains.
+build-kernel = "build -Z build-std=core,alloc --target wasm32-unknown-unknown"
+build-kernel-release = "build -Z build-std=core,alloc --target wasm32-unknown-unknown --release"
+test-kernel = "xtask test"
+test-kernel-lib = "xtask test-lib"
+test-kernel-riscv = "xtask test-binary riscv_tests"
+test-kernel-ltp = "xtask test-binary ltp_tests"
 
 [target.wasm32-wasip1]
 runner = ["wasmtime", "--dir=/"]
-
-[unstable]
-# Shared-memory wasm requires core/alloc to be rebuilt with the same atomics
-# and bulk-memory features as the kernel crate itself.
-build-std = ["core", "alloc"]

@@ -65,11 +65,14 @@ struct VforkSnapshot {
     robust_list_len: u64,
     sig_mask: u64,
     sig_pending: u64,
+    sig_info_code: i32,
     sigaltstack_sp: u64,
     sigaltstack_size: u64,
     sigaltstack_flags: i32,
     lr_addr: u64,
     lr_val: u64,
+    lr_gen: u32,
+    lr_gen_end: u32,
     insn_budget: i32,
     fault_pc: u64,
     fault_addr: u64,
@@ -95,20 +98,41 @@ struct VforkSnapshot {
     wait_rusage_addr: u64,
     futex_wait_addr: u64,
     futex_wait_timeout: u64,
+    futex_wait_expected: u32,
     epoll_timeout_ms: i64,
+    epoll_maxevents: u32,
     blocked_fd: u32,
     blocked_ofd_id: u32,
     child_pid: i32,
 }
 
 struct ExecveImage {
+    ino: u32,
     path_bytes: Vec<u8>,
     argv: Vec<Vec<u8>>,
     envp: Vec<Vec<u8>>,
-    elf_ptr: u32,
     elf_len: u32,
     elf: crate::elf::ElfLoadResult,
 }
+
+const ELF_EI_CLASS: usize = 4;
+const ELF_EI_DATA: usize = 5;
+const ELF_E_TYPE: usize = 16;
+const ELF_E_MACHINE: usize = 18;
+const ELF_E_ENTRY: usize = 24;
+const ELF_E_PHOFF: usize = 32;
+const ELF_E_PHENTSIZE: usize = 54;
+const ELF_E_PHNUM: usize = 56;
+const ELF_PH_TYPE: usize = 0;
+const ELF_PH_OFFSET: usize = 8;
+const ELF_PH_VADDR: usize = 16;
+const ELF_PH_FILESZ: usize = 32;
+const ELF_PH_MEMSZ: usize = 40;
+const ELFCLASS64: u8 = 2;
+const ELFDATA2LSB: u8 = 1;
+const ET_EXEC: u16 = 2;
+const EM_RISCV: u16 = 243;
+const PT_LOAD: u32 = 1;
 
 #[repr(C)]
 struct ProcessRuntimeState {
@@ -141,11 +165,14 @@ fn empty_vfork_snapshot() -> VforkSnapshot {
         robust_list_len: 0,
         sig_mask: 0,
         sig_pending: 0,
+        sig_info_code: 0,
         sigaltstack_sp: 0,
         sigaltstack_size: 0,
         sigaltstack_flags: 0,
-        lr_addr: 0,
+        lr_addr: u64::MAX,
         lr_val: 0,
+        lr_gen: 0,
+        lr_gen_end: 0,
         insn_budget: 0,
         fault_pc: 0,
         fault_addr: 0,
@@ -171,7 +198,9 @@ fn empty_vfork_snapshot() -> VforkSnapshot {
         wait_rusage_addr: 0,
         futex_wait_addr: 0,
         futex_wait_timeout: 0,
+        futex_wait_expected: 0,
         epoll_timeout_ms: 0,
+        epoll_maxevents: 0,
         blocked_fd: 0,
         blocked_ofd_id: 0,
         child_pid: 0,
@@ -586,9 +615,11 @@ fn current_effective_gid(_vm: &ThreadState) -> u32 {
 
 fn reattach_guest_thread_count(vm: &mut ThreadState, base: u32) {
     if let Some(ps) = current_process_state_mut(vm, base) {
+        let gen_ptr = core::ptr::addr_of!(ps.reservation_gen) as *const core::sync::atomic::AtomicU32;
+        let lock_ptr = core::ptr::addr_of!(ps.reservation_lock) as *const core::sync::atomic::AtomicU32;
         let tc_ptr = core::ptr::addr_of!(ps.thread_count);
         unsafe {
-            guest_mem::init(core::ptr::null(), tc_ptr);
+            guest_mem::init(gen_ptr, lock_ptr, tc_ptr);
         }
     }
 }
@@ -735,15 +766,7 @@ fn load_execve_image(
         Ok(len) if len > 0 => len,
         _ => return Err(ENOEXEC),
     };
-    let elf_ptr = match memfs::file_data_ptr(ino) {
-        Some(ptr) => ptr,
-        None => return Err(EIO),
-    };
-
-    let elf = match unsafe { crate::elf::inspect_elf(elf_ptr, elf_len, ram_size) } {
-        Ok(result) => result,
-        Err(_) => return Err(ENOEXEC),
-    };
+    let elf = inspect_execve_elf(ino, elf_len, ram_size)?;
     let mut argv = read_guest_strvec(base, argv_addr)?;
     let envp = read_guest_strvec(base, envp_addr)?;
     if argv.is_empty() {
@@ -753,22 +776,183 @@ fn load_execve_image(
     }
 
     Ok(ExecveImage {
+        ino,
         path_bytes,
         argv,
         envp,
-        elf_ptr,
         elf_len,
         elf,
     })
 }
 
+fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
+    bytes.get(offset..offset + 2)
+        .and_then(|slice| <[u8; 2]>::try_from(slice).ok())
+        .map(u16::from_le_bytes)
+}
+
+fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
+    bytes.get(offset..offset + 4)
+        .and_then(|slice| <[u8; 4]>::try_from(slice).ok())
+        .map(u32::from_le_bytes)
+}
+
+fn read_u64_le(bytes: &[u8], offset: usize) -> Option<u64> {
+    bytes.get(offset..offset + 8)
+        .and_then(|slice| <[u8; 8]>::try_from(slice).ok())
+        .map(u64::from_le_bytes)
+}
+
+fn inspect_execve_elf(ino: u32, elf_len: u32, ram_size: u64) -> Result<crate::elf::ElfLoadResult, i64> {
+    let mut header = [0u8; 64];
+    if memfs::read_file(ino, 0, &mut header) != header.len() as i64 {
+        return Err(ENOEXEC);
+    }
+
+    if header[0] != 0x7f || header[1] != b'E' || header[2] != b'L' || header[3] != b'F' {
+        return Err(ENOEXEC);
+    }
+    if header[ELF_EI_CLASS] != ELFCLASS64 || header[ELF_EI_DATA] != ELFDATA2LSB {
+        return Err(ENOEXEC);
+    }
+    if read_u16_le(&header, ELF_E_TYPE) != Some(ET_EXEC) {
+        return Err(ENOEXEC);
+    }
+    if read_u16_le(&header, ELF_E_MACHINE) != Some(EM_RISCV) {
+        return Err(ENOEXEC);
+    }
+
+    let entry = read_u64_le(&header, ELF_E_ENTRY).ok_or(ENOEXEC)?;
+    let ph_off = read_u64_le(&header, ELF_E_PHOFF).ok_or(ENOEXEC)? as usize;
+    let ph_entsize = read_u16_le(&header, ELF_E_PHENTSIZE).ok_or(ENOEXEC)? as usize;
+    let ph_num = read_u16_le(&header, ELF_E_PHNUM).ok_or(ENOEXEC)? as usize;
+    if ph_entsize < 56 {
+        return Err(ENOEXEC);
+    }
+    let ph_size = ph_num.checked_mul(ph_entsize).ok_or(ENOEXEC)?;
+    let ph_end = ph_off.checked_add(ph_size).ok_or(ENOEXEC)?;
+    if ph_end > elf_len as usize {
+        return Err(ENOEXEC);
+    }
+
+    let mut phdrs = vec![0u8; ph_size];
+    if memfs::read_file(ino, ph_off as u64, &mut phdrs) != ph_size as i64 {
+        return Err(ENOEXEC);
+    }
+
+    let mut brk_end = 0u64;
+    let mut phdr_addr = 0u64;
+    for index in 0..ph_num {
+        let start = index * ph_entsize;
+        let ph = &phdrs[start..start + ph_entsize];
+        if read_u32_le(ph, ELF_PH_TYPE) != Some(PT_LOAD) {
+            continue;
+        }
+
+        let p_offset = read_u64_le(ph, ELF_PH_OFFSET).ok_or(ENOEXEC)?;
+        let p_vaddr = read_u64_le(ph, ELF_PH_VADDR).ok_or(ENOEXEC)?;
+        let p_filesz = read_u64_le(ph, ELF_PH_FILESZ).ok_or(ENOEXEC)?;
+        let p_memsz = read_u64_le(ph, ELF_PH_MEMSZ).ok_or(ENOEXEC)?;
+        if p_vaddr.checked_add(p_memsz).is_none_or(|end| end > ram_size) {
+            return Err(ENOEXEC);
+        }
+        if p_offset.checked_add(p_filesz).is_none_or(|end| end > elf_len as u64) {
+            return Err(ENOEXEC);
+        }
+
+        let seg_end = p_vaddr + p_memsz;
+        if seg_end > brk_end {
+            brk_end = seg_end;
+        }
+        if phdr_addr == 0 && p_offset == 0 {
+            phdr_addr = p_vaddr + ph_off as u64;
+        }
+    }
+
+    brk_end = (brk_end + 4095) & !4095;
+    Ok(crate::elf::ElfLoadResult {
+        entry,
+        brk_start: brk_end,
+        phdr_addr,
+        phent: ph_entsize as u16,
+        phnum: ph_num as u16,
+    })
+}
+
+fn load_execve_elf_from_inode(
+    base: u32,
+    ram_size: u64,
+    ino: u32,
+    elf_len: u32,
+) -> Result<crate::elf::ElfLoadResult, i64> {
+    let inspected = inspect_execve_elf(ino, elf_len, ram_size)?;
+    let mut header = [0u8; 64];
+    if memfs::read_file(ino, 0, &mut header) != header.len() as i64 {
+        return Err(EIO);
+    }
+
+    let ph_off = read_u64_le(&header, ELF_E_PHOFF).ok_or(ENOEXEC)? as usize;
+    let ph_entsize = read_u16_le(&header, ELF_E_PHENTSIZE).ok_or(ENOEXEC)? as usize;
+    let ph_num = read_u16_le(&header, ELF_E_PHNUM).ok_or(ENOEXEC)? as usize;
+    if ph_entsize < 56 {
+        return Err(ENOEXEC);
+    }
+    let ph_size = ph_num.checked_mul(ph_entsize).ok_or(ENOEXEC)?;
+    let ph_end = ph_off.checked_add(ph_size).ok_or(ENOEXEC)?;
+    if ph_end > elf_len as usize {
+        return Err(ENOEXEC);
+    }
+
+    let mut phdrs = vec![0u8; ph_size];
+    if memfs::read_file(ino, ph_off as u64, &mut phdrs) != ph_size as i64 {
+        return Err(EIO);
+    }
+
+    let mut chunk = [0u8; 4096];
+    for index in 0..ph_num {
+        let start = index * ph_entsize;
+        let ph = &phdrs[start..start + ph_entsize];
+        if read_u32_le(ph, ELF_PH_TYPE) != Some(PT_LOAD) {
+            continue;
+        }
+
+        let p_offset = read_u64_le(ph, ELF_PH_OFFSET).ok_or(ENOEXEC)?;
+        let p_vaddr = read_u64_le(ph, ELF_PH_VADDR).ok_or(ENOEXEC)?;
+        let p_filesz = read_u64_le(ph, ELF_PH_FILESZ).ok_or(ENOEXEC)?;
+        let p_memsz = read_u64_le(ph, ELF_PH_MEMSZ).ok_or(ENOEXEC)?;
+
+        let mut copied = 0u64;
+        while copied < p_filesz {
+            let read_len = ((p_filesz - copied) as usize).min(chunk.len());
+            let read = memfs::read_file(ino, p_offset + copied, &mut chunk[..read_len]);
+            if read != read_len as i64 {
+                return Err(EIO);
+            }
+            unsafe {
+                guest_mem::write_bytes(base, p_vaddr + copied, &chunk[..read_len]);
+            }
+            copied += read_len as u64;
+        }
+
+        if p_memsz > p_filesz {
+            unsafe {
+                guest_mem::zero_mem(base, p_vaddr + p_filesz, (p_memsz - p_filesz) as usize);
+            }
+        }
+    }
+
+    Ok(inspected)
+}
+
 fn install_proc_self_exe(target: &[u8]) {
+    crate::runtime_test_support::record_execve_stage(711, target.len() as u64, 0);
     let proc_ino = memfs::resolve_path(b"/proc");
     let proc_ino = if proc_ino == 0 {
         memfs::create_dir(1, b"proc", 0o555)
     } else {
         proc_ino
     };
+    crate::runtime_test_support::record_execve_stage(712, proc_ino as u64, 0);
     if proc_ino == 0 {
         return;
     }
@@ -779,14 +963,19 @@ fn install_proc_self_exe(target: &[u8]) {
     } else {
         self_ino
     };
+    crate::runtime_test_support::record_execve_stage(713, self_ino as u64, 0);
     if self_ino == 0 {
         return;
     }
 
-    if memfs::lookup(self_ino, b"exe") != 0 {
+    let existing_exe = memfs::lookup(self_ino, b"exe");
+    crate::runtime_test_support::record_execve_stage(714, existing_exe as u64, self_ino as u64);
+    if existing_exe != 0 {
         let _ = memfs::unlink(self_ino, b"exe");
     }
-    let _ = memfs::create_symlink(self_ino, b"exe", target);
+    crate::runtime_test_support::record_execve_stage(715, self_ino as u64, target.len() as u64);
+    let exe_ino = memfs::create_symlink(self_ino, b"exe", target);
+    crate::runtime_test_support::record_execve_stage(716, exe_ino as u64, 0);
 }
 
 fn write_stack_strings(base: u32, start: u64, strings: &[Vec<u8>], addrs: &mut [u64]) {
@@ -798,6 +987,14 @@ fn write_stack_strings(base: u32, start: u64, strings: &[Vec<u8>], addrs: &mut [
         addrs[idx] = cursor;
         cursor += bytes.len() as u64;
     }
+}
+
+fn stack_string_bytes_total(strings: &[Vec<u8>]) -> u64 {
+    strings.iter().map(|bytes| bytes.len() as u64).sum()
+}
+
+fn align_down(value: u64, align: u64) -> u64 {
+    value & !(align - 1)
 }
 
 fn ensure_guest_memory_capacity(base: u32, guest_end: u64) -> bool {
@@ -819,6 +1016,18 @@ fn current_guest_memory_limit(base: u32) -> u64 {
         ((core::arch::wasm32::memory_size(0) as u64) * 65536).saturating_sub(base as u64)
     };
     limit.min(EXECVE_RAM_LIMIT)
+}
+
+fn execve_guest_limit(base: u32, brk_start: u64, stack_size: u64) -> u64 {
+    const EXECVE_STACK_HEADROOM: u64 = 64 * 1024 * 1024;
+    let current_limit = current_guest_memory_limit(base);
+    let usable_stack = ((stack_size.max(64 * 1024) + 4095) & !4095)
+        .saturating_add(4096);
+    let required_limit = brk_start
+        .saturating_add(usable_stack)
+        .saturating_add(EXECVE_STACK_HEADROOM);
+    let rounded_limit = (required_limit + 0xF_FFFF) & !0xF_FFFF;
+    current_limit.max(rounded_limit).min(EXECVE_RAM_LIMIT)
 }
 
 fn retain_process_ofds(base: u32, process_ptr: u32) {
@@ -883,17 +1092,23 @@ fn clone_process_state_for_vfork(
     Some(child_ps_addr as u32)
 }
 
-pub fn complete_execve_in_place(vm: &mut ThreadState, base: u32, ram_size: u64) -> i64 {
+fn complete_execve_in_place_inner(
+    vm: &mut ThreadState,
+    base: u32,
+    ram_size: u64,
+    flush_shared_mappings: bool,
+) -> i64 {
+    let vm_ptr = vm as *mut ThreadState as u32;
     if vm.spawn_kind != SPAWN_KIND_EXECVE {
         return EINVAL;
     }
     crate::runtime_test_support::record_execve_stage(1, base as u64, ram_size);
 
     let ExecveImage {
+        ino,
         path_bytes,
         argv,
         envp,
-        elf_ptr,
         elf_len,
         elf,
     } = match load_execve_image(
@@ -975,6 +1190,7 @@ pub fn complete_execve_in_place(vm: &mut ThreadState, base: u32, ram_size: u64) 
         return EINVAL;
     }
     let target_ppid = if target_pid != old_pid { old_pid } else { old_ppid };
+    let defer_backend_cleanup = target_pid != old_pid;
 
     let mut inherited_fds = [FdEntry {
         ofd_id: 0,
@@ -990,30 +1206,31 @@ pub fn complete_execve_in_place(vm: &mut ThreadState, base: u32, ram_size: u64) 
         inherited_fds[idx] = entry;
     }
 
-    // Allocate the pointer vectors before rebuilding the guest image. This
-    // keeps execve off the system allocator after load_elf()/memory reset.
+    // Allocate the pointer vectors before rebuilding the guest image so the
+    // guest image rewrite itself does not depend on post-reset allocations.
     let mut argv_ptrs = vec![0u64; argv.len()];
     let mut envp_ptrs = vec![0u64; envp.len()];
-    let guest_limit = current_guest_memory_limit(base);
+    let guest_limit = execve_guest_limit(base, elf.brk_start, crate::syscall::memory::DEFAULT_STACK_SIZE);
 
     let ps_size = core::mem::size_of::<ProcessState>() as u64;
     let ps_align = core::mem::align_of::<ProcessState>() as u64;
     let new_ps_addr = (elf.brk_start + ps_align - 1) & !(ps_align - 1);
     crate::runtime_test_support::record_execve_stage(3, guest_limit, new_ps_addr + ps_size);
-    if !ensure_guest_memory_capacity(base, new_ps_addr + ps_size) {
+    // vfork+execve handoff starts from a bootstrap-sized child memory. Grow the
+    // guest view to the full execve limit before resetting and loading ELF
+    // segments, matching process_create()'s dynamic-growth contract.
+    if !ensure_guest_memory_capacity(base, guest_limit) {
         crate::runtime_test_support::record_execve_stage(11, guest_limit, new_ps_addr + ps_size);
         return ENOMEM;
     }
 
     crate::syscall::thread::discard_other_threads_for_exec(vm, base);
-    let elf_result = match unsafe {
-        crate::elf::load_elf(base, ram_size, elf_ptr, elf_len)
-    } {
+    crate::syscall::memory::reset_for_execve_with_flush(base, elf.brk_start, flush_shared_mappings);
+    let elf_result = match load_execve_elf_from_inode(base, ram_size, ino, elf_len) {
         Ok(result) => result,
-        Err(_) => return ENOEXEC,
+        Err(errno) => return errno,
     };
     crate::runtime_test_support::record_execve_stage(4, elf_result.brk_start, elf_result.entry);
-    crate::syscall::memory::reset_for_execve(base, elf_result.brk_start);
     let stack_top = crate::syscall::memory::map_initial_stack(
         base,
         guest_limit,
@@ -1033,9 +1250,11 @@ pub fn complete_execve_in_place(vm: &mut ThreadState, base: u32, ram_size: u64) 
         return ENOMEM;
     }
     crate::runtime_test_support::record_execve_stage(6, brk, ps_addr + ps_size);
+    crate::runtime_test_support::record_execve_stage(61, ps_addr, ps_size);
     unsafe {
         guest_mem::zero_mem(base, ps_addr, ps_size as usize);
     }
+    crate::runtime_test_support::record_execve_stage(62, ps_addr, ps_size);
 
     let mut released_cloexec_ofds = [false; MAX_FDS];
     for entry in old_fd_table.iter().copied() {
@@ -1052,9 +1271,14 @@ pub fn complete_execve_in_place(vm: &mut ThreadState, base: u32, ram_size: u64) 
             continue;
         }
         released_cloexec_ofds[entry.ofd_id as usize] = true;
-        fd_table::release_ofd_id(entry.ofd_id);
+        if defer_backend_cleanup {
+            let _ = fd_table::release_ofd_id_deferred(entry.ofd_id);
+        } else {
+            fd_table::release_ofd_id(entry.ofd_id);
+        }
     }
 
+    let vm = unsafe { &mut *(vm_ptr as *mut ThreadState) };
     vm.process_ptr = ps_addr as u32;
     for (idx, entry) in inherited_fds.iter().enumerate() {
         let entry_off = ps_addr + (idx * core::mem::size_of::<FdEntry>()) as u64;
@@ -1063,6 +1287,7 @@ pub fn complete_execve_in_place(vm: &mut ThreadState, base: u32, ram_size: u64) 
             guest_mem::write_u32(base, entry_off + 4, entry.fd_flags);
         }
     }
+    crate::runtime_test_support::record_execve_stage(63, ps_addr, inherited_fds.len() as u64);
     let pid_off = core::mem::offset_of!(ProcessState, pid) as u64;
     let ppid_off = core::mem::offset_of!(ProcessState, ppid) as u64;
     let cwd_off = core::mem::offset_of!(ProcessState, cwd_ino) as u64;
@@ -1079,33 +1304,36 @@ pub fn complete_execve_in_place(vm: &mut ThreadState, base: u32, ram_size: u64) 
         guest_mem::write_u32(base, ps_addr + stderr_pipe_off, old_stderr_pipe_slot);
         guest_mem::write_u32(base, ps_addr + fs_ring_off, old_fs_ring_base);
     }
+    crate::runtime_test_support::record_execve_stage(64, ps_addr + pid_off, ps_addr + fs_ring_off);
 
     let random_addr = stack_top.saturating_sub(16);
+    crate::runtime_test_support::record_execve_stage(65, stack_top, random_addr);
     unsafe {
         guest_mem::write_bytes(base, random_addr, &[0x42u8; 16]);
     }
-    write_stack_strings(
-        base,
-        stack_top.saturating_sub(0x4000),
-        &argv,
-        &mut argv_ptrs,
-    );
-    write_stack_strings(
-        base,
-        stack_top.saturating_sub(0x2000),
-        &envp,
-        &mut envp_ptrs,
-    );
+    let string_bytes = stack_string_bytes_total(&argv) + stack_string_bytes_total(&envp);
+    let strings_end = stack_top.saturating_sub(128);
+    let strings_start = align_down(strings_end.saturating_sub(string_bytes), 16);
+    let stack_setup_top = strings_start.saturating_sub(128);
+    let cursor = {
+        write_stack_strings(base, strings_start, &argv, &mut argv_ptrs);
+        crate::runtime_test_support::record_execve_stage(66, strings_start, argv.len() as u64);
+        let argv_bytes_end = strings_start.saturating_add(stack_string_bytes_total(&argv));
+        write_stack_strings(base, argv_bytes_end, &envp, &mut envp_ptrs);
+        argv_bytes_end
+    };
+    crate::runtime_test_support::record_execve_stage(67, cursor, envp.len() as u64);
     let sp = unsafe {
         crate::elf::setup_stack(
             base,
-            stack_top.saturating_sub(128),
+            stack_setup_top,
             &argv_ptrs,
             &envp_ptrs,
             &elf_result,
             random_addr,
         )
     };
+    crate::runtime_test_support::record_execve_stage(68, sp, stack_setup_top);
 
     vm.x = [0; 32];
     vm.pc = elf_result.entry;
@@ -1131,21 +1359,42 @@ pub fn complete_execve_in_place(vm: &mut ThreadState, base: u32, ram_size: u64) 
     vm.clone_pending = 0;
     vm.futex_wait_addr = 0;
     vm.futex_wait_timeout = 0;
+    vm.futex_wait_expected = 0;
     vm.epoll_timeout_ms = 0;
+    vm.epoll_maxevents = 0;
     vm.blocked_fd = 0;
     vm.blocked_ofd_id = 0;
     clear_wait4_state(vm);
     clear_spawn_handoff(vm);
+    crate::runtime_test_support::record_execve_stage(69, vm.pc, vm.x[2]);
 
     crate::syscall::thread::init_main_thread(vm as *mut ThreadState as u32, base);
+    crate::runtime_test_support::record_execve_stage(70, vm.pc, vm.x[2]);
     crate::syscall::signal::reset_on_execve(target_pid);
-    install_proc_self_exe(&path_bytes);
+    crate::runtime_test_support::record_execve_stage(71, target_pid as u64, 0);
+    if flush_shared_mappings {
+        install_proc_self_exe(&path_bytes);
+        crate::runtime_test_support::record_execve_stage(72, path_bytes.len() as u64, 0);
+    }
     if let Some(slot) = ensure_process(target_pid, target_ppid) {
         slot.did_exec = true;
     }
+    crate::runtime_test_support::record_execve_stage(73, target_pid as u64, target_ppid as u64);
 
     crate::runtime_test_support::record_execve_stage(7, vm.pc, vm.x[2]);
     0
+}
+
+pub fn complete_execve_in_place(vm: &mut ThreadState, base: u32, ram_size: u64) -> i64 {
+    complete_execve_in_place_inner(vm, base, ram_size, true)
+}
+
+pub fn complete_execve_in_place_from_handoff(
+    vm: &mut ThreadState,
+    base: u32,
+    ram_size: u64,
+) -> i64 {
+    complete_execve_in_place_inner(vm, base, ram_size, false)
 }
 
 fn empty_child_entry() -> ChildEntry {
@@ -1415,11 +1664,14 @@ pub fn sys_vfork(vm: &mut ThreadState, base: u32) -> i32 {
         robust_list_len: vm.robust_list_len,
         sig_mask: vm.sig_mask,
         sig_pending: vm.sig_pending,
+        sig_info_code: vm.sig_info_code,
         sigaltstack_sp: vm.sigaltstack_sp,
         sigaltstack_size: vm.sigaltstack_size,
         sigaltstack_flags: vm.sigaltstack_flags,
         lr_addr: vm.lr_addr,
         lr_val: vm.lr_val,
+        lr_gen: vm.lr_gen,
+        lr_gen_end: vm.lr_gen_end,
         insn_budget: vm.insn_budget,
         fault_pc: vm.fault_pc,
         fault_addr: vm.fault_addr,
@@ -1445,7 +1697,9 @@ pub fn sys_vfork(vm: &mut ThreadState, base: u32) -> i32 {
         wait_rusage_addr: vm.wait_rusage_addr,
         futex_wait_addr: vm.futex_wait_addr,
         futex_wait_timeout: vm.futex_wait_timeout,
+        futex_wait_expected: vm.futex_wait_expected,
         epoll_timeout_ms: vm.epoll_timeout_ms,
+        epoll_maxevents: vm.epoll_maxevents,
         blocked_fd: vm.blocked_fd,
         blocked_ofd_id: vm.blocked_ofd_id,
         child_pid,
@@ -1465,13 +1719,13 @@ pub fn sys_vfork(vm: &mut ThreadState, base: u32) -> i32 {
 }
 
 /// Restore parent from vfork snapshot. Called when child does execve or _exit.
-pub fn vfork_parent_resume(vm: &mut ThreadState, child_pid: i32) {
+fn vfork_parent_resume_inner(vm: &mut ThreadState, child_pid: i32, cleanup_child_fds: bool) {
     if prs().vfork_active == 0 {
         return;
     }
     let snap = prs().vfork_snapshot;
     prs().vfork_active = 0;
-    if vm.process_ptr != 0 && vm.process_ptr != snap.process_ptr {
+    if cleanup_child_fds && vm.process_ptr != 0 && vm.process_ptr != snap.process_ptr {
         crate::fs::fd_table::close_all_for_process(vm.guest_base, vm);
     }
     vm.x = snap.x;
@@ -1492,11 +1746,14 @@ pub fn vfork_parent_resume(vm: &mut ThreadState, child_pid: i32) {
     vm.robust_list_len = snap.robust_list_len;
     vm.sig_mask = snap.sig_mask;
     vm.sig_pending = snap.sig_pending;
+    vm.sig_info_code = snap.sig_info_code;
     vm.sigaltstack_sp = snap.sigaltstack_sp;
     vm.sigaltstack_size = snap.sigaltstack_size;
     vm.sigaltstack_flags = snap.sigaltstack_flags;
     vm.lr_addr = snap.lr_addr;
     vm.lr_val = snap.lr_val;
+    vm.lr_gen = snap.lr_gen;
+    vm.lr_gen_end = snap.lr_gen_end;
     vm.insn_budget = snap.insn_budget;
     vm.fault_pc = snap.fault_pc;
     vm.fault_addr = snap.fault_addr;
@@ -1522,13 +1779,30 @@ pub fn vfork_parent_resume(vm: &mut ThreadState, child_pid: i32) {
     vm.wait_rusage_addr = snap.wait_rusage_addr;
     vm.futex_wait_addr = snap.futex_wait_addr;
     vm.futex_wait_timeout = snap.futex_wait_timeout;
+    vm.futex_wait_expected = snap.futex_wait_expected;
     vm.epoll_timeout_ms = snap.epoll_timeout_ms;
+    vm.epoll_maxevents = snap.epoll_maxevents;
     vm.blocked_fd = snap.blocked_fd;
     vm.blocked_ofd_id = snap.blocked_ofd_id;
     reattach_guest_thread_count(vm, vm.guest_base);
     vm.x[10] = child_pid as u64; // parent's clone returns child PID
     clear_spawn_handoff(vm);
     vm.status = STATUS_OK;
+}
+
+pub fn vfork_parent_resume(vm: &mut ThreadState, child_pid: i32) {
+    vfork_parent_resume_inner(vm, child_pid, true);
+}
+
+pub fn vfork_parent_restore_without_cleanup(vm: &mut ThreadState, child_pid: i32) {
+    if prs().vfork_active == 0 {
+        return;
+    }
+    let snap = prs().vfork_snapshot;
+    if vm.process_ptr != 0 && vm.process_ptr != snap.process_ptr {
+        crate::fs::fd_table::close_all_for_process_without_backend_cleanup(vm.guest_base, vm);
+    }
+    vfork_parent_resume_inner(vm, child_pid, false);
 }
 
 pub fn clear_vfork_runtime_state() {
@@ -1864,10 +2138,13 @@ const SIGINFO_OFF_SI_STATUS: u64 = 24;
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::abi::*;
     use crate::fs::memfs;
     use crate::test_helpers::TestVm;
     use crate::types::{FdEntry, ProcessState, THREAD_NONE, THREAD_RUNNING, ThreadRecord};
+    use crate::guest_mem;
+    use crate::syscall::epoll::{EPOLL_CTL_ADD, EPOLL_CTL_DEL, EPOLLIN};
     use alloc_crate::vec;
     use alloc_crate::vec::Vec;
     use core::sync::atomic::Ordering;
@@ -2282,11 +2559,17 @@ mod tests {
             assert_eq!(argc, 2);
             let argv0 = unsafe { crate::guest_mem::read_u64(t.base, t.vm.x[2] + 8) };
             let argv1 = unsafe { crate::guest_mem::read_u64(t.base, t.vm.x[2] + 16) };
+            let env0 = unsafe { crate::guest_mem::read_u64(t.base, t.vm.x[2] + 32) };
             let mut buf = [0u8; 32];
             let len0 = unsafe { crate::guest_mem::read_cstr(t.base, argv0, &mut buf) };
             assert_eq!(&buf[..len0], b"/bin/test");
             let len1 = unsafe { crate::guest_mem::read_cstr(t.base, argv1, &mut buf) };
             assert_eq!(&buf[..len1], b"arg1");
+            let env_len = unsafe { crate::guest_mem::read_cstr(t.base, env0, &mut buf) };
+            assert_eq!(&buf[..env_len], b"KEY=VALUE");
+            assert!(argv0 > t.vm.x[2], "argv strings must stay above the initial sp");
+            assert!(argv1 > t.vm.x[2], "argv strings must stay above the initial sp");
+            assert!(env0 > t.vm.x[2], "env strings must stay above the initial sp");
         }
 
         #[test]
@@ -2301,6 +2584,7 @@ mod tests {
             t.vm.blocked_ofd_id = stdout_ofd;
             t.vm.futex_wait_addr = 0x1234;
             t.vm.futex_wait_timeout = 0x5678;
+            t.vm.futex_wait_expected = 0x9abc;
             t.vm.epoll_timeout_ms = 99;
 
             let before = crate::fs::fd_table::get_ofd_by_id(stdout_ofd)
@@ -2316,6 +2600,7 @@ mod tests {
             assert_eq!(t.vm.blocked_ofd_id, 0);
             assert_eq!(t.vm.futex_wait_addr, 0);
             assert_eq!(t.vm.futex_wait_timeout, 0);
+            assert_eq!(t.vm.futex_wait_expected, 0);
             assert_eq!(t.vm.epoll_timeout_ms, 0);
 
             let after = crate::fs::fd_table::get_ofd_by_id(stdout_ofd)
@@ -2342,7 +2627,7 @@ mod tests {
             assert_eq!(t.vm.status, STATUS_EXECVE_SPAWN);
 
             process_impl::clear_vfork_runtime_state();
-            let ret = process_impl::complete_execve_in_place(
+            let ret = process_impl::complete_execve_in_place_from_handoff(
                 &mut t.vm,
                 t.base,
                 process_impl::EXECVE_RAM_LIMIT,
@@ -2353,6 +2638,324 @@ mod tests {
             assert_eq!(new_ps.fd_table[0].ofd_id, old_fd0);
             assert_eq!(new_ps.fd_table[1].ofd_id, old_fd1);
             assert_eq!(new_ps.fd_table[2].ofd_id, old_fd2);
+        }
+
+        #[test]
+        fn semantics_vfork_execve_preserves_distinct_capture_pipe_ofds() {
+            let mut t = TestVm::new();
+            let stdout_pipefd_addr = t.scratch + 0x1800;
+            let stderr_pipefd_addr = t.scratch + 0x1810;
+            assert_eq!(
+                crate::syscall::pipe::sys_pipe2(&mut t.vm, t.base, stdout_pipefd_addr, 0),
+                0
+            );
+            assert_eq!(
+                crate::syscall::pipe::sys_pipe2(&mut t.vm, t.base, stderr_pipefd_addr, 0),
+                0
+            );
+
+            let stdout_read_fd = unsafe { crate::guest_mem::read_u32(t.base, stdout_pipefd_addr) };
+            let stdout_write_fd =
+                unsafe { crate::guest_mem::read_u32(t.base, stdout_pipefd_addr + 4) };
+            let stderr_read_fd = unsafe { crate::guest_mem::read_u32(t.base, stderr_pipefd_addr) };
+            let stderr_write_fd =
+                unsafe { crate::guest_mem::read_u32(t.base, stderr_pipefd_addr + 4) };
+
+            assert_eq!(t.sys_dup3(stdout_write_fd as u64, 1, 0), 1);
+            assert_eq!(t.sys_dup3(stderr_write_fd as u64, 2, 0), 2);
+            assert_eq!(t.sys_close(stdout_write_fd as i64), 0);
+            assert_eq!(t.sys_close(stderr_write_fd as i64), 0);
+            assert_eq!(t.sys_close(stdout_read_fd as i64), 0);
+            assert_eq!(t.sys_close(stderr_read_fd as i64), 0);
+
+            let ps_before =
+                unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+            let stdout_ofd_before = ps_before.fd_table[1].ofd_id;
+            let stderr_ofd_before = ps_before.fd_table[2].ofd_id;
+            assert_ne!(stdout_ofd_before, 0);
+            assert_ne!(stderr_ofd_before, 0);
+            assert_ne!(stdout_ofd_before, stderr_ofd_before);
+
+            let stdout_pipe_before = crate::fs::fd_table::get_ofd_by_id(stdout_ofd_before)
+                .expect("stdout pipe OFD should exist before vfork+execve");
+            let stderr_pipe_before = crate::fs::fd_table::get_ofd_by_id(stderr_ofd_before)
+                .expect("stderr pipe OFD should exist before vfork+execve");
+            assert_ne!(stdout_pipe_before.ino, stderr_pipe_before.ino);
+
+            let status = process_impl::sys_vfork(&mut t.vm, t.base);
+            assert_eq!(status, STATUS_VFORK_WAIT);
+
+            let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+            let path_addr = install_exec_file(&t, b"test", &elf);
+            let child_pid = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+            assert!(child_pid > 0);
+            assert_eq!(t.vm.status, STATUS_EXECVE_SPAWN);
+
+            process_impl::clear_vfork_runtime_state();
+            let ret = process_impl::complete_execve_in_place_from_handoff(
+                &mut t.vm,
+                t.base,
+                process_impl::EXECVE_RAM_LIMIT,
+            );
+            assert_eq!(ret, 0);
+
+            let ps_after =
+                unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+            let stdout_ofd_after = ps_after.fd_table[1].ofd_id;
+            let stderr_ofd_after = ps_after.fd_table[2].ofd_id;
+            assert_eq!(stdout_ofd_after, stdout_ofd_before);
+            assert_eq!(stderr_ofd_after, stderr_ofd_before);
+
+            let stdout_pipe_after = crate::fs::fd_table::get_ofd_by_id(stdout_ofd_after)
+                .expect("stdout pipe OFD should survive execve");
+            let stderr_pipe_after = crate::fs::fd_table::get_ofd_by_id(stderr_ofd_after)
+                .expect("stderr pipe OFD should survive execve");
+            assert_ne!(stdout_pipe_after.ino, stderr_pipe_after.ino);
+        }
+
+        #[test]
+        fn semantics_vfork_parent_restore_without_cleanup_preserves_parent_epoll() {
+            let mut t = TestVm::new();
+            t.memfs.create_file(b"stdin.txt", b"");
+
+            let output_pipefd_addr = t.scratch + 0x1820;
+            let status_pipefd_addr = t.scratch + 0x1830;
+            assert_eq!(
+                crate::syscall::pipe::sys_pipe2(
+                    &mut t.vm,
+                    t.base,
+                    output_pipefd_addr,
+                    O_CLOEXEC as u64,
+                ),
+                0
+            );
+            assert_eq!(
+                crate::syscall::pipe::sys_pipe2(
+                    &mut t.vm,
+                    t.base,
+                    status_pipefd_addr,
+                    O_CLOEXEC as u64,
+                ),
+                0
+            );
+
+            let output_read_fd = unsafe { crate::guest_mem::read_u32(t.base, output_pipefd_addr) } as u64;
+            let output_write_fd =
+                unsafe { crate::guest_mem::read_u32(t.base, output_pipefd_addr + 4) } as u64;
+            let status_read_fd = unsafe { crate::guest_mem::read_u32(t.base, status_pipefd_addr) } as u64;
+            let status_write_fd =
+                unsafe { crate::guest_mem::read_u32(t.base, status_pipefd_addr + 4) } as u64;
+            let stdin_fd = t.sys_openat(b"/stdin.txt", O_RDONLY | O_CLOEXEC);
+            assert!(stdin_fd >= 3);
+
+            let epfd = crate::syscall::epoll::sys_epoll_create1(&mut t.vm, t.base, O_CLOEXEC as u64);
+            assert!(epfd >= 3);
+
+            let event_addr = t.scratch + 0x2000;
+            let out_addr = t.scratch + 0x2100;
+            unsafe {
+                crate::guest_mem::write_u32(t.base, event_addr, EPOLLIN);
+                crate::guest_mem::write_u64(t.base, event_addr + 8, 0x1111);
+            }
+            assert_eq!(
+                crate::syscall::epoll::sys_epoll_ctl(
+                    &mut t.vm,
+                    t.base,
+                    epfd as u64,
+                    EPOLL_CTL_ADD,
+                    output_read_fd,
+                    event_addr,
+                ),
+                0
+            );
+            unsafe {
+                crate::guest_mem::write_u32(t.base, event_addr, EPOLLIN);
+                crate::guest_mem::write_u64(t.base, event_addr + 8, 0x2222);
+            }
+            assert_eq!(
+                crate::syscall::epoll::sys_epoll_ctl(
+                    &mut t.vm,
+                    t.base,
+                    epfd as u64,
+                    EPOLL_CTL_ADD,
+                    status_read_fd,
+                    event_addr,
+                ),
+                0
+            );
+
+            let epoll_ofd_id = unsafe {
+                let ps = &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState);
+                ps.fd_table[epfd as usize].ofd_id
+            };
+            let epoll_idx = crate::fs::fd_table::get_ofd_by_id(epoll_ofd_id)
+                .expect("epoll OFD should exist before vfork")
+                .ino;
+            assert_eq!(
+                crate::fs::fd_table::get_ofd_by_id(epoll_ofd_id)
+                    .expect("epoll OFD should be readable before vfork")
+                    .refcount,
+                1
+            );
+
+            let status = process_impl::sys_vfork(&mut t.vm, t.base);
+            assert_eq!(status, STATUS_VFORK_WAIT);
+            assert_eq!(
+                crate::fs::fd_table::get_ofd_by_id(epoll_ofd_id)
+                    .expect("epoll OFD should be retained for the vfork child")
+                    .refcount,
+                2
+            );
+
+            assert_eq!(t.sys_dup3(stdin_fd as u64, 0, 0), 0);
+            assert_eq!(t.sys_dup3(output_write_fd, 1, 0), 1);
+            assert_eq!(t.sys_dup3(output_write_fd, 2, 0), 2);
+            assert_eq!(t.sys_close(output_read_fd as i64), 0);
+            assert_eq!(t.sys_close(status_read_fd as i64), 0);
+            assert!(
+                crate::syscall::epoll::epoll_slot_allocated(epoll_idx),
+                "child pipe setup must not close the suspended parent's epoll instance",
+            );
+            assert_eq!(
+                crate::fs::fd_table::get_ofd_by_id(epoll_ofd_id)
+                    .expect("epoll OFD should survive child pipe setup")
+                    .refcount,
+                2
+            );
+
+            let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+            let path_addr = install_exec_file(&t, b"test", &elf);
+            let child_pid = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+            assert!(child_pid > 0);
+            assert_eq!(t.vm.status, STATUS_EXECVE_SPAWN);
+
+            process_impl::vfork_parent_restore_without_cleanup(&mut t.vm, child_pid as i32);
+            assert_eq!(t.vm.status, STATUS_OK);
+            assert_eq!(t.vm.x[10], child_pid as u64);
+            assert!(
+                crate::syscall::epoll::epoll_slot_allocated(epoll_idx),
+                "restoring the suspended parent must not invalidate parent epoll",
+            );
+            assert_eq!(
+                crate::fs::fd_table::get_ofd_by_id(epoll_ofd_id)
+                    .expect("epoll OFD should survive parent restore")
+                    .refcount,
+                1
+            );
+
+            assert_eq!(t.sys_close(stdin_fd), 0);
+            assert_eq!(t.sys_close(output_write_fd as i64), 0);
+            assert_eq!(t.sys_close(status_write_fd as i64), 0);
+            assert!(
+                crate::syscall::epoll::epoll_slot_allocated(epoll_idx),
+                "closing parent child-side descriptors must not invalidate epoll",
+            );
+
+            assert_eq!(
+                crate::syscall::epoll::sys_epoll_ctl(
+                    &mut t.vm,
+                    t.base,
+                    epfd as u64,
+                    EPOLL_CTL_DEL,
+                    output_read_fd,
+                    event_addr,
+                ),
+                0
+            );
+            assert_eq!(
+                crate::syscall::epoll::sys_epoll_ctl(
+                    &mut t.vm,
+                    t.base,
+                    epfd as u64,
+                    EPOLL_CTL_DEL,
+                    status_read_fd,
+                    event_addr,
+                ),
+                0
+            );
+            assert_eq!(
+                crate::syscall::epoll::sys_epoll_pwait(
+                    &mut t.vm,
+                    t.base,
+                    epfd as u64,
+                    out_addr,
+                    1,
+                    0,
+                    0,
+                ),
+                0
+            );
+        }
+
+        #[test]
+        fn semantics_vfork_parent_restore_without_cleanup_preserves_distinct_capture_pipe_ofds() {
+            let mut t = TestVm::new();
+
+            let stdout_pipefd_addr = t.scratch + 0x1800;
+            let stderr_pipefd_addr = t.scratch + 0x1810;
+            assert_eq!(
+                crate::syscall::pipe::sys_pipe2(&mut t.vm, t.base, stdout_pipefd_addr, 0),
+                0
+            );
+            assert_eq!(
+                crate::syscall::pipe::sys_pipe2(&mut t.vm, t.base, stderr_pipefd_addr, 0),
+                0
+            );
+
+            let stdout_read_fd = unsafe { crate::guest_mem::read_u32(t.base, stdout_pipefd_addr) };
+            let stdout_write_fd =
+                unsafe { crate::guest_mem::read_u32(t.base, stdout_pipefd_addr + 4) };
+            let stderr_read_fd = unsafe { crate::guest_mem::read_u32(t.base, stderr_pipefd_addr) };
+            let stderr_write_fd =
+                unsafe { crate::guest_mem::read_u32(t.base, stderr_pipefd_addr + 4) };
+
+            assert_eq!(t.sys_dup3(stdout_write_fd as u64, 1, 0), 1);
+            assert_eq!(t.sys_dup3(stderr_write_fd as u64, 2, 0), 2);
+            assert_eq!(t.sys_close(stdout_write_fd as i64), 0);
+            assert_eq!(t.sys_close(stderr_write_fd as i64), 0);
+            assert_eq!(t.sys_close(stdout_read_fd as i64), 0);
+            assert_eq!(t.sys_close(stderr_read_fd as i64), 0);
+
+            let ps_before =
+                unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+            let stdout_ofd_before = ps_before.fd_table[1].ofd_id;
+            let stderr_ofd_before = ps_before.fd_table[2].ofd_id;
+            assert_ne!(stdout_ofd_before, 0);
+            assert_ne!(stderr_ofd_before, 0);
+            assert_ne!(stdout_ofd_before, stderr_ofd_before);
+
+            let status = process_impl::sys_vfork(&mut t.vm, t.base);
+            assert_eq!(status, STATUS_VFORK_WAIT);
+
+            let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+            let path_addr = install_exec_file(&t, b"test", &elf);
+            let child_pid = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+            assert!(child_pid > 0);
+            assert_eq!(t.vm.status, STATUS_EXECVE_SPAWN);
+
+            process_impl::vfork_parent_restore_without_cleanup(&mut t.vm, child_pid as i32);
+            assert_eq!(t.vm.status, STATUS_OK);
+
+            let ps_after =
+                unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+            assert_eq!(ps_after.fd_table[1].ofd_id, stdout_ofd_before);
+            assert_eq!(ps_after.fd_table[2].ofd_id, stderr_ofd_before);
+
+            let eventfd = crate::syscall::pipe::sys_eventfd2(&mut t.vm, t.base, 0, 0);
+            assert!(eventfd >= 3, "eventfd must not reuse restored stdout/stderr descriptors");
+
+            let ps_after_eventfd =
+                unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+            assert_eq!(ps_after_eventfd.fd_table[1].ofd_id, stdout_ofd_before);
+            assert_eq!(ps_after_eventfd.fd_table[2].ofd_id, stderr_ofd_before);
+
+            let stdout_pipe_after = crate::fs::fd_table::get_ofd_by_id(stdout_ofd_before)
+                .expect("stdout pipe OFD should survive restore_without_cleanup");
+            let stderr_pipe_after = crate::fs::fd_table::get_ofd_by_id(stderr_ofd_before)
+                .expect("stderr pipe OFD should survive restore_without_cleanup");
+            assert_eq!(stdout_pipe_after.fd_type, FD_TYPE_PIPE);
+            assert_eq!(stderr_pipe_after.fd_type, FD_TYPE_PIPE);
+            assert_ne!(stdout_pipe_after.ino, stderr_pipe_after.ino);
         }
 
         #[test]

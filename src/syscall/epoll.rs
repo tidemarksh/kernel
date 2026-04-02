@@ -15,11 +15,11 @@ use crate::fs::fd_table;
 use crate::guest_mem;
 use crate::types::{OpenFileDesc, ThreadState};
 
-const EPOLL_CTL_ADD: u64 = 1;
-const EPOLL_CTL_DEL: u64 = 2;
+pub(crate) const EPOLL_CTL_ADD: u64 = 1;
+pub(crate) const EPOLL_CTL_DEL: u64 = 2;
 const EPOLL_CTL_MOD: u64 = 3;
 
-const EPOLLIN: u32 = 0x001;
+pub(crate) const EPOLLIN: u32 = 0x001;
 const EPOLLOUT: u32 = 0x004;
 const EPOLLERR: u32 = 0x008;
 const EPOLLHUP: u32 = 0x010;
@@ -76,6 +76,19 @@ fn set_epoll_ptr(idx: usize, val: *mut EpollInstance) {
     }
 }
 
+fn validated_epoll_instance(epoll_idx: usize) -> Option<&'static mut EpollInstance> {
+    let ptr = epoll_ptr(epoll_idx);
+    if ptr.is_null() {
+        return None;
+    }
+    let inst = unsafe { &mut *ptr };
+    if inst.count as usize > MAX_EPOLL_ENTRIES {
+        close_epoll(epoll_idx as u32);
+        return None;
+    }
+    Some(inst)
+}
+
 pub fn epoll_table_ptr() -> u32 {
     unsafe { core::ptr::read(core::ptr::addr_of!(EPOLL_TABLE_PTR)) as u32 }
 }
@@ -117,16 +130,18 @@ fn remove_entry(inst: &mut EpollInstance, idx: usize) {
     inst.count -= 1;
 }
 
+fn epoll_supports_fd_type(fd_type: i32) -> bool {
+    matches!(fd_type, FD_TYPE_PIPE | FD_TYPE_SOCKET | FD_TYPE_EVENTFD)
+}
+
 pub fn release_interest_for_ofd(ofd_id: u32) {
     if ofd_id == 0 {
         return;
     }
     for epoll_idx in 0..MAX_EPOLL_ENTRIES {
-        let ptr = epoll_ptr(epoll_idx);
-        if ptr.is_null() {
+        let Some(inst) = validated_epoll_instance(epoll_idx) else {
             continue;
-        }
-        let inst = unsafe { &mut *ptr };
+        };
         let mut idx = 0usize;
         while idx < inst.count as usize {
             if inst.entries[idx].ofd_id == ofd_id {
@@ -193,16 +208,21 @@ pub fn sys_epoll_ctl(
     if epoll_ofd.fd_type != FD_TYPE_EPOLL {
         return EINVAL;
     }
+    let watched_ofd = match fd_table::get_ofd(base, vm, fd) {
+        Some(o) => o,
+        None => return EBADF,
+    };
+    if !epoll_supports_fd_type(watched_ofd.fd_type) {
+        return EPERM;
+    }
     let watched_ofd_id = match fd_table::get_ofd_id(base, vm, fd) {
         Some(id) => id,
         None => return EBADF,
     };
 
-    let inst_ptr = epoll_ptr(epoll_ofd.ino as usize);
-    if inst_ptr.is_null() {
+    let Some(inst) = validated_epoll_instance(epoll_ofd.ino as usize) else {
         return EBADF;
-    }
-    let inst = unsafe { &mut *inst_ptr };
+    };
 
     match op {
         EPOLL_CTL_ADD => {
@@ -277,11 +297,9 @@ pub fn sys_epoll_pwait(
         return EINVAL;
     }
 
-    let inst_ptr = epoll_ptr(epoll_ofd.ino as usize);
-    if inst_ptr.is_null() {
+    let Some(inst) = validated_epoll_instance(epoll_ofd.ino as usize) else {
         return EBADF;
-    }
-    let inst = unsafe { &*inst_ptr };
+    };
     let max = maxevents as usize;
     let mut ready = 0usize;
 
@@ -314,14 +332,32 @@ pub fn sys_epoll_pwait(
     vm.fault_addr = epfd;
     vm.fault_pc = events_addr;
     vm.epoll_timeout_ms = timeout;
+    vm.epoll_maxevents = maxevents as u32;
     vm.status = STATUS_EPOLL_WAIT;
     return 0; // dispatch() checks vm.status and returns it
 }
 
 pub fn resume_timeout(vm: &mut ThreadState) {
     vm.epoll_timeout_ms = 0;
+    vm.epoll_maxevents = 0;
     vm.x[10] = 0;
     vm.status = STATUS_OK;
+}
+
+pub fn resume_wait(vm: &mut ThreadState, base: u32) -> i64 {
+    let result = sys_epoll_pwait(
+        vm,
+        base,
+        vm.fault_addr,
+        vm.fault_pc,
+        vm.epoll_maxevents as u64,
+        vm.epoll_timeout_ms,
+        0,
+    );
+    if vm.status == STATUS_OK {
+        vm.x[10] = result as u64;
+    }
+    result
 }
 
 /// Poll a single watched object for readiness using its OFD snapshot.
@@ -634,6 +670,35 @@ mod tests {
         assert_eq!(
             unsafe { crate::guest_mem::read_u64(t.base, out_addr + 8) },
             0x9876
+        );
+    }
+
+    #[test]
+    fn epoll_ctl_rejects_regular_files_with_eperm() {
+        let mut t = TestVm::new();
+        t.memfs.create_file(b"regular.txt", b"hello");
+        let file_fd = t.sys_openat(b"/regular.txt", O_RDONLY);
+        assert!(file_fd >= 3);
+
+        let epfd = super::sys_epoll_create1(&mut t.vm, t.base, 0);
+        assert!(epfd >= 3);
+
+        let event_addr = t.scratch + 0x2000;
+        unsafe {
+            crate::guest_mem::write_u32(t.base, event_addr, EPOLLIN);
+            crate::guest_mem::write_u64(t.base, event_addr + 8, 0x44);
+        }
+
+        assert_eq!(
+            super::sys_epoll_ctl(
+                &mut t.vm,
+                t.base,
+                epfd as u64,
+                EPOLL_CTL_ADD,
+                file_fd as u64,
+                event_addr,
+            ),
+            EPERM
         );
     }
 }

@@ -52,7 +52,8 @@ static mut PIPE_USED: u64 = 0;
 pub fn init() {
     unsafe {
         core::ptr::write(core::ptr::addr_of_mut!(SAB_PIPE_BASE), 0);
-        core::ptr::write(core::ptr::addr_of_mut!(PIPE_USED), 0);
+        // Slot 0 stays reserved as the ABI-level "no pipe" sentinel.
+        core::ptr::write(core::ptr::addr_of_mut!(PIPE_USED), 1);
 
         let total = MAX_PIPES as u32 * PIPE_SLOT_SIZE;
         // Allocate from shared memory (in production, this is SAB;
@@ -105,6 +106,12 @@ pub fn read_open_ptr(slot: u32) -> &'static AtomicI32 {
 fn write_open_ptr(slot: u32) -> &'static AtomicI32 {
     unsafe { &*((slot + OFF_WRITE_OPEN) as *const AtomicI32) }
 }
+pub fn debug_read_open(idx: u32) -> i32 {
+    read_open_ptr(slot_addr(idx)).load(Ordering::Acquire)
+}
+pub fn debug_write_open(idx: u32) -> i32 {
+    write_open_ptr(slot_addr(idx)).load(Ordering::Acquire)
+}
 fn data_ptr(slot: u32) -> *mut u8 {
     (slot + OFF_DATA) as *mut u8
 }
@@ -119,7 +126,7 @@ pub struct PipeCloseOutcome {
 pub fn alloc_pipe_slot() -> Option<u32> {
     unsafe {
         let used = core::ptr::read(core::ptr::addr_of!(PIPE_USED));
-        for i in 0..MAX_PIPES {
+        for i in 1..MAX_PIPES {
             if used & (1u64 << i) == 0 {
                 core::ptr::write(core::ptr::addr_of_mut!(PIPE_USED), used | (1u64 << i));
                 let addr = slot_addr(i as u32);
@@ -333,6 +340,7 @@ pub fn sys_eventfd2(vm: &mut ThreadState, base: u32, initval: u64, flags: u64) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fs::fd_table::OPEN_ACCESS_MODE_MASK;
     use crate::test_helpers::TestVm;
 
     #[test]
@@ -386,6 +394,13 @@ mod tests {
                 slot_released: true,
             }
         );
+    }
+
+    #[test]
+    fn pipe_slot_zero_is_reserved() {
+        let _ = TestVm::new();
+        let idx = alloc_pipe_slot().unwrap();
+        assert_ne!(idx, 0);
     }
 
     #[test]

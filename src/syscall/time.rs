@@ -119,6 +119,13 @@ pub fn advance_monotonic(ticks: u64) {
     ts().monotonic_ticks += ticks;
 }
 
+pub fn sync_monotonic_ticks_floor(ticks: u64) {
+    let state = ts();
+    if ticks > state.monotonic_ticks {
+        state.monotonic_ticks = ticks;
+    }
+}
+
 fn monotonic_ticks() -> u64 {
     ts().monotonic_ticks
 }
@@ -313,6 +320,8 @@ pub fn sys_nanosleep(vm: &mut ThreadState, base: u32, req: u64, _rem: u64) -> i3
 /// before resuming this one; guest-visible return value remains 0.
 /// https://man7.org/linux/man-pages/man2/sched_yield.2.html
 pub fn sys_sched_yield(vm: &mut ThreadState) -> i32 {
+    vm.fault_addr = 0;
+    vm.fault_pc = 0;
     vm.x[10] = 0;
     vm.status = abi::STATUS_SLEEP;
     abi::STATUS_SLEEP
@@ -383,6 +392,17 @@ mod tests {
         );
         let sec = unsafe { crate::guest_mem::read_u64(t.base, tp) };
         assert!(sec >= 2, "CLOCK_MONOTONIC should reflect monotonic ticks");
+    }
+
+    #[test]
+    fn sync_monotonic_ticks_floor_only_moves_forward() {
+        let _t = TestVm::new();
+        super::advance_monotonic(200_000_000);
+        super::sync_monotonic_ticks_floor(100_000_000);
+        assert_eq!(super::monotonic_ticks(), 200_000_001);
+
+        super::sync_monotonic_ticks_floor(300_000_000);
+        assert_eq!(super::monotonic_ticks(), 300_000_000);
     }
 
     #[test]

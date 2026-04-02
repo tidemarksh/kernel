@@ -41,7 +41,7 @@ impl TestVm {
     pub fn new() -> Self {
         unsafe {
             let base: u32 = 0;
-            crate::guest_mem::init(core::ptr::null(), core::ptr::null());
+            crate::guest_mem::init(core::ptr::null(), core::ptr::null(), core::ptr::null());
 
             let current_pages = core::arch::wasm32::memory_size(0);
             let target_pages = 256;
@@ -69,6 +69,7 @@ impl TestVm {
             let mut vm: ThreadState = core::mem::zeroed();
             vm.tid = 1;
             vm.status = STATUS_OK;
+            vm.lr_addr = u64::MAX;
 
             // Allocate ProcessState in guest Memory via brk (not alloc.rs which is
             // kernel Worker private memory). Guest Memory is the shared address space
@@ -96,6 +97,12 @@ impl TestVm {
             crate::syscall::signal::init_for_process(42);
 
             crate::fs::fd_table::init_stdio(base, &mut vm);
+
+            let ps = &*((base as u64 + vm.process_ptr as u64) as *const ProcessState);
+            let gen_ptr = core::ptr::addr_of!(ps.reservation_gen) as *const core::sync::atomic::AtomicU32;
+            let lock_ptr = core::ptr::addr_of!(ps.reservation_lock) as *const core::sync::atomic::AtomicU32;
+            let tc_ptr = core::ptr::addr_of!(ps.thread_count);
+            crate::guest_mem::init(gen_ptr, lock_ptr, tc_ptr);
 
             // Scratch area for test data (64KB, above shadow stack)
             let scratch = crate::alloc::alloc_zeroed(0x10000, 16) as u64;

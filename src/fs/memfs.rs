@@ -33,6 +33,30 @@
 use crate::abi::*;
 use crate::alloc;
 
+#[repr(C)]
+struct PageCacheMeta {
+    mode: u32,
+    _pad: u32,
+    size: u64,
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[link(wasm_import_module = "env")]
+unsafe extern "C" {
+    fn tidemark_page_cache_read(ino: u32, offset: u64, dst_ptr: u32, dst_len: u32) -> i64;
+    fn tidemark_page_cache_stat(ino: u32, out_ptr: u32) -> i32;
+}
+
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+unsafe fn tidemark_page_cache_read(_ino: u32, _offset: u64, _dst_ptr: u32, _dst_len: u32) -> i64 {
+    0
+}
+
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+unsafe fn tidemark_page_cache_stat(_ino: u32, _out_ptr: u32) -> i32 {
+    0
+}
+
 pub const S_IFMT: u32 = 0o170000;
 pub const S_IFDIR: u32 = 0o040000;
 pub const S_IFREG: u32 = 0o100000;
@@ -259,6 +283,31 @@ fn alloc_inode(mode: u32) -> u32 {
     ino as u32
 }
 
+pub fn reserve_inode_until(target_ino: u32) -> i64 {
+    let h = fs();
+    if target_ino as usize >= MAX_INODES {
+        return ENOSPC;
+    }
+    while h.inode_count < target_ino {
+        unsafe {
+            core::ptr::write(
+                h.inodes.add(h.inode_count as usize),
+                Inode {
+                    mode: 0,
+                    nlink: 0,
+                    uid: 0,
+                    gid: 0,
+                    size: 0,
+                    data_offset: 0,
+                    data_cap: 0,
+                },
+            );
+        }
+        h.inode_count += 1;
+    }
+    0
+}
+
 fn alloc_data(size: u32) -> u32 {
     let aligned = (size + 7) & !7;
     let data_used = fs().data_used;
@@ -275,9 +324,49 @@ fn alloc_data(size: u32) -> u32 {
     off
 }
 
+fn has_external_file_data(ino: u32) -> bool {
+    let inode = inodes()[ino as usize];
+    inode.mode & S_IFMT == S_IFREG && inode.size > 0 && inode.data_cap == 0
+}
+
+fn materialize_external_file_data(ino: u32) -> i64 {
+    if !has_external_file_data(ino) {
+        return 0;
+    }
+
+    let idx = ino as usize;
+    let size = inodes()[idx].size as usize;
+    let cap = (size as u32).max(4096);
+    let off = alloc_data(cap);
+    if off == u32::MAX {
+        return ENOSPC;
+    }
+
+    let mut copied = 0usize;
+    while copied < size {
+        let chunk = (size - copied).min(4096);
+        let dst_ptr = unsafe { fs().data.add(off as usize + copied) as u32 };
+        let n = unsafe { tidemark_page_cache_read(ino, copied as u64, dst_ptr, chunk as u32) };
+        if n < 0 {
+            return n;
+        }
+        if n == 0 {
+            return EIO;
+        }
+        copied += n as usize;
+    }
+
+    let inode = &mut inodes()[idx];
+    inode.data_offset = off;
+    inode.data_cap = cap;
+    0
+}
+
 fn grow_data_pool(needed: u32) -> bool {
-    let h = fs();
-    let mut new_cap = h.data_cap.max(4096);
+    let data_cap = fs().data_cap;
+    let data_used = fs().data_used;
+    let old_data = fs().data;
+    let mut new_cap = data_cap.max(4096);
     while new_cap < needed {
         let Some(doubled) = new_cap.checked_mul(2) else {
             return false;
@@ -293,8 +382,9 @@ fn grow_data_pool(needed: u32) -> bool {
     }
 
     unsafe {
-        core::ptr::copy_nonoverlapping(h.data, new_data as *mut u8, h.data_used as usize);
+        core::ptr::copy_nonoverlapping(old_data, new_data as *mut u8, data_used as usize);
     }
+    let h = fs();
     h.data = new_data as *mut u8;
     h.data_cap = new_cap;
     true
@@ -482,27 +572,36 @@ pub fn write_path(ino: u32, buf: &mut [u8]) -> usize {
 /// Returns the new inode number, or 0 on failure.
 /// https://man7.org/linux/man-pages/man2/symlinkat.2.html
 pub fn create_symlink(parent_ino: u32, name: &[u8], target: &[u8]) -> u32 {
-    if lookup(parent_ino, name) != 0 {
+    crate::runtime_test_support::record_execve_stage(801, parent_ino as u64, target.len() as u64);
+    let existing = lookup(parent_ino, name);
+    crate::runtime_test_support::record_execve_stage(802, existing as u64, name.len() as u64);
+    if existing != 0 {
         return 0;
     } // already exists
     let ino = alloc_inode(S_IFLNK | 0o777);
+    crate::runtime_test_support::record_execve_stage(803, ino as u64, 0);
     if ino == 0 {
         return 0;
     }
     // Store target as the inode's data
     let off = alloc_data(target.len() as u32);
+    crate::runtime_test_support::record_execve_stage(804, off as u64, fs().data_cap as u64);
     if off == u32::MAX {
         return 0;
     }
     unsafe {
         core::ptr::copy_nonoverlapping(target.as_ptr(), fs().data.add(off as usize), target.len());
     }
+    crate::runtime_test_support::record_execve_stage(805, off as u64, target.len() as u64);
     inodes()[ino as usize].data_offset = off;
     inodes()[ino as usize].data_cap = target.len() as u32;
     inodes()[ino as usize].size = target.len() as u64;
-    if !add_dir_entry(parent_ino, name, ino) {
+    let added = add_dir_entry(parent_ino, name, ino);
+    crate::runtime_test_support::record_execve_stage(806, added as u64, ino as u64);
+    if !added {
         return 0;
     }
+    crate::runtime_test_support::record_execve_stage(807, ino as u64, 0);
     ino
 }
 
@@ -599,6 +698,11 @@ pub fn write_file(ino: u32, offset: u64, data: &[u8]) -> i64 {
         return EBADF;
     }
 
+    let materialized = materialize_external_file_data(ino);
+    if materialized < 0 {
+        return materialized;
+    }
+
     let end = offset as u32 + data.len() as u32;
     let data_cap = inodes()[idx].data_cap;
 
@@ -649,6 +753,9 @@ pub fn read_file(ino: u32, offset: u64, buf: &mut [u8]) -> i64 {
     if offset >= inode.size {
         return 0;
     }
+    if inode.data_cap == 0 {
+        return unsafe { tidemark_page_cache_read(ino, offset, buf.as_mut_ptr() as u32, buf.len() as u32) };
+    }
     let avail = (inode.size - offset) as usize;
     let n = buf.len().min(avail);
     let base = inode.data_offset as usize + offset as usize;
@@ -671,6 +778,10 @@ pub fn truncate(ino: u32, size: u64) -> i64 {
     let idx = ino as usize;
     if inodes()[idx].mode & S_IFMT != S_IFREG {
         return EINVAL;
+    }
+    let materialized = materialize_external_file_data(ino);
+    if materialized < 0 {
+        return materialized;
     }
     let old_size = inodes()[idx].size;
     let data_cap = inodes()[idx].data_cap as u64;
@@ -717,6 +828,31 @@ pub fn truncate(ino: u32, size: u64) -> i64 {
             core::ptr::write_bytes(fs().data.add(base), 0, len);
         }
     }
+    inodes()[idx].size = size;
+    0
+}
+
+pub fn set_file_size_shallow(ino: u32, size: u64) -> i64 {
+    let idx = ino as usize;
+    if inodes()[idx].mode & S_IFMT != S_IFREG {
+        return EINVAL;
+    }
+    if inodes()[idx].data_cap != 0 {
+        return EINVAL;
+    }
+
+    let mut meta = PageCacheMeta {
+        mode: 0,
+        _pad: 0,
+        size: 0,
+    };
+    let published = unsafe { tidemark_page_cache_stat(ino, (&mut meta as *mut PageCacheMeta) as u32) };
+    if published != 0 {
+        inodes()[idx].mode = meta.mode;
+        inodes()[idx].size = meta.size;
+        return 0;
+    }
+
     inodes()[idx].size = size;
     0
 }

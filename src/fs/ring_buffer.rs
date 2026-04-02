@@ -62,6 +62,18 @@ pub const OFF_NOTIFY: u32 = 16;
 pub const OFF_SQ_BASE: u32 = HEADER_SIZE as u32;
 pub const OFF_CQ_BASE: u32 = (HEADER_SIZE + SQ_SIZE * REQ_SIZE) as u32;
 
+#[derive(Clone, Copy)]
+pub struct FsRequestInfo {
+    pub opcode: u32,
+    pub fd: i32,
+    pub offset: u64,
+    pub len: u64,
+    pub buf_ptr: u64,
+    pub path_ptr: u64,
+    pub flags: u32,
+    pub mode: u32,
+}
+
 /// Submit a FS request to the ring buffer.
 /// `ring_base` is the SAB offset where the ring buffer starts.
 /// Returns the submission index, or -1 if the queue is full.
@@ -143,6 +155,42 @@ pub fn read_completion(ring_base: u32) -> i64 {
     }
 }
 
+/// Peek the next queued request without consuming it.
+/// Returns `(opcode, flags)` or `None` when the submission queue is empty.
+pub fn peek_request(ring_base: u32) -> Option<(u32, u32)> {
+    peek_request_info(ring_base).map(|request| (request.opcode, request.flags))
+}
+
+/// Peek the next queued request without consuming it.
+pub fn peek_request_info(ring_base: u32) -> Option<FsRequestInfo> {
+    unsafe {
+        use core::sync::atomic::{AtomicU32, Ordering};
+
+        let head_ptr = ring_base as *const AtomicU32;
+        let tail_ptr = (ring_base + OFF_SUBMIT_TAIL) as *const AtomicU32;
+
+        let head = (*head_ptr).load(Ordering::Acquire);
+        let tail = (*tail_ptr).load(Ordering::Relaxed);
+        if head == tail {
+            return None;
+        }
+
+        let idx = (tail as usize) % SQ_SIZE;
+        let entry_off = ring_base + OFF_SQ_BASE + (idx as u32) * (REQ_SIZE as u32);
+        let p = entry_off as *const u8;
+        Some(FsRequestInfo {
+            opcode: *(p as *const u32),
+            fd: *(p.add(4) as *const i32),
+            offset: *(p.add(8) as *const u64),
+            len: *(p.add(16) as *const u64),
+            buf_ptr: *(p.add(24) as *const u64),
+            path_ptr: *(p.add(32) as *const u64),
+            flags: *(p.add(40) as *const u32),
+            mode: *(p.add(44) as *const u32),
+        })
+    }
+}
+
 /// Process pending FS requests from the submission queue.
 /// Called by the kernel Worker (or in single-instance mode, synchronously).
 /// Reads requests, dispatches to MemFS, writes completions.
@@ -216,7 +264,7 @@ pub fn process_requests(ring_base: u32, vm_ptr: u32, base: u32) {
                         crate::syscall::fs::sys_mkdirat(
                             vm,
                             base,
-                            -100i32 as u64, // AT_FDCWD
+                            fd as u64,
                             path_ptr,
                             mode as u64,
                         )
@@ -229,7 +277,7 @@ pub fn process_requests(ring_base: u32, vm_ptr: u32, base: u32) {
                         crate::syscall::fs::sys_unlinkat(
                             vm,
                             base,
-                            -100i32 as u64, // AT_FDCWD
+                            fd as u64,
                             path_ptr,
                             flags as u64,
                         )
@@ -400,5 +448,40 @@ mod tests {
         // Verify the directory was created.
         let dir_ino = crate::fs::memfs::resolve_path(b"/ringdir");
         assert!(dir_ino > 0, "/ringdir should exist after mkdir");
+    }
+
+    #[test]
+    fn ring_buffer_dispatch_mkdir_respects_dirfd() {
+        use crate::test_helpers::TestVm;
+
+        let mut t = TestVm::new();
+        let ring_base = unsafe { crate::alloc::alloc_zeroed(RING_BUFFER_SIZE as u32, 16) };
+        assert!(ring_base != 0, "ring buffer allocation should succeed");
+
+        assert_eq!(t.sys_mkdirat(b"/parent"), 0);
+        let dirfd = t.sys_openat(b"/parent", O_RDONLY);
+        assert!(dirfd >= 3, "open directory should succeed, got {}", dirfd);
+
+        let path_addr = t.write_path(0xB100, b"child");
+        let idx = submit_request(
+            ring_base,
+            FS_OP_MKDIR,
+            dirfd as i32,
+            0,
+            0,
+            0,
+            path_addr,
+            0,
+            0o755,
+        );
+        assert!(idx >= 0, "submit_request should succeed");
+
+        let vm_ptr = &mut t.vm as *mut crate::types::ThreadState as u32;
+        process_requests(ring_base, vm_ptr, t.base);
+
+        let result = read_completion(ring_base);
+        assert_eq!(result, 0, "mkdir should succeed via dirfd, got {}", result);
+        assert!(crate::fs::memfs::resolve_path(b"/parent/child") > 0);
+        assert_eq!(crate::fs::memfs::resolve_path(b"/child"), 0);
     }
 }
