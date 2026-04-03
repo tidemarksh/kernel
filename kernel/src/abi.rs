@@ -878,6 +878,29 @@ fn align_down(value: u64, align: u64) -> u64 {
     value & !(align - 1)
 }
 
+unsafe fn read_interp_path_from_elf(
+    elf_ptr: u32,
+    elf_len: u32,
+    inspected: &crate::elf::ElfLoadResult,
+) -> Option<alloc_crate::vec::Vec<u8>> {
+    if inspected.interp_len == 0
+        || inspected.interp_len > 4096
+        || inspected.interp_offset.checked_add(inspected.interp_len)? > elf_len as u64
+    {
+        return None;
+    }
+    let mut raw = alloc_crate::vec![0u8; inspected.interp_len as usize];
+    unsafe {
+        crate::guest_mem::read_bytes(0, elf_ptr as u64 + inspected.interp_offset, &mut raw);
+    }
+    let nul = raw.iter().position(|&b| b == 0)?;
+    if nul == 0 || raw[0] != b'/' || raw[nul + 1..].iter().any(|&b| b != 0) {
+        return None;
+    }
+    raw.truncate(nul);
+    Some(raw)
+}
+
 fn process_stack_capacity(stack_size: u32) -> u64 {
     let usable = page_align_up((stack_size as u64).max(64 * 1024));
     usable.saturating_sub(PAGE_SIZE)
@@ -991,15 +1014,45 @@ pub extern "C" fn process_create(
             Ok(r) => r,
             Err(_) => return 0,
         };
-        if !crate::syscall::memory::ensure_guest_memory_capacity(base, inspected.brk_start) {
+        let interp = if inspected.interp_len != 0 {
+            let path = match read_interp_path_from_elf(elf_ptr, elf_len, &inspected) {
+                Some(path) => path,
+                None => return 0,
+            };
+            match crate::syscall::process::resolve_interp_from_path(&path, guest_ram_size) {
+                Ok(image) => Some(image),
+                Err(_) => return 0,
+            }
+        } else {
+            None
+        };
+        let effective_brk = interp
+            .as_ref()
+            .map(|interp| interp.elf.brk_start.max(inspected.brk_start))
+            .unwrap_or(inspected.brk_start);
+        if !crate::syscall::memory::ensure_guest_memory_capacity(base, effective_brk) {
             return 0;
         }
         let elf_result = match crate::elf::load_elf(base, guest_ram_size, elf_ptr, elf_len) {
             Ok(r) => r,
             Err(_) => return 0,
         };
+        let interp_result = match interp.as_ref() {
+            Some(interp) => {
+                match crate::syscall::process::load_elf_from_inode(
+                    base,
+                    guest_ram_size,
+                    interp.ino,
+                    interp.elf_len,
+                ) {
+                    Ok(result) => Some(result),
+                    Err(_) => return 0,
+                }
+            }
+            None => None,
+        };
 
-        crate::syscall::memory::init(elf_result.brk_start);
+        crate::syscall::memory::init(effective_brk);
 
         // ProcessState lives in guest Memory (shared WebAssembly.Memory),
         // not in kernel Worker private memory (alloc.rs).
@@ -1095,13 +1148,17 @@ pub extern "C" fn process_create(
             &mut envp_addrs[..staged_envc],
         );
 
-        let sp = crate::elf::setup_stack(
+        let sp = crate::elf::setup_stack_with_base(
             base,
             stack_setup_top,
             &argv_addrs[..argc],
             &envp_addrs[..envc],
             &elf_result,
             random_addr,
+            interp_result
+                .as_ref()
+                .map(|interp| interp.load_base)
+                .unwrap_or(0),
         );
         // Clear staged args for next process
         staged.argc = 0;
@@ -1134,12 +1191,18 @@ pub extern "C" fn process_create(
             }
         }
 
-        ts.pc = elf_result.entry;
+        ts.pc = interp_result
+            .as_ref()
+            .map(|interp| interp.entry)
+            .unwrap_or(elf_result.entry);
         ts.x[2] = sp;
-        ts.x[4] = elf_result.tls_base;
+        ts.x[4] = interp_result
+            .as_ref()
+            .and_then(|interp| (interp.tls_base != 0).then_some(interp.tls_base))
+            .unwrap_or(elf_result.tls_base);
         ts.status = STATUS_OK;
         ts.tid = 1;
-        ts.tls_base = elf_result.tls_base;
+        ts.tls_base = ts.x[4];
         ts.guest_base = base;
         ts.process_ptr = ps_addr as u32;
         crate::fs::fd_table::init_stdio(base, ts);
