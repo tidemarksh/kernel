@@ -1,3 +1,12 @@
+pub mod support {
+    pub use crate::harness_support::{
+        PlainForkSnapshot, clear_guest_output, clear_plain_fork_futex_wait,
+        clear_plain_fork_futex_waits, register_plain_fork_futex_wait,
+        restore_plain_fork_parent, snapshot_plain_fork, take_guest_output,
+        take_plain_fork_futex_wake,
+    };
+}
+
 use crate::abi::*;
 use crate::fs;
 use crate::net;

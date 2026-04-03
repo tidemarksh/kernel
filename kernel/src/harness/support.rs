@@ -4,6 +4,8 @@ use crate::abi::MAP_SHARED;
 use crate::guest_mem;
 use crate::syscall::memory;
 
+const HARNESS_RUNTIME_SUPPORT_ENABLED: bool = cfg!(any(test, feature = "harness"));
+
 struct SharedMappingSnapshot {
     start: u64,
     bytes: Vec<u8>,
@@ -29,12 +31,18 @@ pub fn snapshot_plain_fork() -> PlainForkSnapshot {
 }
 
 pub fn clear_guest_output() {
+    if !HARNESS_RUNTIME_SUPPORT_ENABLED {
+        return;
+    }
     unsafe {
         core::ptr::write(core::ptr::addr_of_mut!(GUEST_OUTPUT), Some(Vec::new()));
     }
 }
 
 pub fn clear_plain_fork_futex_waits() {
+    if !HARNESS_RUNTIME_SUPPORT_ENABLED {
+        return;
+    }
     unsafe {
         core::ptr::write(
             core::ptr::addr_of_mut!(PLAIN_FORK_FUTEX_WAITS),
@@ -44,6 +52,9 @@ pub fn clear_plain_fork_futex_waits() {
 }
 
 pub fn register_plain_fork_futex_wait(pid: i32, addr: u32) {
+    if !HARNESS_RUNTIME_SUPPORT_ENABLED {
+        return;
+    }
     unsafe {
         let slot = &mut *core::ptr::addr_of_mut!(PLAIN_FORK_FUTEX_WAITS);
         if slot.is_none() {
@@ -65,6 +76,9 @@ pub fn register_plain_fork_futex_wait(pid: i32, addr: u32) {
 }
 
 pub fn clear_plain_fork_futex_wait(pid: i32) {
+    if !HARNESS_RUNTIME_SUPPORT_ENABLED {
+        return;
+    }
     unsafe {
         let slot = &mut *core::ptr::addr_of_mut!(PLAIN_FORK_FUTEX_WAITS);
         if let Some(waits) = slot.as_mut() {
@@ -74,6 +88,9 @@ pub fn clear_plain_fork_futex_wait(pid: i32) {
 }
 
 pub fn wake_plain_fork_futex_waits(addr: u32, max_wake: u32) -> u32 {
+    if !HARNESS_RUNTIME_SUPPORT_ENABLED {
+        return 0;
+    }
     if max_wake == 0 {
         return 0;
     }
@@ -100,6 +117,9 @@ pub fn wake_plain_fork_futex_waits(addr: u32, max_wake: u32) -> u32 {
 }
 
 pub fn requeue_plain_fork_futex_waits(addr: u32, new_addr: u32, max_requeue: u32) -> u32 {
+    if !HARNESS_RUNTIME_SUPPORT_ENABLED {
+        return 0;
+    }
     if max_requeue == 0 || addr == new_addr {
         return 0;
     }
@@ -126,6 +146,9 @@ pub fn requeue_plain_fork_futex_waits(addr: u32, new_addr: u32, max_requeue: u32
 }
 
 pub fn take_plain_fork_futex_wake(pid: i32, addr: u32) -> bool {
+    if !HARNESS_RUNTIME_SUPPORT_ENABLED {
+        return false;
+    }
     unsafe {
         let slot = &mut *core::ptr::addr_of_mut!(PLAIN_FORK_FUTEX_WAITS);
         let Some(waits) = slot.as_mut() else {
@@ -145,6 +168,10 @@ pub fn take_plain_fork_futex_wake(pid: i32, addr: u32) -> bool {
 }
 
 pub fn append_guest_output(bytes: &[u8]) {
+    if !HARNESS_RUNTIME_SUPPORT_ENABLED {
+        let _ = bytes;
+        return;
+    }
     unsafe {
         let slot = &mut *core::ptr::addr_of_mut!(GUEST_OUTPUT);
         if slot.is_none() {
@@ -157,6 +184,9 @@ pub fn append_guest_output(bytes: &[u8]) {
 }
 
 pub fn take_guest_output() -> Vec<u8> {
+    if !HARNESS_RUNTIME_SUPPORT_ENABLED {
+        return Vec::new();
+    }
     unsafe {
         let slot = &mut *core::ptr::addr_of_mut!(GUEST_OUTPUT);
         slot.take().unwrap_or_default()

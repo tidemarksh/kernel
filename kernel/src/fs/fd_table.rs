@@ -219,7 +219,7 @@ pub fn run_backend_cleanup(cleanup: BackendCleanup) {
             ofd_id,
         } => {
             let outcome = crate::syscall::pipe::pipe_close_outcome(pipe_idx, is_read_end);
-            crate::runtime_debug::record_pipe_close_event(
+            crate::harness_debug::record_pipe_close_event(
                 pipe_idx,
                 is_read_end,
                 ofd_id,

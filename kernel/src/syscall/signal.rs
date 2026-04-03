@@ -72,7 +72,7 @@ struct SignalTrace {
     pc: u64,
     ra: u64,
     sp: u64,
-    g: u64,
+    x27: u64,
 }
 
 static mut LAST_SIGNAL_DELIVERY: SignalTrace = SignalTrace {
@@ -81,7 +81,7 @@ static mut LAST_SIGNAL_DELIVERY: SignalTrace = SignalTrace {
     pc: 0,
     ra: 0,
     sp: 0,
-    g: 0,
+    x27: 0,
 };
 static mut LAST_SIGRETURN: SignalTrace = SignalTrace {
     sig: 0,
@@ -89,7 +89,7 @@ static mut LAST_SIGRETURN: SignalTrace = SignalTrace {
     pc: 0,
     ra: 0,
     sp: 0,
-    g: 0,
+    x27: 0,
 };
 static mut LAST_TRAMPOLINE_PC: u64 = 0;
 static mut LAST_TRAMPOLINE_HIT_TID: i32 = 0;
@@ -136,14 +136,14 @@ pub fn process_pending_bytes() -> u32 {
 pub fn last_signal_delivery() -> (u32, u64, u64, u64, u64, u64) {
     unsafe {
         let t = LAST_SIGNAL_DELIVERY;
-        (t.sig, t.frame_base, t.pc, t.ra, t.sp, t.g)
+        (t.sig, t.frame_base, t.pc, t.ra, t.sp, t.x27)
     }
 }
 
 pub fn last_sigreturn() -> (u32, u64, u64, u64, u64, u64) {
     unsafe {
         let t = LAST_SIGRETURN;
-        (t.sig, t.frame_base, t.pc, t.ra, t.sp, t.g)
+        (t.sig, t.frame_base, t.pc, t.ra, t.sp, t.x27)
     }
 }
 
@@ -503,7 +503,7 @@ const UCONTEXT_STACK_OFF_FLAGS: u64 = 8;
 const UCONTEXT_STACK_OFF_SIZE: u64 = 16;
 const UCONTEXT_OFF_SIGMASK: u64 = 40;
 const UCONTEXT_SIGMASK_WORDS: u64 = 16;
-const UCONTEXT_OFF_PAD_CGO: u64 = 168;
+const UCONTEXT_OFF_RESERVED_PAD: u64 = 168;
 const UCONTEXT_OFF_MCONTEXT: u64 = 176;
 const MCONTEXT_OFF_REGS: u64 = 0;
 const MCONTEXT_OFF_FREGS: u64 = 256;
@@ -592,7 +592,7 @@ fn push_signal_frame(vm: &mut ThreadState, base: u32, sig: usize, action: &SigAc
         for word in 1..UCONTEXT_SIGMASK_WORDS {
             guest_mem::write_u64(base, ucontext_base + UCONTEXT_OFF_SIGMASK + word * 8, 0);
         }
-        guest_mem::write_u64(base, ucontext_base + UCONTEXT_OFF_PAD_CGO, 0);
+        guest_mem::write_u64(base, ucontext_base + UCONTEXT_OFF_RESERVED_PAD, 0);
 
         guest_mem::write_u64(base, regs_base, vm.pc);
         for i in 1..32 {
@@ -650,7 +650,7 @@ fn push_signal_frame(vm: &mut ThreadState, base: u32, sig: usize, action: &SigAc
             pc: vm.pc,
             ra: vm.x[1],
             sp: vm.x[2],
-            g: vm.x[27],
+            x27: vm.x[27],
         };
         LAST_TRAMPOLINE_PC = frame_base + SIGFRAME_OFF_TRAMPOLINE;
     }
@@ -691,7 +691,7 @@ pub fn sys_rt_sigreturn(vm: &mut ThreadState, base: u32) {
             pc: vm.pc,
             ra: vm.x[1],
             sp: vm.x[2],
-            g: vm.x[27],
+            x27: vm.x[27],
         };
         SIGRETURN_COUNT = SIGRETURN_COUNT.wrapping_add(1);
     }
@@ -856,4 +856,3 @@ pub fn queue_sigsegv(vm: &mut ThreadState, pc: u64, addr: u64, accerr: bool) {
     vm.fault_addr = addr;
     send_signal_with_code(vm, SIGSEGV, if accerr { SEGV_ACCERR } else { SEGV_MAPERR });
 }
-

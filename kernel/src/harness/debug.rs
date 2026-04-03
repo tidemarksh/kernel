@@ -16,6 +16,8 @@ pub struct WriteTraceSummary {
     pub last_pipe_write_open: i32,
 }
 
+const RUNTIME_DEBUG_ENABLED: bool = cfg!(any(test, feature = "harness"));
+
 static mut WRITE_TRACE: WriteTraceSummary = WriteTraceSummary {
     write_calls: 0,
     writev_calls: 0,
@@ -116,8 +118,6 @@ static mut MEMORY_TRACE: MemoryTraceSummary = MemoryTraceSummary {
     result: 0,
 };
 
-static mut LAST_EXECVE_PATH: [u8; 256] = [0; 256];
-static mut LAST_EXECVE_LEN: u32 = 0;
 static mut LAST_EXECVE_STAGE: u32 = 0;
 static mut LAST_EXECVE_VALUE0: u64 = 0;
 static mut LAST_EXECVE_VALUE1: u64 = 0;
@@ -141,6 +141,9 @@ static mut PIPE_CLOSE_TRACE: PipeCloseTraceSummary = PipeCloseTraceSummary {
 };
 
 pub fn clear_write_trace() {
+    if !RUNTIME_DEBUG_ENABLED {
+        return;
+    }
     unsafe {
         core::ptr::write(
             core::ptr::addr_of_mut!(WRITE_TRACE),
@@ -166,6 +169,9 @@ pub fn clear_write_trace() {
 }
 
 pub fn clear_syscall_trace() {
+    if !RUNTIME_DEBUG_ENABLED {
+        return;
+    }
     unsafe {
         core::ptr::write(
             core::ptr::addr_of_mut!(SYSCALL_TRACE),
@@ -181,6 +187,9 @@ pub fn clear_syscall_trace() {
 }
 
 pub fn clear_memory_trace() {
+    if !RUNTIME_DEBUG_ENABLED {
+        return;
+    }
     unsafe {
         core::ptr::write(
             core::ptr::addr_of_mut!(MEMORY_TRACE),
@@ -191,28 +200,6 @@ pub fn clear_memory_trace() {
                 arg2: 0,
                 arg3: 0,
                 result: 0,
-            },
-        );
-    }
-}
-
-pub fn clear_execve_trace() {
-    unsafe {
-        core::ptr::write(core::ptr::addr_of_mut!(LAST_EXECVE_PATH), [0; 256]);
-        core::ptr::write(core::ptr::addr_of_mut!(LAST_EXECVE_LEN), 0);
-    }
-}
-
-pub fn clear_pipe_close_trace() {
-    unsafe {
-        core::ptr::write(
-            core::ptr::addr_of_mut!(PIPE_CLOSE_TRACE),
-            PipeCloseTraceSummary {
-                pipe_idx: 0,
-                is_read_end: 0,
-                ofd_id: 0,
-                read_open: 0,
-                write_open: 0,
             },
         );
     }
@@ -232,6 +219,23 @@ pub fn record_write_attempt(
     pipe_write_open: i32,
     bytes: Option<&[u8]>,
 ) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (
+            fd,
+            nr,
+            buf_addr,
+            count,
+            result,
+            ofd_id,
+            ofd_type,
+            ofd_ino,
+            status_flags,
+            pipe_read_open,
+            pipe_write_open,
+            bytes,
+        );
+        return;
+    }
     unsafe {
         let trace = &mut *core::ptr::addr_of_mut!(WRITE_TRACE);
         if nr == crate::abi::SYS_WRITEV {
@@ -269,6 +273,10 @@ pub fn record_pipe_close_event(
     read_open: i32,
     write_open: i32,
 ) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (pipe_idx, is_read_end, ofd_id, read_open, write_open);
+        return;
+    }
     unsafe {
         core::ptr::write(
             core::ptr::addr_of_mut!(PIPE_CLOSE_TRACE),
@@ -284,10 +292,23 @@ pub fn record_pipe_close_event(
 }
 
 pub fn pipe_close_trace_summary() -> PipeCloseTraceSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        return PipeCloseTraceSummary {
+            pipe_idx: 0,
+            is_read_end: 0,
+            ofd_id: 0,
+            read_open: 0,
+            write_open: 0,
+        };
+    }
     unsafe { core::ptr::read(core::ptr::addr_of!(PIPE_CLOSE_TRACE)) }
 }
 
 pub fn record_syscall(vm_ptr: u32, nr: u64, result: i64, status: i32) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (vm_ptr, nr, result, status);
+        return;
+    }
     unsafe {
         core::ptr::write(
             core::ptr::addr_of_mut!(SYSCALL_TRACE),
@@ -365,6 +386,23 @@ pub fn record_fd_syscall(
     result: i64,
     status: i32,
 ) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (
+            vm_ptr,
+            nr,
+            arg0,
+            arg0_ofd_id,
+            arg0_ofd_type,
+            arg1,
+            arg2,
+            arg2_ofd_id,
+            arg2_ofd_type,
+            arg3,
+            result,
+            status,
+        );
+        return;
+    }
     let should_record = matches!(
         nr,
         crate::abi::SYS_EPOLL_CREATE1
@@ -404,10 +442,30 @@ pub fn record_fd_syscall(
 }
 
 pub fn fd_syscall_trace_len() -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
     unsafe { FD_SYSCALL_TRACE_LEN }
 }
 
 pub fn fd_syscall_trace_entry(index: u32) -> FdSyscallTraceEntry {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = index;
+        return FdSyscallTraceEntry {
+            vm_ptr: 0,
+            nr: 0,
+            arg0: 0,
+            arg0_ofd_id: 0,
+            arg0_ofd_type: 0,
+            arg1: 0,
+            arg2: 0,
+            arg2_ofd_id: 0,
+            arg2_ofd_type: 0,
+            arg3: 0,
+            result: 0,
+            status: 0,
+        };
+    }
     unsafe {
         let len = FD_SYSCALL_TRACE_LEN.min(FD_SYSCALL_TRACE_CAP as u32);
         if index >= len {
@@ -437,10 +495,17 @@ pub fn fd_syscall_trace_entry(index: u32) -> FdSyscallTraceEntry {
 }
 
 pub fn completed_sync_effects() -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
     unsafe { core::ptr::read(core::ptr::addr_of!(COMPLETED_SYNC_EFFECTS)) }
 }
 
 pub fn record_memory_syscall(nr: u64, arg0: u64, arg1: u64, arg2: u64, arg3: u64, result: i64) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (nr, arg0, arg1, arg2, arg3, result);
+        return;
+    }
     unsafe {
         core::ptr::write(
             core::ptr::addr_of_mut!(MEMORY_TRACE),
@@ -456,17 +521,11 @@ pub fn record_memory_syscall(nr: u64, arg0: u64, arg1: u64, arg2: u64, arg3: u64
     }
 }
 
-pub fn record_execve_path(path: &[u8]) {
-    unsafe {
-        let mut buf = [0u8; 256];
-        let len = path.len().min(buf.len());
-        buf[..len].copy_from_slice(&path[..len]);
-        core::ptr::write(core::ptr::addr_of_mut!(LAST_EXECVE_PATH), buf);
-        core::ptr::write(core::ptr::addr_of_mut!(LAST_EXECVE_LEN), len as u32);
-    }
-}
-
 pub fn record_execve_stage(stage: u32, value0: u64, value1: u64) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (stage, value0, value1);
+        return;
+    }
     unsafe {
         core::ptr::write(core::ptr::addr_of_mut!(LAST_EXECVE_STAGE), stage);
         core::ptr::write(core::ptr::addr_of_mut!(LAST_EXECVE_VALUE0), value0);
@@ -475,41 +534,83 @@ pub fn record_execve_stage(stage: u32, value0: u64, value1: u64) {
 }
 
 pub fn write_trace_summary() -> WriteTraceSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        return WriteTraceSummary {
+            write_calls: 0,
+            writev_calls: 0,
+            last_fd: 0,
+            last_nr: 0,
+            last_buf_addr: 0,
+            last_count: 0,
+            last_result: 0,
+            last_ofd_id: 0,
+            last_ofd_type: 0,
+            last_ofd_ino: 0,
+            last_status_flags: 0,
+            last_pipe_read_open: 0,
+            last_pipe_write_open: 0,
+        };
+    }
     unsafe { *core::ptr::addr_of!(WRITE_TRACE) }
 }
 
 pub fn write_trace_ptr() -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
     core::ptr::addr_of!(LAST_WRITE_BYTES) as u32
 }
 
 pub fn write_trace_len() -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
     unsafe { core::ptr::read(core::ptr::addr_of!(LAST_WRITE_BYTES_LEN)) }
 }
 
 pub fn syscall_trace_summary() -> SyscallTraceSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        return SyscallTraceSummary {
+            vm_ptr: 0,
+            nr: 0,
+            result: 0,
+            status: 0,
+        };
+    }
     unsafe { *core::ptr::addr_of!(SYSCALL_TRACE) }
 }
 
 pub fn memory_trace_summary() -> MemoryTraceSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        return MemoryTraceSummary {
+            nr: 0,
+            arg0: 0,
+            arg1: 0,
+            arg2: 0,
+            arg3: 0,
+            result: 0,
+        };
+    }
     unsafe { *core::ptr::addr_of!(MEMORY_TRACE) }
 }
 
-pub fn execve_trace_ptr() -> u32 {
-    core::ptr::addr_of!(LAST_EXECVE_PATH) as u32
-}
-
-pub fn execve_trace_len() -> u32 {
-    unsafe { core::ptr::read(core::ptr::addr_of!(LAST_EXECVE_LEN)) }
-}
-
 pub fn execve_stage() -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
     unsafe { core::ptr::read(core::ptr::addr_of!(LAST_EXECVE_STAGE)) }
 }
 
 pub fn execve_value0() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
     unsafe { core::ptr::read(core::ptr::addr_of!(LAST_EXECVE_VALUE0)) }
 }
 
 pub fn execve_value1() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
     unsafe { core::ptr::read(core::ptr::addr_of!(LAST_EXECVE_VALUE1)) }
 }

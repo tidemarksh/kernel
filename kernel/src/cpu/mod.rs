@@ -44,7 +44,7 @@ struct ZeroRegTrace {
     reg: u32,
     prev_value: u64,
     sp: u64,
-    g: u64,
+    x27: u64,
 }
 
 static mut LAST_ZERO_REG_TRACE: ZeroRegTrace = ZeroRegTrace {
@@ -53,7 +53,7 @@ static mut LAST_ZERO_REG_TRACE: ZeroRegTrace = ZeroRegTrace {
     reg: 0,
     prev_value: 0,
     sp: 0,
-    g: 0,
+    x27: 0,
 };
 
 #[derive(Clone, Copy)]
@@ -67,7 +67,7 @@ struct RegWriteTrace {
     rs1_value: u64,
 }
 
-static mut LAST_G_WRITE_TRACE: RegWriteTrace = RegWriteTrace {
+static mut LAST_X27_WRITE_TRACE: RegWriteTrace = RegWriteTrace {
     pc: 0,
     raw: 0,
     source: 0,
@@ -94,7 +94,7 @@ static mut RECENT_EXEC_TRACE_STEP: [u32; EXEC_TRACE_LEN] = [0; EXEC_TRACE_LEN];
 static mut RECENT_EXEC_TRACE_SP: [u64; EXEC_TRACE_LEN] = [0; EXEC_TRACE_LEN];
 static mut RECENT_EXEC_TRACE_RA: [u64; EXEC_TRACE_LEN] = [0; EXEC_TRACE_LEN];
 static mut RECENT_EXEC_TRACE_A0: [u64; EXEC_TRACE_LEN] = [0; EXEC_TRACE_LEN];
-static mut RECENT_EXEC_TRACE_G: [u64; EXEC_TRACE_LEN] = [0; EXEC_TRACE_LEN];
+static mut RECENT_EXEC_TRACE_X27: [u64; EXEC_TRACE_LEN] = [0; EXEC_TRACE_LEN];
 static mut RECENT_EXEC_TRACE_NEXT: u32 = 0;
 
 const REG_WRITE_SOURCE_STEP: u32 = 1;
@@ -111,7 +111,7 @@ fn note_exec_trace(pc: u64, raw: u32, step: u64, x: &[u64; 32]) {
         RECENT_EXEC_TRACE_SP[slot] = x[2];
         RECENT_EXEC_TRACE_RA[slot] = x[1];
         RECENT_EXEC_TRACE_A0[slot] = x[10];
-        RECENT_EXEC_TRACE_G[slot] = x[27];
+        RECENT_EXEC_TRACE_X27[slot] = x[27];
         RECENT_EXEC_TRACE_NEXT = RECENT_EXEC_TRACE_NEXT.wrapping_add(1);
     }
 }
@@ -136,7 +136,7 @@ pub fn recent_exec_trace(index: u32) -> (u64, u32, u32, u64, u64, u64, u64) {
             RECENT_EXEC_TRACE_SP[slot],
             RECENT_EXEC_TRACE_RA[slot],
             RECENT_EXEC_TRACE_A0[slot],
-            RECENT_EXEC_TRACE_G[slot],
+            RECENT_EXEC_TRACE_X27[slot],
         )
     }
 }
@@ -164,16 +164,16 @@ pub fn last_jalr_trace() -> (u64, u64, u64, u32, u32) {
 }
 
 #[inline(always)]
-fn note_zero_reg_transition(pc: u64, raw: u32, prev_sp: u64, prev_g: u64, x: &[u64; 32]) {
+fn note_zero_reg_transition(pc: u64, raw: u32, prev_sp: u64, prev_x27: u64, x: &[u64; 32]) {
     unsafe {
-        if prev_g != 0 && x[27] == 0 {
+        if prev_x27 != 0 && x[27] == 0 {
             LAST_ZERO_REG_TRACE = ZeroRegTrace {
                 pc,
                 raw,
                 reg: 27,
-                prev_value: prev_g,
+                prev_value: prev_x27,
                 sp: x[2],
-                g: x[27],
+                x27: x[27],
             };
             return;
         }
@@ -184,7 +184,7 @@ fn note_zero_reg_transition(pc: u64, raw: u32, prev_sp: u64, prev_g: u64, x: &[u
                 reg: 2,
                 prev_value: prev_sp,
                 sp: x[2],
-                g: x[27],
+                x27: x[27],
             };
         }
     }
@@ -199,7 +199,7 @@ pub fn last_zero_reg_trace() -> (u64, u32, u32, u64, u64, u64) {
             trace.reg,
             trace.prev_value,
             trace.sp,
-            trace.g,
+            trace.x27,
         )
     }
 }
@@ -210,18 +210,18 @@ fn note_special_reg_transitions(
     raw: u32,
     source: u32,
     prev_sp: u64,
-    prev_g: u64,
+    prev_x27: u64,
     x: &[u64; 32],
 ) {
     unsafe {
         let rs1 = if raw == 0 { 0 } else { decode::rs1(raw) as u32 };
         let rs1_value = if raw == 0 { 0 } else { x[rs1 as usize] };
-        if prev_g != x[27] {
-            LAST_G_WRITE_TRACE = RegWriteTrace {
+        if prev_x27 != x[27] {
+            LAST_X27_WRITE_TRACE = RegWriteTrace {
                 pc,
                 raw,
                 source,
-                prev_value: prev_g,
+                prev_value: prev_x27,
                 value: x[27],
                 rs1,
                 rs1_value,
@@ -241,9 +241,9 @@ fn note_special_reg_transitions(
     }
 }
 
-pub fn last_g_write_trace() -> (u64, u32, u32, u64, u64, u32, u64) {
+pub fn last_x27_write_trace() -> (u64, u32, u32, u64, u64, u32, u64) {
     unsafe {
-        let trace = LAST_G_WRITE_TRACE;
+        let trace = LAST_X27_WRITE_TRACE;
         (
             trace.pc,
             trace.raw,
@@ -367,7 +367,7 @@ pub unsafe fn exec_at_base(
                 // WASM has no async interrupts, so check at budget boundaries in addition
                 // to syscall return boundaries.
                 let prev_sp = x[2];
-                let prev_g = x[27];
+                let prev_x27 = x[27];
                 vm.x = x;
                 vm.f = f;
                 vm.pc = pc;
@@ -382,7 +382,7 @@ pub unsafe fn exec_at_base(
                         0,
                         REG_WRITE_SOURCE_VM_RESTORE,
                         prev_sp,
-                        prev_g,
+                        prev_x27,
                         &x,
                     );
                     if vm.status != abi::STATUS_OK {
@@ -393,7 +393,7 @@ pub unsafe fn exec_at_base(
             }
             remaining -= 1;
             let prev_sp = x[2];
-            let prev_g = x[27];
+            let prev_x27 = x[27];
             let instr_pc = pc;
 
             // Fetch instruction
@@ -428,7 +428,7 @@ pub unsafe fn exec_at_base(
                         raw16 as u32,
                         REG_WRITE_SOURCE_VM_RESTORE,
                         prev_sp,
-                        prev_g,
+                        prev_x27,
                         &x,
                     );
                     if vm.status != abi::STATUS_OK {
@@ -619,7 +619,7 @@ pub unsafe fn exec_at_base(
                                     raw,
                                     REG_WRITE_SOURCE_VM_RESTORE,
                                     prev_sp,
-                                    prev_g,
+                                    prev_x27,
                                     &x,
                                 );
                                 if status != abi::STATUS_OK {
@@ -627,7 +627,7 @@ pub unsafe fn exec_at_base(
                                     return remaining;
                                 }
                                 x[0] = 0;
-                                note_zero_reg_transition(instr_pc, raw, prev_sp, prev_g, &x);
+                                note_zero_reg_transition(instr_pc, raw, prev_sp, prev_x27, &x);
                                 continue;
                             }
                             1 => {
@@ -729,7 +729,7 @@ pub unsafe fn exec_at_base(
                         raw,
                         REG_WRITE_SOURCE_VM_RESTORE,
                         prev_sp,
-                        prev_g,
+                        prev_x27,
                         &x,
                     );
                     if vm.status != abi::STATUS_OK {
@@ -742,8 +742,15 @@ pub unsafe fn exec_at_base(
 
             // Enforce x0 = 0
             x[0] = 0;
-            note_special_reg_transitions(instr_pc, raw, REG_WRITE_SOURCE_STEP, prev_sp, prev_g, &x);
-            note_zero_reg_transition(instr_pc, raw, prev_sp, prev_g, &x);
+            note_special_reg_transitions(
+                instr_pc,
+                raw,
+                REG_WRITE_SOURCE_STEP,
+                prev_sp,
+                prev_x27,
+                &x,
+            );
+            note_zero_reg_transition(instr_pc, raw, prev_sp, prev_x27, &x);
         }
 
         vm.x = x;
@@ -785,7 +792,7 @@ unsafe fn exec_block(
         for i in 0..len {
             let op = blk.ops[i];
             let prev_sp = x[2];
-            let prev_g = x[27];
+            let prev_x27 = x[27];
             let op_pc = cur_pc;
             let rd = op.rd();
             let r1 = op.rs1();
@@ -1042,7 +1049,7 @@ unsafe fn exec_block(
                         0,
                         REG_WRITE_SOURCE_BLOCK,
                         prev_sp,
-                        prev_g,
+                        prev_x27,
                         x,
                     );
                     return blk.total_budget as i32;
@@ -1059,7 +1066,7 @@ unsafe fn exec_block(
                         0,
                         REG_WRITE_SOURCE_BLOCK,
                         prev_sp,
-                        prev_g,
+                        prev_x27,
                         x,
                     );
                     return blk.total_budget as i32;
@@ -1078,7 +1085,7 @@ unsafe fn exec_block(
                         0,
                         REG_WRITE_SOURCE_BLOCK,
                         prev_sp,
-                        prev_g,
+                        prev_x27,
                         x,
                     );
                     return blk.total_budget as i32;
@@ -1093,14 +1100,14 @@ unsafe fn exec_block(
                         0,
                         REG_WRITE_SOURCE_BLOCK,
                         prev_sp,
-                        prev_g,
+                        prev_x27,
                         x,
                     );
                     return i as i32;
                 }
             }
             x[0] = 0;
-            note_special_reg_transitions(op_pc, 0, REG_WRITE_SOURCE_BLOCK, prev_sp, prev_g, x);
+            note_special_reg_transitions(op_pc, 0, REG_WRITE_SOURCE_BLOCK, prev_sp, prev_x27, x);
             cur_pc += step;
         }
 

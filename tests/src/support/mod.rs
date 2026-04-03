@@ -30,7 +30,7 @@ struct DeferredPlainFork {
     pid: i32,
     vm: ThreadState,
     guest_memory: GuestMemorySnapshot,
-    mm_state: tidemark_kernel::runtime_support::PlainForkSnapshot,
+    mm_state: tidemark_kernel::harness::support::PlainForkSnapshot,
 }
 
 enum VmRunOutcome {
@@ -466,7 +466,7 @@ fn run_vm_inner(
             STATUS_FUTEX_WAIT if allow_plain_fork_defer => {
                 refresh_proc_pid_stat(vm, base, b'S')?;
                 if vm.process_ptr != 0 {
-                    tidemark_kernel::runtime_support::register_plain_fork_futex_wait(
+                    tidemark_kernel::harness::support::register_plain_fork_futex_wait(
                         process_pid(base, vm.process_ptr),
                         vm.x[10] as u32,
                     );
@@ -546,7 +546,7 @@ fn handle_plain_fork(
             parent_pid, snapshot_parent_pid
         ));
     }
-    let parent_mm_state = tidemark_kernel::runtime_support::snapshot_plain_fork();
+    let parent_mm_state = tidemark_kernel::harness::support::snapshot_plain_fork();
     refresh_proc_pid_stat(parent_vm, base, b'S')?;
 
     tidemark_kernel::fs::fd_table::retain_fds_for_fork(base, parent_vm);
@@ -602,7 +602,7 @@ fn handle_plain_fork(
     if parent_pid == INITIAL_PID {
         match run_vm_inner(&mut child_vm, base, _use_cache, deferred_plain_forks, true)? {
             VmRunOutcome::Exited(child_exit, _child_pc) => {
-                tidemark_kernel::runtime_support::clear_plain_fork_futex_wait(child_pid);
+                tidemark_kernel::harness::support::clear_plain_fork_futex_wait(child_pid);
                 tidemark_kernel::syscall::process::record_child_exit(
                     child_pid,
                     child_wait_status(&child_vm, child_exit),
@@ -613,7 +613,7 @@ fn handle_plain_fork(
                     pid: child_pid,
                     vm: child_vm,
                     guest_memory: snapshot_guest_memory(base)?,
-                    mm_state: tidemark_kernel::runtime_support::snapshot_plain_fork(),
+                    mm_state: tidemark_kernel::harness::support::snapshot_plain_fork(),
                 });
             }
         }
@@ -624,11 +624,11 @@ fn handle_plain_fork(
             pid: child_pid,
             vm: child_vm,
             guest_memory: snapshot_guest_memory(base)?,
-            mm_state: tidemark_kernel::runtime_support::snapshot_plain_fork(),
+            mm_state: tidemark_kernel::harness::support::snapshot_plain_fork(),
         });
     }
 
-    tidemark_kernel::runtime_support::restore_plain_fork_parent(
+    tidemark_kernel::harness::support::restore_plain_fork_parent(
         base,
         guest_window_size(base) as u64,
         &parent_mm_state,
@@ -675,7 +675,7 @@ fn handle_vfork_execve_spawn(
 
     let parent_pid = process_pid(base, process_ptr);
     let parent_memory = snapshot_guest_memory(base)?;
-    let parent_mm_state = tidemark_kernel::runtime_support::snapshot_plain_fork();
+    let parent_mm_state = tidemark_kernel::harness::support::snapshot_plain_fork();
 
     let mut child_vm = unsafe { core::ptr::read(parent_vm as *const ThreadState) };
     set_process_identity(base, process_ptr, child_pid, parent_pid);
@@ -686,7 +686,7 @@ fn handle_vfork_execve_spawn(
         GUEST_RAM_SIZE as u64,
     );
     if ret < 0 {
-        tidemark_kernel::runtime_support::restore_plain_fork_parent(
+        tidemark_kernel::harness::support::restore_plain_fork_parent(
             base,
             guest_window_size(base) as u64,
             &parent_mm_state,
@@ -707,7 +707,7 @@ fn handle_vfork_execve_spawn(
         child_wait_status(&child_vm, child_exit),
     );
 
-    tidemark_kernel::runtime_support::restore_plain_fork_parent(
+    tidemark_kernel::harness::support::restore_plain_fork_parent(
         base,
         guest_window_size(base) as u64,
         &parent_mm_state,
@@ -729,9 +729,9 @@ fn run_next_deferred_plain_fork(
     };
 
     let current_memory = snapshot_guest_memory(base)?;
-    let current_mm_state = tidemark_kernel::runtime_support::snapshot_plain_fork();
+    let current_mm_state = tidemark_kernel::harness::support::snapshot_plain_fork();
 
-    tidemark_kernel::runtime_support::restore_plain_fork_parent(
+    tidemark_kernel::harness::support::restore_plain_fork_parent(
         base,
         guest_window_size(base) as u64,
         &deferred.mm_state,
@@ -747,7 +747,7 @@ fn run_next_deferred_plain_fork(
         }
         STATUS_FUTEX_WAIT => {
             let futex_addr = deferred.vm.x[10] as u32;
-            if tidemark_kernel::runtime_support::take_plain_fork_futex_wake(
+            if tidemark_kernel::harness::support::take_plain_fork_futex_wake(
                 deferred.pid,
                 futex_addr,
             ) {
@@ -761,9 +761,9 @@ fn run_next_deferred_plain_fork(
             } else {
                 refresh_proc_pid_stat(&deferred.vm, base, b'S')?;
                 deferred.guest_memory = snapshot_guest_memory(base)?;
-                deferred.mm_state = tidemark_kernel::runtime_support::snapshot_plain_fork();
+                deferred.mm_state = tidemark_kernel::harness::support::snapshot_plain_fork();
                 deferred_plain_forks.push_back(deferred);
-                tidemark_kernel::runtime_support::restore_plain_fork_parent(
+                tidemark_kernel::harness::support::restore_plain_fork_parent(
                     base,
                     guest_window_size(base) as u64,
                     &current_mm_state,
@@ -780,7 +780,7 @@ fn run_next_deferred_plain_fork(
         STATUS_WAIT4 => {
             refresh_proc_pid_stat(&deferred.vm, base, b'S')?;
             deferred.guest_memory = snapshot_guest_memory(base)?;
-            deferred.mm_state = tidemark_kernel::runtime_support::snapshot_plain_fork();
+            deferred.mm_state = tidemark_kernel::harness::support::snapshot_plain_fork();
             deferred_plain_forks.push_back(deferred);
             false
         }
@@ -792,7 +792,7 @@ fn run_next_deferred_plain_fork(
             true,
         )? {
             VmRunOutcome::Exited(child_exit, _child_pc) => {
-                tidemark_kernel::runtime_support::clear_plain_fork_futex_wait(deferred.pid);
+                tidemark_kernel::harness::support::clear_plain_fork_futex_wait(deferred.pid);
                 tidemark_kernel::syscall::process::record_child_exit(
                     deferred.pid,
                     child_wait_status(&deferred.vm, child_exit),
@@ -802,14 +802,14 @@ fn run_next_deferred_plain_fork(
             VmRunOutcome::Deferred(_child_pc) => {
                 refresh_proc_pid_stat(&deferred.vm, base, b'S')?;
                 deferred.guest_memory = snapshot_guest_memory(base)?;
-                deferred.mm_state = tidemark_kernel::runtime_support::snapshot_plain_fork();
+                deferred.mm_state = tidemark_kernel::harness::support::snapshot_plain_fork();
                 deferred_plain_forks.push_back(deferred);
                 false
             }
         },
     };
 
-    tidemark_kernel::runtime_support::restore_plain_fork_parent(
+    tidemark_kernel::harness::support::restore_plain_fork_parent(
         base,
         guest_window_size(base) as u64,
         &current_mm_state,
@@ -862,13 +862,13 @@ fn service_blocked_futex_wait(
     let futex_addr = vm.futex_wait_addr as u32;
     let timed_wait = vm.futex_wait_timeout != 0;
     if pid > 0 {
-        tidemark_kernel::runtime_support::register_plain_fork_futex_wait(pid, futex_addr);
+        tidemark_kernel::harness::support::register_plain_fork_futex_wait(pid, futex_addr);
     }
 
     let result = (|| -> Result<(), String> {
         for _ in 0..1024 {
             if pid > 0
-                && tidemark_kernel::runtime_support::take_plain_fork_futex_wake(pid, futex_addr)
+                && tidemark_kernel::harness::support::take_plain_fork_futex_wake(pid, futex_addr)
             {
                 tidemark_kernel::syscall::thread::resume_futex_wait(vm, base);
                 return Ok(());
@@ -898,7 +898,7 @@ fn service_blocked_futex_wait(
     })();
 
     if pid > 0 {
-        tidemark_kernel::runtime_support::clear_plain_fork_futex_wait(pid);
+        tidemark_kernel::harness::support::clear_plain_fork_futex_wait(pid);
     }
     refresh_proc_pid_stat(vm, base, b'R')?;
     result
@@ -926,8 +926,8 @@ pub fn run_elf_no_cache_with_output(elf_bytes: &[u8]) -> Result<(i32, u64, Vec<u
 
 fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> Result<(i32, u64, Vec<u8>), String> {
     let helper_binaries = load_ltp_helper_binaries()?;
-    tidemark_kernel::runtime_support::clear_guest_output();
-    tidemark_kernel::runtime_support::clear_plain_fork_futex_waits();
+    tidemark_kernel::harness::support::clear_guest_output();
+    tidemark_kernel::harness::support::clear_plain_fork_futex_waits();
     let mut deferred_plain_forks = VecDeque::new();
     let result = (|| -> Result<(i32, u64), String> {
         unsafe {
@@ -1112,7 +1112,7 @@ fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> Result<(i32, u64, Vec<u8>
             run_vm(&mut vm, base, use_cache, &mut deferred_plain_forks)
         }
     })();
-    let output = tidemark_kernel::runtime_support::take_guest_output();
+    let output = tidemark_kernel::harness::support::take_guest_output();
 
     match result {
         Ok((code, pc)) => Ok((code, pc, output)),

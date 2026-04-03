@@ -173,7 +173,7 @@ pub struct ProcessState {
     pub pid: i32,
     /// Parent process ID
     pub ppid: i32,
-    /// Current working directory inode in MemFS. 0 means "/" for legacy callers.
+    /// Current working directory inode in MemFS. 0 means "/".
     pub cwd_ino: u32,
     /// Hidden stdin pipe slot (runtime owns the write side).
     pub stdin_pipe_slot: u32,
