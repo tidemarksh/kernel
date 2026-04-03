@@ -133,6 +133,7 @@ const ELFDATA2LSB: u8 = 1;
 const ET_EXEC: u16 = 2;
 const EM_RISCV: u16 = 243;
 const PT_LOAD: u32 = 1;
+const PT_TLS: u32 = 7;
 
 #[repr(C)]
 struct ProcessRuntimeState {
@@ -855,17 +856,18 @@ fn inspect_execve_elf(
 
     let mut brk_end = 0u64;
     let mut phdr_addr = 0u64;
+    let mut tls_base = 0u64;
     for index in 0..ph_num {
         let start = index * ph_entsize;
         let ph = &phdrs[start..start + ph_entsize];
-        if read_u32_le(ph, ELF_PH_TYPE) != Some(PT_LOAD) {
-            continue;
-        }
-
+        let p_type = read_u32_le(ph, ELF_PH_TYPE).ok_or(ENOEXEC)?;
         let p_offset = read_u64_le(ph, ELF_PH_OFFSET).ok_or(ENOEXEC)?;
         let p_vaddr = read_u64_le(ph, ELF_PH_VADDR).ok_or(ENOEXEC)?;
         let p_filesz = read_u64_le(ph, ELF_PH_FILESZ).ok_or(ENOEXEC)?;
         let p_memsz = read_u64_le(ph, ELF_PH_MEMSZ).ok_or(ENOEXEC)?;
+        if p_type != PT_LOAD && p_type != PT_TLS {
+            continue;
+        }
         if p_vaddr
             .checked_add(p_memsz)
             .is_none_or(|end| end > ram_size)
@@ -878,13 +880,16 @@ fn inspect_execve_elf(
         {
             return Err(ENOEXEC);
         }
-
-        let seg_end = p_vaddr + p_memsz;
-        if seg_end > brk_end {
-            brk_end = seg_end;
-        }
-        if phdr_addr == 0 && p_offset == 0 {
-            phdr_addr = p_vaddr + ph_off as u64;
+        if p_type == PT_LOAD {
+            let seg_end = p_vaddr + p_memsz;
+            if seg_end > brk_end {
+                brk_end = seg_end;
+            }
+            if phdr_addr == 0 && p_offset == 0 {
+                phdr_addr = p_vaddr + ph_off as u64;
+            }
+        } else if tls_base == 0 {
+            tls_base = p_vaddr;
         }
     }
 
@@ -892,6 +897,7 @@ fn inspect_execve_elf(
     Ok(crate::elf::ElfLoadResult {
         entry,
         brk_start: brk_end,
+        tls_base,
         phdr_addr,
         phent: ph_entsize as u16,
         phnum: ph_num as u16,
@@ -1366,12 +1372,13 @@ fn complete_execve_in_place_inner(
     vm.x = [0; 32];
     vm.pc = elf_result.entry;
     vm.x[2] = sp;
+    vm.x[4] = elf_result.tls_base;
     vm.f = [0; 32];
     vm.fcsr = 0;
     vm.status = STATUS_OK;
     vm.exit_code = 0;
     vm.tid = 1;
-    vm.tls_base = 0;
+    vm.tls_base = elf_result.tls_base;
     vm.sigaltstack_sp = 0;
     vm.sigaltstack_size = 0;
     vm.sigaltstack_flags = 0;

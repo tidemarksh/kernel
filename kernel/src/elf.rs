@@ -21,6 +21,7 @@ const ELFDATA2LSB: u8 = 1;
 const ET_EXEC: u16 = 2;
 const EM_RISCV: u16 = 243;
 const PT_LOAD: u32 = 1;
+const PT_TLS: u32 = 7;
 
 // ELF64 header offsets
 const EI_CLASS: usize = 4;
@@ -55,6 +56,8 @@ pub struct ElfLoadResult {
     pub entry: u64,
     /// Highest loaded address + 1 (for brk initialization)
     pub brk_start: u64,
+    /// Initial TLS image base from PT_TLS, or 0 when absent.
+    pub tls_base: u64,
     /// Program header table address in guest memory (for AT_PHDR)
     pub phdr_addr: u64,
     /// Size of one program header entry
@@ -110,34 +113,49 @@ pub unsafe fn inspect_elf(elf_ptr: u32, elf_len: u32, ram_size: u64) -> Result<E
 
         let mut brk_end: u64 = 0;
         let mut phdr_addr: u64 = 0;
+        let mut tls_base: u64 = 0;
 
         for i in 0..ph_num {
             let ph = e.add(ph_off + i * ph_entsize);
             let p_type = read_u32(ph, P_TYPE);
 
-            if p_type != PT_LOAD {
-                continue;
-            }
+            match p_type {
+                PT_LOAD => {
+                    let p_offset = read_u64(ph, P_OFFSET);
+                    let p_vaddr = read_u64(ph, P_VADDR);
+                    let p_filesz = read_u64(ph, P_FILESZ);
+                    let p_memsz = read_u64(ph, P_MEMSZ);
 
-            let p_offset = read_u64(ph, P_OFFSET);
-            let p_vaddr = read_u64(ph, P_VADDR);
-            let p_filesz = read_u64(ph, P_FILESZ);
-            let p_memsz = read_u64(ph, P_MEMSZ);
+                    if p_vaddr + p_memsz > ram_size {
+                        return Err(-7);
+                    }
+                    if p_offset + p_filesz > elf_len as u64 {
+                        return Err(-8);
+                    }
 
-            if p_vaddr + p_memsz > ram_size {
-                return Err(-7);
-            }
-            if p_offset + p_filesz > elf_len as u64 {
-                return Err(-8);
-            }
+                    let seg_end = p_vaddr + p_memsz;
+                    if seg_end > brk_end {
+                        brk_end = seg_end;
+                    }
 
-            let seg_end = p_vaddr + p_memsz;
-            if seg_end > brk_end {
-                brk_end = seg_end;
-            }
-
-            if phdr_addr == 0 && p_offset == 0 {
-                phdr_addr = p_vaddr + ph_off as u64;
+                    if phdr_addr == 0 && p_offset == 0 {
+                        phdr_addr = p_vaddr + ph_off as u64;
+                    }
+                }
+                PT_TLS => {
+                    let p_offset = read_u64(ph, P_OFFSET);
+                    let p_vaddr = read_u64(ph, P_VADDR);
+                    let p_filesz = read_u64(ph, P_FILESZ);
+                    let p_memsz = read_u64(ph, P_MEMSZ);
+                    if p_vaddr + p_memsz > ram_size {
+                        return Err(-7);
+                    }
+                    if p_offset + p_filesz > elf_len as u64 {
+                        return Err(-8);
+                    }
+                    tls_base = p_vaddr;
+                }
+                _ => {}
             }
         }
 
@@ -146,6 +164,7 @@ pub unsafe fn inspect_elf(elf_ptr: u32, elf_len: u32, ram_size: u64) -> Result<E
         Ok(ElfLoadResult {
             entry,
             brk_start: brk_end,
+            tls_base,
             phdr_addr,
             phent: ph_entsize as u16,
             phnum: ph_num as u16,

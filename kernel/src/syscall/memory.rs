@@ -218,6 +218,41 @@ pub fn current_brk() -> u64 {
     ms().brk_current
 }
 
+#[cfg(any(test, feature = "harness"))]
+pub fn debug_brk_base() -> u64 {
+    ms().brk_base
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn debug_mmap_next() -> u64 {
+    ms().mmap_next
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn debug_vma_len() -> u32 {
+    ms().vmas.len() as u32
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn debug_vma_start(index: u32) -> u64 {
+    ms().vmas.get(index as usize).map(|v| v.start).unwrap_or(0)
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn debug_vma_end(index: u32) -> u64 {
+    ms().vmas.get(index as usize).map(|v| v.end).unwrap_or(0)
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn debug_vma_prot(index: u32) -> i32 {
+    ms().vmas.get(index as usize).map(|v| v.prot).unwrap_or(0)
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn debug_vma_flags(index: u32) -> i32 {
+    ms().vmas.get(index as usize).map(|v| v.flags).unwrap_or(0)
+}
+
 fn ensure_memory_capacity_for_guest_range(base: u32, guest_end: u64) -> bool {
     let Some(needed) = (base as u64).checked_add(guest_end) else {
         return false;
@@ -893,4 +928,3 @@ fn refresh_shared_file_vma(base: u32, vma: &Vma, guest_limit: u64) {
         off += n as usize;
     }
 }
-

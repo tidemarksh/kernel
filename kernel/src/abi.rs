@@ -1136,8 +1136,10 @@ pub extern "C" fn process_create(
 
         ts.pc = elf_result.entry;
         ts.x[2] = sp;
+        ts.x[4] = elf_result.tls_base;
         ts.status = STATUS_OK;
         ts.tid = 1;
+        ts.tls_base = elf_result.tls_base;
         ts.guest_base = base;
         ts.process_ptr = ps_addr as u32;
         crate::fs::fd_table::init_stdio(base, ts);

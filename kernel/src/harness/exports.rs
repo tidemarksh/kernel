@@ -654,3 +654,51 @@ pub extern "C" fn debug_execve_value0() -> u64 {
 pub extern "C" fn debug_execve_value1() -> u64 {
     crate::harness_debug::execve_value1()
 }
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_brk_base() -> u64 {
+    crate::syscall::memory::debug_brk_base()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_brk_current() -> u64 {
+    crate::syscall::memory::current_brk()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_mmap_next() -> u64 {
+    crate::syscall::memory::debug_mmap_next()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_vma_len() -> u32 {
+    crate::syscall::memory::debug_vma_len()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_vma_start(index: u32) -> u64 {
+    crate::syscall::memory::debug_vma_start(index)
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_vma_end(index: u32) -> u64 {
+    crate::syscall::memory::debug_vma_end(index)
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_vma_prot(index: u32) -> i32 {
+    crate::syscall::memory::debug_vma_prot(index)
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_vma_flags(index: u32) -> i32 {
+    crate::syscall::memory::debug_vma_flags(index)
+}

@@ -2,6 +2,71 @@ use std::vec;
 use tidemark_kernel::abi::*;
 use tidemark_kernel::harness::TestVm;
 
+fn build_test_elf_with_tls(code: &[u8], tls_init: &[u8], tls_memsz: u64) -> Vec<u8> {
+    fn put_u16(buf: &mut [u8], off: usize, value: u16) {
+        buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u32(buf: &mut [u8], off: usize, value: u32) {
+        buf[off..off + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u64(buf: &mut [u8], off: usize, value: u64) {
+        buf[off..off + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    let code_off = 0x100usize;
+    let data_off = 0x200usize;
+    let entry = 0x1000u64 + code_off as u64;
+    let code_filesz = (code_off + code.len()) as u64;
+    let data_vaddr = 0x3000u64;
+    let data_filesz = tls_init.len() as u64;
+    let data_memsz = tls_memsz.max(data_filesz);
+    let total_len = data_off + tls_init.len();
+    let mut elf = vec![0u8; total_len];
+    elf[0] = 0x7f;
+    elf[1] = b'E';
+    elf[2] = b'L';
+    elf[3] = b'F';
+    elf[4] = 2;
+    elf[5] = 1;
+    elf[6] = 1;
+    put_u16(&mut elf, 16, 2);
+    put_u16(&mut elf, 18, 243);
+    put_u32(&mut elf, 20, 1);
+    put_u64(&mut elf, 24, entry);
+    put_u64(&mut elf, 32, 64);
+    put_u16(&mut elf, 52, 64);
+    put_u16(&mut elf, 54, 56);
+    put_u16(&mut elf, 56, 3);
+
+    put_u32(&mut elf, 64, 1);
+    put_u32(&mut elf, 68, 5);
+    put_u64(&mut elf, 72, 0);
+    put_u64(&mut elf, 80, 0x1000);
+    put_u64(&mut elf, 96, code_filesz);
+    put_u64(&mut elf, 104, code_filesz);
+    put_u64(&mut elf, 112, 0x1000);
+
+    put_u32(&mut elf, 120, 1);
+    put_u32(&mut elf, 124, 6);
+    put_u64(&mut elf, 128, data_off as u64);
+    put_u64(&mut elf, 136, data_vaddr);
+    put_u64(&mut elf, 152, data_filesz);
+    put_u64(&mut elf, 160, data_memsz);
+    put_u64(&mut elf, 168, 0x1000);
+
+    put_u32(&mut elf, 176, 7);
+    put_u32(&mut elf, 180, 4);
+    put_u64(&mut elf, 184, data_off as u64);
+    put_u64(&mut elf, 192, data_vaddr);
+    put_u64(&mut elf, 208, data_filesz);
+    put_u64(&mut elf, 216, tls_memsz);
+    put_u64(&mut elf, 224, 8);
+
+    elf[code_off..code_off + code.len()].copy_from_slice(code);
+    elf[data_off..data_off + tls_init.len()].copy_from_slice(tls_init);
+    elf
+}
+
 #[test]
 fn status_codes_are_distinct() {
     let codes = [
@@ -202,6 +267,30 @@ fn process_create_populates_initial_stack_contract() {
         cursor += 16;
     }
     assert!(found_random, "AT_RANDOM must be present in auxv");
+}
+
+#[test]
+fn process_create_initializes_tp_from_pt_tls() {
+    let _t = TestVm::new();
+    let ram_size = 64 * 1024 * 1024;
+    let elf = build_test_elf_with_tls(&[0x13, 0x05, 0x70, 0x00], &[0x41, 0x42, 0x43, 0x44], 0x20);
+
+    let elf_ptr = unsafe { tidemark_kernel::alloc::alloc_zeroed(0x1000, 16) };
+    assert_ne!(elf_ptr, 0);
+    unsafe {
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64, &elf);
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64 + 0x400, b"/bin/test\0");
+    }
+
+    process_clear_args();
+    process_push_arg(elf_ptr + 0x400);
+
+    let vm_ptr = process_create(elf_ptr, elf.len() as u32, ram_size, 1024 * 1024);
+    assert_ne!(vm_ptr, 0);
+
+    let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
+    assert_eq!(vm.tls_base, 0x3000);
+    assert_eq!(vm.x[4], 0x3000);
 }
 
 #[test]
