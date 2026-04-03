@@ -1,10 +1,10 @@
-//! ELF loader for statically-linked RISC-V 64-bit executables.
+//! ELF loader for RISC-V 64-bit executables.
 //!
 //! Reference: ELF spec (https://refspecs.linuxfoundation.org/elf/elf.pdf)
 //!            RISC-V ELF psABI (https://github.com/riscv-non-isa/riscv-elf-psabi-doc)
 //!
-//! Supports: ET_EXEC (static), RV64, little-endian.
-//! Does not support: dynamic linking, relocations, shared objects.
+//! Supports: ET_EXEC, ET_DYN without PT_INTERP, RV64, little-endian.
+//! Does not support: dynamic linking, relocations, PT_INTERP handoff.
 
 use crate::guest_mem;
 
@@ -19,6 +19,7 @@ const EI_MAG3: u8 = b'F';
 const ELFCLASS64: u8 = 2;
 const ELFDATA2LSB: u8 = 1;
 const ET_EXEC: u16 = 2;
+const ET_DYN: u16 = 3;
 const EM_RISCV: u16 = 243;
 const PT_LOAD: u32 = 1;
 const PT_TLS: u32 = 7;
@@ -93,7 +94,7 @@ pub unsafe fn inspect_elf(elf_ptr: u32, elf_len: u32, ram_size: u64) -> Result<E
         }
 
         let e_type = read_u16(e, E_TYPE);
-        if e_type != ET_EXEC {
+        if e_type != ET_EXEC && e_type != ET_DYN {
             return Err(-4);
         }
 

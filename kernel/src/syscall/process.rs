@@ -131,6 +131,7 @@ const ELF_PH_MEMSZ: usize = 40;
 const ELFCLASS64: u8 = 2;
 const ELFDATA2LSB: u8 = 1;
 const ET_EXEC: u16 = 2;
+const ET_DYN: u16 = 3;
 const EM_RISCV: u16 = 243;
 const PT_LOAD: u32 = 1;
 const PT_TLS: u32 = 7;
@@ -829,7 +830,8 @@ fn inspect_execve_elf(
     if header[ELF_EI_CLASS] != ELFCLASS64 || header[ELF_EI_DATA] != ELFDATA2LSB {
         return Err(ENOEXEC);
     }
-    if read_u16_le(&header, ELF_E_TYPE) != Some(ET_EXEC) {
+    let e_type = read_u16_le(&header, ELF_E_TYPE).ok_or(ENOEXEC)?;
+    if e_type != ET_EXEC && e_type != ET_DYN {
         return Err(ENOEXEC);
     }
     if read_u16_le(&header, ELF_E_MACHINE) != Some(EM_RISCV) {

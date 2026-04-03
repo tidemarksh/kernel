@@ -67,6 +67,45 @@ fn build_test_elf_with_tls(code: &[u8], tls_init: &[u8], tls_memsz: u64) -> Vec<
     elf
 }
 
+fn build_test_elf_dyn(code: &[u8]) -> Vec<u8> {
+    fn put_u16(buf: &mut [u8], off: usize, value: u16) {
+        buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u32(buf: &mut [u8], off: usize, value: u32) {
+        buf[off..off + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u64(buf: &mut [u8], off: usize, value: u64) {
+        buf[off..off + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    let mut elf = vec![0u8; 0x100 + code.len()];
+    elf[0] = 0x7f;
+    elf[1] = b'E';
+    elf[2] = b'L';
+    elf[3] = b'F';
+    elf[4] = 2;
+    elf[5] = 1;
+    elf[6] = 1;
+    put_u16(&mut elf, 16, 3);
+    put_u16(&mut elf, 18, 243);
+    put_u32(&mut elf, 20, 1);
+    put_u64(&mut elf, 24, 0x1000);
+    put_u64(&mut elf, 32, 64);
+    put_u16(&mut elf, 52, 64);
+    put_u16(&mut elf, 54, 56);
+    put_u16(&mut elf, 56, 1);
+
+    put_u32(&mut elf, 64, 1);
+    put_u32(&mut elf, 68, 5);
+    put_u64(&mut elf, 72, 0x100);
+    put_u64(&mut elf, 80, 0x1000);
+    put_u64(&mut elf, 96, code.len() as u64);
+    put_u64(&mut elf, 104, code.len() as u64);
+    put_u64(&mut elf, 112, 0x1000);
+    elf[0x100..0x100 + code.len()].copy_from_slice(code);
+    elf
+}
+
 #[test]
 fn status_codes_are_distinct() {
     let codes = [
@@ -291,6 +330,29 @@ fn process_create_initializes_tp_from_pt_tls() {
     let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
     assert_eq!(vm.tls_base, 0x3000);
     assert_eq!(vm.x[4], 0x3000);
+}
+
+#[test]
+fn process_create_accepts_et_dyn_without_pt_interp() {
+    let _t = TestVm::new();
+    let ram_size = 64 * 1024 * 1024;
+    let elf = build_test_elf_dyn(&[0x13, 0x05, 0x70, 0x00]);
+
+    let elf_ptr = unsafe { tidemark_kernel::alloc::alloc_zeroed(0x1000, 16) };
+    assert_ne!(elf_ptr, 0);
+    unsafe {
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64, &elf);
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64 + 0x400, b"/bin/test-dyn\0");
+    }
+
+    process_clear_args();
+    process_push_arg(elf_ptr + 0x400);
+
+    let vm_ptr = process_create(elf_ptr, elf.len() as u32, ram_size, 1024 * 1024);
+    assert_ne!(vm_ptr, 0);
+
+    let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
+    assert_eq!(vm.pc, 0x1000);
 }
 
 #[test]
