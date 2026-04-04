@@ -207,6 +207,18 @@ pub const O_NONBLOCK: i32 = 0x800;
 pub const O_CLOEXEC: i32 = 0x80000;
 pub const O_DIRECTORY: i32 = 0x10000;
 
+const ELF_EI_CLASS: usize = 4;
+const ELF_EI_DATA: usize = 5;
+const ELF_E_PHOFF: usize = 32;
+const ELF_E_PHENTSIZE: usize = 54;
+const ELF_E_PHNUM: usize = 56;
+const ELF_PH_TYPE: usize = 0;
+const ELF_PH_OFFSET: usize = 8;
+const ELF_PH_FILESZ: usize = 32;
+const ELFCLASS64: u8 = 2;
+const ELFDATA2LSB: u8 = 1;
+const PT_INTERP: u32 = 3;
+
 // =============================================================================
 // Signal numbers
 // https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/signal.h
@@ -905,6 +917,73 @@ unsafe fn staged_cstr_bytes_total(ptrs: &[u32]) -> usize {
         .sum()
 }
 
+fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
+    bytes
+        .get(offset..offset + 2)
+        .and_then(|slice| <[u8; 2]>::try_from(slice).ok())
+        .map(u16::from_le_bytes)
+}
+
+fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
+    bytes
+        .get(offset..offset + 4)
+        .and_then(|slice| <[u8; 4]>::try_from(slice).ok())
+        .map(u32::from_le_bytes)
+}
+
+fn read_u64_le(bytes: &[u8], offset: usize) -> Option<u64> {
+    bytes
+        .get(offset..offset + 8)
+        .and_then(|slice| <[u8; 8]>::try_from(slice).ok())
+        .map(u64::from_le_bytes)
+}
+
+unsafe fn read_process_create_interp_path(elf_ptr: u32, elf_len: u32) -> Option<Vec<u8>> {
+    if elf_len < 64 {
+        return None;
+    }
+    let elf = unsafe { core::slice::from_raw_parts(elf_ptr as *const u8, elf_len as usize) };
+    if elf[0] != 0x7f || elf[1] != b'E' || elf[2] != b'L' || elf[3] != b'F' {
+        return None;
+    }
+    if elf[ELF_EI_CLASS] != ELFCLASS64 || elf[ELF_EI_DATA] != ELFDATA2LSB {
+        return None;
+    }
+    let ph_off = read_u64_le(elf, ELF_E_PHOFF)? as usize;
+    let ph_entsize = read_u16_le(elf, ELF_E_PHENTSIZE)? as usize;
+    let ph_num = read_u16_le(elf, ELF_E_PHNUM)? as usize;
+    if ph_entsize < 56 {
+        return None;
+    }
+    let ph_size = ph_num.checked_mul(ph_entsize)?;
+    let ph_end = ph_off.checked_add(ph_size)?;
+    if ph_end > elf_len as usize {
+        return None;
+    }
+    for index in 0..ph_num {
+        let start = ph_off + index * ph_entsize;
+        let ph = &elf[start..start + ph_entsize];
+        if read_u32_le(ph, ELF_PH_TYPE) != Some(PT_INTERP) {
+            continue;
+        }
+        let p_offset = read_u64_le(ph, ELF_PH_OFFSET)? as usize;
+        let p_filesz = read_u64_le(ph, ELF_PH_FILESZ)? as usize;
+        let p_end = p_offset.checked_add(p_filesz)?;
+        if p_filesz == 0 || p_end > elf_len as usize {
+            return None;
+        }
+        let mut interp = elf[p_offset..p_end].to_vec();
+        if let Some(nul) = interp.iter().position(|b| *b == 0) {
+            interp.truncate(nul);
+        }
+        if interp.is_empty() {
+            return None;
+        }
+        return Some(interp);
+    }
+    None
+}
+
 unsafe fn write_staged_cstrings(base: u32, start: u64, ptrs: &[u32], out: &mut [u64]) -> u64 {
     let mut cursor = start;
     for (idx, ptr) in ptrs.iter().copied().enumerate() {
@@ -987,17 +1066,61 @@ pub extern "C" fn process_create(
             return 0;
         }
         let guest_ram_size = process_guest_ram_size(ram_size, base);
-        let inspected = match crate::elf::inspect_elf(elf_ptr, elf_len, guest_ram_size) {
+        let main_inspected = match crate::elf::inspect_elf(elf_ptr, elf_len, guest_ram_size) {
             Ok(r) => r,
             Err(_) => return 0,
         };
-        if !crate::syscall::memory::ensure_guest_memory_capacity(base, inspected.brk_start) {
+        let mut load_ptr = elf_ptr;
+        let mut load_len = elf_len;
+        let mut interpreter_handoff = false;
+        let load_brk_start = match read_process_create_interp_path(elf_ptr, elf_len) {
+            Some(interp_path) => {
+                let interp_ino = crate::fs::memfs::resolve_path(&interp_path);
+                if interp_ino == 0 {
+                    return 0;
+                }
+                let interp_st = match crate::fs::memfs::stat(interp_ino) {
+                    Some(st) if st.mode & crate::fs::memfs::S_IFMT == crate::fs::memfs::S_IFREG => st,
+                    _ => return 0,
+                };
+                let interp_len = match u32::try_from(interp_st.size) {
+                    Ok(len) if len > 0 => len,
+                    _ => return 0,
+                };
+                let interp_ptr = crate::alloc::alloc_zeroed(interp_len, 16);
+                if interp_ptr == 0 {
+                    return 0;
+                }
+                let interp_buf =
+                    core::slice::from_raw_parts_mut(interp_ptr as *mut u8, interp_len as usize);
+                if crate::fs::memfs::read_file(interp_ino, 0, interp_buf) != interp_len as i64 {
+                    return 0;
+                }
+                let interp_inspected =
+                    match crate::elf::inspect_elf(interp_ptr, interp_len, guest_ram_size) {
+                        Ok(r) => r,
+                        Err(_) => return 0,
+                    };
+                load_ptr = interp_ptr;
+                load_len = interp_len;
+                interpreter_handoff = true;
+                interp_inspected.brk_start
+            }
+            None => main_inspected.brk_start,
+        };
+        if !crate::syscall::memory::ensure_guest_memory_capacity(base, load_brk_start) {
             return 0;
         }
-        let elf_result = match crate::elf::load_elf(base, guest_ram_size, elf_ptr, elf_len) {
+        let mut elf_result = match crate::elf::load_elf(base, guest_ram_size, load_ptr, load_len) {
             Ok(r) => r,
             Err(_) => return 0,
         };
+        if interpreter_handoff {
+            elf_result.aux_entry = main_inspected.entry;
+            elf_result.aux_phdr_addr = main_inspected.phdr_addr;
+            elf_result.aux_phent = main_inspected.phent;
+            elf_result.aux_phnum = main_inspected.phnum;
+        }
 
         crate::syscall::memory::init(elf_result.brk_start);
 
