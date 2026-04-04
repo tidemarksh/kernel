@@ -51,6 +51,7 @@ pub const AT_ENTRY: u64 = 9;
 pub const AT_RANDOM: u64 = 25;
 
 /// Result of loading an ELF binary.
+#[derive(Clone, Copy)]
 pub struct ElfLoadResult {
     /// Entry point address (e_entry)
     pub entry: u64,
@@ -64,6 +65,14 @@ pub struct ElfLoadResult {
     pub phent: u16,
     /// Number of program header entries
     pub phnum: u16,
+    /// AT_ENTRY value exposed to the new process image.
+    pub aux_entry: u64,
+    /// AT_PHDR value exposed to the new process image.
+    pub aux_phdr_addr: u64,
+    /// AT_PHENT value exposed to the new process image.
+    pub aux_phent: u16,
+    /// AT_PHNUM value exposed to the new process image.
+    pub aux_phnum: u16,
 }
 
 /// Validate an ELF image and compute the metadata needed for loading it
@@ -168,6 +177,10 @@ pub unsafe fn inspect_elf(elf_ptr: u32, elf_len: u32, ram_size: u64) -> Result<E
             phdr_addr,
             phent: ph_entsize as u16,
             phnum: ph_num as u16,
+            aux_entry: entry,
+            aux_phdr_addr: phdr_addr,
+            aux_phent: ph_entsize as u16,
+            aux_phnum: ph_num as u16,
         })
     }
 }
@@ -254,10 +267,10 @@ pub unsafe fn setup_stack(
         // Auxiliary vector entries
         let auxv: [(u64, u64); 6] = [
             (AT_PAGESZ, 4096),
-            (AT_PHDR, elf_result.phdr_addr),
-            (AT_PHENT, elf_result.phent as u64),
-            (AT_PHNUM, elf_result.phnum as u64),
-            (AT_ENTRY, elf_result.entry),
+            (AT_PHDR, elf_result.aux_phdr_addr),
+            (AT_PHENT, elf_result.aux_phent as u64),
+            (AT_PHNUM, elf_result.aux_phnum as u64),
+            (AT_ENTRY, elf_result.aux_entry),
             (AT_RANDOM, random_addr),
         ];
 

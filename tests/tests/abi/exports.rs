@@ -67,6 +67,90 @@ fn build_test_elf_with_tls(code: &[u8], tls_init: &[u8], tls_memsz: u64) -> Vec<
     elf
 }
 
+fn build_test_elf_with_interp(code: &[u8], interp_path: &[u8]) -> Vec<u8> {
+    fn put_u16(buf: &mut [u8], off: usize, value: u16) {
+        buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u32(buf: &mut [u8], off: usize, value: u32) {
+        buf[off..off + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u64(buf: &mut [u8], off: usize, value: u64) {
+        buf[off..off + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    let ph_off = 64usize;
+    let ph_num = 2usize;
+    let interp_off = 0x100usize;
+    let code_off = 0x200usize;
+    let entry = 0x1000u64 + code_off as u64;
+    let code_end = code_off + code.len();
+    let total_len = code_end.max(interp_off + interp_path.len() + 1);
+    let mut elf = vec![0u8; total_len];
+    elf[0] = 0x7f;
+    elf[1] = b'E';
+    elf[2] = b'L';
+    elf[3] = b'F';
+    elf[4] = 2;
+    elf[5] = 1;
+    elf[6] = 1;
+    put_u16(&mut elf, 16, 2);
+    put_u16(&mut elf, 18, 243);
+    put_u32(&mut elf, 20, 1);
+    put_u64(&mut elf, 24, entry);
+    put_u64(&mut elf, 32, ph_off as u64);
+    put_u16(&mut elf, 52, 64);
+    put_u16(&mut elf, 54, 56);
+    put_u16(&mut elf, 56, ph_num as u16);
+
+    put_u32(&mut elf, ph_off, 3);
+    put_u32(&mut elf, ph_off + 4, 4);
+    put_u64(&mut elf, ph_off + 8, interp_off as u64);
+    put_u64(&mut elf, ph_off + 16, 0x1800);
+    put_u64(&mut elf, ph_off + 32, (interp_path.len() + 1) as u64);
+    put_u64(&mut elf, ph_off + 40, (interp_path.len() + 1) as u64);
+    put_u64(&mut elf, ph_off + 48, 1);
+
+    let load_off = ph_off + 56;
+    put_u32(&mut elf, load_off, 1);
+    put_u32(&mut elf, load_off + 4, 5);
+    put_u64(&mut elf, load_off + 8, 0);
+    put_u64(&mut elf, load_off + 16, 0x1000);
+    put_u64(&mut elf, load_off + 32, code_end as u64);
+    put_u64(&mut elf, load_off + 40, code_end as u64);
+    put_u64(&mut elf, load_off + 48, 0x1000);
+
+    elf[interp_off..interp_off + interp_path.len()].copy_from_slice(interp_path);
+    elf[interp_off + interp_path.len()] = 0;
+    elf[code_off..code_off + code.len()].copy_from_slice(code);
+    elf
+}
+
+fn find_auxv_value(base: u32, sp: u64, tag: u64) -> Option<u64> {
+    let argc = unsafe { tidemark_kernel::guest_mem::read_u64(base, sp) };
+    let mut cursor = sp + 8;
+    cursor += argc * 8 + 8;
+    while unsafe { tidemark_kernel::guest_mem::read_u64(base, cursor) } != 0 {
+        cursor += 8;
+    }
+    cursor += 8;
+    while unsafe { tidemark_kernel::guest_mem::read_u64(base, cursor) } != 0 {
+        cursor += 8;
+    }
+    cursor += 8;
+    for _ in 0..32 {
+        let aux_tag = unsafe { tidemark_kernel::guest_mem::read_u64(base, cursor) };
+        let aux_val = unsafe { tidemark_kernel::guest_mem::read_u64(base, cursor + 8) };
+        if aux_tag == tidemark_kernel::elf::AT_NULL {
+            return None;
+        }
+        if aux_tag == tag {
+            return Some(aux_val);
+        }
+        cursor += 16;
+    }
+    None
+}
+
 #[test]
 fn status_codes_are_distinct() {
     let codes = [
@@ -291,6 +375,33 @@ fn process_create_initializes_tp_from_pt_tls() {
     let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
     assert_eq!(vm.tls_base, 0x3000);
     assert_eq!(vm.x[4], 0x3000);
+}
+
+#[test]
+#[ignore = "requires process_create PT_INTERP handoff and interpreter-shaped auxv"]
+fn process_create_with_pt_interp_preserves_executable_entry_in_auxv() {
+    let _t = TestVm::new();
+    let ram_size = 64 * 1024 * 1024;
+    let guest_base = process_guest_base(ram_size);
+    let elf = build_test_elf_with_interp(&[0x13, 0x05, 0x70, 0x00], b"/lib/ld-test.so");
+
+    let elf_ptr = unsafe { tidemark_kernel::alloc::alloc_zeroed(0x1000, 16) };
+    assert_ne!(elf_ptr, 0);
+    unsafe {
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64, &elf);
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64 + 0x400, b"/bin/test-interp\0");
+    }
+
+    process_clear_args();
+    process_push_arg(elf_ptr + 0x400);
+
+    let vm_ptr = process_create(elf_ptr, elf.len() as u32, ram_size, 1024 * 1024);
+    assert_ne!(vm_ptr, 0);
+
+    let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
+    assert_eq!(vm.pc, 0x1000);
+    assert_eq!(find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_ENTRY), Some(0x1200));
+    assert!(find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_PHDR).is_some());
 }
 
 #[test]

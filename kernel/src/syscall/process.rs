@@ -112,7 +112,9 @@ struct ExecveImage {
     argv: Vec<Vec<u8>>,
     envp: Vec<Vec<u8>>,
     elf_len: u32,
-    elf: crate::elf::ElfLoadResult,
+    load_ino: u32,
+    load_elf_len: u32,
+    load_elf: crate::elf::ElfLoadResult,
 }
 
 const ELF_EI_CLASS: usize = 4;
@@ -132,6 +134,7 @@ const ELFCLASS64: u8 = 2;
 const ELFDATA2LSB: u8 = 1;
 const ET_EXEC: u16 = 2;
 const EM_RISCV: u16 = 243;
+const PT_INTERP: u32 = 3;
 const PT_LOAD: u32 = 1;
 const PT_TLS: u32 = 7;
 
@@ -774,6 +777,29 @@ fn load_execve_image(
         _ => return Err(ENOEXEC),
     };
     let elf = inspect_execve_elf(ino, elf_len, ram_size)?;
+    let (load_ino, load_elf_len, load_elf) = match read_execve_interp_path(ino, elf_len)? {
+        Some(interp_path) => {
+            let interp_ino = memfs::resolve_path(&interp_path);
+            if interp_ino == 0 {
+                return Err(ENOENT);
+            }
+            let interp_st = memfs::stat(interp_ino).ok_or(ENOENT)?;
+            if interp_st.mode & memfs::S_IFMT != memfs::S_IFREG {
+                return Err(EACCES);
+            }
+            let interp_len = u32::try_from(interp_st.size).map_err(|_| ENOEXEC)?;
+            if interp_len == 0 {
+                return Err(ENOEXEC);
+            }
+            let mut interp_elf = inspect_execve_elf(interp_ino, interp_len, ram_size)?;
+            interp_elf.aux_entry = elf.entry;
+            interp_elf.aux_phdr_addr = elf.phdr_addr;
+            interp_elf.aux_phent = elf.phent;
+            interp_elf.aux_phnum = elf.phnum;
+            (interp_ino, interp_len, interp_elf)
+        }
+        None => (ino, elf_len, elf),
+    };
     let mut argv = read_guest_strvec(base, argv_addr)?;
     let envp = read_guest_strvec(base, envp_addr)?;
     if argv.is_empty() {
@@ -788,8 +814,60 @@ fn load_execve_image(
         argv,
         envp,
         elf_len,
-        elf,
+        load_ino,
+        load_elf_len,
+        load_elf,
     })
+}
+
+fn read_execve_interp_path(ino: u32, elf_len: u32) -> Result<Option<Vec<u8>>, i64> {
+    let mut header = [0u8; 64];
+    if memfs::read_file(ino, 0, &mut header) != header.len() as i64 {
+        return Err(EIO);
+    }
+
+    let ph_off = read_u64_le(&header, ELF_E_PHOFF).ok_or(ENOEXEC)? as usize;
+    let ph_entsize = read_u16_le(&header, ELF_E_PHENTSIZE).ok_or(ENOEXEC)? as usize;
+    let ph_num = read_u16_le(&header, ELF_E_PHNUM).ok_or(ENOEXEC)? as usize;
+    if ph_entsize < 56 {
+        return Err(ENOEXEC);
+    }
+    let ph_size = ph_num.checked_mul(ph_entsize).ok_or(ENOEXEC)?;
+    let ph_end = ph_off.checked_add(ph_size).ok_or(ENOEXEC)?;
+    if ph_end > elf_len as usize {
+        return Err(ENOEXEC);
+    }
+
+    let mut phdrs = vec![0u8; ph_size];
+    if memfs::read_file(ino, ph_off as u64, &mut phdrs) != ph_size as i64 {
+        return Err(EIO);
+    }
+
+    for index in 0..ph_num {
+        let start = index * ph_entsize;
+        let ph = &phdrs[start..start + ph_entsize];
+        if read_u32_le(ph, ELF_PH_TYPE) != Some(PT_INTERP) {
+            continue;
+        }
+        let p_offset = read_u64_le(ph, ELF_PH_OFFSET).ok_or(ENOEXEC)?;
+        let p_filesz = read_u64_le(ph, ELF_PH_FILESZ).ok_or(ENOEXEC)?;
+        if p_filesz == 0 || p_offset.checked_add(p_filesz).is_none_or(|end| end > elf_len as u64) {
+            return Err(ENOEXEC);
+        }
+        let mut interp = vec![0u8; p_filesz as usize];
+        if memfs::read_file(ino, p_offset, &mut interp) != p_filesz as i64 {
+            return Err(EIO);
+        }
+        if let Some(nul) = interp.iter().position(|b| *b == 0) {
+            interp.truncate(nul);
+        }
+        if interp.is_empty() {
+            return Err(ENOEXEC);
+        }
+        return Ok(Some(interp));
+    }
+
+    Ok(None)
 }
 
 fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
@@ -901,6 +979,10 @@ fn inspect_execve_elf(
         phdr_addr,
         phent: ph_entsize as u16,
         phnum: ph_num as u16,
+        aux_entry: entry,
+        aux_phdr_addr: phdr_addr,
+        aux_phent: ph_entsize as u16,
+        aux_phnum: ph_num as u16,
     })
 }
 
@@ -1131,12 +1213,14 @@ fn complete_execve_in_place_inner(
     crate::harness_debug::record_execve_stage(1, base as u64, ram_size);
 
     let ExecveImage {
-        ino,
+        ino: _ino,
         path_bytes,
         argv,
         envp,
-        elf_len,
-        elf,
+        elf_len: _elf_len,
+        load_ino,
+        load_elf_len,
+        load_elf,
     } = match load_execve_image(
         vm,
         base,
@@ -1148,7 +1232,7 @@ fn complete_execve_in_place_inner(
         Ok(image) => image,
         Err(errno) => return errno,
     };
-    crate::harness_debug::record_execve_stage(2, elf.brk_start, elf.entry);
+    crate::harness_debug::record_execve_stage(2, load_elf.brk_start, load_elf.entry);
 
     let ps_addr = vm.process_ptr as u64;
     let old_pid = unsafe {
@@ -1242,13 +1326,13 @@ fn complete_execve_in_place_inner(
     let mut envp_ptrs = vec![0u64; envp.len()];
     let guest_limit = execve_guest_limit(
         base,
-        elf.brk_start,
+        load_elf.brk_start,
         crate::syscall::memory::DEFAULT_STACK_SIZE,
     );
 
     let ps_size = core::mem::size_of::<ProcessState>() as u64;
     let ps_align = core::mem::align_of::<ProcessState>() as u64;
-    let new_ps_addr = (elf.brk_start + ps_align - 1) & !(ps_align - 1);
+    let new_ps_addr = (load_elf.brk_start + ps_align - 1) & !(ps_align - 1);
     crate::harness_debug::record_execve_stage(3, guest_limit, new_ps_addr + ps_size);
     // vfork+execve handoff starts from a bootstrap-sized child memory. Grow the
     // guest view to the full execve limit before resetting and loading ELF
@@ -1259,8 +1343,12 @@ fn complete_execve_in_place_inner(
     }
 
     crate::syscall::thread::discard_other_threads_for_exec(vm, base);
-    crate::syscall::memory::reset_for_execve_with_flush(base, elf.brk_start, flush_shared_mappings);
-    let elf_result = match load_execve_elf_from_inode(base, ram_size, ino, elf_len) {
+    crate::syscall::memory::reset_for_execve_with_flush(
+        base,
+        load_elf.brk_start,
+        flush_shared_mappings,
+    );
+    let elf_result = match load_execve_elf_from_inode(base, ram_size, load_ino, load_elf_len) {
         Ok(result) => result,
         Err(errno) => return errno,
     };
@@ -1357,13 +1445,20 @@ fn complete_execve_in_place_inner(
         argv_bytes_end
     };
     crate::harness_debug::record_execve_stage(67, cursor, envp.len() as u64);
+    let mut stack_elf = load_elf;
+    stack_elf.entry = elf_result.entry;
+    stack_elf.brk_start = elf_result.brk_start;
+    stack_elf.tls_base = elf_result.tls_base;
+    stack_elf.phdr_addr = elf_result.phdr_addr;
+    stack_elf.phent = elf_result.phent;
+    stack_elf.phnum = elf_result.phnum;
     let sp = unsafe {
         crate::elf::setup_stack(
             base,
             stack_setup_top,
             &argv_ptrs,
             &envp_ptrs,
-            &elf_result,
+            &stack_elf,
             random_addr,
         )
     };
