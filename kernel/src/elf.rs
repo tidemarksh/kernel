@@ -3,8 +3,8 @@
 //! Reference: ELF spec (https://refspecs.linuxfoundation.org/elf/elf.pdf)
 //!            RISC-V ELF psABI (https://github.com/riscv-non-isa/riscv-elf-psabi-doc)
 //!
-//! Supports: ET_EXEC, ET_DYN, static PT_INTERP handoff, RV64, little-endian.
-//! Does not support: dynamic linking, relocations, shared-library resolution.
+//! Supports: ET_EXEC, ET_DYN without PT_INTERP, RV64, little-endian.
+//! Does not support: dynamic linking, relocations, PT_INTERP handoff.
 
 use crate::guest_mem;
 
@@ -22,7 +22,6 @@ const ET_EXEC: u16 = 2;
 const ET_DYN: u16 = 3;
 const EM_RISCV: u16 = 243;
 const PT_LOAD: u32 = 1;
-const PT_INTERP: u32 = 3;
 const PT_TLS: u32 = 7;
 
 // ELF64 header offsets
@@ -49,7 +48,6 @@ pub const AT_PHDR: u64 = 3;
 pub const AT_PHENT: u64 = 4;
 pub const AT_PHNUM: u64 = 5;
 pub const AT_PAGESZ: u64 = 6;
-pub const AT_BASE: u64 = 7;
 pub const AT_ENTRY: u64 = 9;
 pub const AT_RANDOM: u64 = 25;
 
@@ -61,18 +59,12 @@ pub struct ElfLoadResult {
     pub brk_start: u64,
     /// Initial TLS image base from PT_TLS, or 0 when absent.
     pub tls_base: u64,
-    /// Lowest load base implied by PT_LOAD segments.
-    pub load_base: u64,
     /// Program header table address in guest memory (for AT_PHDR)
     pub phdr_addr: u64,
     /// Size of one program header entry
     pub phent: u16,
     /// Number of program header entries
     pub phnum: u16,
-    /// PT_INTERP string offset within the ELF image, or 0 when absent.
-    pub interp_offset: u64,
-    /// PT_INTERP string length including the terminating NUL, or 0 when absent.
-    pub interp_len: u64,
 }
 
 /// Validate an ELF image and compute the metadata needed for loading it
@@ -121,11 +113,8 @@ pub unsafe fn inspect_elf(elf_ptr: u32, elf_len: u32, ram_size: u64) -> Result<E
         }
 
         let mut brk_end: u64 = 0;
-        let mut load_base: u64 = u64::MAX;
         let mut phdr_addr: u64 = 0;
         let mut tls_base: u64 = 0;
-        let mut interp_offset: u64 = 0;
-        let mut interp_len: u64 = 0;
 
         for i in 0..ph_num {
             let ph = e.add(ph_off + i * ph_entsize);
@@ -150,29 +139,9 @@ pub unsafe fn inspect_elf(elf_ptr: u32, elf_len: u32, ram_size: u64) -> Result<E
                         brk_end = seg_end;
                     }
 
-                    let candidate_base = p_vaddr.saturating_sub(p_offset);
-                    if candidate_base < load_base {
-                        load_base = candidate_base;
+                    if phdr_addr == 0 && p_offset == 0 {
+                        phdr_addr = p_vaddr + ph_off as u64;
                     }
-
-                    if phdr_addr == 0
-                        && (ph_off as u64) >= p_offset
-                        && (ph_off as u64 + 56) <= p_offset + p_filesz
-                    {
-                        phdr_addr = candidate_base + ph_off as u64;
-                    }
-                }
-                PT_INTERP => {
-                    let p_offset = read_u64(ph, P_OFFSET);
-                    let p_filesz = read_u64(ph, P_FILESZ);
-                    if p_filesz == 0 {
-                        return Err(-8);
-                    }
-                    if p_offset + p_filesz > elf_len as u64 {
-                        return Err(-8);
-                    }
-                    interp_offset = p_offset;
-                    interp_len = p_filesz;
                 }
                 PT_TLS => {
                     let p_offset = read_u64(ph, P_OFFSET);
@@ -192,20 +161,14 @@ pub unsafe fn inspect_elf(elf_ptr: u32, elf_len: u32, ram_size: u64) -> Result<E
         }
 
         brk_end = (brk_end + 4095) & !4095;
-        if load_base == u64::MAX {
-            load_base = 0;
-        }
 
         Ok(ElfLoadResult {
             entry,
             brk_start: brk_end,
             tls_base,
-            load_base,
             phdr_addr,
             phent: ph_entsize as u16,
             phnum: ph_num as u16,
-            interp_offset,
-            interp_len,
         })
     }
 }
@@ -277,20 +240,6 @@ pub unsafe fn setup_stack(
     elf_result: &ElfLoadResult,
     random_addr: u64, // 16 bytes of random data address
 ) -> u64 {
-    unsafe { setup_stack_with_base(ram_base, stack_top, argv, envp, elf_result, random_addr, 0) }
-}
-
-/// Like `setup_stack`, but includes AT_BASE when an interpreter has been
-/// loaded at `interp_base`.
-pub unsafe fn setup_stack_with_base(
-    ram_base: u32,
-    stack_top: u64,
-    argv: &[u64],
-    envp: &[u64],
-    elf_result: &ElfLoadResult,
-    random_addr: u64,
-    interp_base: u64,
-) -> u64 {
     unsafe {
         // Stack layout (grows downward):
         //   auxv entries (AT_NULL terminated)
@@ -304,27 +253,17 @@ pub unsafe fn setup_stack_with_base(
         let envc = envp.len();
 
         // Auxiliary vector entries
-        let mut auxv = [(0u64, 0u64); 7];
-        let mut auxc = 0usize;
-        auxv[auxc] = (AT_PAGESZ, 4096);
-        auxc += 1;
-        auxv[auxc] = (AT_PHDR, elf_result.phdr_addr);
-        auxc += 1;
-        auxv[auxc] = (AT_PHENT, elf_result.phent as u64);
-        auxc += 1;
-        auxv[auxc] = (AT_PHNUM, elf_result.phnum as u64);
-        auxc += 1;
-        if interp_base != 0 {
-            auxv[auxc] = (AT_BASE, interp_base);
-            auxc += 1;
-        }
-        auxv[auxc] = (AT_ENTRY, elf_result.entry);
-        auxc += 1;
-        auxv[auxc] = (AT_RANDOM, random_addr);
-        auxc += 1;
+        let auxv: [(u64, u64); 6] = [
+            (AT_PAGESZ, 4096),
+            (AT_PHDR, elf_result.phdr_addr),
+            (AT_PHENT, elf_result.phent as u64),
+            (AT_PHNUM, elf_result.phnum as u64),
+            (AT_ENTRY, elf_result.entry),
+            (AT_RANDOM, random_addr),
+        ];
 
         // Calculate total size needed
-        let auxv_size = (auxc + 1) * 16; // +1 for AT_NULL
+        let auxv_size = (auxv.len() + 1) * 16; // +1 for AT_NULL
         let total_entries = 1 + argc + 1 + envc + 1; // argc + argv + NULL + envp + NULL
         let total_size = total_entries * 8 + auxv_size;
 
@@ -353,7 +292,7 @@ pub unsafe fn setup_stack_with_base(
         pos += 8;
 
         // auxv
-        for &(a_type, a_val) in &auxv[..auxc] {
+        for &(a_type, a_val) in &auxv {
             guest_mem::write_u64(ram_base, pos, a_type);
             guest_mem::write_u64(ram_base, pos + 8, a_val);
             pos += 16;

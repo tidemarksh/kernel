@@ -2,15 +2,6 @@ use std::vec;
 use tidemark_kernel::abi::*;
 use tidemark_kernel::harness::TestVm;
 
-fn ensure_dir(parent: u32, name: &[u8]) -> u32 {
-    let ino = tidemark_kernel::fs::memfs::lookup(parent, name);
-    if ino != 0 {
-        ino
-    } else {
-        tidemark_kernel::fs::memfs::create_dir(parent, name, 0o755)
-    }
-}
-
 fn build_test_elf_with_tls(code: &[u8], tls_init: &[u8], tls_memsz: u64) -> Vec<u8> {
     fn put_u16(buf: &mut [u8], off: usize, value: u16) {
         buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
@@ -113,113 +104,6 @@ fn build_test_elf_dyn(code: &[u8]) -> Vec<u8> {
     put_u64(&mut elf, 112, 0x1000);
     elf[0x100..0x100 + code.len()].copy_from_slice(code);
     elf
-}
-
-fn build_test_elf_exec_at(code: &[u8], entry: u64, vaddr: u64) -> Vec<u8> {
-    fn put_u16(buf: &mut [u8], off: usize, value: u16) {
-        buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
-    }
-    fn put_u32(buf: &mut [u8], off: usize, value: u32) {
-        buf[off..off + 4].copy_from_slice(&value.to_le_bytes());
-    }
-    fn put_u64(buf: &mut [u8], off: usize, value: u64) {
-        buf[off..off + 8].copy_from_slice(&value.to_le_bytes());
-    }
-
-    let mut elf = vec![0u8; 0x100 + code.len()];
-    elf[0] = 0x7f;
-    elf[1] = b'E';
-    elf[2] = b'L';
-    elf[3] = b'F';
-    elf[4] = 2;
-    elf[5] = 1;
-    elf[6] = 1;
-    put_u16(&mut elf, 16, 2);
-    put_u16(&mut elf, 18, 243);
-    put_u32(&mut elf, 20, 1);
-    put_u64(&mut elf, 24, entry);
-    put_u64(&mut elf, 32, 64);
-    put_u16(&mut elf, 52, 64);
-    put_u16(&mut elf, 54, 56);
-    put_u16(&mut elf, 56, 1);
-
-    put_u32(&mut elf, 64, 1);
-    put_u32(&mut elf, 68, 5);
-    put_u64(&mut elf, 72, 0x100);
-    put_u64(&mut elf, 80, vaddr);
-    put_u64(&mut elf, 96, code.len() as u64);
-    put_u64(&mut elf, 104, code.len() as u64);
-    put_u64(&mut elf, 112, 0x1000);
-    elf[0x100..0x100 + code.len()].copy_from_slice(code);
-    elf
-}
-
-fn build_test_elf_dyn_with_interp(code: &[u8], interp: &[u8]) -> Vec<u8> {
-    fn put_u16(buf: &mut [u8], off: usize, value: u16) {
-        buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
-    }
-    fn put_u32(buf: &mut [u8], off: usize, value: u32) {
-        buf[off..off + 4].copy_from_slice(&value.to_le_bytes());
-    }
-    fn put_u64(buf: &mut [u8], off: usize, value: u64) {
-        buf[off..off + 8].copy_from_slice(&value.to_le_bytes());
-    }
-
-    let code_off = 0x100usize;
-    let interp_off = 0x200usize;
-    let total_len = interp_off + interp.len();
-    let mut elf = vec![0u8; total_len];
-    elf[0] = 0x7f;
-    elf[1] = b'E';
-    elf[2] = b'L';
-    elf[3] = b'F';
-    elf[4] = 2;
-    elf[5] = 1;
-    elf[6] = 1;
-    put_u16(&mut elf, 16, 3);
-    put_u16(&mut elf, 18, 243);
-    put_u32(&mut elf, 20, 1);
-    put_u64(&mut elf, 24, 0x1000);
-    put_u64(&mut elf, 32, 64);
-    put_u16(&mut elf, 52, 64);
-    put_u16(&mut elf, 54, 56);
-    put_u16(&mut elf, 56, 2);
-
-    put_u32(&mut elf, 64, 1);
-    put_u32(&mut elf, 68, 5);
-    put_u64(&mut elf, 72, code_off as u64);
-    put_u64(&mut elf, 80, 0x1000);
-    put_u64(&mut elf, 96, code.len() as u64);
-    put_u64(&mut elf, 104, code.len() as u64);
-    put_u64(&mut elf, 112, 0x1000);
-
-    put_u32(&mut elf, 120, 3);
-    put_u32(&mut elf, 124, 4);
-    put_u64(&mut elf, 128, interp_off as u64);
-    put_u64(&mut elf, 136, 0);
-    put_u64(&mut elf, 152, interp.len() as u64);
-    put_u64(&mut elf, 160, interp.len() as u64);
-    put_u64(&mut elf, 168, 1);
-
-    elf[code_off..code_off + code.len()].copy_from_slice(code);
-    elf[interp_off..interp_off + interp.len()].copy_from_slice(interp);
-    elf
-}
-
-fn auxv_value(guest_base: u32, sp: u64, argc: usize, envc: usize, tag: u64) -> Option<u64> {
-    let mut cursor = sp + ((1 + argc + 1 + envc + 1) as u64) * 8;
-    for _ in 0..32 {
-        let cur_tag = unsafe { tidemark_kernel::guest_mem::read_u64(guest_base, cursor) };
-        let cur_val = unsafe { tidemark_kernel::guest_mem::read_u64(guest_base, cursor + 8) };
-        if cur_tag == tidemark_kernel::elf::AT_NULL {
-            return None;
-        }
-        if cur_tag == tag {
-            return Some(cur_val);
-        }
-        cursor += 16;
-    }
-    None
 }
 
 #[test]
@@ -469,50 +353,6 @@ fn process_create_accepts_et_dyn_without_pt_interp() {
 
     let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
     assert_eq!(vm.pc, 0x1000);
-}
-
-#[test]
-fn process_create_enters_pt_interp_loader() {
-    let _t = TestVm::new();
-    let ram_size = 64 * 1024 * 1024;
-    let main_elf = build_test_elf_dyn_with_interp(
-        &[0x13, 0x05, 0x70, 0x00],
-        b"/lib/ld-test.so\0",
-    );
-    let interp_elf = build_test_elf_exec_at(&[0x13, 0x05, 0x70, 0x00], 0x4100, 0x4000);
-
-    let lib_ino = ensure_dir(1, b"lib");
-    let interp_ino = tidemark_kernel::fs::memfs::create_file(lib_ino, b"ld-test.so", 0o755);
-    assert_ne!(interp_ino, 0);
-    assert_eq!(
-        tidemark_kernel::fs::memfs::write_file(interp_ino, 0, &interp_elf),
-        interp_elf.len() as i64
-    );
-
-    let elf_ptr = unsafe { tidemark_kernel::alloc::alloc_zeroed(0x2000, 16) };
-    assert_ne!(elf_ptr, 0);
-    unsafe {
-        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64, &main_elf);
-        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64 + 0x400, b"/bin/test-dyn\0");
-    }
-
-    process_clear_args();
-    process_push_arg(elf_ptr + 0x400);
-
-    let vm_ptr = process_create(elf_ptr, main_elf.len() as u32, ram_size, 1024 * 1024);
-    assert_ne!(vm_ptr, 0);
-
-    let guest_base = process_guest_base(ram_size);
-    let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
-    assert_eq!(vm.pc, 0x4100);
-    assert_eq!(
-        auxv_value(guest_base, vm.x[2], 1, 0, tidemark_kernel::elf::AT_BASE),
-        Some(0x3f00)
-    );
-    assert_eq!(
-        auxv_value(guest_base, vm.x[2], 1, 0, tidemark_kernel::elf::AT_ENTRY),
-        Some(0x1000)
-    );
 }
 
 #[test]

@@ -113,13 +113,6 @@ struct ExecveImage {
     envp: Vec<Vec<u8>>,
     elf_len: u32,
     elf: crate::elf::ElfLoadResult,
-    interp: Option<InterpImage>,
-}
-
-pub(crate) struct InterpImage {
-    pub ino: u32,
-    pub elf_len: u32,
-    pub elf: crate::elf::ElfLoadResult,
 }
 
 const ELF_EI_CLASS: usize = 4;
@@ -141,7 +134,6 @@ const ET_EXEC: u16 = 2;
 const ET_DYN: u16 = 3;
 const EM_RISCV: u16 = 243;
 const PT_LOAD: u32 = 1;
-const PT_INTERP: u32 = 3;
 const PT_TLS: u32 = 7;
 
 #[repr(C)]
@@ -783,7 +775,6 @@ fn load_execve_image(
         _ => return Err(ENOEXEC),
     };
     let elf = inspect_execve_elf(ino, elf_len, ram_size)?;
-    let interp = resolve_interp_from_inode(ino, elf_len, &elf, ram_size)?;
     let mut argv = read_guest_strvec(base, argv_addr)?;
     let envp = read_guest_strvec(base, envp_addr)?;
     if argv.is_empty() {
@@ -799,7 +790,6 @@ fn load_execve_image(
         envp,
         elf_len,
         elf,
-        interp,
     })
 }
 
@@ -867,11 +857,8 @@ fn inspect_execve_elf(
     }
 
     let mut brk_end = 0u64;
-    let mut load_base = u64::MAX;
     let mut phdr_addr = 0u64;
     let mut tls_base = 0u64;
-    let mut interp_offset = 0u64;
-    let mut interp_len = 0u64;
     for index in 0..ph_num {
         let start = index * ph_entsize;
         let ph = &phdrs[start..start + ph_entsize];
@@ -880,8 +867,14 @@ fn inspect_execve_elf(
         let p_vaddr = read_u64_le(ph, ELF_PH_VADDR).ok_or(ENOEXEC)?;
         let p_filesz = read_u64_le(ph, ELF_PH_FILESZ).ok_or(ENOEXEC)?;
         let p_memsz = read_u64_le(ph, ELF_PH_MEMSZ).ok_or(ENOEXEC)?;
-        if p_type != PT_LOAD && p_type != PT_TLS && p_type != PT_INTERP {
+        if p_type != PT_LOAD && p_type != PT_TLS {
             continue;
+        }
+        if p_vaddr
+            .checked_add(p_memsz)
+            .is_none_or(|end| end > ram_size)
+        {
+            return Err(ENOEXEC);
         }
         if p_offset
             .checked_add(p_filesz)
@@ -890,69 +883,30 @@ fn inspect_execve_elf(
             return Err(ENOEXEC);
         }
         if p_type == PT_LOAD {
-            if p_vaddr
-                .checked_add(p_memsz)
-                .is_none_or(|end| end > ram_size)
-            {
-                return Err(ENOEXEC);
-            }
             let seg_end = p_vaddr + p_memsz;
             if seg_end > brk_end {
                 brk_end = seg_end;
             }
-            let candidate_base = p_vaddr.saturating_sub(p_offset);
-            if candidate_base < load_base {
-                load_base = candidate_base;
-            }
-            if phdr_addr == 0
-                && (ph_off as u64) >= p_offset
-                && (ph_off as u64 + ph_entsize as u64) <= p_offset + p_filesz
-            {
-                phdr_addr = candidate_base + ph_off as u64;
+            if phdr_addr == 0 && p_offset == 0 {
+                phdr_addr = p_vaddr + ph_off as u64;
             }
         } else if tls_base == 0 {
-            if p_type == PT_TLS {
-                if p_vaddr
-                    .checked_add(p_memsz)
-                    .is_none_or(|end| end > ram_size)
-                {
-                    return Err(ENOEXEC);
-                }
-                tls_base = p_vaddr;
-            } else {
-                if p_filesz == 0 {
-                    return Err(ENOEXEC);
-                }
-                interp_offset = p_offset;
-                interp_len = p_filesz;
-            }
-        } else if p_type == PT_INTERP {
-            if p_filesz == 0 {
-                return Err(ENOEXEC);
-            }
-            interp_offset = p_offset;
-            interp_len = p_filesz;
+            tls_base = p_vaddr;
         }
     }
 
     brk_end = (brk_end + 4095) & !4095;
-    if load_base == u64::MAX {
-        load_base = 0;
-    }
     Ok(crate::elf::ElfLoadResult {
         entry,
         brk_start: brk_end,
         tls_base,
-        load_base,
         phdr_addr,
         phent: ph_entsize as u16,
         phnum: ph_num as u16,
-        interp_offset,
-        interp_len,
     })
 }
 
-pub(crate) fn load_elf_from_inode(
+fn load_execve_elf_from_inode(
     base: u32,
     ram_size: u64,
     ino: u32,
@@ -1015,66 +969,6 @@ pub(crate) fn load_elf_from_inode(
     }
 
     Ok(inspected)
-}
-
-fn read_interp_path_from_inode(
-    ino: u32,
-    interp_offset: u64,
-    interp_len: u64,
-) -> Result<Vec<u8>, i64> {
-    if interp_len == 0 || interp_len > EXECVE_PATH_MAX as u64 {
-        return Err(ENOEXEC);
-    }
-    let mut raw = vec![0u8; interp_len as usize];
-    if memfs::read_file(ino, interp_offset, &mut raw) != interp_len as i64 {
-        return Err(EIO);
-    }
-    let nul = raw.iter().position(|&b| b == 0).ok_or(ENOEXEC)?;
-    if nul == 0 || raw[0] != b'/' || raw[nul + 1..].iter().any(|&b| b != 0) {
-        return Err(ENOEXEC);
-    }
-    raw.truncate(nul);
-    Ok(raw)
-}
-
-pub(crate) fn resolve_interp_from_path(path_bytes: &[u8], ram_size: u64) -> Result<InterpImage, i64> {
-    if path_bytes.is_empty() || path_bytes[0] != b'/' {
-        return Err(ENOEXEC);
-    }
-    let ino = memfs::resolve_path(path_bytes);
-    if ino == 0 {
-        return Err(ENOENT);
-    }
-    let st = memfs::stat(ino).ok_or(ENOENT)?;
-    if st.mode & memfs::S_IFMT != memfs::S_IFREG {
-        return Err(ENOEXEC);
-    }
-    let elf_len = u32::try_from(st.size).map_err(|_| ENOEXEC)?;
-    if elf_len == 0 {
-        return Err(ENOEXEC);
-    }
-    let elf = inspect_execve_elf(ino, elf_len, ram_size)?;
-    if elf.interp_len != 0 {
-        return Err(ENOEXEC);
-    }
-    Ok(InterpImage {
-        ino,
-        elf_len,
-        elf,
-    })
-}
-
-fn resolve_interp_from_inode(
-    ino: u32,
-    _elf_len: u32,
-    elf: &crate::elf::ElfLoadResult,
-    ram_size: u64,
-) -> Result<Option<InterpImage>, i64> {
-    if elf.interp_len == 0 {
-        return Ok(None);
-    }
-    let path_bytes = read_interp_path_from_inode(ino, elf.interp_offset, elf.interp_len)?;
-    resolve_interp_from_path(&path_bytes, ram_size).map(Some)
 }
 
 fn install_proc_self_exe(target: &[u8]) {
@@ -1245,7 +1139,6 @@ fn complete_execve_in_place_inner(
         envp,
         elf_len,
         elf,
-        interp,
     } = match load_execve_image(
         vm,
         base,
@@ -1349,19 +1242,15 @@ fn complete_execve_in_place_inner(
     // guest image rewrite itself does not depend on post-reset allocations.
     let mut argv_ptrs = vec![0u64; argv.len()];
     let mut envp_ptrs = vec![0u64; envp.len()];
-    let effective_brk = interp
-        .as_ref()
-        .map(|interp| interp.elf.brk_start.max(elf.brk_start))
-        .unwrap_or(elf.brk_start);
     let guest_limit = execve_guest_limit(
         base,
-        effective_brk,
+        elf.brk_start,
         crate::syscall::memory::DEFAULT_STACK_SIZE,
     );
 
     let ps_size = core::mem::size_of::<ProcessState>() as u64;
     let ps_align = core::mem::align_of::<ProcessState>() as u64;
-    let new_ps_addr = (effective_brk + ps_align - 1) & !(ps_align - 1);
+    let new_ps_addr = (elf.brk_start + ps_align - 1) & !(ps_align - 1);
     crate::harness_debug::record_execve_stage(3, guest_limit, new_ps_addr + ps_size);
     // vfork+execve handoff starts from a bootstrap-sized child memory. Grow the
     // guest view to the full execve limit before resetting and loading ELF
@@ -1372,17 +1261,10 @@ fn complete_execve_in_place_inner(
     }
 
     crate::syscall::thread::discard_other_threads_for_exec(vm, base);
-    crate::syscall::memory::reset_for_execve_with_flush(base, effective_brk, flush_shared_mappings);
-    let elf_result = match load_elf_from_inode(base, ram_size, ino, elf_len) {
+    crate::syscall::memory::reset_for_execve_with_flush(base, elf.brk_start, flush_shared_mappings);
+    let elf_result = match load_execve_elf_from_inode(base, ram_size, ino, elf_len) {
         Ok(result) => result,
         Err(errno) => return errno,
-    };
-    let interp_result = match interp.as_ref() {
-        Some(interp) => match load_elf_from_inode(base, ram_size, interp.ino, interp.elf_len) {
-            Ok(result) => Some(result),
-            Err(errno) => return errno,
-        },
-        None => None,
     };
     crate::harness_debug::record_execve_stage(4, elf_result.brk_start, elf_result.entry);
     let stack_top = crate::syscall::memory::map_initial_stack(
@@ -1478,37 +1360,27 @@ fn complete_execve_in_place_inner(
     };
     crate::harness_debug::record_execve_stage(67, cursor, envp.len() as u64);
     let sp = unsafe {
-        crate::elf::setup_stack_with_base(
+        crate::elf::setup_stack(
             base,
             stack_setup_top,
             &argv_ptrs,
             &envp_ptrs,
             &elf_result,
             random_addr,
-            interp_result
-                .as_ref()
-                .map(|interp| interp.load_base)
-                .unwrap_or(0),
         )
     };
     crate::harness_debug::record_execve_stage(68, sp, stack_setup_top);
 
     vm.x = [0; 32];
-    vm.pc = interp_result
-        .as_ref()
-        .map(|interp| interp.entry)
-        .unwrap_or(elf_result.entry);
+    vm.pc = elf_result.entry;
     vm.x[2] = sp;
-    vm.x[4] = interp_result
-        .as_ref()
-        .and_then(|interp| (interp.tls_base != 0).then_some(interp.tls_base))
-        .unwrap_or(elf_result.tls_base);
+    vm.x[4] = elf_result.tls_base;
     vm.f = [0; 32];
     vm.fcsr = 0;
     vm.status = STATUS_OK;
     vm.exit_code = 0;
     vm.tid = 1;
-    vm.tls_base = vm.x[4];
+    vm.tls_base = elf_result.tls_base;
     vm.sigaltstack_sp = 0;
     vm.sigaltstack_size = 0;
     vm.sigaltstack_flags = 0;
