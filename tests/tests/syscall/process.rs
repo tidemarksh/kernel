@@ -37,6 +37,16 @@ fn ensure_dir(parent: u32, name: &[u8]) -> u32 {
     }
 }
 
+fn read_file_bytes(path: &[u8]) -> Vec<u8> {
+    let ino = memfs::resolve_path(path);
+    assert_ne!(ino, 0, "missing memfs path: {:?}", path);
+    let size = memfs::stat(ino).unwrap().size as usize;
+    let mut buf = vec![0u8; size];
+    let n = memfs::read_file(ino, 0, &mut buf);
+    assert_eq!(n as usize, size);
+    buf
+}
+
 fn build_test_elf(code: &[u8]) -> Vec<u8> {
     fn put_u16(buf: &mut [u8], off: usize, value: u16) {
         buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
@@ -179,7 +189,7 @@ fn build_test_elf_with_interp(code: &[u8], interp_path: &[u8]) -> Vec<u8> {
     put_u32(&mut elf, ph_off, 3);
     put_u32(&mut elf, ph_off + 4, 4);
     put_u64(&mut elf, ph_off + 8, interp_off as u64);
-    put_u64(&mut elf, ph_off + 16, 0x1800);
+    put_u64(&mut elf, ph_off + 16, 0x1100);
     put_u64(&mut elf, ph_off + 32, (interp_path.len() + 1) as u64);
     put_u64(&mut elf, ph_off + 40, (interp_path.len() + 1) as u64);
     put_u64(&mut elf, ph_off + 48, 1);
@@ -196,6 +206,396 @@ fn build_test_elf_with_interp(code: &[u8], interp_path: &[u8]) -> Vec<u8> {
     elf[interp_off..interp_off + interp_path.len()].copy_from_slice(interp_path);
     elf[interp_off + interp_path.len()] = 0;
     elf[code_off..code_off + code.len()].copy_from_slice(code);
+    elf
+}
+
+fn build_test_elf_with_interp_and_tls(
+    code: &[u8],
+    interp_path: &[u8],
+    tls_init: &[u8],
+    tls_memsz: u64,
+) -> Vec<u8> {
+    fn put_u16(buf: &mut [u8], off: usize, value: u16) {
+        buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u32(buf: &mut [u8], off: usize, value: u32) {
+        buf[off..off + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u64(buf: &mut [u8], off: usize, value: u64) {
+        buf[off..off + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    let ph_off = 64usize;
+    let interp_off = 0x200usize;
+    let code_off = 0x300usize;
+    let data_off = 0x400usize;
+    let entry = 0x1000u64 + code_off as u64;
+    let total_len = data_off + tls_init.len();
+    let mut elf = vec![0u8; total_len];
+    elf[0] = 0x7f;
+    elf[1] = b'E';
+    elf[2] = b'L';
+    elf[3] = b'F';
+    elf[4] = 2;
+    elf[5] = 1;
+    elf[6] = 1;
+    put_u16(&mut elf, 16, 2);
+    put_u16(&mut elf, 18, 243);
+    put_u32(&mut elf, 20, 1);
+    put_u64(&mut elf, 24, entry);
+    put_u64(&mut elf, 32, ph_off as u64);
+    put_u16(&mut elf, 52, 64);
+    put_u16(&mut elf, 54, 56);
+    put_u16(&mut elf, 56, 4);
+
+    put_u32(&mut elf, ph_off, 3);
+    put_u32(&mut elf, ph_off + 4, 4);
+    put_u64(&mut elf, ph_off + 8, interp_off as u64);
+    put_u64(&mut elf, ph_off + 16, 0x1100);
+    put_u64(&mut elf, ph_off + 32, (interp_path.len() + 1) as u64);
+    put_u64(&mut elf, ph_off + 40, (interp_path.len() + 1) as u64);
+    put_u64(&mut elf, ph_off + 48, 1);
+
+    let code_ph = ph_off + 56;
+    put_u32(&mut elf, code_ph, 1);
+    put_u32(&mut elf, code_ph + 4, 5);
+    put_u64(&mut elf, code_ph + 8, 0);
+    put_u64(&mut elf, code_ph + 16, 0x1000);
+    put_u64(&mut elf, code_ph + 32, data_off as u64);
+    put_u64(&mut elf, code_ph + 40, data_off as u64);
+    put_u64(&mut elf, code_ph + 48, 0x1000);
+
+    let data_ph = ph_off + 112;
+    put_u32(&mut elf, data_ph, 1);
+    put_u32(&mut elf, data_ph + 4, 6);
+    put_u64(&mut elf, data_ph + 8, data_off as u64);
+    put_u64(&mut elf, data_ph + 16, 0x3000);
+    put_u64(&mut elf, data_ph + 32, tls_init.len() as u64);
+    put_u64(&mut elf, data_ph + 40, tls_memsz);
+    put_u64(&mut elf, data_ph + 48, 0x1000);
+
+    let tls_ph = ph_off + 168;
+    put_u32(&mut elf, tls_ph, 7);
+    put_u32(&mut elf, tls_ph + 4, 4);
+    put_u64(&mut elf, tls_ph + 8, data_off as u64);
+    put_u64(&mut elf, tls_ph + 16, 0x3000);
+    put_u64(&mut elf, tls_ph + 32, tls_init.len() as u64);
+    put_u64(&mut elf, tls_ph + 40, tls_memsz);
+    put_u64(&mut elf, tls_ph + 48, 8);
+
+    elf[interp_off..interp_off + interp_path.len()].copy_from_slice(interp_path);
+    elf[interp_off + interp_path.len()] = 0;
+    elf[code_off..code_off + code.len()].copy_from_slice(code);
+    elf[data_off..data_off + tls_init.len()].copy_from_slice(tls_init);
+    elf
+}
+
+fn build_test_elf_dyn_with_interp(code: &[u8], interp_path: &[u8]) -> Vec<u8> {
+    let mut elf = build_test_elf_with_interp(code, interp_path);
+    elf[16..18].copy_from_slice(&3u16.to_le_bytes());
+    elf
+}
+
+fn build_test_elf_dyn_with_interp_and_tls(
+    code: &[u8],
+    interp_path: &[u8],
+    tls_init: &[u8],
+    tls_memsz: u64,
+) -> Vec<u8> {
+    let mut elf = build_test_elf_with_interp_and_tls(code, interp_path, tls_init, tls_memsz);
+    elf[16..18].copy_from_slice(&3u16.to_le_bytes());
+    elf
+}
+
+fn build_test_elf_dyn(code: &[u8]) -> Vec<u8> {
+    fn put_u16(buf: &mut [u8], off: usize, value: u16) {
+        buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u32(buf: &mut [u8], off: usize, value: u32) {
+        buf[off..off + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u64(buf: &mut [u8], off: usize, value: u64) {
+        buf[off..off + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    let mut elf = vec![0u8; 0x100 + code.len()];
+    elf[0] = 0x7f;
+    elf[1] = b'E';
+    elf[2] = b'L';
+    elf[3] = b'F';
+    elf[4] = 2;
+    elf[5] = 1;
+    elf[6] = 1;
+    put_u16(&mut elf, 16, 3);
+    put_u16(&mut elf, 18, 243);
+    put_u32(&mut elf, 20, 1);
+    put_u64(&mut elf, 24, 0x1000);
+    put_u64(&mut elf, 32, 64);
+    put_u16(&mut elf, 52, 64);
+    put_u16(&mut elf, 54, 56);
+    put_u16(&mut elf, 56, 1);
+
+    put_u32(&mut elf, 64, 1);
+    put_u32(&mut elf, 68, 5);
+    put_u64(&mut elf, 72, 0x100);
+    put_u64(&mut elf, 80, 0x1000);
+    put_u64(&mut elf, 96, code.len() as u64);
+    put_u64(&mut elf, 104, code.len() as u64);
+    put_u64(&mut elf, 112, 0x1000);
+    elf[0x100..0x100 + code.len()].copy_from_slice(code);
+    elf
+}
+
+fn build_test_elf_dyn_low(code: &[u8]) -> Vec<u8> {
+    fn put_u16(buf: &mut [u8], off: usize, value: u16) {
+        buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u32(buf: &mut [u8], off: usize, value: u32) {
+        buf[off..off + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u64(buf: &mut [u8], off: usize, value: u64) {
+        buf[off..off + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    let code_off = 0x100usize;
+    let mut elf = vec![0u8; code_off + code.len()];
+    elf[0] = 0x7f;
+    elf[1] = b'E';
+    elf[2] = b'L';
+    elf[3] = b'F';
+    elf[4] = 2;
+    elf[5] = 1;
+    elf[6] = 1;
+    put_u16(&mut elf, 16, 3);
+    put_u16(&mut elf, 18, 243);
+    put_u32(&mut elf, 20, 1);
+    put_u64(&mut elf, 24, 0x40);
+    put_u64(&mut elf, 32, 64);
+    put_u16(&mut elf, 52, 64);
+    put_u16(&mut elf, 54, 56);
+    put_u16(&mut elf, 56, 1);
+
+    put_u32(&mut elf, 64, 1);
+    put_u32(&mut elf, 68, 5);
+    put_u64(&mut elf, 72, code_off as u64);
+    put_u64(&mut elf, 80, 0);
+    put_u64(&mut elf, 96, code.len() as u64);
+    put_u64(&mut elf, 104, code.len() as u64);
+    put_u64(&mut elf, 112, 0x1000);
+    elf[code_off..code_off + code.len()].copy_from_slice(code);
+    elf
+}
+
+fn build_test_elf_dyn_two_loads(code: &[u8], data: &[u8]) -> Vec<u8> {
+    fn put_u16(buf: &mut [u8], off: usize, value: u16) {
+        buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u32(buf: &mut [u8], off: usize, value: u32) {
+        buf[off..off + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u64(buf: &mut [u8], off: usize, value: u64) {
+        buf[off..off + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    let ph_off = 64usize;
+    let code_off = 0x100usize;
+    let data_off = 0x300usize;
+    let entry = 0x1000u64;
+    let total_len = data_off + data.len();
+    let mut elf = vec![0u8; total_len];
+    elf[0] = 0x7f;
+    elf[1] = b'E';
+    elf[2] = b'L';
+    elf[3] = b'F';
+    elf[4] = 2;
+    elf[5] = 1;
+    elf[6] = 1;
+    put_u16(&mut elf, 16, 3);
+    put_u16(&mut elf, 18, 243);
+    put_u32(&mut elf, 20, 1);
+    put_u64(&mut elf, 24, entry);
+    put_u64(&mut elf, 32, ph_off as u64);
+    put_u16(&mut elf, 52, 64);
+    put_u16(&mut elf, 54, 56);
+    put_u16(&mut elf, 56, 2);
+
+    put_u32(&mut elf, ph_off, 1);
+    put_u32(&mut elf, ph_off + 4, 5);
+    put_u64(&mut elf, ph_off + 8, code_off as u64);
+    put_u64(&mut elf, ph_off + 16, 0x1000);
+    put_u64(&mut elf, ph_off + 32, code.len() as u64);
+    put_u64(&mut elf, ph_off + 40, code.len() as u64);
+    put_u64(&mut elf, ph_off + 48, 0x1000);
+
+    let data_ph = ph_off + 56;
+    put_u32(&mut elf, data_ph, 1);
+    put_u32(&mut elf, data_ph + 4, 6);
+    put_u64(&mut elf, data_ph + 8, data_off as u64);
+    put_u64(&mut elf, data_ph + 16, 0x3000);
+    put_u64(&mut elf, data_ph + 32, data.len() as u64);
+    put_u64(&mut elf, data_ph + 40, data.len() as u64 + 0x100);
+    put_u64(&mut elf, data_ph + 48, 0x1000);
+
+    elf[code_off..code_off + code.len()].copy_from_slice(code);
+    elf[data_off..data_off + data.len()].copy_from_slice(data);
+    elf
+}
+
+fn build_test_elf_dyn_with_interp_two_loads(
+    code: &[u8],
+    data: &[u8],
+    interp_path: &[u8],
+) -> Vec<u8> {
+    fn put_u16(buf: &mut [u8], off: usize, value: u16) {
+        buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u32(buf: &mut [u8], off: usize, value: u32) {
+        buf[off..off + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u64(buf: &mut [u8], off: usize, value: u64) {
+        buf[off..off + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    let ph_off = 64usize;
+    let interp_off = 0x100usize;
+    let code_off = 0x200usize;
+    let data_off = 0x300usize;
+    let entry = 0x1000u64 + code_off as u64;
+    let total_len = data_off + data.len();
+    let mut elf = vec![0u8; total_len];
+    elf[0] = 0x7f;
+    elf[1] = b'E';
+    elf[2] = b'L';
+    elf[3] = b'F';
+    elf[4] = 2;
+    elf[5] = 1;
+    elf[6] = 1;
+    put_u16(&mut elf, 16, 3);
+    put_u16(&mut elf, 18, 243);
+    put_u32(&mut elf, 20, 1);
+    put_u64(&mut elf, 24, entry);
+    put_u64(&mut elf, 32, ph_off as u64);
+    put_u16(&mut elf, 52, 64);
+    put_u16(&mut elf, 54, 56);
+    put_u16(&mut elf, 56, 3);
+
+    put_u32(&mut elf, ph_off, 3);
+    put_u32(&mut elf, ph_off + 4, 4);
+    put_u64(&mut elf, ph_off + 8, interp_off as u64);
+    put_u64(&mut elf, ph_off + 16, 0x1100);
+    put_u64(&mut elf, ph_off + 32, (interp_path.len() + 1) as u64);
+    put_u64(&mut elf, ph_off + 40, (interp_path.len() + 1) as u64);
+    put_u64(&mut elf, ph_off + 48, 1);
+
+    let code_ph = ph_off + 56;
+    put_u32(&mut elf, code_ph, 1);
+    put_u32(&mut elf, code_ph + 4, 5);
+    put_u64(&mut elf, code_ph + 8, 0);
+    put_u64(&mut elf, code_ph + 16, 0x1000);
+    put_u64(&mut elf, code_ph + 32, data_off as u64);
+    put_u64(&mut elf, code_ph + 40, data_off as u64);
+    put_u64(&mut elf, code_ph + 48, 0x1000);
+
+    let data_ph = ph_off + 112;
+    put_u32(&mut elf, data_ph, 1);
+    put_u32(&mut elf, data_ph + 4, 6);
+    put_u64(&mut elf, data_ph + 8, data_off as u64);
+    put_u64(&mut elf, data_ph + 16, 0x3000);
+    put_u64(&mut elf, data_ph + 32, data.len() as u64);
+    put_u64(&mut elf, data_ph + 40, data.len() as u64 + 0x100);
+    put_u64(&mut elf, data_ph + 48, 0x1000);
+
+    elf[interp_off..interp_off + interp_path.len()].copy_from_slice(interp_path);
+    elf[interp_off + interp_path.len()] = 0;
+    elf[code_off..code_off + code.len()].copy_from_slice(code);
+    elf[data_off..data_off + data.len()].copy_from_slice(data);
+    elf
+}
+
+fn build_test_elf_dyn_with_interp_dynamic(code: &[u8], data: &[u8], interp_path: &[u8]) -> Vec<u8> {
+    fn put_u16(buf: &mut [u8], off: usize, value: u16) {
+        buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u32(buf: &mut [u8], off: usize, value: u32) {
+        buf[off..off + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u64(buf: &mut [u8], off: usize, value: u64) {
+        buf[off..off + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    let ph_off = 64usize;
+    let interp_off = 0x100usize;
+    let code_off = 0x200usize;
+    let data_off = 0x300usize;
+    let dynamic_off = 0x320usize;
+    let dynamic_vaddr = 0x3020u64;
+    let entry = 0x1000u64 + code_off as u64;
+    let second_filesz = (dynamic_off + 64 - data_off).max(data.len());
+    let total_len = data_off + second_filesz;
+    let mut elf = vec![0u8; total_len];
+    elf[0] = 0x7f;
+    elf[1] = b'E';
+    elf[2] = b'L';
+    elf[3] = b'F';
+    elf[4] = 2;
+    elf[5] = 1;
+    elf[6] = 1;
+    put_u16(&mut elf, 16, 3);
+    put_u16(&mut elf, 18, 243);
+    put_u32(&mut elf, 20, 1);
+    put_u64(&mut elf, 24, entry);
+    put_u64(&mut elf, 32, ph_off as u64);
+    put_u16(&mut elf, 52, 64);
+    put_u16(&mut elf, 54, 56);
+    put_u16(&mut elf, 56, 4);
+
+    put_u32(&mut elf, ph_off, 3);
+    put_u32(&mut elf, ph_off + 4, 4);
+    put_u64(&mut elf, ph_off + 8, interp_off as u64);
+    put_u64(&mut elf, ph_off + 16, 0x1100);
+    put_u64(&mut elf, ph_off + 32, (interp_path.len() + 1) as u64);
+    put_u64(&mut elf, ph_off + 40, (interp_path.len() + 1) as u64);
+    put_u64(&mut elf, ph_off + 48, 1);
+
+    let code_ph = ph_off + 56;
+    put_u32(&mut elf, code_ph, 1);
+    put_u32(&mut elf, code_ph + 4, 5);
+    put_u64(&mut elf, code_ph + 8, 0);
+    put_u64(&mut elf, code_ph + 16, 0x1000);
+    put_u64(&mut elf, code_ph + 32, data_off as u64);
+    put_u64(&mut elf, code_ph + 40, data_off as u64);
+    put_u64(&mut elf, code_ph + 48, 0x1000);
+
+    let data_ph = ph_off + 112;
+    put_u32(&mut elf, data_ph, 1);
+    put_u32(&mut elf, data_ph + 4, 6);
+    put_u64(&mut elf, data_ph + 8, data_off as u64);
+    put_u64(&mut elf, data_ph + 16, 0x3000);
+    put_u64(&mut elf, data_ph + 32, second_filesz as u64);
+    put_u64(&mut elf, data_ph + 40, second_filesz as u64 + 0x100);
+    put_u64(&mut elf, data_ph + 48, 0x1000);
+
+    let dynamic_ph = ph_off + 168;
+    put_u32(&mut elf, dynamic_ph, 2);
+    put_u32(&mut elf, dynamic_ph + 4, 6);
+    put_u64(&mut elf, dynamic_ph + 8, dynamic_off as u64);
+    put_u64(&mut elf, dynamic_ph + 16, dynamic_vaddr);
+    put_u64(&mut elf, dynamic_ph + 32, 4 * 16);
+    put_u64(&mut elf, dynamic_ph + 40, 4 * 16);
+    put_u64(&mut elf, dynamic_ph + 48, 8);
+
+    elf[interp_off..interp_off + interp_path.len()].copy_from_slice(interp_path);
+    elf[interp_off + interp_path.len()] = 0;
+    elf[code_off..code_off + code.len()].copy_from_slice(code);
+    elf[data_off..data_off + data.len()].copy_from_slice(data);
+    put_u64(&mut elf, dynamic_off, 7);
+    put_u64(&mut elf, dynamic_off + 8, 0x3300);
+    put_u64(&mut elf, dynamic_off + 16, 8);
+    put_u64(&mut elf, dynamic_off + 24, 24);
+    put_u64(&mut elf, dynamic_off + 32, 0x6fff_ffff);
+    put_u64(&mut elf, dynamic_off + 40, 5);
+    put_u64(&mut elf, dynamic_off + 48, 0);
+    put_u64(&mut elf, dynamic_off + 56, 0);
     elf
 }
 
@@ -355,7 +755,8 @@ fn contract_vfork_exit_preserves_parent_thread_state() {
     let status = thread_impl::sys_exit(&mut t.vm, t.base, 7);
     assert_eq!(status, STATUS_FAULT);
 
-    let thread_count = unsafe { guest_mem::read_u32(t.base, t.vm.process_ptr as u64 + thread_count_off) };
+    let thread_count =
+        unsafe { guest_mem::read_u32(t.base, t.vm.process_ptr as u64 + thread_count_off) };
     assert_eq!(thread_count, 1);
 
     process_impl::record_child_exit(child_pid, ((t.vm.exit_code as u32) << 8) as i32);
@@ -462,14 +863,18 @@ fn contract_vfork_execve_failure_does_not_publish_spawn_handoff() {
 fn semantics_execve_discards_other_threads_on_success() {
     let mut t = TestVm::new();
     let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
-    ps.thread_count.store(2, core::sync::atomic::Ordering::Release);
+    ps.thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
     ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, 0xFEED_BEEFu32, 0, 0);
     let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
     let path_addr = install_exec_file(&t, b"test", &elf);
     let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
     assert_eq!(ret, 0);
     let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
-    assert_eq!(ps.thread_count.load(core::sync::atomic::Ordering::Acquire), 1);
+    assert_eq!(
+        ps.thread_count.load(core::sync::atomic::Ordering::Acquire),
+        1
+    );
     assert_eq!(ps.threads[0].state, THREAD_RUNNING);
     assert_eq!(ps.threads[1].state, THREAD_NONE);
 }
@@ -498,7 +903,10 @@ fn semantics_execve_preserves_signal_mask_and_pending() {
     let path_addr = install_exec_file(&t, b"test", &elf);
     process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
 
-    assert_eq!(t.vm.sig_mask, (1u64 << (SIGALRM - 1)) | (1u64 << (SIGTERM - 1)));
+    assert_eq!(
+        t.vm.sig_mask,
+        (1u64 << (SIGALRM - 1)) | (1u64 << (SIGTERM - 1))
+    );
     assert_eq!(t.vm.sig_pending, 1u64 << (SIGCHLD - 1));
 }
 
@@ -515,11 +923,360 @@ fn contract_execve_with_pt_interp_enters_interpreter_and_sets_auxv() {
     let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
     assert_eq!(ret, 0);
     assert_eq!(t.vm.status, STATUS_OK);
-    assert_eq!(t.vm.pc, 0x1000);
+    assert_eq!(t.vm.pc, 0x3000);
     assert_eq!(t.vm.sig_mask, 1u64 << (SIGTERM - 1));
     assert_eq!(t.vm.sig_pending, 1u64 << (SIGCHLD - 1));
-    assert_eq!(find_auxv_value(&t, tidemark_kernel::elf::AT_ENTRY), Some(0x1200));
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_ENTRY),
+        Some(0x1200)
+    );
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_BASE),
+        Some(0x2000)
+    );
     assert!(find_auxv_value(&t, tidemark_kernel::elf::AT_PHDR).is_some());
+}
+
+#[test]
+fn contract_execve_with_pt_interp_preserves_executable_tls_base() {
+    let mut t = TestVm::new();
+    let main_elf = build_test_elf_with_interp_and_tls(
+        &[0x13, 0x05, 0x70, 0x00],
+        b"/lib/ld-test.so",
+        &[0x41, 0x42, 0x43, 0x44],
+        0x20,
+    );
+    let interp_elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    install_exec_file_at(&t, b"/lib/ld-test.so", &interp_elf);
+    let path_addr = install_exec_file_at(&t, b"/bin/test_interp_tls", &main_elf);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x5000);
+    assert_eq!(t.vm.tls_base, 0x3000);
+    assert_eq!(t.vm.x[4], 0x3000);
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_ENTRY),
+        Some(0x1300)
+    );
+}
+
+#[test]
+fn contract_execve_with_pt_interp_preserves_biased_dynamic_tls_base() {
+    let mut t = TestVm::new();
+    let main_elf = build_test_elf_dyn_with_interp_and_tls(
+        &[0x13, 0x05, 0x70, 0x00],
+        b"/lib/ld-test.so",
+        &[0x41, 0x42, 0x43, 0x44],
+        0x20,
+    );
+    let interp_elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    install_exec_file_at(&t, b"/lib/ld-test.so", &interp_elf);
+    let path_addr = install_exec_file_at(&t, b"/bin/test_dyn_interp_tls", &main_elf);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x6000);
+    assert_eq!(t.vm.tls_base, 0x4000);
+    assert_eq!(t.vm.x[4], 0x4000);
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_ENTRY),
+        Some(0x2300)
+    );
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_BASE),
+        Some(0x5000)
+    );
+}
+
+#[test]
+fn contract_execve_accepts_et_dyn_main_binary() {
+    let mut t = TestVm::new();
+    let path_addr = install_exec_file(
+        &t,
+        b"test-dyn",
+        &build_test_elf_dyn(&[0x13, 0x05, 0x70, 0x00]),
+    );
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x1000);
+}
+
+#[test]
+fn contract_execve_with_pt_interp_accepts_et_dyn_interpreter() {
+    let mut t = TestVm::new();
+    let main_elf = build_test_elf_with_interp(&[0x13, 0x05, 0x70, 0x00], b"/lib/ld-test.so");
+    let interp_elf = build_test_elf_dyn(&[0x13, 0x05, 0x70, 0x00]);
+    install_exec_file_at(&t, b"/lib/ld-test.so", &interp_elf);
+    let path_addr = install_exec_file_at(&t, b"/bin/test_dyn_interp", &main_elf);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x3000);
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_ENTRY),
+        Some(0x1200)
+    );
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_BASE),
+        Some(0x2000)
+    );
+    let mut code = [0u8; 4];
+    unsafe {
+        tidemark_kernel::guest_mem::read_bytes(t.base, t.vm.pc, &mut code);
+    }
+    assert_eq!(code, [0x13, 0x05, 0x70, 0x00]);
+}
+
+#[test]
+fn contract_execve_with_pt_interp_accepts_et_dyn_two_load_interpreter() {
+    let mut t = TestVm::new();
+    let main_elf = build_test_elf_with_interp(&[0x13, 0x05, 0x70, 0x00], b"/lib/ld-test.so");
+    let interp_elf =
+        build_test_elf_dyn_two_loads(&[0x13, 0x05, 0x70, 0x00], &[0xaa, 0xbb, 0xcc, 0xdd]);
+    install_exec_file_at(&t, b"/lib/ld-test.so", &interp_elf);
+    let path_addr = install_exec_file_at(&t, b"/bin/test_dyn_two_load_interp", &main_elf);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x3000);
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_ENTRY),
+        Some(0x1200)
+    );
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_BASE),
+        Some(0x2000)
+    );
+}
+
+#[test]
+fn contract_execve_with_pt_interp_biases_et_dyn_main_executable() {
+    let mut t = TestVm::new();
+    let main_code = [0x13, 0x05, 0x70, 0x00];
+    let main_elf = build_test_elf_dyn_with_interp(&main_code, b"/lib/ld-test.so");
+    let interp_elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    install_exec_file_at(&t, b"/lib/ld-test.so", &interp_elf);
+    let path_addr = install_exec_file_at(&t, b"/bin/test_dyn_main_interp", &main_elf);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x4000);
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_ENTRY),
+        Some(0x2200)
+    );
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_PHDR),
+        Some(0x2040)
+    );
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_BASE),
+        Some(0x3000)
+    );
+
+    let mut interp = [0u8; 32];
+    let interp_len = unsafe { tidemark_kernel::guest_mem::read_cstr(t.base, 0x2100, &mut interp) };
+    assert_eq!(&interp[..interp_len], b"/lib/ld-test.so");
+
+    let mut code = [0u8; 4];
+    unsafe {
+        tidemark_kernel::guest_mem::read_bytes(t.base, 0x2200, &mut code);
+    }
+    assert_eq!(code, main_code);
+}
+
+#[test]
+fn contract_execve_with_pt_interp_biases_et_dyn_two_load_main_executable() {
+    let mut t = TestVm::new();
+    let main_code = [0x13, 0x05, 0x70, 0x00];
+    let main_data = [0xaa, 0xbb, 0xcc, 0xdd];
+    let main_elf =
+        build_test_elf_dyn_with_interp_two_loads(&main_code, &main_data, b"/lib/ld-test.so");
+    let interp_elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    install_exec_file_at(&t, b"/lib/ld-test.so", &interp_elf);
+    let path_addr = install_exec_file_at(&t, b"/bin/test_dyn_two_load_main_interp", &main_elf);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x6000);
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_ENTRY),
+        Some(0x2200)
+    );
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_PHDR),
+        Some(0x2040)
+    );
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_BASE),
+        Some(0x5000)
+    );
+
+    let mut data = [0u8; 4];
+    unsafe {
+        tidemark_kernel::guest_mem::read_bytes(t.base, 0x4000, &mut data);
+    }
+    assert_eq!(data, main_data);
+}
+
+#[test]
+fn contract_execve_with_pt_interp_preserves_biased_main_dynamic_section() {
+    let mut t = TestVm::new();
+    let main_elf = build_test_elf_dyn_with_interp_dynamic(
+        &[0x13, 0x05, 0x70, 0x00],
+        &[0xaa, 0xbb, 0xcc, 0xdd],
+        b"/lib/ld-test.so",
+    );
+    let interp_elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    install_exec_file_at(&t, b"/lib/ld-test.so", &interp_elf);
+    let path_addr = install_exec_file_at(&t, b"/bin/test_dyn_dynamic_interp", &main_elf);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x6000);
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_ENTRY),
+        Some(0x2200)
+    );
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_PHDR),
+        Some(0x2040)
+    );
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_BASE),
+        Some(0x5000)
+    );
+
+    let dyn_base = 0x4020u64;
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, dyn_base) },
+        7
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, dyn_base + 8) },
+        0x3300
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, dyn_base + 16) },
+        8
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, dyn_base + 24) },
+        24
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, dyn_base + 32) },
+        0x6fff_ffff
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, dyn_base + 40) },
+        5
+    );
+}
+
+#[test]
+fn contract_execve_with_pt_interp_zero_fills_interpreter_brk_padding() {
+    let mut t = TestVm::new();
+    let main_code = [0x13, 0x05, 0x70, 0x00];
+    let main_elf = build_test_elf_with_interp(&main_code, b"/lib/ld-test.so");
+    let interp_elf = build_test_elf_dyn_low(&[0x13, 0x06, 0x80, 0x00]);
+    install_exec_file_at(&t, b"/lib/ld-test.so", &interp_elf);
+    let path_addr = install_exec_file_at(&t, b"/bin/test_pad", &main_elf);
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_bytes(t.base, 0x2ff0, &[0xa5; 16]);
+    }
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+
+    let mut padding = [0u8; 16];
+    unsafe {
+        tidemark_kernel::guest_mem::read_bytes(t.base, 0x2ff0, &mut padding);
+    }
+    assert_eq!(padding, [0u8; 16]);
+}
+
+#[test]
+fn install_procfs_snapshot_writes_linux_like_maps() {
+    let mut t = TestVm::new();
+    let grown = t.sys_brk(0x126000);
+    assert_eq!(grown, 0x126000);
+
+    let bin = ensure_dir(1, b"bin");
+    let exe_ino = memfs::create_file(bin, b"maps-target", 0o755);
+    assert!(exe_ino > 0);
+    assert_eq!(memfs::write_file(exe_ino, 0, b"ELF"), 3);
+
+    let exe_fd = t.sys_openat(b"/bin/maps-target", O_RDONLY);
+    assert!(exe_fd >= 3);
+    let file_map = t.sys_mmap(0, PAGE_SIZE, PROT_READ | PROT_EXEC, MAP_PRIVATE, exe_fd, 0);
+    assert!(file_map > 0);
+    let anon_map = t.sys_mmap(
+        0,
+        PAGE_SIZE,
+        PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS,
+        -1,
+        0,
+    );
+    assert!(anon_map > 0);
+    let stack_top = tidemark_kernel::syscall::memory::map_initial_stack(t.base, 0x80_0000, 0x20000);
+    assert!(stack_top > 0);
+
+    process_impl::install_procfs_snapshot(b"/bin/maps-target");
+
+    let maps = String::from_utf8(read_file_bytes(b"/proc/self/maps")).unwrap();
+    assert!(maps.contains("/bin/maps-target"));
+    assert!(maps.contains("r-xp"));
+    assert!(maps.contains("[heap]"));
+    assert!(maps.contains("[stack]"));
+    assert!(maps.contains("rw-p 00000000 00:00 0 [heap]"));
+}
+
+#[test]
+#[ignore = "requires PT_INTERP execve loader to keep the main executable image mapped"]
+fn contract_execve_with_pt_interp_maps_main_executable_image() {
+    let mut t = TestVm::new();
+    let main_code = [0x13, 0x05, 0x70, 0x00];
+    let main_elf = build_test_elf_with_interp(&main_code, b"/lib/ld-test.so");
+    let interp_elf = build_test_elf_dyn_low(&[0x13, 0x06, 0x80, 0x00]);
+    install_exec_file_at(&t, b"/lib/ld-test.so", &interp_elf);
+    let path_addr = install_exec_file_at(&t, b"/bin/test_main_mapped", &main_elf);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x2040);
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_ENTRY),
+        Some(0x1200)
+    );
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_BASE),
+        Some(0x2000)
+    );
+
+    let mut interp = [0u8; 32];
+    let interp_len = unsafe { tidemark_kernel::guest_mem::read_cstr(t.base, 0x1100, &mut interp) };
+    assert_eq!(&interp[..interp_len], b"/lib/ld-test.so");
+
+    let mut code = [0u8; 4];
+    unsafe {
+        tidemark_kernel::guest_mem::read_bytes(t.base, 0x1200, &mut code);
+    }
+    assert_eq!(code, main_code);
 }
 
 #[test]
@@ -555,7 +1312,10 @@ fn semantics_execve_in_place_reload_rebuilds_process_state() {
     assert_eq!(t.vm.status, STATUS_OK);
     assert_eq!(t.vm.pc, 0x1000);
     assert_eq!(t.vm.tid, 1);
-    assert!(!tidemark_kernel::syscall::memory::range_has_prot_none(mapped as u64, PAGE_SIZE));
+    assert!(!tidemark_kernel::syscall::memory::range_has_prot_none(
+        mapped as u64,
+        PAGE_SIZE
+    ));
 
     let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
     assert_eq!(ps.pid, 42);
@@ -606,7 +1366,8 @@ fn semantics_execve_clears_blocked_resume_scratch() {
     t.vm.futex_wait_expected = 0x9abc;
     t.vm.epoll_timeout_ms = 99;
 
-    let before = tidemark_kernel::fs::fd_table::get_ofd_by_id(stdout_ofd).expect("stdout OFD should exist");
+    let before =
+        tidemark_kernel::fs::fd_table::get_ofd_by_id(stdout_ofd).expect("stdout OFD should exist");
     assert_eq!(before.refcount, 2);
 
     let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
@@ -621,7 +1382,8 @@ fn semantics_execve_clears_blocked_resume_scratch() {
     assert_eq!(t.vm.futex_wait_expected, 0);
     assert_eq!(t.vm.epoll_timeout_ms, 0);
 
-    let after = tidemark_kernel::fs::fd_table::get_ofd_by_id(stdout_ofd).expect("stdout OFD should survive execve");
+    let after = tidemark_kernel::fs::fd_table::get_ofd_by_id(stdout_ofd)
+        .expect("stdout OFD should survive execve");
     assert_eq!(after.refcount, 1);
 }
 
@@ -662,8 +1424,14 @@ fn semantics_vfork_execve_preserves_distinct_capture_pipe_ofds() {
     let mut t = TestVm::new();
     let stdout_pipefd_addr = t.scratch + 0x1800;
     let stderr_pipefd_addr = t.scratch + 0x1810;
-    assert_eq!(tidemark_kernel::syscall::pipe::sys_pipe2(&mut t.vm, t.base, stdout_pipefd_addr, 0), 0);
-    assert_eq!(tidemark_kernel::syscall::pipe::sys_pipe2(&mut t.vm, t.base, stderr_pipefd_addr, 0), 0);
+    assert_eq!(
+        tidemark_kernel::syscall::pipe::sys_pipe2(&mut t.vm, t.base, stdout_pipefd_addr, 0),
+        0
+    );
+    assert_eq!(
+        tidemark_kernel::syscall::pipe::sys_pipe2(&mut t.vm, t.base, stderr_pipefd_addr, 0),
+        0
+    );
 
     let stdout_read_fd = unsafe { guest_mem::read_u32(t.base, stdout_pipefd_addr) };
     let stdout_write_fd = unsafe { guest_mem::read_u32(t.base, stdout_pipefd_addr + 4) };
@@ -728,11 +1496,21 @@ fn semantics_vfork_parent_restore_without_cleanup_preserves_parent_epoll() {
     let output_pipefd_addr = t.scratch + 0x1820;
     let status_pipefd_addr = t.scratch + 0x1830;
     assert_eq!(
-        tidemark_kernel::syscall::pipe::sys_pipe2(&mut t.vm, t.base, output_pipefd_addr, O_CLOEXEC as u64),
+        tidemark_kernel::syscall::pipe::sys_pipe2(
+            &mut t.vm,
+            t.base,
+            output_pipefd_addr,
+            O_CLOEXEC as u64
+        ),
         0
     );
     assert_eq!(
-        tidemark_kernel::syscall::pipe::sys_pipe2(&mut t.vm, t.base, status_pipefd_addr, O_CLOEXEC as u64),
+        tidemark_kernel::syscall::pipe::sys_pipe2(
+            &mut t.vm,
+            t.base,
+            status_pipefd_addr,
+            O_CLOEXEC as u64
+        ),
         0
     );
 
@@ -743,7 +1521,8 @@ fn semantics_vfork_parent_restore_without_cleanup_preserves_parent_epoll() {
     let stdin_fd = t.sys_openat(b"/stdin.txt", O_RDONLY | O_CLOEXEC);
     assert!(stdin_fd >= 3);
 
-    let epfd = tidemark_kernel::syscall::epoll::sys_epoll_create1(&mut t.vm, t.base, O_CLOEXEC as u64);
+    let epfd =
+        tidemark_kernel::syscall::epoll::sys_epoll_create1(&mut t.vm, t.base, O_CLOEXEC as u64);
     assert!(epfd >= 3);
 
     let event_addr = t.scratch + 0x2000;
@@ -753,7 +1532,14 @@ fn semantics_vfork_parent_restore_without_cleanup_preserves_parent_epoll() {
         guest_mem::write_u64(t.base, event_addr + 8, 0x1111);
     }
     assert_eq!(
-        tidemark_kernel::syscall::epoll::sys_epoll_ctl(&mut t.vm, t.base, epfd as u64, EPOLL_CTL_ADD, output_read_fd, event_addr),
+        tidemark_kernel::syscall::epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            output_read_fd,
+            event_addr
+        ),
         0
     );
     unsafe {
@@ -761,7 +1547,14 @@ fn semantics_vfork_parent_restore_without_cleanup_preserves_parent_epoll() {
         guest_mem::write_u64(t.base, event_addr + 8, 0x2222);
     }
     assert_eq!(
-        tidemark_kernel::syscall::epoll::sys_epoll_ctl(&mut t.vm, t.base, epfd as u64, EPOLL_CTL_ADD, status_read_fd, event_addr),
+        tidemark_kernel::syscall::epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            status_read_fd,
+            event_addr
+        ),
         0
     );
 
@@ -793,7 +1586,9 @@ fn semantics_vfork_parent_restore_without_cleanup_preserves_parent_epoll() {
     assert_eq!(t.sys_dup3(output_write_fd, 2, 0), 2);
     assert_eq!(t.sys_close(output_read_fd as i64), 0);
     assert_eq!(t.sys_close(status_read_fd as i64), 0);
-    assert!(tidemark_kernel::syscall::epoll::epoll_slot_allocated(epoll_idx));
+    assert!(tidemark_kernel::syscall::epoll::epoll_slot_allocated(
+        epoll_idx
+    ));
     assert_eq!(
         tidemark_kernel::fs::fd_table::get_ofd_by_id(epoll_ofd_id)
             .expect("epoll OFD should survive child pipe setup")
@@ -810,7 +1605,9 @@ fn semantics_vfork_parent_restore_without_cleanup_preserves_parent_epoll() {
     process_impl::vfork_parent_restore_without_cleanup(&mut t.vm, child_pid as i32);
     assert_eq!(t.vm.status, STATUS_OK);
     assert_eq!(t.vm.x[10], child_pid as u64);
-    assert!(tidemark_kernel::syscall::epoll::epoll_slot_allocated(epoll_idx));
+    assert!(tidemark_kernel::syscall::epoll::epoll_slot_allocated(
+        epoll_idx
+    ));
     assert_eq!(
         tidemark_kernel::fs::fd_table::get_ofd_by_id(epoll_ofd_id)
             .expect("epoll OFD should survive parent restore")
@@ -821,18 +1618,42 @@ fn semantics_vfork_parent_restore_without_cleanup_preserves_parent_epoll() {
     assert_eq!(t.sys_close(stdin_fd), 0);
     assert_eq!(t.sys_close(output_write_fd as i64), 0);
     assert_eq!(t.sys_close(status_write_fd as i64), 0);
-    assert!(tidemark_kernel::syscall::epoll::epoll_slot_allocated(epoll_idx));
+    assert!(tidemark_kernel::syscall::epoll::epoll_slot_allocated(
+        epoll_idx
+    ));
 
     assert_eq!(
-        tidemark_kernel::syscall::epoll::sys_epoll_ctl(&mut t.vm, t.base, epfd as u64, EPOLL_CTL_DEL, output_read_fd, event_addr),
+        tidemark_kernel::syscall::epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_DEL,
+            output_read_fd,
+            event_addr
+        ),
         0
     );
     assert_eq!(
-        tidemark_kernel::syscall::epoll::sys_epoll_ctl(&mut t.vm, t.base, epfd as u64, EPOLL_CTL_DEL, status_read_fd, event_addr),
+        tidemark_kernel::syscall::epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_DEL,
+            status_read_fd,
+            event_addr
+        ),
         0
     );
     assert_eq!(
-        tidemark_kernel::syscall::epoll::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 1, 0, 0),
+        tidemark_kernel::syscall::epoll::sys_epoll_pwait(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            out_addr,
+            1,
+            0,
+            0
+        ),
         0
     );
 }
@@ -843,8 +1664,14 @@ fn semantics_vfork_parent_restore_without_cleanup_preserves_distinct_capture_pip
 
     let stdout_pipefd_addr = t.scratch + 0x1800;
     let stderr_pipefd_addr = t.scratch + 0x1810;
-    assert_eq!(tidemark_kernel::syscall::pipe::sys_pipe2(&mut t.vm, t.base, stdout_pipefd_addr, 0), 0);
-    assert_eq!(tidemark_kernel::syscall::pipe::sys_pipe2(&mut t.vm, t.base, stderr_pipefd_addr, 0), 0);
+    assert_eq!(
+        tidemark_kernel::syscall::pipe::sys_pipe2(&mut t.vm, t.base, stdout_pipefd_addr, 0),
+        0
+    );
+    assert_eq!(
+        tidemark_kernel::syscall::pipe::sys_pipe2(&mut t.vm, t.base, stderr_pipefd_addr, 0),
+        0
+    );
 
     let stdout_read_fd = unsafe { guest_mem::read_u32(t.base, stdout_pipefd_addr) };
     let stdout_write_fd = unsafe { guest_mem::read_u32(t.base, stdout_pipefd_addr + 4) };
@@ -903,7 +1730,8 @@ fn semantics_execve_failure_preserves_thread_group_and_altstack() {
     let mut t = TestVm::new();
     let ps_before = t.vm.process_ptr;
     let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
-    ps.thread_count.store(2, core::sync::atomic::Ordering::Release);
+    ps.thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
     ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, 0xFEED_BEEFu32, 0, 0);
     t.vm.sigaltstack_sp = 0x7000;
     t.vm.sigaltstack_size = 4096;
@@ -917,7 +1745,10 @@ fn semantics_execve_failure_preserves_thread_group_and_altstack() {
     assert_eq!(t.vm.sigaltstack_size, 4096);
 
     let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
-    assert_eq!(ps.thread_count.load(core::sync::atomic::Ordering::Acquire), 2);
+    assert_eq!(
+        ps.thread_count.load(core::sync::atomic::Ordering::Acquire),
+        2
+    );
     assert_eq!(ps.threads[1].state, THREAD_RUNNING);
 }
 
@@ -925,7 +1756,8 @@ fn semantics_execve_failure_preserves_thread_group_and_altstack() {
 fn contract_reset_process_lifecycle_reinitializes_thread_registry() {
     let mut t = TestVm::new();
     let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
-    ps.thread_count.store(3, core::sync::atomic::Ordering::Release);
+    ps.thread_count
+        .store(3, core::sync::atomic::Ordering::Release);
     ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, 0xFEED_BEEFu32, 0, 0);
     ps.threads[2] = ThreadRecord::new(3, THREAD_RUNNING, 0xCAFE_BABEu32, 0, 0);
 
@@ -934,7 +1766,10 @@ fn contract_reset_process_lifecycle_reinitializes_thread_registry() {
     let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
     assert_eq!(ps.pid, 7);
     assert_eq!(ps.ppid, 1);
-    assert_eq!(ps.thread_count.load(core::sync::atomic::Ordering::Acquire), 1);
+    assert_eq!(
+        ps.thread_count.load(core::sync::atomic::Ordering::Acquire),
+        1
+    );
     assert_eq!(ps.threads[0].tid, t.vm.tid);
     assert_eq!(ps.threads[0].state, THREAD_RUNNING);
     assert_eq!(ps.threads[0].thread_ptr, &t.vm as *const _ as u32);
@@ -979,7 +1814,10 @@ fn semantics_fork_inherited_session_allows_nested_group_join() {
 
     write_process_ids(&t, child2, child1);
     assert_eq!(process_impl::sys_setpgid(&t.vm, t.base, 0, 0), 0);
-    assert_eq!(process_impl::sys_setpgid(&t.vm, t.base, 0, child1 as i64), 0);
+    assert_eq!(
+        process_impl::sys_setpgid(&t.vm, t.base, 0, child1 as i64),
+        0
+    );
     assert_eq!(process_impl::sys_getpgid(&t.vm, t.base, 0), child1 as i64);
 }
 
@@ -1007,15 +1845,44 @@ fn semantics_waitid_wnowait_reports_without_reaping() {
     t.vm.status = STATUS_OK;
     process_impl::record_child_exit(child, 9 << 8);
 
-    let ret = process_impl::sys_waitid(&mut t.vm, t.base, P_PID, child as i64, info_addr, WEXITED | WNOWAIT, 0);
+    let ret = process_impl::sys_waitid(
+        &mut t.vm,
+        t.base,
+        P_PID,
+        child as i64,
+        info_addr,
+        WEXITED | WNOWAIT,
+        0,
+    );
     assert_eq!(ret, 0);
-    assert_eq!(unsafe { guest_mem::read_u32(t.base, info_addr + SIGINFO_OFF_SI_PID) }, child as u32);
-    assert_eq!(unsafe { guest_mem::read_u32(t.base, info_addr + SIGINFO_OFF_SI_STATUS) }, 9);
+    assert_eq!(
+        unsafe { guest_mem::read_u32(t.base, info_addr + SIGINFO_OFF_SI_PID) },
+        child as u32
+    );
+    assert_eq!(
+        unsafe { guest_mem::read_u32(t.base, info_addr + SIGINFO_OFF_SI_STATUS) },
+        9
+    );
 
-    let ret = process_impl::sys_waitid(&mut t.vm, t.base, P_PID, child as i64, info_addr, WEXITED, 0);
+    let ret = process_impl::sys_waitid(
+        &mut t.vm,
+        t.base,
+        P_PID,
+        child as i64,
+        info_addr,
+        WEXITED,
+        0,
+    );
     assert_eq!(ret, 0);
 
-    let ret =
-        process_impl::sys_waitid(&mut t.vm, t.base, P_PID, child as i64, info_addr, WEXITED | WNOHANG, 0);
+    let ret = process_impl::sys_waitid(
+        &mut t.vm,
+        t.base,
+        P_PID,
+        child as i64,
+        info_addr,
+        WEXITED | WNOHANG,
+        0,
+    );
     assert_eq!(ret, ECHILD);
 }

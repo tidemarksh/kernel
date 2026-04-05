@@ -43,12 +43,12 @@ pub mod cpu;
 pub mod elf;
 pub mod fs;
 pub mod guest_mem;
+#[cfg(any(test, all(target_arch = "wasm32", feature = "harness")))]
+pub mod harness;
 #[path = "harness/debug.rs"]
 mod harness_debug;
 #[path = "harness/exports.rs"]
 mod harness_exports;
-#[cfg(any(test, all(target_arch = "wasm32", feature = "harness")))]
-pub mod harness;
 #[path = "harness/support.rs"]
 mod harness_support;
 pub mod jit;

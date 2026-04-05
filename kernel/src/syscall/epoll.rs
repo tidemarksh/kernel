@@ -1,13 +1,16 @@
 //! Epoll syscalls: epoll_create1, epoll_ctl, epoll_pwait.
 //!
-//! Struct layout (RV64):
+//! Struct layout (RV64 Linux):
 //!
 //! struct epoll_event {                  // 16 bytes total
 //!     events: u32,                      // offset 0
-//!     _pad:   u32,                      // offset 4 (alignment)
+//!     pad:    u32,                      // offset 4
 //!     data:   u64,                      // offset 8
 //! };
-//! https://github.com/torvalds/linux/blob/v6.12/include/uapi/linux/eventpoll.h
+//!
+//! Linux UAPI only packs this structure on x86_64. RISC-V uses the natural
+//! alignment, so user ABI is 16-byte stride with `data` at +8.
+//! See `include/uapi/linux/eventpoll.h`.
 
 use crate::abi::*;
 use crate::alloc;
@@ -23,6 +26,8 @@ pub(crate) const EPOLLIN: u32 = 0x001;
 const EPOLLOUT: u32 = 0x004;
 const EPOLLERR: u32 = 0x008;
 const EPOLLHUP: u32 = 0x010;
+const EPOLL_EVENT_DATA_OFFSET: u64 = 8;
+const EPOLL_EVENT_SIZE: u64 = 16;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -236,7 +241,7 @@ pub fn sys_epoll_ctl(
                 }
             }
             let events = unsafe { guest_mem::read_u32(base, event_addr) };
-            let data = unsafe { guest_mem::read_u64(base, event_addr + 8) };
+            let data = unsafe { guest_mem::read_u64(base, event_addr + EPOLL_EVENT_DATA_OFFSET) };
             let idx = inst.count as usize;
             inst.entries[idx] = EpollEntry {
                 ofd_id: watched_ofd_id,
@@ -259,7 +264,8 @@ pub fn sys_epoll_ctl(
             for i in 0..inst.count as usize {
                 if inst.entries[i].ofd_id == watched_ofd_id {
                     inst.entries[i].events = unsafe { guest_mem::read_u32(base, event_addr) };
-                    inst.entries[i].data = unsafe { guest_mem::read_u64(base, event_addr + 8) };
+                    inst.entries[i].data =
+                        unsafe { guest_mem::read_u64(base, event_addr + EPOLL_EVENT_DATA_OFFSET) };
                     return 0;
                 }
             }
@@ -289,15 +295,64 @@ pub fn sys_epoll_pwait(
     timeout: i64,
     _sigmask: u64,
 ) -> i64 {
+    const EPOLL_WAIT_REASON_NO_OFD: u32 = 1;
+    const EPOLL_WAIT_REASON_WRONG_TYPE: u32 = 2;
+    const EPOLL_WAIT_REASON_MISSING_INSTANCE: u32 = 3;
+    const EPOLL_WAIT_REASON_READY: u32 = 4;
+    const EPOLL_WAIT_REASON_BLOCKED: u32 = 5;
+
+    let epoll_ofd_id = fd_table::get_ofd_id(base, vm, epfd).unwrap_or(0);
     let epoll_ofd = match fd_table::get_ofd(base, vm, epfd) {
         Some(o) => o,
-        None => return EBADF,
+        None => {
+            crate::harness_debug::record_epoll_wait(
+                0,
+                epfd,
+                epoll_ofd_id,
+                0,
+                0,
+                0,
+                0,
+                EBADF,
+                EPOLL_WAIT_REASON_NO_OFD,
+            );
+            return EBADF;
+        }
     };
     if epoll_ofd.fd_type != FD_TYPE_EPOLL {
+        crate::harness_debug::record_epoll_wait(
+            0,
+            epfd,
+            epoll_ofd_id,
+            epoll_ofd.fd_type,
+            epoll_ofd.ino,
+            epoll_ptr(epoll_ofd.ino as usize) as u32,
+            0,
+            EINVAL,
+            EPOLL_WAIT_REASON_WRONG_TYPE,
+        );
         return EINVAL;
     }
 
+    let epoll_idx = epoll_ofd.ino as usize;
+    let epoll_ptr_value = epoll_ptr(epoll_idx);
+    let epoll_count = if epoll_ptr_value.is_null() {
+        0
+    } else {
+        unsafe { (*epoll_ptr_value).count }
+    };
     let Some(inst) = validated_epoll_instance(epoll_ofd.ino as usize) else {
+        crate::harness_debug::record_epoll_wait(
+            0,
+            epfd,
+            epoll_ofd_id,
+            epoll_ofd.fd_type,
+            epoll_ofd.ino,
+            epoll_ptr_value as u32,
+            epoll_count,
+            EBADF,
+            EPOLL_WAIT_REASON_MISSING_INSTANCE,
+        );
         return EBADF;
     };
     let max = maxevents as usize;
@@ -313,10 +368,10 @@ pub fn sys_epoll_pwait(
         };
         let revents = poll_ofd(&ofd, e.events);
         if revents != 0 {
-            let out_addr = events_addr + (ready as u64) * 16;
+            let out_addr = events_addr + (ready as u64) * EPOLL_EVENT_SIZE;
             unsafe {
                 guest_mem::write_u32(base, out_addr, revents);
-                guest_mem::write_u64(base, out_addr + 8, e.data);
+                guest_mem::write_u64(base, out_addr + EPOLL_EVENT_DATA_OFFSET, e.data);
             }
             ready += 1;
         }
@@ -324,20 +379,44 @@ pub fn sys_epoll_pwait(
 
     if ready > 0 || timeout == 0 {
         vm.epoll_timeout_ms = 0;
+        crate::harness_debug::record_epoll_wait(
+            0,
+            epfd,
+            epoll_ofd_id,
+            epoll_ofd.fd_type,
+            epoll_ofd.ino,
+            epoll_ptr_value as u32,
+            inst.count,
+            ready as i64,
+            EPOLL_WAIT_REASON_READY,
+        );
         return ready as i64;
     }
 
     // No events ready and timeout != 0: block via STATUS_EPOLL_WAIT.
     // Store context for resume by the TS runtime.
+    fd_table::pin_blocked_fd(base, vm, epfd);
     vm.fault_addr = epfd;
     vm.fault_pc = events_addr;
     vm.epoll_timeout_ms = timeout;
     vm.epoll_maxevents = maxevents as u32;
     vm.status = STATUS_EPOLL_WAIT;
+    crate::harness_debug::record_epoll_wait(
+        0,
+        epfd,
+        epoll_ofd_id,
+        epoll_ofd.fd_type,
+        epoll_ofd.ino,
+        epoll_ptr_value as u32,
+        inst.count,
+        0,
+        EPOLL_WAIT_REASON_BLOCKED,
+    );
     return 0; // dispatch() checks vm.status and returns it
 }
 
 pub fn resume_timeout(vm: &mut ThreadState) {
+    fd_table::clear_blocked_ofd_pin(vm);
     vm.epoll_timeout_ms = 0;
     vm.epoll_maxevents = 0;
     vm.x[10] = 0;

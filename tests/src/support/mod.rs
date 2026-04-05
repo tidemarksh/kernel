@@ -943,8 +943,7 @@ fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> Result<(i32, u64, Vec<u8>
             } else {
                 let current_bytes = (current_pages as u64).saturating_mul(65536);
                 let guest_base_hint = current_bytes.saturating_add(GUEST_BASE_PADDING as u64);
-                let aligned = guest_base_hint
-                    .saturating_add((GUEST_RAM_ALIGN - 1) as u64)
+                let aligned = guest_base_hint.saturating_add((GUEST_RAM_ALIGN - 1) as u64)
                     & !((GUEST_RAM_ALIGN - 1) as u64);
                 let base = aligned.min(u32::MAX as u64) as u32;
                 TEST_GUEST_BASE = base;
@@ -1061,6 +1060,7 @@ fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> Result<(i32, u64, Vec<u8>
                 &[env_path_addr],
                 &elf_result,
                 random_addr,
+                argv0_addr,
             );
 
             let mut vm: ThreadState = core::mem::zeroed();

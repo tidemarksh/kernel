@@ -1,9 +1,8 @@
 pub mod support {
     pub use crate::harness_support::{
         PlainForkSnapshot, clear_guest_output, clear_plain_fork_futex_wait,
-        clear_plain_fork_futex_waits, register_plain_fork_futex_wait,
-        restore_plain_fork_parent, snapshot_plain_fork, take_guest_output,
-        take_plain_fork_futex_wake,
+        clear_plain_fork_futex_waits, register_plain_fork_futex_wait, restore_plain_fork_parent,
+        snapshot_plain_fork, take_guest_output, take_plain_fork_futex_wake,
     };
 }
 
@@ -87,15 +86,13 @@ impl TestVm {
                 let current_bytes = (current_pages as u64).saturating_mul(65536);
                 let guest_base_hint =
                     current_bytes.saturating_add(DEFAULT_GUEST_BASE_PADDING as u64);
-                let aligned = guest_base_hint
-                    .saturating_add((DEFAULT_GUEST_RAM_ALIGN - 1) as u64)
+                let aligned = guest_base_hint.saturating_add((DEFAULT_GUEST_RAM_ALIGN - 1) as u64)
                     & !((DEFAULT_GUEST_RAM_ALIGN - 1) as u64);
                 let base = aligned.min(u32::MAX as u64) as u32;
                 TEST_GUEST_BASE = base;
                 base
             };
-            let target_bytes =
-                (base as u64).saturating_add(DEFAULT_GUEST_RAM_SIZE as u64);
+            let target_bytes = (base as u64).saturating_add(DEFAULT_GUEST_RAM_SIZE as u64);
             let target_pages = ((target_bytes + 65535) / 65536) as usize;
             let target_pages = target_pages.max(DEFAULT_MEMORY_PAGES);
             if current_pages < target_pages {
@@ -131,7 +128,8 @@ impl TestVm {
             let cwd_off = core::mem::offset_of!(ProcessState, cwd_ino) as u64;
             crate::guest_mem::write_u32(base, ps_addr + cwd_off, 1);
             let fs_ring_off = core::mem::offset_of!(ProcessState, fs_ring_base) as u64;
-            let fs_ring_base = crate::alloc::alloc_zeroed(crate::fs::ring_buffer::RING_BUFFER_SIZE as u32, 16);
+            let fs_ring_base =
+                crate::alloc::alloc_zeroed(crate::fs::ring_buffer::RING_BUFFER_SIZE as u32, 16);
             crate::guest_mem::write_u32(base, ps_addr + fs_ring_off, fs_ring_base);
 
             syscall::signal::init_for_process(42);

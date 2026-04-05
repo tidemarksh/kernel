@@ -18,6 +18,7 @@ use crate::fs::{fd_table, memfs};
 use crate::guest_mem;
 use crate::types::{FdEntry, ProcessState, ThreadState};
 use alloc_crate::{vec, vec::Vec};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 // =========================================================================
 // Process table — tracks child processes for wait4
@@ -99,6 +100,7 @@ struct VforkSnapshot {
     futex_wait_addr: u64,
     futex_wait_timeout: u64,
     futex_wait_expected: u32,
+    futex_wait_bitset: u32,
     epoll_timeout_ms: i64,
     epoll_maxevents: u32,
     blocked_fd: u32,
@@ -107,39 +109,21 @@ struct VforkSnapshot {
 }
 
 struct ExecveImage {
-    ino: u32,
     path_bytes: Vec<u8>,
     argv: Vec<Vec<u8>>,
     envp: Vec<Vec<u8>>,
-    elf_len: u32,
-    load_ino: u32,
-    load_elf_len: u32,
-    load_elf: crate::elf::ElfLoadResult,
+    main_bytes: Vec<u8>,
+    main_bias: u64,
+    main_elf: crate::elf::ElfLoadResult,
+    interp_bytes: Option<Vec<u8>>,
+    interp_bias: u64,
+    interp_elf: Option<crate::elf::ElfLoadResult>,
 }
-
-const ELF_EI_CLASS: usize = 4;
-const ELF_EI_DATA: usize = 5;
-const ELF_E_TYPE: usize = 16;
-const ELF_E_MACHINE: usize = 18;
-const ELF_E_ENTRY: usize = 24;
-const ELF_E_PHOFF: usize = 32;
-const ELF_E_PHENTSIZE: usize = 54;
-const ELF_E_PHNUM: usize = 56;
-const ELF_PH_TYPE: usize = 0;
-const ELF_PH_OFFSET: usize = 8;
-const ELF_PH_VADDR: usize = 16;
-const ELF_PH_FILESZ: usize = 32;
-const ELF_PH_MEMSZ: usize = 40;
-const ELFCLASS64: u8 = 2;
-const ELFDATA2LSB: u8 = 1;
-const ET_EXEC: u16 = 2;
-const EM_RISCV: u16 = 243;
-const PT_INTERP: u32 = 3;
-const PT_LOAD: u32 = 1;
-const PT_TLS: u32 = 7;
 
 #[repr(C)]
 struct ProcessRuntimeState {
+    heap_base: u32,
+    heap_ptr: AtomicU32,
     children: [ChildEntry; MAX_CHILDREN],
     next_pid: i32,
     vfork_active: u32,
@@ -203,6 +187,7 @@ fn empty_vfork_snapshot() -> VforkSnapshot {
         futex_wait_addr: 0,
         futex_wait_timeout: 0,
         futex_wait_expected: 0,
+        futex_wait_bitset: 0,
         epoll_timeout_ms: 0,
         epoll_maxevents: 0,
         blocked_fd: 0,
@@ -263,6 +248,8 @@ pub fn init() {
         core::ptr::write(
             state,
             ProcessRuntimeState {
+                heap_base: alloc::heap_base(),
+                heap_ptr: AtomicU32::new(alloc::heap_ptr()),
                 children: [ChildEntry {
                     pid: 0,
                     parent_pid: 0,
@@ -293,6 +280,52 @@ pub fn attach_process_runtime_state_ptr(ptr: u32) {
             core::ptr::addr_of_mut!(PROCESS_RUNTIME_STATE),
             ptr as *mut ProcessRuntimeState,
         );
+    }
+}
+
+pub fn shared_heap_base() -> Option<u32> {
+    let ptr = unsafe { core::ptr::read(core::ptr::addr_of!(PROCESS_RUNTIME_STATE)) };
+    if ptr.is_null() {
+        None
+    } else {
+        Some(unsafe { (*ptr).heap_base })
+    }
+}
+
+pub fn shared_heap_ptr() -> Option<u32> {
+    let ptr = unsafe { core::ptr::read(core::ptr::addr_of!(PROCESS_RUNTIME_STATE)) };
+    if ptr.is_null() {
+        None
+    } else {
+        Some(unsafe { (*ptr).heap_ptr.load(Ordering::Acquire) })
+    }
+}
+
+pub fn shared_heap_alloc(size: u32, align: u32) -> Option<u32> {
+    let ptr = unsafe { core::ptr::read(core::ptr::addr_of!(PROCESS_RUNTIME_STATE)) };
+    if ptr.is_null() {
+        return None;
+    }
+    let state = unsafe { &*ptr };
+    loop {
+        let current = state.heap_ptr.load(Ordering::Acquire);
+        let aligned = (current + align - 1) & !(align - 1);
+        let end = aligned + size;
+        let mem_size = (core::arch::wasm32::memory_size(0) as u64) * 65536;
+        if end as u64 > mem_size {
+            let pages_needed = (((end as u64 - mem_size) + 65535) / 65536) as usize;
+            let result = core::arch::wasm32::memory_grow(0, pages_needed);
+            if result == usize::MAX {
+                return Some(0);
+            }
+        }
+        if state
+            .heap_ptr
+            .compare_exchange(current, end, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            return Some(aligned);
+        }
     }
 }
 
@@ -741,6 +774,42 @@ fn read_guest_strvec(base: u32, vec_addr: u64) -> Result<Vec<Vec<u8>>, i64> {
     Ok(out)
 }
 
+fn read_execve_elf_bytes(ino: u32, elf_len: u32) -> Result<Vec<u8>, i64> {
+    let mut elf_bytes = vec![0u8; elf_len as usize];
+    if memfs::read_file(ino, 0, &mut elf_bytes) != elf_len as i64 {
+        return Err(EIO);
+    }
+    Ok(elf_bytes)
+}
+
+fn inspect_execve_elf_bytes(
+    elf_bytes: &[u8],
+    ram_size: u64,
+) -> Result<crate::elf::ElfLoadResult, i64> {
+    unsafe {
+        crate::elf::inspect_elf(elf_bytes.as_ptr() as u32, elf_bytes.len() as u32, ram_size)
+            .map_err(|_| ENOEXEC)
+    }
+}
+
+fn load_execve_elf_bytes_at(
+    base: u32,
+    ram_size: u64,
+    elf_bytes: &[u8],
+    load_bias: u64,
+) -> Result<crate::elf::ElfLoadResult, i64> {
+    unsafe {
+        crate::elf::load_elf_at(
+            base,
+            ram_size,
+            elf_bytes.as_ptr() as u32,
+            elf_bytes.len() as u32,
+            load_bias,
+        )
+        .map_err(|_| ENOEXEC)
+    }
+}
+
 fn load_execve_image(
     vm: &ThreadState,
     base: u32,
@@ -776,8 +845,14 @@ fn load_execve_image(
         Ok(len) if len > 0 => len,
         _ => return Err(ENOEXEC),
     };
-    let elf = inspect_execve_elf(ino, elf_len, ram_size)?;
-    let (load_ino, load_elf_len, load_elf) = match read_execve_interp_path(ino, elf_len)? {
+    let main_bytes = read_execve_elf_bytes(ino, elf_len)?;
+    let mut elf = inspect_execve_elf_bytes(&main_bytes, ram_size)?;
+    let interp_path = crate::elf::read_interp_path_bytes(&main_bytes).map_err(|_| ENOEXEC)?;
+    let main_bias = crate::elf::main_executable_load_bias(&elf, interp_path.is_some());
+    if main_bias != 0 {
+        elf = crate::elf::bias_load_result(elf, main_bias);
+    }
+    let (interp_bytes, interp_bias, interp_elf) = match interp_path {
         Some(interp_path) => {
             let interp_ino = memfs::resolve_path(&interp_path);
             if interp_ino == 0 {
@@ -791,14 +866,14 @@ fn load_execve_image(
             if interp_len == 0 {
                 return Err(ENOEXEC);
             }
-            let mut interp_elf = inspect_execve_elf(interp_ino, interp_len, ram_size)?;
-            interp_elf.aux_entry = elf.entry;
-            interp_elf.aux_phdr_addr = elf.phdr_addr;
-            interp_elf.aux_phent = elf.phent;
-            interp_elf.aux_phnum = elf.phnum;
-            (interp_ino, interp_len, interp_elf)
+            let interp_bytes = read_execve_elf_bytes(interp_ino, interp_len)?;
+            let mut interp_elf = inspect_execve_elf_bytes(&interp_bytes, ram_size)?;
+            let interp_bias = crate::elf::interpreter_load_bias(elf.brk_start);
+            interp_elf = crate::elf::bias_load_result(interp_elf, interp_bias);
+            crate::elf::preserve_main_executable_process_image(&mut interp_elf, &elf);
+            (Some(interp_bytes), interp_bias, Some(interp_elf))
         }
-        None => (ino, elf_len, elf),
+        None => (None, 0, None),
     };
     let mut argv = read_guest_strvec(base, argv_addr)?;
     let envp = read_guest_strvec(base, envp_addr)?;
@@ -809,246 +884,16 @@ fn load_execve_image(
     }
 
     Ok(ExecveImage {
-        ino,
         path_bytes,
         argv,
         envp,
-        elf_len,
-        load_ino,
-        load_elf_len,
-        load_elf,
+        main_bytes,
+        main_bias,
+        main_elf: elf,
+        interp_bytes,
+        interp_bias,
+        interp_elf,
     })
-}
-
-fn read_execve_interp_path(ino: u32, elf_len: u32) -> Result<Option<Vec<u8>>, i64> {
-    let mut header = [0u8; 64];
-    if memfs::read_file(ino, 0, &mut header) != header.len() as i64 {
-        return Err(EIO);
-    }
-
-    let ph_off = read_u64_le(&header, ELF_E_PHOFF).ok_or(ENOEXEC)? as usize;
-    let ph_entsize = read_u16_le(&header, ELF_E_PHENTSIZE).ok_or(ENOEXEC)? as usize;
-    let ph_num = read_u16_le(&header, ELF_E_PHNUM).ok_or(ENOEXEC)? as usize;
-    if ph_entsize < 56 {
-        return Err(ENOEXEC);
-    }
-    let ph_size = ph_num.checked_mul(ph_entsize).ok_or(ENOEXEC)?;
-    let ph_end = ph_off.checked_add(ph_size).ok_or(ENOEXEC)?;
-    if ph_end > elf_len as usize {
-        return Err(ENOEXEC);
-    }
-
-    let mut phdrs = vec![0u8; ph_size];
-    if memfs::read_file(ino, ph_off as u64, &mut phdrs) != ph_size as i64 {
-        return Err(EIO);
-    }
-
-    for index in 0..ph_num {
-        let start = index * ph_entsize;
-        let ph = &phdrs[start..start + ph_entsize];
-        if read_u32_le(ph, ELF_PH_TYPE) != Some(PT_INTERP) {
-            continue;
-        }
-        let p_offset = read_u64_le(ph, ELF_PH_OFFSET).ok_or(ENOEXEC)?;
-        let p_filesz = read_u64_le(ph, ELF_PH_FILESZ).ok_or(ENOEXEC)?;
-        if p_filesz == 0 || p_offset.checked_add(p_filesz).is_none_or(|end| end > elf_len as u64) {
-            return Err(ENOEXEC);
-        }
-        let mut interp = vec![0u8; p_filesz as usize];
-        if memfs::read_file(ino, p_offset, &mut interp) != p_filesz as i64 {
-            return Err(EIO);
-        }
-        if let Some(nul) = interp.iter().position(|b| *b == 0) {
-            interp.truncate(nul);
-        }
-        if interp.is_empty() {
-            return Err(ENOEXEC);
-        }
-        return Ok(Some(interp));
-    }
-
-    Ok(None)
-}
-
-fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
-    bytes
-        .get(offset..offset + 2)
-        .and_then(|slice| <[u8; 2]>::try_from(slice).ok())
-        .map(u16::from_le_bytes)
-}
-
-fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
-    bytes
-        .get(offset..offset + 4)
-        .and_then(|slice| <[u8; 4]>::try_from(slice).ok())
-        .map(u32::from_le_bytes)
-}
-
-fn read_u64_le(bytes: &[u8], offset: usize) -> Option<u64> {
-    bytes
-        .get(offset..offset + 8)
-        .and_then(|slice| <[u8; 8]>::try_from(slice).ok())
-        .map(u64::from_le_bytes)
-}
-
-fn inspect_execve_elf(
-    ino: u32,
-    elf_len: u32,
-    ram_size: u64,
-) -> Result<crate::elf::ElfLoadResult, i64> {
-    let mut header = [0u8; 64];
-    if memfs::read_file(ino, 0, &mut header) != header.len() as i64 {
-        return Err(ENOEXEC);
-    }
-
-    if header[0] != 0x7f || header[1] != b'E' || header[2] != b'L' || header[3] != b'F' {
-        return Err(ENOEXEC);
-    }
-    if header[ELF_EI_CLASS] != ELFCLASS64 || header[ELF_EI_DATA] != ELFDATA2LSB {
-        return Err(ENOEXEC);
-    }
-    if read_u16_le(&header, ELF_E_TYPE) != Some(ET_EXEC) {
-        return Err(ENOEXEC);
-    }
-    if read_u16_le(&header, ELF_E_MACHINE) != Some(EM_RISCV) {
-        return Err(ENOEXEC);
-    }
-
-    let entry = read_u64_le(&header, ELF_E_ENTRY).ok_or(ENOEXEC)?;
-    let ph_off = read_u64_le(&header, ELF_E_PHOFF).ok_or(ENOEXEC)? as usize;
-    let ph_entsize = read_u16_le(&header, ELF_E_PHENTSIZE).ok_or(ENOEXEC)? as usize;
-    let ph_num = read_u16_le(&header, ELF_E_PHNUM).ok_or(ENOEXEC)? as usize;
-    if ph_entsize < 56 {
-        return Err(ENOEXEC);
-    }
-    let ph_size = ph_num.checked_mul(ph_entsize).ok_or(ENOEXEC)?;
-    let ph_end = ph_off.checked_add(ph_size).ok_or(ENOEXEC)?;
-    if ph_end > elf_len as usize {
-        return Err(ENOEXEC);
-    }
-
-    let mut phdrs = vec![0u8; ph_size];
-    if memfs::read_file(ino, ph_off as u64, &mut phdrs) != ph_size as i64 {
-        return Err(ENOEXEC);
-    }
-
-    let mut brk_end = 0u64;
-    let mut phdr_addr = 0u64;
-    let mut tls_base = 0u64;
-    for index in 0..ph_num {
-        let start = index * ph_entsize;
-        let ph = &phdrs[start..start + ph_entsize];
-        let p_type = read_u32_le(ph, ELF_PH_TYPE).ok_or(ENOEXEC)?;
-        let p_offset = read_u64_le(ph, ELF_PH_OFFSET).ok_or(ENOEXEC)?;
-        let p_vaddr = read_u64_le(ph, ELF_PH_VADDR).ok_or(ENOEXEC)?;
-        let p_filesz = read_u64_le(ph, ELF_PH_FILESZ).ok_or(ENOEXEC)?;
-        let p_memsz = read_u64_le(ph, ELF_PH_MEMSZ).ok_or(ENOEXEC)?;
-        if p_type != PT_LOAD && p_type != PT_TLS {
-            continue;
-        }
-        if p_vaddr
-            .checked_add(p_memsz)
-            .is_none_or(|end| end > ram_size)
-        {
-            return Err(ENOEXEC);
-        }
-        if p_offset
-            .checked_add(p_filesz)
-            .is_none_or(|end| end > elf_len as u64)
-        {
-            return Err(ENOEXEC);
-        }
-        if p_type == PT_LOAD {
-            let seg_end = p_vaddr + p_memsz;
-            if seg_end > brk_end {
-                brk_end = seg_end;
-            }
-            if phdr_addr == 0 && p_offset == 0 {
-                phdr_addr = p_vaddr + ph_off as u64;
-            }
-        } else if tls_base == 0 {
-            tls_base = p_vaddr;
-        }
-    }
-
-    brk_end = (brk_end + 4095) & !4095;
-    Ok(crate::elf::ElfLoadResult {
-        entry,
-        brk_start: brk_end,
-        tls_base,
-        phdr_addr,
-        phent: ph_entsize as u16,
-        phnum: ph_num as u16,
-        aux_entry: entry,
-        aux_phdr_addr: phdr_addr,
-        aux_phent: ph_entsize as u16,
-        aux_phnum: ph_num as u16,
-    })
-}
-
-fn load_execve_elf_from_inode(
-    base: u32,
-    ram_size: u64,
-    ino: u32,
-    elf_len: u32,
-) -> Result<crate::elf::ElfLoadResult, i64> {
-    let inspected = inspect_execve_elf(ino, elf_len, ram_size)?;
-    let mut header = [0u8; 64];
-    if memfs::read_file(ino, 0, &mut header) != header.len() as i64 {
-        return Err(EIO);
-    }
-
-    let ph_off = read_u64_le(&header, ELF_E_PHOFF).ok_or(ENOEXEC)? as usize;
-    let ph_entsize = read_u16_le(&header, ELF_E_PHENTSIZE).ok_or(ENOEXEC)? as usize;
-    let ph_num = read_u16_le(&header, ELF_E_PHNUM).ok_or(ENOEXEC)? as usize;
-    if ph_entsize < 56 {
-        return Err(ENOEXEC);
-    }
-    let ph_size = ph_num.checked_mul(ph_entsize).ok_or(ENOEXEC)?;
-    let ph_end = ph_off.checked_add(ph_size).ok_or(ENOEXEC)?;
-    if ph_end > elf_len as usize {
-        return Err(ENOEXEC);
-    }
-
-    let mut phdrs = vec![0u8; ph_size];
-    if memfs::read_file(ino, ph_off as u64, &mut phdrs) != ph_size as i64 {
-        return Err(EIO);
-    }
-
-    let mut chunk = [0u8; 4096];
-    for index in 0..ph_num {
-        let start = index * ph_entsize;
-        let ph = &phdrs[start..start + ph_entsize];
-        if read_u32_le(ph, ELF_PH_TYPE) != Some(PT_LOAD) {
-            continue;
-        }
-
-        let p_offset = read_u64_le(ph, ELF_PH_OFFSET).ok_or(ENOEXEC)?;
-        let p_vaddr = read_u64_le(ph, ELF_PH_VADDR).ok_or(ENOEXEC)?;
-        let p_filesz = read_u64_le(ph, ELF_PH_FILESZ).ok_or(ENOEXEC)?;
-        let p_memsz = read_u64_le(ph, ELF_PH_MEMSZ).ok_or(ENOEXEC)?;
-
-        let mut copied = 0u64;
-        while copied < p_filesz {
-            let read_len = ((p_filesz - copied) as usize).min(chunk.len());
-            let read = memfs::read_file(ino, p_offset + copied, &mut chunk[..read_len]);
-            if read != read_len as i64 {
-                return Err(EIO);
-            }
-            unsafe {
-                guest_mem::write_bytes(base, p_vaddr + copied, &chunk[..read_len]);
-            }
-            copied += read_len as u64;
-        }
-
-        if p_memsz > p_filesz {
-            unsafe {
-                guest_mem::zero_mem(base, p_vaddr + p_filesz, (p_memsz - p_filesz) as usize);
-            }
-        }
-    }
-
-    Ok(inspected)
 }
 
 fn install_proc_self_exe(target: &[u8]) {
@@ -1083,6 +928,38 @@ fn install_proc_self_exe(target: &[u8]) {
     crate::harness_debug::record_execve_stage(715, self_ino as u64, target.len() as u64);
     let exe_ino = memfs::create_symlink(self_ino, b"exe", target);
     crate::harness_debug::record_execve_stage(716, exe_ino as u64, 0);
+}
+
+const PROC_STAT_BYTES: &[u8] = b"cpu  1 1 1 1 0 0 0 0 0 0\ncpu0 1 1 1 1 0 0 0 0 0 0\n";
+const PROC_CPUINFO_BYTES: &[u8] = b"processor\t: 0\nmodel name\t: tidemark-riscv64\n\n";
+
+fn replace_proc_file(proc_ino: u32, name: &[u8], data: &[u8]) {
+    let existing = memfs::lookup(proc_ino, name);
+    if existing != 0 {
+        let _ = memfs::unlink(proc_ino, name);
+    }
+    let _ = memfs::create_file_with_data(proc_ino, name, data);
+}
+
+pub fn install_procfs_snapshot(exe_target: &[u8]) {
+    install_proc_self_exe(exe_target);
+
+    let proc_ino = memfs::resolve_path(b"/proc");
+    if proc_ino == 0 {
+        return;
+    }
+    let self_ino = memfs::resolve_path(b"/proc/self");
+    if self_ino == 0 {
+        return;
+    }
+
+    replace_proc_file(proc_ino, b"stat", PROC_STAT_BYTES);
+    replace_proc_file(proc_ino, b"cpuinfo", PROC_CPUINFO_BYTES);
+    replace_proc_file(
+        self_ino,
+        b"maps",
+        &crate::syscall::memory::proc_self_maps_snapshot(),
+    );
 }
 
 fn write_stack_strings(base: u32, start: u64, strings: &[Vec<u8>], addrs: &mut [u64]) {
@@ -1213,14 +1090,15 @@ fn complete_execve_in_place_inner(
     crate::harness_debug::record_execve_stage(1, base as u64, ram_size);
 
     let ExecveImage {
-        ino: _ino,
         path_bytes,
         argv,
         envp,
-        elf_len: _elf_len,
-        load_ino,
-        load_elf_len,
-        load_elf,
+        main_bytes,
+        main_bias,
+        main_elf,
+        interp_bytes,
+        interp_bias,
+        interp_elf,
     } = match load_execve_image(
         vm,
         base,
@@ -1232,7 +1110,11 @@ fn complete_execve_in_place_inner(
         Ok(image) => image,
         Err(errno) => return errno,
     };
-    crate::harness_debug::record_execve_stage(2, load_elf.brk_start, load_elf.entry);
+    let load_brk_start = main_elf
+        .brk_start
+        .max(interp_elf.as_ref().map(|elf| elf.brk_start).unwrap_or(0));
+    let active_elf = interp_elf.as_ref().copied().unwrap_or(main_elf);
+    crate::harness_debug::record_execve_stage(2, load_brk_start, active_elf.entry);
 
     let ps_addr = vm.process_ptr as u64;
     let old_pid = unsafe {
@@ -1326,13 +1208,13 @@ fn complete_execve_in_place_inner(
     let mut envp_ptrs = vec![0u64; envp.len()];
     let guest_limit = execve_guest_limit(
         base,
-        load_elf.brk_start,
+        load_brk_start,
         crate::syscall::memory::DEFAULT_STACK_SIZE,
     );
 
     let ps_size = core::mem::size_of::<ProcessState>() as u64;
     let ps_align = core::mem::align_of::<ProcessState>() as u64;
-    let new_ps_addr = (load_elf.brk_start + ps_align - 1) & !(ps_align - 1);
+    let new_ps_addr = (load_brk_start + ps_align - 1) & !(ps_align - 1);
     crate::harness_debug::record_execve_stage(3, guest_limit, new_ps_addr + ps_size);
     // vfork+execve handoff starts from a bootstrap-sized child memory. Grow the
     // guest view to the full execve limit before resetting and loading ELF
@@ -1345,13 +1227,30 @@ fn complete_execve_in_place_inner(
     crate::syscall::thread::discard_other_threads_for_exec(vm, base);
     crate::syscall::memory::reset_for_execve_with_flush(
         base,
-        load_elf.brk_start,
+        load_brk_start,
         flush_shared_mappings,
     );
-    let elf_result = match load_execve_elf_from_inode(base, ram_size, load_ino, load_elf_len) {
+    let main_result = match load_execve_elf_bytes_at(base, ram_size, &main_bytes, main_bias) {
         Ok(result) => result,
         Err(errno) => return errno,
     };
+    let mut elf_result = match interp_bytes.as_deref() {
+        Some(interp_bytes) => {
+            match load_execve_elf_bytes_at(base, ram_size, interp_bytes, interp_bias) {
+                Ok(result) => result,
+                Err(errno) => return errno,
+            }
+        }
+        None => main_result,
+    };
+    if interp_bytes.is_some() {
+        crate::elf::preserve_main_executable_process_image(&mut elf_result, &main_result);
+    }
+    let loaded_end = main_result
+        .load_end
+        .max(interp_elf.map(|elf| elf.load_end).unwrap_or(0));
+    crate::elf::zero_fill_load_padding(base, loaded_end, load_brk_start);
+    elf_result.brk_start = load_brk_start;
     crate::harness_debug::record_execve_stage(4, elf_result.brk_start, elf_result.entry);
     let stack_top = crate::syscall::memory::map_initial_stack(
         base,
@@ -1445,13 +1344,18 @@ fn complete_execve_in_place_inner(
         argv_bytes_end
     };
     crate::harness_debug::record_execve_stage(67, cursor, envp.len() as u64);
-    let mut stack_elf = load_elf;
+    let mut stack_elf = active_elf;
     stack_elf.entry = elf_result.entry;
     stack_elf.brk_start = elf_result.brk_start;
     stack_elf.tls_base = elf_result.tls_base;
     stack_elf.phdr_addr = elf_result.phdr_addr;
     stack_elf.phent = elf_result.phent;
     stack_elf.phnum = elf_result.phnum;
+    stack_elf.aux_entry = elf_result.aux_entry;
+    stack_elf.aux_phdr_addr = elf_result.aux_phdr_addr;
+    stack_elf.aux_phent = elf_result.aux_phent;
+    stack_elf.aux_phnum = elf_result.aux_phnum;
+    stack_elf.aux_base = elf_result.aux_base;
     let sp = unsafe {
         crate::elf::setup_stack(
             base,
@@ -1460,6 +1364,7 @@ fn complete_execve_in_place_inner(
             &envp_ptrs,
             &stack_elf,
             random_addr,
+            argv_ptrs[0],
         )
     };
     crate::harness_debug::record_execve_stage(68, sp, stack_setup_top);
@@ -1490,6 +1395,7 @@ fn complete_execve_in_place_inner(
     vm.futex_wait_addr = 0;
     vm.futex_wait_timeout = 0;
     vm.futex_wait_expected = 0;
+    vm.futex_wait_bitset = 0;
     vm.epoll_timeout_ms = 0;
     vm.epoll_maxevents = 0;
     vm.blocked_fd = 0;
@@ -1830,6 +1736,7 @@ pub fn sys_vfork(vm: &mut ThreadState, base: u32) -> i32 {
         futex_wait_addr: vm.futex_wait_addr,
         futex_wait_timeout: vm.futex_wait_timeout,
         futex_wait_expected: vm.futex_wait_expected,
+        futex_wait_bitset: vm.futex_wait_bitset,
         epoll_timeout_ms: vm.epoll_timeout_ms,
         epoll_maxevents: vm.epoll_maxevents,
         blocked_fd: vm.blocked_fd,
@@ -1912,6 +1819,7 @@ fn vfork_parent_resume_inner(vm: &mut ThreadState, child_pid: i32, cleanup_child
     vm.futex_wait_addr = snap.futex_wait_addr;
     vm.futex_wait_timeout = snap.futex_wait_timeout;
     vm.futex_wait_expected = snap.futex_wait_expected;
+    vm.futex_wait_bitset = snap.futex_wait_bitset;
     vm.epoll_timeout_ms = snap.epoll_timeout_ms;
     vm.epoll_maxevents = snap.epoll_maxevents;
     vm.blocked_fd = snap.blocked_fd;

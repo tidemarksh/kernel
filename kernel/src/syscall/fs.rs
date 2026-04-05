@@ -683,78 +683,98 @@ pub fn sys_openat(
     let raw_path = &path_buf[1..1 + len];
     let require_directory = path_has_trailing_slash(raw_path);
     let path = trim_trailing_slashes(raw_path);
-
-    if path.is_empty() {
-        return ENOENT;
-    }
-
-    if path == b"/dev/null" {
+    let result = if path.is_empty() {
+        ENOENT
+    } else if path == b"/dev/null" {
         if require_directory || oflags & O_DIRECTORY != 0 {
-            return ENOTDIR;
+            ENOTDIR
+        } else {
+            fd_table::open_devnull(vm, base, oflags)
         }
-        return fd_table::open_devnull(vm, base, oflags);
-    }
-
-    if oflags & O_CREAT == 0 {
-        let ino = if path[0] == b'/' {
-            match resolve_path_with_errno(1, path) {
-                Ok(ino) => ino,
-                Err(errno) => return errno,
-            }
+    } else if oflags & O_CREAT == 0 {
+        let ino_result = if path[0] == b'/' {
+            resolve_path_with_errno(1, path)
         } else {
             let base_ino = match dirfd_base_ino(vm, dirfd, base) {
                 Ok(ino) => ino,
-                Err(errno) => return errno,
+                Err(errno) => {
+                    crate::harness_debug::record_path_syscall(
+                        vm as *const ThreadState as u32,
+                        crate::abi::SYS_OPENAT,
+                        dirfd as i64,
+                        raw_path,
+                        errno,
+                        vm.status,
+                    );
+                    return errno;
+                }
             };
-            match resolve_path_with_errno(base_ino, path) {
-                Ok(ino) => ino,
-                Err(errno) => return errno,
-            }
+            resolve_path_with_errno(base_ino, path)
         };
-        return open_existing_inode(vm, base, ino, oflags, require_directory);
-    }
-
-    if path[0] == b'/' {
-        // Absolute path
+        match ino_result {
+            Ok(ino) => open_existing_inode(vm, base, ino, oflags, require_directory),
+            Err(errno) => errno,
+        }
+    } else if path[0] == b'/' {
         let (parent_ino, name) = split_parent_name(path);
         if parent_ino == 0 && name.is_empty() {
-            return fd_table::open_file(vm, base, 1, oflags);
+            fd_table::open_file(vm, base, 1, oflags)
+        } else if parent_ino == 0 {
+            ENOENT
+        } else {
+            openat_with_parent(vm, base, parent_ino, name, oflags, mode, require_directory)
         }
-        if parent_ino == 0 {
-            return ENOENT;
-        }
-        openat_with_parent(vm, base, parent_ino, name, oflags, mode, require_directory)
     } else {
-        // Relative path: determine base directory inode
         let base_ino = match dirfd_base_ino(vm, dirfd, base) {
             Ok(ino) => ino,
-            Err(errno) => return errno,
-        };
-
-        let (parent_rel, name) = split_relative_parent_name(path);
-        if name.is_empty() {
-            // Path like "mydir/" — open the directory itself
-            let ino = if parent_rel.is_empty() {
-                base_ino
-            } else {
-                memfs::resolve_path_from(base_ino, parent_rel)
-            };
-            if ino == 0 {
-                return ENOENT;
+            Err(errno) => {
+                crate::harness_debug::record_path_syscall(
+                    vm as *const ThreadState as u32,
+                    crate::abi::SYS_OPENAT,
+                    dirfd as i64,
+                    raw_path,
+                    errno,
+                    vm.status,
+                );
+                return errno;
             }
-            return fd_table::open_file(vm, base, ino, oflags);
-        }
-
-        let parent_ino = if parent_rel.is_empty() {
-            base_ino
-        } else {
-            memfs::resolve_path_from(base_ino, parent_rel)
         };
-        if parent_ino == 0 {
-            return ENOENT;
+        {
+            let (parent_rel, name) = split_relative_parent_name(path);
+            if name.is_empty() {
+                let ino = if parent_rel.is_empty() {
+                    base_ino
+                } else {
+                    memfs::resolve_path_from(base_ino, parent_rel)
+                };
+                if ino == 0 {
+                    ENOENT
+                } else {
+                    fd_table::open_file(vm, base, ino, oflags)
+                }
+            } else {
+                let parent_ino = if parent_rel.is_empty() {
+                    base_ino
+                } else {
+                    memfs::resolve_path_from(base_ino, parent_rel)
+                };
+                if parent_ino == 0 {
+                    ENOENT
+                } else {
+                    openat_with_parent(vm, base, parent_ino, name, oflags, mode, require_directory)
+                }
+            }
         }
-        openat_with_parent(vm, base, parent_ino, name, oflags, mode, require_directory)
-    }
+    };
+    crate::harness_debug::record_path_syscall(
+        vm as *const ThreadState as u32,
+        crate::abi::SYS_OPENAT,
+        dirfd as i64,
+        raw_path,
+        result,
+        vm.status,
+    );
+    result
 }
 
 fn open_existing_inode(
@@ -1763,25 +1783,32 @@ pub fn sys_newfstatat(
     let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf[1..]) };
     let raw_path = &path_buf[1..1 + len];
     let path = trim_trailing_slashes(raw_path);
-    if path.is_empty() {
+    let result = if path.is_empty() {
         if flags & AT_EMPTY_PATH == 0 {
-            return ENOENT;
+            ENOENT
+        } else if dirfd as i64 == AT_FDCWD as i64 {
+            write_stat(base, stat_buf, current_dir_ino(base, vm))
+        } else {
+            sys_fstat(vm, base, dirfd, stat_buf)
         }
-        if dirfd as i64 == AT_FDCWD as i64 {
-            return write_stat(base, stat_buf, current_dir_ino(base, vm));
-        }
-        return sys_fstat(vm, base, dirfd, stat_buf);
-    }
-    if path == b"/dev/null" {
+    } else if path == b"/dev/null" {
         write_devnull_stat(base, stat_buf, vm.uid, vm.gid);
-        return 0;
-    }
-
-    let ino = match resolve_at(vm, dirfd, path_addr, base) {
-        Ok(ino) => ino,
-        Err(errno) => return errno,
+        0
+    } else {
+        match resolve_at(vm, dirfd, path_addr, base) {
+            Ok(ino) => write_stat(base, stat_buf, ino),
+            Err(errno) => errno,
+        }
     };
-    write_stat(base, stat_buf, ino)
+    crate::harness_debug::record_path_syscall(
+        vm as *const ThreadState as u32,
+        crate::abi::SYS_NEWFSTATAT,
+        dirfd as i64,
+        raw_path,
+        result,
+        vm.status,
+    );
+    result
 }
 
 fn write_stat(base: u32, stat_buf: u64, ino: u32) -> i64 {
@@ -2043,10 +2070,22 @@ pub fn sys_faccessat(
     path_addr: u64,
     _mode: u64,
 ) -> i64 {
-    match resolve_at(vm, dirfd, path_addr, base) {
+    let mut path_buf = [0u8; 512];
+    let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf) };
+    let raw_path = &path_buf[..len];
+    let result = match resolve_at(vm, dirfd, path_addr, base) {
         Ok(_) => 0,
         Err(errno) => errno,
-    }
+    };
+    crate::harness_debug::record_path_syscall(
+        vm as *const ThreadState as u32,
+        crate::abi::SYS_FACCESSAT,
+        dirfd as i64,
+        raw_path,
+        result,
+        vm.status,
+    );
+    result
 }
 
 pub fn sys_fchmodat(
@@ -2114,34 +2153,64 @@ pub fn sys_readlinkat(
     let mut path_buf = [0u8; 512];
     let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf) };
     let path = trim_trailing_slashes(&path_buf[..len]);
-
-    let ino = if path.is_empty() {
+    let result = if path.is_empty() {
         if dirfd as i32 == AT_FDCWD {
-            return ENOENT;
-        }
-        match fd_table::get_ofd(base, vm, dirfd) {
-            Some(ofd) => ofd.ino as u32,
-            None => return EBADF,
+            ENOENT
+        } else {
+            match fd_table::get_ofd(base, vm, dirfd) {
+                Some(ofd) => {
+                    let mut link_buf = [0u8; 512];
+                    let n = memfs::read_link(ofd.ino as u32, &mut link_buf);
+                    if n == 0 {
+                        EINVAL
+                    } else {
+                        let out = n.min(bufsiz as usize);
+                        unsafe {
+                            guest_mem::write_bytes(base, buf, &link_buf[..out]);
+                        }
+                        out as i64
+                    }
+                }
+                None => EBADF,
+            }
         }
     } else {
-        match resolve_at(vm, dirfd, path_addr, base) {
+        let ino = match resolve_at(vm, dirfd, path_addr, base) {
             Ok(ino) => ino,
-            Err(errno) => return errno,
+            Err(errno) => {
+                crate::harness_debug::record_path_syscall(
+                    vm as *const ThreadState as u32,
+                    crate::abi::SYS_READLINKAT,
+                    dirfd as i64,
+                    &path_buf[..len],
+                    errno,
+                    vm.status,
+                );
+                return errno;
+            }
+        };
+
+        let mut link_buf = [0u8; 512];
+        let n = memfs::read_link(ino, &mut link_buf);
+        if n == 0 {
+            EINVAL
+        } else {
+            let out = n.min(bufsiz as usize);
+            unsafe {
+                guest_mem::write_bytes(base, buf, &link_buf[..out]);
+            }
+            out as i64
         }
     };
-
-    // Read symlink target via memfs
-    let mut link_buf = [0u8; 512];
-    let n = memfs::read_link(ino, &mut link_buf);
-    if n == 0 {
-        return EINVAL;
-    } // not a symlink
-
-    let out = n.min(bufsiz as usize);
-    unsafe {
-        guest_mem::write_bytes(base, buf, &link_buf[..out]);
-    }
-    out as i64
+    crate::harness_debug::record_path_syscall(
+        vm as *const ThreadState as u32,
+        crate::abi::SYS_READLINKAT,
+        dirfd as i64,
+        &path_buf[..len],
+        result,
+        vm.status,
+    );
+    result
 }
 
 /// ftruncate: truncate file to specified length.
@@ -2184,4 +2253,3 @@ pub fn sys_truncate(_vm: &mut ThreadState, base: u32, path_addr: u64, length: u6
 
     memfs::truncate(ino, length)
 }
-

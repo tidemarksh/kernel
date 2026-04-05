@@ -20,6 +20,8 @@ use crate::guest_mem;
 use crate::types::{ProcessState, ThreadState};
 use core::sync::atomic::{AtomicI32, AtomicI64, Ordering};
 
+const HARNESS_TRACE_ENABLED: bool = cfg!(any(test, feature = "harness"));
+
 #[derive(Clone, Copy)]
 struct JalrTrace {
     pc: u64,
@@ -58,6 +60,7 @@ static mut LAST_ZERO_REG_TRACE: ZeroRegTrace = ZeroRegTrace {
 
 #[derive(Clone, Copy)]
 struct RegWriteTrace {
+    tid: i32,
     pc: u64,
     raw: u32,
     source: u32,
@@ -68,6 +71,7 @@ struct RegWriteTrace {
 }
 
 static mut LAST_X27_WRITE_TRACE: RegWriteTrace = RegWriteTrace {
+    tid: 0,
     pc: 0,
     raw: 0,
     source: 0,
@@ -78,6 +82,18 @@ static mut LAST_X27_WRITE_TRACE: RegWriteTrace = RegWriteTrace {
 };
 
 static mut LAST_SP_WRITE_TRACE: RegWriteTrace = RegWriteTrace {
+    tid: 0,
+    pc: 0,
+    raw: 0,
+    source: 0,
+    prev_value: 0,
+    value: 0,
+    rs1: 0,
+    rs1_value: 0,
+};
+
+static mut LAST_TP_WRITE_TRACE: RegWriteTrace = RegWriteTrace {
+    tid: 0,
     pc: 0,
     raw: 0,
     source: 0,
@@ -103,6 +119,9 @@ const REG_WRITE_SOURCE_BLOCK: u32 = 3;
 
 #[inline(always)]
 fn note_exec_trace(pc: u64, raw: u32, step: u64, x: &[u64; 32]) {
+    if !HARNESS_TRACE_ENABLED {
+        return;
+    }
     unsafe {
         let slot = (RECENT_EXEC_TRACE_NEXT as usize) % EXEC_TRACE_LEN;
         RECENT_EXEC_TRACE_PC[slot] = pc;
@@ -117,10 +136,16 @@ fn note_exec_trace(pc: u64, raw: u32, step: u64, x: &[u64; 32]) {
 }
 
 pub fn recent_exec_trace_len() -> u32 {
+    if !HARNESS_TRACE_ENABLED {
+        return 0;
+    }
     EXEC_TRACE_LEN as u32
 }
 
 pub fn recent_exec_trace(index: u32) -> (u64, u32, u32, u64, u64, u64, u64) {
+    if !HARNESS_TRACE_ENABLED {
+        return (0, 0, 0, 0, 0, 0, 0);
+    }
     unsafe {
         let len = EXEC_TRACE_LEN as u32;
         let available = RECENT_EXEC_TRACE_NEXT.min(len);
@@ -143,6 +168,9 @@ pub fn recent_exec_trace(index: u32) -> (u64, u32, u32, u64, u64, u64, u64) {
 
 #[inline(always)]
 fn note_jalr(pc: u64, rd: usize, rs1: usize, rs1_value: u64, target: u64) {
+    if !HARNESS_TRACE_ENABLED {
+        return;
+    }
     if rs1 == 1 || target < 0x1000 {
         unsafe {
             LAST_JALR_TRACE = JalrTrace {
@@ -157,6 +185,9 @@ fn note_jalr(pc: u64, rd: usize, rs1: usize, rs1_value: u64, target: u64) {
 }
 
 pub fn last_jalr_trace() -> (u64, u64, u64, u32, u32) {
+    if !HARNESS_TRACE_ENABLED {
+        return (0, 0, 0, 0, 0);
+    }
     unsafe {
         let trace = LAST_JALR_TRACE;
         (trace.pc, trace.rs1_value, trace.target, trace.rd, trace.rs1)
@@ -165,6 +196,9 @@ pub fn last_jalr_trace() -> (u64, u64, u64, u32, u32) {
 
 #[inline(always)]
 fn note_zero_reg_transition(pc: u64, raw: u32, prev_sp: u64, prev_x27: u64, x: &[u64; 32]) {
+    if !HARNESS_TRACE_ENABLED {
+        return;
+    }
     unsafe {
         if prev_x27 != 0 && x[27] == 0 {
             LAST_ZERO_REG_TRACE = ZeroRegTrace {
@@ -191,6 +225,9 @@ fn note_zero_reg_transition(pc: u64, raw: u32, prev_sp: u64, prev_x27: u64, x: &
 }
 
 pub fn last_zero_reg_trace() -> (u64, u32, u32, u64, u64, u64) {
+    if !HARNESS_TRACE_ENABLED {
+        return (0, 0, 0, 0, 0, 0);
+    }
     unsafe {
         let trace = LAST_ZERO_REG_TRACE;
         (
@@ -206,18 +243,24 @@ pub fn last_zero_reg_trace() -> (u64, u32, u32, u64, u64, u64) {
 
 #[inline(always)]
 fn note_special_reg_transitions(
+    tid: i32,
     pc: u64,
     raw: u32,
     source: u32,
     prev_sp: u64,
+    prev_tp: u64,
     prev_x27: u64,
     x: &[u64; 32],
 ) {
+    if !HARNESS_TRACE_ENABLED {
+        return;
+    }
     unsafe {
         let rs1 = if raw == 0 { 0 } else { decode::rs1(raw) as u32 };
         let rs1_value = if raw == 0 { 0 } else { x[rs1 as usize] };
         if prev_x27 != x[27] {
             LAST_X27_WRITE_TRACE = RegWriteTrace {
+                tid,
                 pc,
                 raw,
                 source,
@@ -229,6 +272,7 @@ fn note_special_reg_transitions(
         }
         if prev_sp != x[2] {
             LAST_SP_WRITE_TRACE = RegWriteTrace {
+                tid,
                 pc,
                 raw,
                 source,
@@ -238,13 +282,29 @@ fn note_special_reg_transitions(
                 rs1_value,
             };
         }
+        if prev_tp != x[4] {
+            LAST_TP_WRITE_TRACE = RegWriteTrace {
+                tid,
+                pc,
+                raw,
+                source,
+                prev_value: prev_tp,
+                value: x[4],
+                rs1,
+                rs1_value,
+            };
+        }
     }
 }
 
-pub fn last_x27_write_trace() -> (u64, u32, u32, u64, u64, u32, u64) {
+pub fn last_x27_write_trace() -> (i32, u64, u32, u32, u64, u64, u32, u64) {
+    if !HARNESS_TRACE_ENABLED {
+        return (0, 0, 0, 0, 0, 0, 0, 0);
+    }
     unsafe {
         let trace = LAST_X27_WRITE_TRACE;
         (
+            trace.tid,
             trace.pc,
             trace.raw,
             trace.source,
@@ -256,10 +316,33 @@ pub fn last_x27_write_trace() -> (u64, u32, u32, u64, u64, u32, u64) {
     }
 }
 
-pub fn last_sp_write_trace() -> (u64, u32, u32, u64, u64, u32, u64) {
+pub fn last_sp_write_trace() -> (i32, u64, u32, u32, u64, u64, u32, u64) {
+    if !HARNESS_TRACE_ENABLED {
+        return (0, 0, 0, 0, 0, 0, 0, 0);
+    }
     unsafe {
         let trace = LAST_SP_WRITE_TRACE;
         (
+            trace.tid,
+            trace.pc,
+            trace.raw,
+            trace.source,
+            trace.prev_value,
+            trace.value,
+            trace.rs1,
+            trace.rs1_value,
+        )
+    }
+}
+
+pub fn last_tp_write_trace() -> (i32, u64, u32, u32, u64, u64, u32, u64) {
+    if !HARNESS_TRACE_ENABLED {
+        return (0, 0, 0, 0, 0, 0, 0, 0);
+    }
+    unsafe {
+        let trace = LAST_TP_WRITE_TRACE;
+        (
+            trace.tid,
             trace.pc,
             trace.raw,
             trace.source,
@@ -367,6 +450,7 @@ pub unsafe fn exec_at_base(
                 // WASM has no async interrupts, so check at budget boundaries in addition
                 // to syscall return boundaries.
                 let prev_sp = x[2];
+                let prev_tp = x[4];
                 let prev_x27 = x[27];
                 vm.x = x;
                 vm.f = f;
@@ -378,10 +462,12 @@ pub unsafe fn exec_at_base(
                     pc = vm.pc;
                     fcsr = vm.fcsr;
                     note_special_reg_transitions(
+                        vm.tid,
                         pc,
                         0,
                         REG_WRITE_SOURCE_VM_RESTORE,
                         prev_sp,
+                        prev_tp,
                         prev_x27,
                         &x,
                     );
@@ -393,6 +479,7 @@ pub unsafe fn exec_at_base(
             }
             remaining -= 1;
             let prev_sp = x[2];
+            let prev_tp = x[4];
             let prev_x27 = x[27];
             let instr_pc = pc;
 
@@ -424,10 +511,12 @@ pub unsafe fn exec_at_base(
                     pc = vm.pc;
                     fcsr = vm.fcsr;
                     note_special_reg_transitions(
+                        vm.tid,
                         instr_pc,
                         raw16 as u32,
                         REG_WRITE_SOURCE_VM_RESTORE,
                         prev_sp,
+                        prev_tp,
                         prev_x27,
                         &x,
                     );
@@ -586,7 +675,7 @@ pub unsafe fn exec_at_base(
                             if let Some(blk) = bc.get(target) {
                                 let cost = blk.total_budget as i32;
                                 if remaining >= cost {
-                                    let executed = exec_block(blk, &mut x, &mut pc, base);
+                                    let executed = exec_block(blk, &mut x, &mut pc, base, vm.tid);
                                     if executed > 0 {
                                         remaining -= executed;
                                         x[0] = 0;
@@ -615,10 +704,12 @@ pub unsafe fn exec_at_base(
                                 pc = vm.pc;
                                 fcsr = vm.fcsr;
                                 note_special_reg_transitions(
+                                    vm.tid,
                                     instr_pc,
                                     raw,
                                     REG_WRITE_SOURCE_VM_RESTORE,
                                     prev_sp,
+                                    prev_tp,
                                     prev_x27,
                                     &x,
                                 );
@@ -725,10 +816,12 @@ pub unsafe fn exec_at_base(
                     pc = vm.pc;
                     fcsr = vm.fcsr;
                     note_special_reg_transitions(
+                        vm.tid,
                         instr_pc,
                         raw,
                         REG_WRITE_SOURCE_VM_RESTORE,
                         prev_sp,
+                        prev_tp,
                         prev_x27,
                         &x,
                     );
@@ -743,10 +836,12 @@ pub unsafe fn exec_at_base(
             // Enforce x0 = 0
             x[0] = 0;
             note_special_reg_transitions(
+                vm.tid,
                 instr_pc,
                 raw,
                 REG_WRITE_SOURCE_STEP,
                 prev_sp,
+                prev_tp,
                 prev_x27,
                 &x,
             );
@@ -784,6 +879,7 @@ unsafe fn exec_block(
     x: &mut [u64; 32],
     pc: &mut u64,
     base: u32,
+    tid: i32,
 ) -> i32 {
     unsafe {
         let len = blk.len as usize;
@@ -792,6 +888,7 @@ unsafe fn exec_block(
         for i in 0..len {
             let op = blk.ops[i];
             let prev_sp = x[2];
+            let prev_tp = x[4];
             let prev_x27 = x[27];
             let op_pc = cur_pc;
             let rd = op.rd();
@@ -1045,10 +1142,12 @@ unsafe fn exec_block(
                     };
                     x[0] = 0;
                     note_special_reg_transitions(
+                        tid,
                         op_pc,
                         0,
                         REG_WRITE_SOURCE_BLOCK,
                         prev_sp,
+                        prev_tp,
                         prev_x27,
                         x,
                     );
@@ -1062,10 +1161,12 @@ unsafe fn exec_block(
                     *pc = (cur_pc as i64 + imm) as u64;
                     x[0] = 0;
                     note_special_reg_transitions(
+                        tid,
                         op_pc,
                         0,
                         REG_WRITE_SOURCE_BLOCK,
                         prev_sp,
+                        prev_tp,
                         prev_x27,
                         x,
                     );
@@ -1081,10 +1182,12 @@ unsafe fn exec_block(
                     *pc = target;
                     x[0] = 0;
                     note_special_reg_transitions(
+                        tid,
                         op_pc,
                         0,
                         REG_WRITE_SOURCE_BLOCK,
                         prev_sp,
+                        prev_tp,
                         prev_x27,
                         x,
                     );
@@ -1096,10 +1199,12 @@ unsafe fn exec_block(
                     *pc = cur_pc;
                     x[0] = 0;
                     note_special_reg_transitions(
+                        tid,
                         op_pc,
                         0,
                         REG_WRITE_SOURCE_BLOCK,
                         prev_sp,
+                        prev_tp,
                         prev_x27,
                         x,
                     );
@@ -1107,7 +1212,16 @@ unsafe fn exec_block(
                 }
             }
             x[0] = 0;
-            note_special_reg_transitions(op_pc, 0, REG_WRITE_SOURCE_BLOCK, prev_sp, prev_x27, x);
+            note_special_reg_transitions(
+                tid,
+                op_pc,
+                0,
+                REG_WRITE_SOURCE_BLOCK,
+                prev_sp,
+                prev_tp,
+                prev_x27,
+                x,
+            );
             cur_pc += step;
         }
 
@@ -3411,6 +3525,31 @@ mod tests {
         assert_eq!(
             x[27], 0xdead_beef,
             "lr/sc must not clobber unrelated registers"
+        );
+    }
+
+    #[test]
+    fn c_addi16sp_does_not_clobber_tp() {
+        let mut t = TestVm::new();
+        let code_addr = t.scratch;
+
+        unsafe {
+            crate::guest_mem::write_u16(t.base, code_addr, 0x7101);
+        }
+
+        t.vm.pc = code_addr;
+        t.vm.status = crate::abi::STATUS_OK;
+        t.vm.x[2] = 0x8000;
+        t.vm.x[4] = 0x1234_5678_9abc_def0;
+
+        unsafe {
+            crate::cpu::exec(&mut t.vm, 1, None, None, None, None);
+        }
+
+        assert_eq!(t.vm.x[2], 0x7e00, "c.addi16sp must update sp");
+        assert_eq!(
+            t.vm.x[4], 0x1234_5678_9abc_def0,
+            "c.addi16sp must not clobber tp"
         );
     }
 }

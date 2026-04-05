@@ -1,7 +1,9 @@
 use tidemark_kernel::abi::*;
 use tidemark_kernel::harness::TestVm;
 use tidemark_kernel::syscall::thread as thread_impl;
-use tidemark_kernel::types::{ProcessState, ThreadRecord, ThreadState, THREAD_BLOCKED_FUTEX, THREAD_NONE, THREAD_RUNNING};
+use tidemark_kernel::types::{
+    ProcessState, THREAD_BLOCKED_FUTEX, THREAD_NONE, THREAD_RUNNING, ThreadRecord, ThreadState,
+};
 
 const FUTEX_WAITERS: u32 = 0x8000_0000;
 const FUTEX_OWNER_DIED: u32 = 0x4000_0000;
@@ -110,12 +112,94 @@ fn contract_futex_wake_unblocks_waiting_thread_record() {
     let addr = t.scratch + 0x500;
     let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
     ps.threads[1] = ThreadRecord::new(2, THREAD_BLOCKED_FUTEX, 0xDEAD_BEEFu32, 0, addr as u32);
-    ps.thread_count.store(2, core::sync::atomic::Ordering::Release);
+    ps.thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
 
     let ret = thread_impl::sys_futex(&mut t.vm, t.base, addr, FUTEX_WAKE as u64, 1, 0, 0, 0);
     assert_eq!(ret, 1);
     assert_eq!(ps.threads[1].state, THREAD_RUNNING);
     assert_eq!(ps.threads[1].blocked_addr, 0);
+}
+
+#[test]
+fn contract_futex_wake_bitset_only_wakes_matching_waiters() {
+    let mut t = TestVm::new();
+    let addr = t.scratch + 0x510;
+    let waiter_ptr = unsafe {
+        tidemark_kernel::alloc::alloc_zeroed(
+            core::mem::size_of::<ThreadState>() as u32,
+            core::mem::align_of::<ThreadState>() as u32,
+        )
+    };
+    assert_ne!(waiter_ptr, 0);
+    let waiter = unsafe { &mut *(waiter_ptr as *mut ThreadState) };
+    waiter.process_ptr = t.vm.process_ptr;
+    waiter.futex_wait_bitset = 0x2;
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    ps.thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
+    ps.threads[1] = ThreadRecord::new(2, THREAD_BLOCKED_FUTEX, waiter_ptr, 0, addr as u32);
+
+    let mismatch = thread_impl::sys_futex(
+        &mut t.vm,
+        t.base,
+        addr,
+        FUTEX_WAKE_BITSET as u64,
+        1,
+        0,
+        0,
+        0x1,
+    );
+    assert_eq!(mismatch, 0);
+    assert_eq!(ps.threads[1].state, THREAD_BLOCKED_FUTEX);
+    assert_eq!(ps.threads[1].blocked_addr, addr as u32);
+
+    let matched = thread_impl::sys_futex(
+        &mut t.vm,
+        t.base,
+        addr,
+        FUTEX_WAKE_BITSET as u64,
+        1,
+        0,
+        0,
+        0x2,
+    );
+    assert_eq!(matched, 1);
+    assert_eq!(ps.threads[1].state, THREAD_RUNNING);
+    assert_eq!(ps.threads[1].blocked_addr, 0);
+}
+
+#[test]
+fn contract_futex_bitset_rejects_zero_mask() {
+    let mut t = TestVm::new();
+    let addr = t.scratch + 0x514;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, addr, 3);
+    }
+
+    let wait_ret = thread_impl::sys_futex(
+        &mut t.vm,
+        t.base,
+        addr,
+        FUTEX_WAIT_BITSET as u64,
+        3,
+        0,
+        0,
+        0,
+    );
+    assert_eq!(wait_ret, EINVAL);
+
+    let wake_ret = thread_impl::sys_futex(
+        &mut t.vm,
+        t.base,
+        addr,
+        FUTEX_WAKE_BITSET as u64,
+        1,
+        0,
+        0,
+        0,
+    );
+    assert_eq!(wake_ret, EINVAL);
 }
 
 #[test]
@@ -127,7 +211,8 @@ fn contract_futex_cmp_requeue_moves_remaining_waiters() {
         tidemark_kernel::guest_mem::write_u32(t.base, from_addr, 7);
     }
     let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
-    ps.thread_count.store(3, core::sync::atomic::Ordering::Release);
+    ps.thread_count
+        .store(3, core::sync::atomic::Ordering::Release);
     ps.threads[1] = ThreadRecord::new(2, THREAD_BLOCKED_FUTEX, 0x1000, 0, from_addr as u32);
     ps.threads[2] = ThreadRecord::new(3, THREAD_BLOCKED_FUTEX, 0x2000, 0, from_addr as u32);
 
@@ -213,8 +298,15 @@ fn contract_exit_marks_owned_robust_futex_owner_died_and_wakes_waiters() {
     t.vm.robust_list_len = 24;
 
     let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
-    ps.threads[1] = ThreadRecord::new(2, THREAD_BLOCKED_FUTEX, 0xDEAD_BEEFu32, 0, futex_addr as u32);
-    ps.thread_count.store(2, core::sync::atomic::Ordering::Release);
+    ps.threads[1] = ThreadRecord::new(
+        2,
+        THREAD_BLOCKED_FUTEX,
+        0xDEAD_BEEFu32,
+        0,
+        futex_addr as u32,
+    );
+    ps.thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
 
     let status = thread_impl::sys_exit(&mut t.vm, t.base, 7);
     assert_eq!(status, STATUS_FAULT);
@@ -256,7 +348,8 @@ fn contract_exit_group_cleans_up_other_thread_robust_futexes() {
 
     let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
     ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, child_ptr, 0, 0);
-    ps.thread_count.store(2, core::sync::atomic::Ordering::Release);
+    ps.thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
 
     let status = thread_impl::sys_exit_group(&mut t.vm, t.base, 9);
     assert_eq!(status, STATUS_FAULT);
@@ -264,7 +357,10 @@ fn contract_exit_group_cleans_up_other_thread_robust_futexes() {
         unsafe { tidemark_kernel::guest_mem::read_u32(t.base, futex_addr) },
         FUTEX_WAITERS | FUTEX_OWNER_DIED
     );
-    assert_eq!(ps.thread_count.load(core::sync::atomic::Ordering::Acquire), 0);
+    assert_eq!(
+        ps.thread_count.load(core::sync::atomic::Ordering::Acquire),
+        0
+    );
     assert_eq!(ps.threads[0].state, THREAD_NONE);
     assert_eq!(ps.threads[1].state, THREAD_NONE);
 }
@@ -273,13 +369,17 @@ fn contract_exit_group_cleans_up_other_thread_robust_futexes() {
 fn contract_exit_group_marks_process_dead() {
     let mut t = TestVm::new();
     let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
-    ps.thread_count.store(2, core::sync::atomic::Ordering::Release);
+    ps.thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
     ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, 0xCAFE_BABEu32, 0, 0);
 
     let status = thread_impl::sys_exit_group(&mut t.vm, t.base, 9);
     assert_eq!(status, STATUS_FAULT);
     assert_eq!(t.vm.exit_code, 9);
-    assert_eq!(ps.thread_count.load(core::sync::atomic::Ordering::Acquire), 0);
+    assert_eq!(
+        ps.thread_count.load(core::sync::atomic::Ordering::Acquire),
+        0
+    );
     assert_eq!(ps.threads[0].state, THREAD_NONE);
     assert_eq!(ps.threads[1].state, THREAD_NONE);
 }
@@ -291,7 +391,10 @@ fn contract_init_main_thread_records_running_slot() {
     thread_impl::init_main_thread(vm_ptr, t.base);
 
     let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
-    assert_eq!(ps.thread_count.load(core::sync::atomic::Ordering::Acquire), 1);
+    assert_eq!(
+        ps.thread_count.load(core::sync::atomic::Ordering::Acquire),
+        1
+    );
     assert_eq!(ps.threads[0].tid, 1);
     assert_eq!(ps.threads[0].state, THREAD_RUNNING);
     assert_eq!(ps.threads[0].thread_ptr, vm_ptr);
@@ -301,11 +404,15 @@ fn contract_init_main_thread_records_running_slot() {
 fn contract_discard_exec_ignores_invalid_stale_slots() {
     let mut t = TestVm::new();
     let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
-    ps.thread_count.store(2, core::sync::atomic::Ordering::Release);
+    ps.thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
     ps.threads[1] = ThreadRecord::new(0, THREAD_RUNNING, 0, 0x6e69_622f, 0);
 
     let discarded = thread_impl::discard_other_threads_for_exec(&t.vm, t.base);
     assert_eq!(discarded, 1);
-    assert_eq!(ps.thread_count.load(core::sync::atomic::Ordering::Acquire), 1);
+    assert_eq!(
+        ps.thread_count.load(core::sync::atomic::Ordering::Acquire),
+        1
+    );
     assert_eq!(ps.threads[1].state, THREAD_NONE);
 }

@@ -50,7 +50,10 @@ fn socket_bind_and_getsockname() {
     let sockaddr: [u8; 16] = [2, 0, 0x50, 0x00, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
     let bind_addr = t.scratch + 0x100;
     t.write_mem(bind_addr, &sockaddr);
-    assert_eq!(socket::sys_bind(&mut t.vm, t.base, fd as u64, bind_addr, 16), 0);
+    assert_eq!(
+        socket::sys_bind(&mut t.vm, t.base, fd as u64, bind_addr, 16),
+        0
+    );
 
     let out_addr = t.scratch + 0x400;
     unsafe {
@@ -116,7 +119,10 @@ fn socket_sockopt_roundtrip_and_enotsock() {
         ),
         0
     );
-    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) }, 1);
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
+        1
+    );
 
     unsafe {
         tidemark_kernel::guest_mem::write_u32(t.base, out_len, 4);
@@ -133,7 +139,10 @@ fn socket_sockopt_roundtrip_and_enotsock() {
         ),
         0
     );
-    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) }, SOCK_STREAM);
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
+        SOCK_STREAM
+    );
 
     assert_eq!(
         socket::sys_setsockopt(
@@ -187,7 +196,10 @@ fn socket_sockopt_validation_and_acceptconn() {
     let sockaddr: [u8; 16] = [2, 0, 0x50, 0x00, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
     let bind_addr = t.scratch + 0x340;
     t.write_mem(bind_addr, &sockaddr);
-    assert_eq!(socket::sys_bind(&mut t.vm, t.base, fd as u64, bind_addr, 16), 0);
+    assert_eq!(
+        socket::sys_bind(&mut t.vm, t.base, fd as u64, bind_addr, 16),
+        0
+    );
     assert_eq!(socket::sys_listen(&mut t.vm, t.base, fd as u64, 8), 0);
 
     let out_addr = t.scratch + 0x380;
@@ -207,7 +219,10 @@ fn socket_sockopt_validation_and_acceptconn() {
         ),
         0
     );
-    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) }, 1);
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
+        1
+    );
 }
 
 #[test]
@@ -230,7 +245,10 @@ fn socket_connect_and_getpeername() {
     let addr = t.scratch + 0x500;
     t.write_mem(addr, &sockaddr);
     t.vm.x[10] = fd as u64;
-    assert_eq!(socket::sys_connect(&mut t.vm, t.base, fd as u64, addr, 16), 0);
+    assert_eq!(
+        socket::sys_connect(&mut t.vm, t.base, fd as u64, addr, 16),
+        0
+    );
     assert_eq!(t.vm.status, STATUS_CONNECT);
 
     socket::resume_connect_result(&mut t.vm, t.base, ECONNREFUSED);

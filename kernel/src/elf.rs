@@ -1,12 +1,13 @@
-//! ELF loader for statically-linked RISC-V 64-bit executables.
+//! ELF loader for RISC-V 64-bit executables.
 //!
 //! Reference: ELF spec (https://refspecs.linuxfoundation.org/elf/elf.pdf)
 //!            RISC-V ELF psABI (https://github.com/riscv-non-isa/riscv-elf-psabi-doc)
 //!
-//! Supports: ET_EXEC (static), RV64, little-endian.
-//! Does not support: dynamic linking, relocations, shared objects.
+//! Supports: ET_EXEC and ET_DYN inspection/loading, RV64, little-endian.
+//! Does not support: dynamic linking semantics, relocations, shared objects.
 
 use crate::guest_mem;
+use alloc_crate::vec::Vec;
 
 // =============================================================================
 // ELF constants (ELF spec v1.2, Chapter 1 — see module doc for URL)
@@ -19,7 +20,9 @@ const EI_MAG3: u8 = b'F';
 const ELFCLASS64: u8 = 2;
 const ELFDATA2LSB: u8 = 1;
 const ET_EXEC: u16 = 2;
+const ET_DYN: u16 = 3;
 const EM_RISCV: u16 = 243;
+const PT_INTERP: u32 = 3;
 const PT_LOAD: u32 = 1;
 const PT_TLS: u32 = 7;
 
@@ -47,14 +50,20 @@ pub const AT_PHDR: u64 = 3;
 pub const AT_PHENT: u64 = 4;
 pub const AT_PHNUM: u64 = 5;
 pub const AT_PAGESZ: u64 = 6;
+pub const AT_BASE: u64 = 7;
 pub const AT_ENTRY: u64 = 9;
 pub const AT_RANDOM: u64 = 25;
+pub const AT_EXECFN: u64 = 31;
 
 /// Result of loading an ELF binary.
 #[derive(Clone, Copy)]
 pub struct ElfLoadResult {
+    /// Whether the inspected ELF image is ET_DYN.
+    pub is_dyn: bool,
     /// Entry point address (e_entry)
     pub entry: u64,
+    /// Highest loaded address before page-aligning the initial brk.
+    pub load_end: u64,
     /// Highest loaded address + 1 (for brk initialization)
     pub brk_start: u64,
     /// Initial TLS image base from PT_TLS, or 0 when absent.
@@ -73,6 +82,8 @@ pub struct ElfLoadResult {
     pub aux_phent: u16,
     /// AT_PHNUM value exposed to the new process image.
     pub aux_phnum: u16,
+    /// AT_BASE value exposed to the new process image.
+    pub aux_base: u64,
 }
 
 /// Validate an ELF image and compute the metadata needed for loading it
@@ -102,7 +113,7 @@ pub unsafe fn inspect_elf(elf_ptr: u32, elf_len: u32, ram_size: u64) -> Result<E
         }
 
         let e_type = read_u16(e, E_TYPE);
-        if e_type != ET_EXEC {
+        if e_type != ET_EXEC && e_type != ET_DYN {
             return Err(-4);
         }
 
@@ -120,7 +131,7 @@ pub unsafe fn inspect_elf(elf_ptr: u32, elf_len: u32, ram_size: u64) -> Result<E
             return Err(-6);
         }
 
-        let mut brk_end: u64 = 0;
+        let mut load_end: u64 = 0;
         let mut phdr_addr: u64 = 0;
         let mut tls_base: u64 = 0;
 
@@ -143,8 +154,8 @@ pub unsafe fn inspect_elf(elf_ptr: u32, elf_len: u32, ram_size: u64) -> Result<E
                     }
 
                     let seg_end = p_vaddr + p_memsz;
-                    if seg_end > brk_end {
-                        brk_end = seg_end;
+                    if seg_end > load_end {
+                        load_end = seg_end;
                     }
 
                     if phdr_addr == 0 && p_offset == 0 {
@@ -168,10 +179,12 @@ pub unsafe fn inspect_elf(elf_ptr: u32, elf_len: u32, ram_size: u64) -> Result<E
             }
         }
 
-        brk_end = (brk_end + 4095) & !4095;
+        let brk_end = (load_end + 4095) & !4095;
 
         Ok(ElfLoadResult {
+            is_dyn: e_type == ET_DYN,
             entry,
+            load_end,
             brk_start: brk_end,
             tls_base,
             phdr_addr,
@@ -181,6 +194,7 @@ pub unsafe fn inspect_elf(elf_ptr: u32, elf_len: u32, ram_size: u64) -> Result<E
             aux_phdr_addr: phdr_addr,
             aux_phent: ph_entsize as u16,
             aux_phnum: ph_num as u16,
+            aux_base: 0,
         })
     }
 }
@@ -192,11 +206,130 @@ pub unsafe fn inspect_elf(elf_ptr: u32, elf_len: u32, ram_size: u64) -> Result<E
 ///
 /// # Safety
 /// `ram_base` must point to valid guest memory. `elf_ptr` must contain a valid ELF.
-pub unsafe fn load_elf(
+fn apply_load_bias(mut result: ElfLoadResult, load_bias: u64) -> ElfLoadResult {
+    result.entry = result.entry.saturating_add(load_bias);
+    result.load_end = result.load_end.saturating_add(load_bias);
+    result.brk_start = result.brk_start.saturating_add(load_bias);
+    if result.tls_base != 0 {
+        result.tls_base = result.tls_base.saturating_add(load_bias);
+    }
+    if result.phdr_addr != 0 {
+        result.phdr_addr = result.phdr_addr.saturating_add(load_bias);
+    }
+    result.aux_entry = result.aux_entry.saturating_add(load_bias);
+    if result.aux_phdr_addr != 0 {
+        result.aux_phdr_addr = result.aux_phdr_addr.saturating_add(load_bias);
+    }
+    result.aux_base = load_bias;
+    result
+}
+
+pub fn bias_load_result(result: ElfLoadResult, load_bias: u64) -> ElfLoadResult {
+    apply_load_bias(result, load_bias)
+}
+
+pub fn main_executable_load_bias(main_elf: &ElfLoadResult, has_interp: bool) -> u64 {
+    if has_interp && main_elf.is_dyn {
+        0x1000
+    } else {
+        0
+    }
+}
+
+pub fn interpreter_load_bias(main_brk_start: u64) -> u64 {
+    align_up(main_brk_start, 0x1000)
+}
+
+pub fn preserve_main_executable_auxv(load_result: &mut ElfLoadResult, main_result: &ElfLoadResult) {
+    load_result.aux_entry = main_result.entry;
+    load_result.aux_phdr_addr = main_result.phdr_addr;
+    load_result.aux_phent = main_result.phent;
+    load_result.aux_phnum = main_result.phnum;
+}
+
+/// Keep process-image metadata sourced from the main executable even when
+/// execution enters a PT_INTERP loader image first.
+pub fn preserve_main_executable_process_image(
+    load_result: &mut ElfLoadResult,
+    main_result: &ElfLoadResult,
+) {
+    preserve_main_executable_auxv(load_result, main_result);
+    if main_result.tls_base != 0 {
+        load_result.tls_base = main_result.tls_base;
+    }
+}
+
+pub fn zero_fill_load_padding(ram_base: u32, load_end: u64, brk_start: u64) {
+    if brk_start <= load_end {
+        return;
+    }
+    unsafe {
+        guest_mem::zero_mem(ram_base, load_end, (brk_start - load_end) as usize);
+    }
+}
+
+pub fn read_interp_path_bytes(elf: &[u8]) -> Result<Option<Vec<u8>>, i32> {
+    if elf.len() < 64 {
+        return Err(-1);
+    }
+    if elf[0] != EI_MAG0 || elf[1] != EI_MAG1 || elf[2] != EI_MAG2 || elf[3] != EI_MAG3 {
+        return Err(-1);
+    }
+    if elf[EI_CLASS] != ELFCLASS64 {
+        return Err(-2);
+    }
+    if elf[EI_DATA] != ELFDATA2LSB {
+        return Err(-3);
+    }
+
+    let ph_off = read_u64_le(elf, E_PHOFF).ok_or(-6)? as usize;
+    let ph_entsize = read_u16_le(elf, E_PHENTSIZE).ok_or(-6)? as usize;
+    let ph_num = read_u16_le(elf, E_PHNUM).ok_or(-6)? as usize;
+    if ph_entsize < 56 {
+        return Err(-6);
+    }
+    let ph_size = ph_num.checked_mul(ph_entsize).ok_or(-6)?;
+    let ph_end = ph_off.checked_add(ph_size).ok_or(-6)?;
+    if ph_end > elf.len() {
+        return Err(-6);
+    }
+
+    for index in 0..ph_num {
+        let start = ph_off + index * ph_entsize;
+        let ph = &elf[start..start + ph_entsize];
+        if read_u32_le(ph, P_TYPE) != Some(PT_INTERP) {
+            continue;
+        }
+        let p_offset = read_u64_le(ph, P_OFFSET).ok_or(-8)? as usize;
+        let p_filesz = read_u64_le(ph, P_FILESZ).ok_or(-8)? as usize;
+        let p_end = p_offset.checked_add(p_filesz).ok_or(-8)?;
+        if p_filesz == 0 || p_end > elf.len() {
+            return Err(-8);
+        }
+        let mut interp = elf[p_offset..p_end].to_vec();
+        if let Some(nul) = interp.iter().position(|b| *b == 0) {
+            interp.truncate(nul);
+        }
+        if interp.is_empty() {
+            return Err(-8);
+        }
+        return Ok(Some(interp));
+    }
+
+    Ok(None)
+}
+
+pub unsafe fn read_interp_path(elf_ptr: u32, elf_len: u32) -> Result<Option<Vec<u8>>, i32> {
+    let elf = unsafe { core::slice::from_raw_parts(elf_ptr as *const u8, elf_len as usize) };
+    read_interp_path_bytes(elf)
+}
+
+pub unsafe fn load_elf_at(
     ram_base: u32,
     ram_size: u64,
     elf_ptr: u32,
     elf_len: u32,
+    load_bias: u64,
 ) -> Result<ElfLoadResult, i32> {
     unsafe {
         let inspected = inspect_elf(elf_ptr, elf_len, ram_size)?;
@@ -214,7 +347,7 @@ pub unsafe fn load_elf(
             }
 
             let p_offset = read_u64(ph, P_OFFSET);
-            let p_vaddr = read_u64(ph, P_VADDR);
+            let p_vaddr = read_u64(ph, P_VADDR).saturating_add(load_bias);
             let p_filesz = read_u64(ph, P_FILESZ);
             let p_memsz = read_u64(ph, P_MEMSZ);
 
@@ -233,8 +366,24 @@ pub unsafe fn load_elf(
             }
         }
 
-        Ok(inspected)
+        Ok(apply_load_bias(inspected, load_bias))
     }
+}
+
+pub unsafe fn load_elf(
+    ram_base: u32,
+    ram_size: u64,
+    elf_ptr: u32,
+    elf_len: u32,
+) -> Result<ElfLoadResult, i32> {
+    unsafe { load_elf_at(ram_base, ram_size, elf_ptr, elf_len, 0) }
+}
+
+fn align_up(value: u64, align: u64) -> u64 {
+    if align == 0 {
+        return value;
+    }
+    (value + align - 1) & !(align - 1)
 }
 
 /// Set up the initial stack for the loaded ELF.
@@ -251,6 +400,7 @@ pub unsafe fn setup_stack(
     envp: &[u64], // pointers to env strings in guest memory
     elf_result: &ElfLoadResult,
     random_addr: u64, // 16 bytes of random data address
+    execfn_addr: u64,
 ) -> u64 {
     unsafe {
         // Stack layout (grows downward):
@@ -265,13 +415,15 @@ pub unsafe fn setup_stack(
         let envc = envp.len();
 
         // Auxiliary vector entries
-        let auxv: [(u64, u64); 6] = [
+        let auxv: [(u64, u64); 8] = [
             (AT_PAGESZ, 4096),
             (AT_PHDR, elf_result.aux_phdr_addr),
             (AT_PHENT, elf_result.aux_phent as u64),
             (AT_PHNUM, elf_result.aux_phnum as u64),
+            (AT_BASE, elf_result.aux_base),
             (AT_ENTRY, elf_result.aux_entry),
             (AT_RANDOM, random_addr),
+            (AT_EXECFN, execfn_addr),
         ];
 
         // Calculate total size needed
@@ -334,4 +486,25 @@ unsafe fn read_u32(base: *const u8, off: usize) -> u32 {
 #[inline(always)]
 unsafe fn read_u64(base: *const u8, off: usize) -> u64 {
     unsafe { (base.add(off) as *const u64).read_unaligned() }
+}
+
+fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
+    bytes
+        .get(offset..offset + 2)
+        .and_then(|slice| <[u8; 2]>::try_from(slice).ok())
+        .map(u16::from_le_bytes)
+}
+
+fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
+    bytes
+        .get(offset..offset + 4)
+        .and_then(|slice| <[u8; 4]>::try_from(slice).ok())
+        .map(u32::from_le_bytes)
+}
+
+fn read_u64_le(bytes: &[u8], offset: usize) -> Option<u64> {
+    bytes
+        .get(offset..offset + 8)
+        .and_then(|slice| <[u8; 8]>::try_from(slice).ok())
+        .map(u64::from_le_bytes)
 }

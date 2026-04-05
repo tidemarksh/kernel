@@ -1,6 +1,6 @@
-use tidemark_kernel::abi::*;
 use std::string::String;
 use std::vec::Vec;
+use tidemark_kernel::abi::*;
 use tidemark_kernel::fs::{fd_table, memfs};
 use tidemark_kernel::harness::TestVm;
 use tidemark_kernel::syscall::fs;
@@ -153,7 +153,10 @@ fn getdents64_zero_fills_record_padding_after_names() {
     }
 
     names.sort();
-    assert_eq!(names, vec![String::from("alpha.txt"), String::from("beta.cfg")]);
+    assert_eq!(
+        names,
+        vec![String::from("alpha.txt"), String::from("beta.cfg")]
+    );
 }
 
 #[test]
@@ -175,7 +178,10 @@ fn newfstatat_rejects_non_directory_dirfd() {
 
     let path_addr = t.write_path(0xF000, b"child");
     let stat_addr = t.scratch + 0x3000;
-    assert_eq!(fs::sys_newfstatat(&mut t.vm, t.base, fd as u64, path_addr, stat_addr, 0), ENOTDIR);
+    assert_eq!(
+        fs::sys_newfstatat(&mut t.vm, t.base, fd as u64, path_addr, stat_addr, 0),
+        ENOTDIR
+    );
 }
 
 #[test]
@@ -201,7 +207,10 @@ fn newfstatat_empty_path_requires_at_empty_path() {
 
     let empty_addr = t.write_path(0xF000, b"");
     let stat_addr = t.scratch + 0x3000;
-    assert_eq!(fs::sys_newfstatat(&mut t.vm, t.base, fd as u64, empty_addr, stat_addr, 0), ENOENT);
+    assert_eq!(
+        fs::sys_newfstatat(&mut t.vm, t.base, fd as u64, empty_addr, stat_addr, 0),
+        ENOENT
+    );
 }
 
 #[test]
@@ -213,7 +222,14 @@ fn newfstatat_empty_path_stats_referenced_fd() {
     let empty_addr = t.write_path(0xF000, b"");
     let stat_addr = t.scratch + 0x3000;
     assert_eq!(
-        fs::sys_newfstatat(&mut t.vm, t.base, fd as u64, empty_addr, stat_addr, AT_EMPTY_PATH),
+        fs::sys_newfstatat(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            empty_addr,
+            stat_addr,
+            AT_EMPTY_PATH
+        ),
         0
     );
     let ino = unsafe { tidemark_kernel::guest_mem::read_u64(t.base, stat_addr + 8) };
@@ -232,7 +248,14 @@ fn newfstatat_empty_path_at_fdcwd_stats_cwd() {
     let empty_addr = t.write_path(0xF200, b"");
     let stat_addr = t.scratch + 0x3000;
     assert_eq!(
-        fs::sys_newfstatat(&mut t.vm, t.base, AT_FDCWD, empty_addr, stat_addr, AT_EMPTY_PATH),
+        fs::sys_newfstatat(
+            &mut t.vm,
+            t.base,
+            AT_FDCWD,
+            empty_addr,
+            stat_addr,
+            AT_EMPTY_PATH
+        ),
         0
     );
     let mode = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, stat_addr + 16) };
@@ -244,7 +267,10 @@ fn unlinkat_with_at_removedir_removes_empty_directory() {
     let mut t = TestVm::new();
     assert_eq!(t.sys_mkdirat(b"/empty"), 0);
     let path_addr = t.write_path(0xF000, b"/empty");
-    assert_eq!(fs::sys_unlinkat(&mut t.vm, t.base, AT_FDCWD, path_addr, AT_REMOVEDIR), 0);
+    assert_eq!(
+        fs::sys_unlinkat(&mut t.vm, t.base, AT_FDCWD, path_addr, AT_REMOVEDIR),
+        0
+    );
     assert_eq!(memfs::resolve_path(b"/empty"), 0);
 }
 
@@ -255,7 +281,10 @@ fn unlinkat_rejects_non_directory_dirfd() {
     assert!(fd >= 3);
 
     let path_addr = t.write_path(0xF000, b"child");
-    assert_eq!(fs::sys_unlinkat(&mut t.vm, t.base, fd as u64, path_addr, 0), ENOTDIR);
+    assert_eq!(
+        fs::sys_unlinkat(&mut t.vm, t.base, fd as u64, path_addr, 0),
+        ENOTDIR
+    );
 }
 
 #[test]
@@ -266,7 +295,10 @@ fn unlinkat_rejects_invalid_flags() {
     t.sys_close(fd);
 
     let path_addr = t.write_path(0xF000, b"/victim");
-    assert_eq!(fs::sys_unlinkat(&mut t.vm, t.base, AT_FDCWD, path_addr, 9999), EINVAL);
+    assert_eq!(
+        fs::sys_unlinkat(&mut t.vm, t.base, AT_FDCWD, path_addr, 9999),
+        EINVAL
+    );
 }
 
 #[test]
@@ -310,11 +342,21 @@ fn dirfd_relative_openat() {
     assert!(dir_fd >= 3);
 
     let path_addr = t.write_path(0xF000, b"nested.txt");
-    let rel_fd = fs::sys_openat(&mut t.vm, t.base, dir_fd as u64, path_addr, O_RDONLY as u64, 0);
+    let rel_fd = fs::sys_openat(
+        &mut t.vm,
+        t.base,
+        dir_fd as u64,
+        path_addr,
+        O_RDONLY as u64,
+        0,
+    );
     assert!(rel_fd >= 3);
 
     let buf_addr = t.scratch + 0xE000;
-    assert_eq!(fs::sys_read(&mut t.vm, t.base, rel_fd as u64, buf_addr, 32), 14);
+    assert_eq!(
+        fs::sys_read(&mut t.vm, t.base, rel_fd as u64, buf_addr, 32),
+        14
+    );
     let data = t.guest_mem(buf_addr, 14);
     assert_eq!(&data[..], b"nested content");
 
@@ -378,11 +420,26 @@ fn faccessat_basic_and_error_paths() {
     let cwd_addr = t.write_path(0xF300, b"dir/file");
     let missing_addr = t.write_path(0xF400, b"missing");
 
-    assert_eq!(fs::sys_faccessat(&mut t.vm, t.base, dir_fd as u64, rel_addr, read_ok), 0);
-    assert_eq!(fs::sys_faccessat(&mut t.vm, t.base, 999, abs_addr, read_ok), 0);
-    assert_eq!(fs::sys_faccessat(&mut t.vm, t.base, AT_FDCWD, cwd_addr, read_ok), 0);
-    assert_eq!(fs::sys_faccessat(&mut t.vm, t.base, file_fd as u64, missing_addr, read_ok), ENOTDIR);
-    assert_eq!(fs::sys_faccessat(&mut t.vm, t.base, 999, rel_addr, read_ok), EBADF);
+    assert_eq!(
+        fs::sys_faccessat(&mut t.vm, t.base, dir_fd as u64, rel_addr, read_ok),
+        0
+    );
+    assert_eq!(
+        fs::sys_faccessat(&mut t.vm, t.base, 999, abs_addr, read_ok),
+        0
+    );
+    assert_eq!(
+        fs::sys_faccessat(&mut t.vm, t.base, AT_FDCWD, cwd_addr, read_ok),
+        0
+    );
+    assert_eq!(
+        fs::sys_faccessat(&mut t.vm, t.base, file_fd as u64, missing_addr, read_ok),
+        ENOTDIR
+    );
+    assert_eq!(
+        fs::sys_faccessat(&mut t.vm, t.base, 999, rel_addr, read_ok),
+        EBADF
+    );
 }
 
 #[test]
@@ -428,12 +485,30 @@ fn readlinkat_basic_and_error_paths() {
     assert_eq!(n, 4);
     assert_eq!(&t.guest_mem(buf_addr, 4), b"file");
 
-    assert_eq!(fs::sys_readlinkat(&mut t.vm, t.base, dir_fd as u64, rel_addr, buf_addr, 0), EINVAL);
-    assert_eq!(fs::sys_readlinkat(&mut t.vm, t.base, dir_fd as u64, file_addr, buf_addr, 16), EINVAL);
-    assert_eq!(fs::sys_readlinkat(&mut t.vm, t.base, file_fd as u64, rel_addr, buf_addr, 16), ENOTDIR);
-    assert_eq!(fs::sys_readlinkat(&mut t.vm, t.base, 999, rel_addr, buf_addr, 16), EBADF);
-    assert_eq!(fs::sys_readlinkat(&mut t.vm, t.base, dir_fd as u64, missing_addr, buf_addr, 16), ENOENT);
-    assert_eq!(fs::sys_readlinkat(&mut t.vm, t.base, dir_fd as u64, nested_addr, buf_addr, 16), ENOTDIR);
+    assert_eq!(
+        fs::sys_readlinkat(&mut t.vm, t.base, dir_fd as u64, rel_addr, buf_addr, 0),
+        EINVAL
+    );
+    assert_eq!(
+        fs::sys_readlinkat(&mut t.vm, t.base, dir_fd as u64, file_addr, buf_addr, 16),
+        EINVAL
+    );
+    assert_eq!(
+        fs::sys_readlinkat(&mut t.vm, t.base, file_fd as u64, rel_addr, buf_addr, 16),
+        ENOTDIR
+    );
+    assert_eq!(
+        fs::sys_readlinkat(&mut t.vm, t.base, 999, rel_addr, buf_addr, 16),
+        EBADF
+    );
+    assert_eq!(
+        fs::sys_readlinkat(&mut t.vm, t.base, dir_fd as u64, missing_addr, buf_addr, 16),
+        ENOENT
+    );
+    assert_eq!(
+        fs::sys_readlinkat(&mut t.vm, t.base, dir_fd as u64, nested_addr, buf_addr, 16),
+        ENOTDIR
+    );
 }
 
 #[test]
@@ -455,7 +530,10 @@ fn devnull_open_read_write_and_stat() {
     assert_eq!(mode & memfs::S_IFMT, memfs::S_IFCHR);
 
     let path_addr = t.write_path(0xF800, b"/dev/null");
-    assert_eq!(fs::sys_newfstatat(&mut t.vm, t.base, AT_FDCWD, path_addr, stat_addr, 0), 0);
+    assert_eq!(
+        fs::sys_newfstatat(&mut t.vm, t.base, AT_FDCWD, path_addr, stat_addr, 0),
+        0
+    );
     let size = unsafe { tidemark_kernel::guest_mem::read_u64(t.base, stat_addr + 48) };
     assert_eq!(size, 0);
 }
@@ -465,7 +543,10 @@ fn fstat_pipe_returns_fifo_mode() {
     let mut t = TestVm::new();
 
     let pipefd_addr = t.scratch + 0x3500;
-    assert_eq!(tidemark_kernel::syscall::pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+    assert_eq!(
+        tidemark_kernel::syscall::pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0),
+        0
+    );
     let rd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) } as i64;
     let stat_addr = t.scratch + 0x3600;
     assert_eq!(t.sys_fstat(rd, stat_addr), 0);

@@ -207,18 +207,6 @@ pub const O_NONBLOCK: i32 = 0x800;
 pub const O_CLOEXEC: i32 = 0x80000;
 pub const O_DIRECTORY: i32 = 0x10000;
 
-const ELF_EI_CLASS: usize = 4;
-const ELF_EI_DATA: usize = 5;
-const ELF_E_PHOFF: usize = 32;
-const ELF_E_PHENTSIZE: usize = 54;
-const ELF_E_PHNUM: usize = 56;
-const ELF_PH_TYPE: usize = 0;
-const ELF_PH_OFFSET: usize = 8;
-const ELF_PH_FILESZ: usize = 32;
-const ELFCLASS64: u8 = 2;
-const ELFDATA2LSB: u8 = 1;
-const PT_INTERP: u32 = 3;
-
 // =============================================================================
 // Signal numbers
 // https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/signal.h
@@ -259,6 +247,11 @@ pub const MAX_PROCESSES: usize = 64;
 pub const FUTEX_WAIT: u32 = 0;
 pub const FUTEX_WAKE: u32 = 1;
 pub const FUTEX_CMP_REQUEUE: u32 = 4;
+pub const FUTEX_WAIT_BITSET: u32 = 9;
+pub const FUTEX_WAKE_BITSET: u32 = 10;
+pub const FUTEX_PRIVATE_FLAG: u32 = 128;
+pub const FUTEX_CLOCK_REALTIME: u32 = 256;
+pub const FUTEX_BITSET_MATCH_ANY: u32 = 0xffff_ffff;
 pub const PAGE_SIZE: u64 = 4096;
 
 // =============================================================================
@@ -896,7 +889,7 @@ fn process_stack_capacity(stack_size: u32) -> u64 {
 }
 
 fn process_stack_setup_bytes(argc: usize, envc: usize) -> u64 {
-    let auxv_size = 7u64 * 16; // 6 entries + AT_NULL
+    let auxv_size = 8u64 * 16; // 7 entries + AT_NULL
     let total_entries = (1 + argc + 1 + envc + 1) as u64; // argc + argv + NULL + envp + NULL
     total_entries * 8 + auxv_size
 }
@@ -915,73 +908,6 @@ unsafe fn staged_cstr_bytes_total(ptrs: &[u32]) -> usize {
         .copied()
         .map(|ptr| unsafe { staged_cstr_len(ptr) })
         .sum()
-}
-
-fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
-    bytes
-        .get(offset..offset + 2)
-        .and_then(|slice| <[u8; 2]>::try_from(slice).ok())
-        .map(u16::from_le_bytes)
-}
-
-fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
-    bytes
-        .get(offset..offset + 4)
-        .and_then(|slice| <[u8; 4]>::try_from(slice).ok())
-        .map(u32::from_le_bytes)
-}
-
-fn read_u64_le(bytes: &[u8], offset: usize) -> Option<u64> {
-    bytes
-        .get(offset..offset + 8)
-        .and_then(|slice| <[u8; 8]>::try_from(slice).ok())
-        .map(u64::from_le_bytes)
-}
-
-unsafe fn read_process_create_interp_path(elf_ptr: u32, elf_len: u32) -> Option<Vec<u8>> {
-    if elf_len < 64 {
-        return None;
-    }
-    let elf = unsafe { core::slice::from_raw_parts(elf_ptr as *const u8, elf_len as usize) };
-    if elf[0] != 0x7f || elf[1] != b'E' || elf[2] != b'L' || elf[3] != b'F' {
-        return None;
-    }
-    if elf[ELF_EI_CLASS] != ELFCLASS64 || elf[ELF_EI_DATA] != ELFDATA2LSB {
-        return None;
-    }
-    let ph_off = read_u64_le(elf, ELF_E_PHOFF)? as usize;
-    let ph_entsize = read_u16_le(elf, ELF_E_PHENTSIZE)? as usize;
-    let ph_num = read_u16_le(elf, ELF_E_PHNUM)? as usize;
-    if ph_entsize < 56 {
-        return None;
-    }
-    let ph_size = ph_num.checked_mul(ph_entsize)?;
-    let ph_end = ph_off.checked_add(ph_size)?;
-    if ph_end > elf_len as usize {
-        return None;
-    }
-    for index in 0..ph_num {
-        let start = ph_off + index * ph_entsize;
-        let ph = &elf[start..start + ph_entsize];
-        if read_u32_le(ph, ELF_PH_TYPE) != Some(PT_INTERP) {
-            continue;
-        }
-        let p_offset = read_u64_le(ph, ELF_PH_OFFSET)? as usize;
-        let p_filesz = read_u64_le(ph, ELF_PH_FILESZ)? as usize;
-        let p_end = p_offset.checked_add(p_filesz)?;
-        if p_filesz == 0 || p_end > elf_len as usize {
-            return None;
-        }
-        let mut interp = elf[p_offset..p_end].to_vec();
-        if let Some(nul) = interp.iter().position(|b| *b == 0) {
-            interp.truncate(nul);
-        }
-        if interp.is_empty() {
-            return None;
-        }
-        return Some(interp);
-    }
-    None
 }
 
 unsafe fn write_staged_cstrings(base: u32, start: u64, ptrs: &[u32], out: &mut [u64]) -> u64 {
@@ -1066,21 +992,31 @@ pub extern "C" fn process_create(
             return 0;
         }
         let guest_ram_size = process_guest_ram_size(ram_size, base);
-        let main_inspected = match crate::elf::inspect_elf(elf_ptr, elf_len, guest_ram_size) {
+        let mut main_inspected = match crate::elf::inspect_elf(elf_ptr, elf_len, guest_ram_size) {
             Ok(r) => r,
             Err(_) => return 0,
         };
-        let mut load_ptr = elf_ptr;
-        let mut load_len = elf_len;
-        let mut interpreter_handoff = false;
-        let load_brk_start = match read_process_create_interp_path(elf_ptr, elf_len) {
+        let interp_path = match crate::elf::read_interp_path(elf_ptr, elf_len) {
+            Ok(path) => path,
+            Err(_) => return 0,
+        };
+        let main_load_bias =
+            crate::elf::main_executable_load_bias(&main_inspected, interp_path.is_some());
+        if main_load_bias != 0 {
+            main_inspected = crate::elf::bias_load_result(main_inspected, main_load_bias);
+        }
+        let main_brk_start = main_inspected.brk_start;
+        let mut interp_load: Option<(u32, u32, u64, crate::elf::ElfLoadResult)> = None;
+        let load_brk_start = match interp_path {
             Some(interp_path) => {
                 let interp_ino = crate::fs::memfs::resolve_path(&interp_path);
                 if interp_ino == 0 {
                     return 0;
                 }
                 let interp_st = match crate::fs::memfs::stat(interp_ino) {
-                    Some(st) if st.mode & crate::fs::memfs::S_IFMT == crate::fs::memfs::S_IFREG => st,
+                    Some(st) if st.mode & crate::fs::memfs::S_IFMT == crate::fs::memfs::S_IFREG => {
+                        st
+                    }
                     _ => return 0,
                 };
                 let interp_len = match u32::try_from(interp_st.size) {
@@ -1101,26 +1037,45 @@ pub extern "C" fn process_create(
                         Ok(r) => r,
                         Err(_) => return 0,
                     };
-                load_ptr = interp_ptr;
-                load_len = interp_len;
-                interpreter_handoff = true;
-                interp_inspected.brk_start
+                let interp_bias = crate::elf::interpreter_load_bias(main_brk_start);
+                let interp_brk_start = interp_inspected.brk_start.saturating_add(interp_bias);
+                interp_load = Some((interp_ptr, interp_len, interp_bias, interp_inspected));
+                main_brk_start.max(interp_brk_start)
             }
-            None => main_inspected.brk_start,
+            None => main_brk_start,
         };
         if !crate::syscall::memory::ensure_guest_memory_capacity(base, load_brk_start) {
             return 0;
         }
-        let mut elf_result = match crate::elf::load_elf(base, guest_ram_size, load_ptr, load_len) {
-            Ok(r) => r,
-            Err(_) => return 0,
+        let main_loaded =
+            match crate::elf::load_elf_at(base, guest_ram_size, elf_ptr, elf_len, main_load_bias) {
+                Ok(r) => r,
+                Err(_) => return 0,
+            };
+        let interp_loaded = match interp_load {
+            Some((interp_ptr, interp_len, interp_bias, _interp_inspected)) => {
+                match crate::elf::load_elf_at(
+                    base,
+                    guest_ram_size,
+                    interp_ptr,
+                    interp_len,
+                    interp_bias,
+                ) {
+                    Ok(result) => Some(result),
+                    Err(_) => return 0,
+                }
+            }
+            None => None,
         };
-        if interpreter_handoff {
-            elf_result.aux_entry = main_inspected.entry;
-            elf_result.aux_phdr_addr = main_inspected.phdr_addr;
-            elf_result.aux_phent = main_inspected.phent;
-            elf_result.aux_phnum = main_inspected.phnum;
+        let mut elf_result = interp_loaded.unwrap_or(main_loaded);
+        if interp_load.is_some() {
+            crate::elf::preserve_main_executable_process_image(&mut elf_result, &main_loaded);
         }
+        let loaded_end = main_loaded
+            .load_end
+            .max(interp_loaded.map(|interp| interp.load_end).unwrap_or(0));
+        crate::elf::zero_fill_load_padding(base, loaded_end, load_brk_start);
+        elf_result.brk_start = load_brk_start;
 
         crate::syscall::memory::init(elf_result.brk_start);
 
@@ -1225,37 +1180,21 @@ pub extern "C" fn process_create(
             &envp_addrs[..envc],
             &elf_result,
             random_addr,
+            argv_addrs[0],
         );
         // Clear staged args for next process
         staged.argc = 0;
         staged.envc = 0;
 
-        // Create /proc/self/exe symlink pointing to argv[0]
-        let proc_ino = crate::fs::memfs::resolve_path(b"/proc");
-        let proc_ino = if proc_ino == 0 {
-            crate::fs::memfs::create_dir(1, b"proc", 0o555)
+        // Seed the minimal procfs snapshot that early userspace expects.
+        let mut exe_target = [0u8; 256];
+        let exe_len = crate::guest_mem::read_cstr(base, argv_addrs[0], &mut exe_target);
+        let target = if exe_len > 0 {
+            &exe_target[..exe_len]
         } else {
-            proc_ino
+            b"/init" as &[u8]
         };
-        if proc_ino > 0 {
-            let self_ino = crate::fs::memfs::resolve_path(b"/proc/self");
-            let self_ino = if self_ino == 0 {
-                crate::fs::memfs::create_dir(proc_ino, b"self", 0o555)
-            } else {
-                self_ino
-            };
-            if self_ino > 0 {
-                // Use argv[0] as the exe path; fall back to "/init"
-                let mut exe_target = [0u8; 256];
-                let exe_len = crate::guest_mem::read_cstr(base, argv_addrs[0], &mut exe_target);
-                let target = if exe_len > 0 {
-                    &exe_target[..exe_len]
-                } else {
-                    b"/init" as &[u8]
-                };
-                crate::fs::memfs::create_symlink(self_ino, b"exe", target);
-            }
-        }
+        crate::syscall::process::install_procfs_snapshot(target);
 
         ts.pc = elf_result.entry;
         ts.x[2] = sp;
@@ -1520,6 +1459,7 @@ pub extern "C" fn thread_resume_epoll_wait_timeout(vm_ptr: u32) {
 pub extern "C" fn thread_interrupt_epoll_wait(vm_ptr: u32, errno: i32) -> i32 {
     unsafe {
         let vm = &mut *(vm_ptr as *mut crate::types::ThreadState);
+        crate::fs::fd_table::clear_blocked_ofd_pin(vm);
         vm.epoll_timeout_ms = 0;
         vm.epoll_maxevents = 0;
         vm.fault_pc = 0;
@@ -1571,6 +1511,21 @@ pub extern "C" fn thread_spawn_kind(vm_ptr: u32) -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn thread_clone_flags(vm_ptr: u32) -> u64 {
     unsafe { (*(vm_ptr as *const crate::types::ThreadState)).clone_flags }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_clone_child_stack(vm_ptr: u32) -> u64 {
+    unsafe { (*(vm_ptr as *const crate::types::ThreadState)).clone_child_stack }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_clone_tls(vm_ptr: u32) -> u64 {
+    unsafe { (*(vm_ptr as *const crate::types::ThreadState)).clone_tls }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_clone_child_tidptr(vm_ptr: u32) -> u64 {
+    unsafe { (*(vm_ptr as *const crate::types::ThreadState)).clone_child_tidptr }
 }
 
 #[unsafe(no_mangle)]
@@ -1808,6 +1763,13 @@ pub extern "C" fn process_set_cwd_ino(vm_ptr: u32, ino: u32) {
     if let Some(ps) = process_state_from_vm(vm_ptr) {
         ps.cwd_ino = ino;
     }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn process_install_procfs_snapshot(target_ptr: u32, target_len: u32) {
+    let target =
+        unsafe { core::slice::from_raw_parts(target_ptr as *const u8, target_len as usize) };
+    crate::syscall::process::install_procfs_snapshot(target);
 }
 
 #[unsafe(no_mangle)]

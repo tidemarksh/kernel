@@ -12,17 +12,38 @@ fn memory_syscalls() {
     let new_brk = cur as u64 + 4096;
     assert_eq!(t.sys_brk(new_brk), new_brk as i64);
 
-    let addr = t.sys_mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
-    assert!(addr > 0, "mmap should return positive address, got {}", addr);
+    let addr = t.sys_mmap(
+        0,
+        4096,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    );
+    assert!(
+        addr > 0,
+        "mmap should return positive address, got {}",
+        addr
+    );
 
     unsafe {
         tidemark_kernel::guest_mem::write_u64(t.base, addr as u64, 0xDEADBEEF);
-        assert_eq!(tidemark_kernel::guest_mem::read_u64(t.base, addr as u64), 0xDEADBEEF);
+        assert_eq!(
+            tidemark_kernel::guest_mem::read_u64(t.base, addr as u64),
+            0xDEADBEEF
+        );
     }
 
     assert_eq!(t.sys_munmap(addr as u64, 4096), 0);
 
-    let addr2 = t.sys_mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    let addr2 = t.sys_mmap(
+        0,
+        4096,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    );
     assert!(addr2 > 0);
     assert_eq!(t.sys_mprotect(addr2 as u64, 4096, PROT_READ), 0);
     assert_eq!(t.sys_mprotect(addr2 as u64, 4096, PROT_NONE), 0);
@@ -47,7 +68,14 @@ fn vmas_are_sorted_after_multiple_mmaps() {
 #[test]
 fn map_fixed_replaces_existing_vma() {
     let mut t = TestVm::new();
-    let a = t.sys_mmap(0, 8192, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    let a = t.sys_mmap(
+        0,
+        8192,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    );
     assert!(a > 0);
 
     let a2 = t.sys_mmap(
@@ -90,7 +118,10 @@ fn munmap_partial_splits_vma() {
     );
     assert_eq!(middle, a + 0x1000);
     unsafe {
-        assert_eq!(tidemark_kernel::guest_mem::read_u32(t.base, a as u64), 0x1111_1111);
+        assert_eq!(
+            tidemark_kernel::guest_mem::read_u32(t.base, a as u64),
+            0x1111_1111
+        );
         assert_eq!(
             tidemark_kernel::guest_mem::read_u32(t.base, a as u64 + 0x2000),
             0x3333_3333
@@ -109,7 +140,14 @@ fn munmap_partial_splits_vma() {
 #[test]
 fn mprotect_split_on_boundary_mismatch() {
     let mut t = TestVm::new();
-    let a = t.sys_mmap(0, 0x2000, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    let a = t.sys_mmap(
+        0,
+        0x2000,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    );
     assert!(a > 0);
     assert_eq!(t.sys_mprotect(a as u64, 0x1000, PROT_READ), 0);
     t.sys_munmap(a as u64, 0x2000);
@@ -163,7 +201,14 @@ fn prot_none_reservation_keeps_rw_mmaps_low() {
     );
     assert!(reserve > 0);
 
-    let mapped = t.sys_mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    let mapped = t.sys_mmap(
+        0,
+        4096,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    );
     assert!(mapped > 0);
     assert!((mapped as u64) < reserve as u64);
 }
@@ -188,7 +233,14 @@ fn mmap_stays_above_expanded_brk_region() {
     let grown = t.sys_brk(0x40_0000);
     assert_eq!(grown, 0x40_0000);
 
-    let mapped = t.sys_mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    let mapped = t.sys_mmap(
+        0,
+        4096,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    );
     assert!(mapped > 0);
 
     let floor = (((grown as u64) + 0x1F_FFFF) & !0x1F_FFFF).max(0x20_0000);

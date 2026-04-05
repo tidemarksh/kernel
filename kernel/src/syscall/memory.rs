@@ -16,7 +16,7 @@
 //! };
 //! https://github.com/torvalds/linux/blob/v6.12/include/linux/mm_types.h
 
-use alloc_crate::vec::Vec;
+use alloc_crate::{format, vec::Vec};
 
 use crate::abi::*;
 use crate::fs::{fd_table, memfs};
@@ -34,6 +34,25 @@ struct AddressSpaceState {
     brk_current: u64,
     mmap_next: u64,
     has_prot_none: u32,
+}
+
+#[derive(Clone, Copy)]
+enum ProcMapsLabel {
+    None,
+    Heap,
+    Stack,
+}
+
+#[derive(Clone, Copy)]
+struct ProcMapsEntry {
+    start: u64,
+    end: u64,
+    prot: i32,
+    flags: i32,
+    fd: i32,
+    offset: u64,
+    inode: u64,
+    label: ProcMapsLabel,
 }
 
 /// Internal snapshot of address space state used by plain-fork handoff support.
@@ -279,6 +298,126 @@ pub fn ensure_guest_memory_capacity(base: u32, guest_end: u64) -> bool {
 
 fn page_align_up(len: u64) -> u64 {
     (len + PAGE_SIZE - 1) & !(PAGE_SIZE - 1)
+}
+
+fn page_align_down(addr: u64) -> u64 {
+    addr & !(PAGE_SIZE - 1)
+}
+
+fn is_stack_vma(vmas: &[Vma], index: usize) -> bool {
+    let vma = vmas[index];
+    if vma.fd >= 0
+        || (vma.flags as u64 & MAP_ANONYMOUS) == 0
+        || (vma.flags as u64 & MAP_PRIVATE) == 0
+        || vma.prot != (PROT_READ | PROT_WRITE)
+    {
+        return false;
+    }
+
+    vmas.iter().any(|candidate| {
+        candidate.end == vma.start
+            && candidate.fd < 0
+            && (candidate.flags as u64 & MAP_ANONYMOUS) != 0
+            && (candidate.flags as u64 & MAP_PRIVATE) != 0
+            && candidate.prot == PROT_NONE
+    })
+}
+
+fn append_proc_maps_line(out: &mut Vec<u8>, entry: &ProcMapsEntry) {
+    let perms = [
+        if (entry.prot & PROT_READ) != 0 {
+            b'r'
+        } else {
+            b'-'
+        },
+        if (entry.prot & PROT_WRITE) != 0 {
+            b'w'
+        } else {
+            b'-'
+        },
+        if (entry.prot & PROT_EXEC) != 0 {
+            b'x'
+        } else {
+            b'-'
+        },
+        if (entry.flags as u64 & MAP_SHARED) != 0 {
+            b's'
+        } else {
+            b'p'
+        },
+    ];
+    out.extend_from_slice(
+        format!(
+            "{:08x}-{:08x} {} {:08x} 00:00 {}",
+            entry.start,
+            entry.end,
+            core::str::from_utf8(&perms).unwrap_or("---p"),
+            entry.offset,
+            entry.inode
+        )
+        .as_bytes(),
+    );
+
+    match entry.label {
+        ProcMapsLabel::Heap => out.extend_from_slice(b" [heap]"),
+        ProcMapsLabel::Stack => out.extend_from_slice(b" [stack]"),
+        ProcMapsLabel::None if entry.fd >= 0 => {
+            let mut path = [0u8; 4096];
+            let len = memfs::write_path(entry.fd as u32, &mut path);
+            if len != 0 {
+                out.push(b' ');
+                out.extend_from_slice(&path[..len]);
+            }
+        }
+        ProcMapsLabel::None => {}
+    }
+
+    out.push(b'\n');
+}
+
+pub fn proc_self_maps_snapshot() -> Vec<u8> {
+    let s = ms();
+    let mut entries = Vec::with_capacity(s.vmas.len() + 1);
+
+    let heap_start = page_align_down(s.brk_base);
+    let heap_end = page_align_up(s.brk_current);
+    if heap_end > heap_start {
+        entries.push(ProcMapsEntry {
+            start: heap_start,
+            end: heap_end,
+            prot: PROT_READ | PROT_WRITE,
+            flags: (MAP_PRIVATE | MAP_ANONYMOUS) as i32,
+            fd: -1,
+            offset: 0,
+            inode: 0,
+            label: ProcMapsLabel::Heap,
+        });
+    }
+
+    for (index, vma) in s.vmas.iter().enumerate() {
+        entries.push(ProcMapsEntry {
+            start: vma.start,
+            end: vma.end,
+            prot: vma.prot,
+            flags: vma.flags,
+            fd: vma.fd,
+            offset: vma.offset,
+            inode: if vma.fd >= 0 { vma.fd as u64 } else { 0 },
+            label: if is_stack_vma(&s.vmas, index) {
+                ProcMapsLabel::Stack
+            } else {
+                ProcMapsLabel::None
+            },
+        });
+    }
+
+    entries.sort_by_key(|entry| entry.start);
+
+    let mut out = Vec::new();
+    for entry in entries.iter() {
+        append_proc_maps_line(&mut out, entry);
+    }
+    out
 }
 
 fn map_fixed_anonymous(base: u32, start: u64, length: u64, prot: i32) -> i64 {

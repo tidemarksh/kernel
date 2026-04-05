@@ -40,6 +40,12 @@ static mut LAST_CLONE_SPAWN: CloneSpawnTrace = CloneSpawnTrace {
     x27: 0,
 };
 
+const THREAD_COUNT_TRACE_INIT_MAIN: u32 = 1;
+const THREAD_COUNT_TRACE_CLONE_INC: u32 = 2;
+const THREAD_COUNT_TRACE_EXIT_DEC: u32 = 3;
+const THREAD_COUNT_TRACE_TERMINATE: u32 = 4;
+const THREAD_COUNT_TRACE_EXEC_RESET: u32 = 5;
+
 pub fn last_clone_spawn() -> (i32, u64, u64, u64, u64) {
     unsafe {
         let t = LAST_CLONE_SPAWN;
@@ -94,10 +100,22 @@ fn clear_tid_and_wake(process_ptr: u32, base: u32, addr: u64) -> u32 {
     unsafe {
         guest_mem::write_u32(base, addr, 0);
     }
-    wake_futex_waiters_by_process_ptr(process_ptr, base, addr as u32, u32::MAX)
+    wake_futex_waiters_by_process_ptr(
+        process_ptr,
+        base,
+        addr as u32,
+        u32::MAX,
+        FUTEX_BITSET_MATCH_ANY,
+    )
 }
 
-fn wake_futex_waiters_by_process_ptr(process_ptr: u32, base: u32, addr: u32, max_wake: u32) -> u32 {
+fn wake_futex_waiters_by_process_ptr(
+    process_ptr: u32,
+    base: u32,
+    addr: u32,
+    max_wake: u32,
+    wake_bitset: u32,
+) -> u32 {
     if process_ptr == 0 || max_wake == 0 {
         return 0;
     }
@@ -110,6 +128,12 @@ fn wake_futex_waiters_by_process_ptr(process_ptr: u32, base: u32, addr: u32, max
                 break;
             }
             if record.state != THREAD_BLOCKED_FUTEX || record.blocked_addr != addr {
+                continue;
+            }
+            let waiter_bitset = thread_state_from_record_ptr(record.thread_ptr)
+                .map(|thread_ptr| (*thread_ptr).futex_wait_bitset)
+                .unwrap_or(FUTEX_BITSET_MATCH_ANY);
+            if (waiter_bitset & wake_bitset) == 0 {
                 continue;
             }
             record.state = THREAD_RUNNING;
@@ -197,7 +221,13 @@ fn mark_robust_futex_owner_died(
     unsafe {
         guest_mem::write_u32(base, futex_addr, updated);
     }
-    wake_futex_waiters_by_process_ptr(process_ptr, base, futex_addr as u32, u32::MAX);
+    wake_futex_waiters_by_process_ptr(
+        process_ptr,
+        base,
+        futex_addr as u32,
+        u32::MAX,
+        FUTEX_BITSET_MATCH_ANY,
+    );
 }
 
 fn cleanup_robust_futexes(process_ptr: u32, base: u32, owner_tid: u32, robust_head: u64) {
@@ -225,13 +255,24 @@ fn cleanup_robust_futexes(process_ptr: u32, base: u32, owner_tid: u32, robust_he
 fn decrement_thread_count(vm: &ThreadState, base: u32) -> u32 {
     unsafe {
         match process_state(base, vm) {
-            Some(ps) => ps
-                .thread_count
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-                    Some(count.saturating_sub(1))
-                })
-                .unwrap_or(0)
-                .saturating_sub(1),
+            Some(ps) => {
+                let before = ps
+                    .thread_count
+                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                        Some(count.saturating_sub(1))
+                    })
+                    .unwrap_or(0);
+                let after = before.saturating_sub(1);
+                crate::harness_debug::record_thread_count(
+                    THREAD_COUNT_TRACE_EXIT_DEC,
+                    vm as *const ThreadState as u32,
+                    vm.tid,
+                    vm.process_ptr,
+                    before,
+                    after,
+                );
+                after
+            }
             None => 0,
         }
     }
@@ -244,6 +285,7 @@ pub fn init_main_thread(vm_ptr: u32, base: u32) {
             return;
         };
 
+        let before = ps.thread_count.load(Ordering::Acquire);
         ps.thread_count.store(1, Ordering::Release);
         for record in ps.threads.iter_mut() {
             *record = ThreadRecord::empty();
@@ -260,6 +302,14 @@ pub fn init_main_thread(vm_ptr: u32, base: u32) {
             core::ptr::addr_of!(ps.reservation_lock) as *const core::sync::atomic::AtomicU32;
         let tc_ptr = core::ptr::addr_of!(ps.thread_count);
         guest_mem::init(gen_ptr, lock_ptr, tc_ptr);
+        crate::harness_debug::record_thread_count(
+            THREAD_COUNT_TRACE_INIT_MAIN,
+            vm_ptr,
+            vm.tid,
+            vm.process_ptr,
+            before,
+            1,
+        );
     }
 }
 
@@ -304,6 +354,7 @@ pub fn discard_other_threads_for_exec(vm: &ThreadState, base: u32) -> u32 {
         }
 
         if let Some(idx) = current_idx {
+            let before = ps.thread_count.load(Ordering::Acquire);
             ps.threads[idx] = ThreadRecord::new(
                 vm.tid,
                 THREAD_RUNNING,
@@ -312,6 +363,14 @@ pub fn discard_other_threads_for_exec(vm: &ThreadState, base: u32) -> u32 {
                 0,
             );
             ps.thread_count.store(1, Ordering::Release);
+            crate::harness_debug::record_thread_count(
+                THREAD_COUNT_TRACE_EXEC_RESET,
+                vm as *const ThreadState as u32,
+                vm.tid,
+                vm.process_ptr,
+                before,
+                1,
+            );
         }
 
         discarded
@@ -398,6 +457,7 @@ pub fn terminate_process(vm: &mut ThreadState, base: u32, exit_code: i32, term_s
     unsafe {
         if process_ptr != 0 {
             let ps = &mut *((base as u64 + process_ptr as u64) as *mut ProcessState);
+            let before = ps.thread_count.load(Ordering::Acquire);
             for record in ps.threads.iter_mut() {
                 if record.state == THREAD_NONE || record.state == THREAD_DEAD {
                     continue;
@@ -428,6 +488,14 @@ pub fn terminate_process(vm: &mut ThreadState, base: u32, exit_code: i32, term_s
                 *record = ThreadRecord::empty();
             }
             ps.thread_count.store(0, Ordering::Release);
+            crate::harness_debug::record_thread_count(
+                THREAD_COUNT_TRACE_TERMINATE,
+                vm as *const ThreadState as u32,
+                vm.tid,
+                vm.process_ptr,
+                before,
+                0,
+            );
         }
     }
 
@@ -479,7 +547,15 @@ pub fn sys_clone(
             let Some(ps) = process_state(base, vm) else {
                 return ESRCH;
             };
-            ps.thread_count.fetch_add(1, Ordering::AcqRel);
+            let before = ps.thread_count.fetch_add(1, Ordering::AcqRel);
+            crate::harness_debug::record_thread_count(
+                THREAD_COUNT_TRACE_CLONE_INC,
+                vm as *const ThreadState as u32,
+                vm.tid,
+                vm.process_ptr,
+                before,
+                before.saturating_add(1),
+            );
         }
 
         // Write child TID to parent_tidptr if CLONE_PARENT_SETTID
@@ -684,10 +760,19 @@ pub fn sys_futex(
     addr2: u64,
     val3: u64,
 ) -> i64 {
-    let futex_op = (op & 0x7F) as u32; // mask out FUTEX_PRIVATE_FLAG
+    let futex_op = (op as u32) & !(FUTEX_PRIVATE_FLAG | FUTEX_CLOCK_REALTIME);
 
     match futex_op {
-        FUTEX_WAIT => {
+        FUTEX_WAIT | FUTEX_WAIT_BITSET => {
+            let bitset = if futex_op == FUTEX_WAIT_BITSET {
+                let bitset = val3 as u32;
+                if bitset == 0 {
+                    return EINVAL;
+                }
+                bitset
+            } else {
+                FUTEX_BITSET_MATCH_ANY
+            };
             let current = unsafe { guest_mem::read_u32(base, addr) };
             if current != val as u32 {
                 return EAGAIN;
@@ -702,17 +787,28 @@ pub fn sys_futex(
             vm.futex_wait_addr = addr;
             vm.futex_wait_timeout = timeout_or_requeue;
             vm.futex_wait_expected = val as u32;
+            vm.futex_wait_bitset = bitset;
             // Value matches — block. Return STATUS_FUTEX_WAIT for TS to Atomics.wait.
             vm.x[10] = addr; // stash addr for TS
             vm.status = STATUS_FUTEX_WAIT;
             return 0;
         }
-        FUTEX_WAKE => {
+        FUTEX_WAKE | FUTEX_WAKE_BITSET => {
+            let wake_bitset = if futex_op == FUTEX_WAKE_BITSET {
+                let bitset = val3 as u32;
+                if bitset == 0 {
+                    return EINVAL;
+                }
+                bitset
+            } else {
+                FUTEX_BITSET_MATCH_ANY
+            };
             let local = wake_futex_waiters_by_process_ptr(
                 vm.process_ptr,
                 base,
                 addr as u32,
                 val.min(u32::MAX as u64) as u32,
+                wake_bitset,
             );
             #[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
             let external = crate::harness_support::wake_plain_fork_futex_waits(
@@ -736,8 +832,13 @@ pub fn sys_futex(
             let wake_count = val.min(u32::MAX as u64) as u32;
             let requeue_count = timeout_or_requeue.min(u32::MAX as u64) as u32;
 
-            let local_wake =
-                wake_futex_waiters_by_process_ptr(vm.process_ptr, base, addr as u32, wake_count);
+            let local_wake = wake_futex_waiters_by_process_ptr(
+                vm.process_ptr,
+                base,
+                addr as u32,
+                wake_count,
+                FUTEX_BITSET_MATCH_ANY,
+            );
             #[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
             let external_wake =
                 crate::harness_support::wake_plain_fork_futex_waits(addr as u32, wake_count);
@@ -783,6 +884,7 @@ pub fn resume_futex_wait_result(vm: &mut ThreadState, base: u32, result: i64) {
     vm.futex_wait_addr = 0;
     vm.futex_wait_timeout = 0;
     vm.futex_wait_expected = 0;
+    vm.futex_wait_bitset = 0;
     vm.status = STATUS_OK;
     vm.x[10] = result as u64;
     crate::syscall::signal::check_pending(vm, base);

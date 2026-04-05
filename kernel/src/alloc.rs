@@ -65,6 +65,9 @@ pub unsafe fn reset(base: u32) {
 /// # Safety
 /// Caller must ensure the WASM linear memory is large enough.
 pub unsafe fn alloc(size: u32, align: u32) -> u32 {
+    if let Some(ptr) = crate::syscall::process::shared_heap_alloc(size, align) {
+        return ptr;
+    }
     let aligned = (unsafe { HEAP_PTR } + align - 1) & !(align - 1);
     let end = aligned + size;
     // Check against WASM memory size
@@ -108,16 +111,22 @@ pub unsafe fn alloc_type<T>() -> u32 {
 
 /// Return current heap usage in bytes.
 pub fn heap_used() -> u32 {
-    unsafe { HEAP_PTR - HEAP_BASE }
+    heap_ptr().saturating_sub(heap_base())
 }
 
 /// Return the heap base address.
 pub fn heap_base() -> u32 {
+    if let Some(base) = crate::syscall::process::shared_heap_base() {
+        return base;
+    }
     unsafe { HEAP_BASE }
 }
 
 /// Return current heap pointer (first unallocated byte).
 pub fn heap_ptr() -> u32 {
+    if let Some(ptr) = crate::syscall::process::shared_heap_ptr() {
+        return ptr;
+    }
     unsafe { HEAP_PTR }
 }
 

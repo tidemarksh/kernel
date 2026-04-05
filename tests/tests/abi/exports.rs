@@ -176,7 +176,7 @@ fn build_test_elf_with_interp(code: &[u8], interp_path: &[u8]) -> Vec<u8> {
     put_u32(&mut elf, ph_off, 3);
     put_u32(&mut elf, ph_off + 4, 4);
     put_u64(&mut elf, ph_off + 8, interp_off as u64);
-    put_u64(&mut elf, ph_off + 16, 0x1800);
+    put_u64(&mut elf, ph_off + 16, 0x1100);
     put_u64(&mut elf, ph_off + 32, (interp_path.len() + 1) as u64);
     put_u64(&mut elf, ph_off + 40, (interp_path.len() + 1) as u64);
     put_u64(&mut elf, ph_off + 48, 1);
@@ -193,6 +193,396 @@ fn build_test_elf_with_interp(code: &[u8], interp_path: &[u8]) -> Vec<u8> {
     elf[interp_off..interp_off + interp_path.len()].copy_from_slice(interp_path);
     elf[interp_off + interp_path.len()] = 0;
     elf[code_off..code_off + code.len()].copy_from_slice(code);
+    elf
+}
+
+fn build_test_elf_with_interp_and_tls(
+    code: &[u8],
+    interp_path: &[u8],
+    tls_init: &[u8],
+    tls_memsz: u64,
+) -> Vec<u8> {
+    fn put_u16(buf: &mut [u8], off: usize, value: u16) {
+        buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u32(buf: &mut [u8], off: usize, value: u32) {
+        buf[off..off + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u64(buf: &mut [u8], off: usize, value: u64) {
+        buf[off..off + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    let ph_off = 64usize;
+    let interp_off = 0x200usize;
+    let code_off = 0x300usize;
+    let data_off = 0x400usize;
+    let entry = 0x1000u64 + code_off as u64;
+    let total_len = data_off + tls_init.len();
+    let mut elf = vec![0u8; total_len];
+    elf[0] = 0x7f;
+    elf[1] = b'E';
+    elf[2] = b'L';
+    elf[3] = b'F';
+    elf[4] = 2;
+    elf[5] = 1;
+    elf[6] = 1;
+    put_u16(&mut elf, 16, 2);
+    put_u16(&mut elf, 18, 243);
+    put_u32(&mut elf, 20, 1);
+    put_u64(&mut elf, 24, entry);
+    put_u64(&mut elf, 32, ph_off as u64);
+    put_u16(&mut elf, 52, 64);
+    put_u16(&mut elf, 54, 56);
+    put_u16(&mut elf, 56, 4);
+
+    put_u32(&mut elf, ph_off, 3);
+    put_u32(&mut elf, ph_off + 4, 4);
+    put_u64(&mut elf, ph_off + 8, interp_off as u64);
+    put_u64(&mut elf, ph_off + 16, 0x1100);
+    put_u64(&mut elf, ph_off + 32, (interp_path.len() + 1) as u64);
+    put_u64(&mut elf, ph_off + 40, (interp_path.len() + 1) as u64);
+    put_u64(&mut elf, ph_off + 48, 1);
+
+    let code_ph = ph_off + 56;
+    put_u32(&mut elf, code_ph, 1);
+    put_u32(&mut elf, code_ph + 4, 5);
+    put_u64(&mut elf, code_ph + 8, 0);
+    put_u64(&mut elf, code_ph + 16, 0x1000);
+    put_u64(&mut elf, code_ph + 32, data_off as u64);
+    put_u64(&mut elf, code_ph + 40, data_off as u64);
+    put_u64(&mut elf, code_ph + 48, 0x1000);
+
+    let data_ph = ph_off + 112;
+    put_u32(&mut elf, data_ph, 1);
+    put_u32(&mut elf, data_ph + 4, 6);
+    put_u64(&mut elf, data_ph + 8, data_off as u64);
+    put_u64(&mut elf, data_ph + 16, 0x3000);
+    put_u64(&mut elf, data_ph + 32, tls_init.len() as u64);
+    put_u64(&mut elf, data_ph + 40, tls_memsz);
+    put_u64(&mut elf, data_ph + 48, 0x1000);
+
+    let tls_ph = ph_off + 168;
+    put_u32(&mut elf, tls_ph, 7);
+    put_u32(&mut elf, tls_ph + 4, 4);
+    put_u64(&mut elf, tls_ph + 8, data_off as u64);
+    put_u64(&mut elf, tls_ph + 16, 0x3000);
+    put_u64(&mut elf, tls_ph + 32, tls_init.len() as u64);
+    put_u64(&mut elf, tls_ph + 40, tls_memsz);
+    put_u64(&mut elf, tls_ph + 48, 8);
+
+    elf[interp_off..interp_off + interp_path.len()].copy_from_slice(interp_path);
+    elf[interp_off + interp_path.len()] = 0;
+    elf[code_off..code_off + code.len()].copy_from_slice(code);
+    elf[data_off..data_off + tls_init.len()].copy_from_slice(tls_init);
+    elf
+}
+
+fn build_test_elf_dyn_with_interp(code: &[u8], interp_path: &[u8]) -> Vec<u8> {
+    let mut elf = build_test_elf_with_interp(code, interp_path);
+    elf[16..18].copy_from_slice(&3u16.to_le_bytes());
+    elf
+}
+
+fn build_test_elf_dyn_with_interp_and_tls(
+    code: &[u8],
+    interp_path: &[u8],
+    tls_init: &[u8],
+    tls_memsz: u64,
+) -> Vec<u8> {
+    let mut elf = build_test_elf_with_interp_and_tls(code, interp_path, tls_init, tls_memsz);
+    elf[16..18].copy_from_slice(&3u16.to_le_bytes());
+    elf
+}
+
+fn build_test_elf_dyn(code: &[u8]) -> Vec<u8> {
+    fn put_u16(buf: &mut [u8], off: usize, value: u16) {
+        buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u32(buf: &mut [u8], off: usize, value: u32) {
+        buf[off..off + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u64(buf: &mut [u8], off: usize, value: u64) {
+        buf[off..off + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    let mut elf = vec![0u8; 0x100 + code.len()];
+    elf[0] = 0x7f;
+    elf[1] = b'E';
+    elf[2] = b'L';
+    elf[3] = b'F';
+    elf[4] = 2;
+    elf[5] = 1;
+    elf[6] = 1;
+    put_u16(&mut elf, 16, 3);
+    put_u16(&mut elf, 18, 243);
+    put_u32(&mut elf, 20, 1);
+    put_u64(&mut elf, 24, 0x1000);
+    put_u64(&mut elf, 32, 64);
+    put_u16(&mut elf, 52, 64);
+    put_u16(&mut elf, 54, 56);
+    put_u16(&mut elf, 56, 1);
+
+    put_u32(&mut elf, 64, 1);
+    put_u32(&mut elf, 68, 5);
+    put_u64(&mut elf, 72, 0x100);
+    put_u64(&mut elf, 80, 0x1000);
+    put_u64(&mut elf, 96, code.len() as u64);
+    put_u64(&mut elf, 104, code.len() as u64);
+    put_u64(&mut elf, 112, 0x1000);
+    elf[0x100..0x100 + code.len()].copy_from_slice(code);
+    elf
+}
+
+fn build_test_elf_dyn_low(code: &[u8]) -> Vec<u8> {
+    fn put_u16(buf: &mut [u8], off: usize, value: u16) {
+        buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u32(buf: &mut [u8], off: usize, value: u32) {
+        buf[off..off + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u64(buf: &mut [u8], off: usize, value: u64) {
+        buf[off..off + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    let code_off = 0x100usize;
+    let mut elf = vec![0u8; code_off + code.len()];
+    elf[0] = 0x7f;
+    elf[1] = b'E';
+    elf[2] = b'L';
+    elf[3] = b'F';
+    elf[4] = 2;
+    elf[5] = 1;
+    elf[6] = 1;
+    put_u16(&mut elf, 16, 3);
+    put_u16(&mut elf, 18, 243);
+    put_u32(&mut elf, 20, 1);
+    put_u64(&mut elf, 24, 0x40);
+    put_u64(&mut elf, 32, 64);
+    put_u16(&mut elf, 52, 64);
+    put_u16(&mut elf, 54, 56);
+    put_u16(&mut elf, 56, 1);
+
+    put_u32(&mut elf, 64, 1);
+    put_u32(&mut elf, 68, 5);
+    put_u64(&mut elf, 72, code_off as u64);
+    put_u64(&mut elf, 80, 0);
+    put_u64(&mut elf, 96, code.len() as u64);
+    put_u64(&mut elf, 104, code.len() as u64);
+    put_u64(&mut elf, 112, 0x1000);
+    elf[code_off..code_off + code.len()].copy_from_slice(code);
+    elf
+}
+
+fn build_test_elf_dyn_two_loads(code: &[u8], data: &[u8]) -> Vec<u8> {
+    fn put_u16(buf: &mut [u8], off: usize, value: u16) {
+        buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u32(buf: &mut [u8], off: usize, value: u32) {
+        buf[off..off + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u64(buf: &mut [u8], off: usize, value: u64) {
+        buf[off..off + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    let ph_off = 64usize;
+    let code_off = 0x100usize;
+    let data_off = 0x300usize;
+    let entry = 0x1000u64;
+    let total_len = data_off + data.len();
+    let mut elf = vec![0u8; total_len];
+    elf[0] = 0x7f;
+    elf[1] = b'E';
+    elf[2] = b'L';
+    elf[3] = b'F';
+    elf[4] = 2;
+    elf[5] = 1;
+    elf[6] = 1;
+    put_u16(&mut elf, 16, 3);
+    put_u16(&mut elf, 18, 243);
+    put_u32(&mut elf, 20, 1);
+    put_u64(&mut elf, 24, entry);
+    put_u64(&mut elf, 32, ph_off as u64);
+    put_u16(&mut elf, 52, 64);
+    put_u16(&mut elf, 54, 56);
+    put_u16(&mut elf, 56, 2);
+
+    put_u32(&mut elf, ph_off, 1);
+    put_u32(&mut elf, ph_off + 4, 5);
+    put_u64(&mut elf, ph_off + 8, code_off as u64);
+    put_u64(&mut elf, ph_off + 16, 0x1000);
+    put_u64(&mut elf, ph_off + 32, code.len() as u64);
+    put_u64(&mut elf, ph_off + 40, code.len() as u64);
+    put_u64(&mut elf, ph_off + 48, 0x1000);
+
+    let data_ph = ph_off + 56;
+    put_u32(&mut elf, data_ph, 1);
+    put_u32(&mut elf, data_ph + 4, 6);
+    put_u64(&mut elf, data_ph + 8, data_off as u64);
+    put_u64(&mut elf, data_ph + 16, 0x3000);
+    put_u64(&mut elf, data_ph + 32, data.len() as u64);
+    put_u64(&mut elf, data_ph + 40, data.len() as u64 + 0x100);
+    put_u64(&mut elf, data_ph + 48, 0x1000);
+
+    elf[code_off..code_off + code.len()].copy_from_slice(code);
+    elf[data_off..data_off + data.len()].copy_from_slice(data);
+    elf
+}
+
+fn build_test_elf_dyn_with_interp_two_loads(
+    code: &[u8],
+    data: &[u8],
+    interp_path: &[u8],
+) -> Vec<u8> {
+    fn put_u16(buf: &mut [u8], off: usize, value: u16) {
+        buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u32(buf: &mut [u8], off: usize, value: u32) {
+        buf[off..off + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u64(buf: &mut [u8], off: usize, value: u64) {
+        buf[off..off + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    let ph_off = 64usize;
+    let interp_off = 0x100usize;
+    let code_off = 0x200usize;
+    let data_off = 0x300usize;
+    let entry = 0x1000u64 + code_off as u64;
+    let total_len = data_off + data.len();
+    let mut elf = vec![0u8; total_len];
+    elf[0] = 0x7f;
+    elf[1] = b'E';
+    elf[2] = b'L';
+    elf[3] = b'F';
+    elf[4] = 2;
+    elf[5] = 1;
+    elf[6] = 1;
+    put_u16(&mut elf, 16, 3);
+    put_u16(&mut elf, 18, 243);
+    put_u32(&mut elf, 20, 1);
+    put_u64(&mut elf, 24, entry);
+    put_u64(&mut elf, 32, ph_off as u64);
+    put_u16(&mut elf, 52, 64);
+    put_u16(&mut elf, 54, 56);
+    put_u16(&mut elf, 56, 3);
+
+    put_u32(&mut elf, ph_off, 3);
+    put_u32(&mut elf, ph_off + 4, 4);
+    put_u64(&mut elf, ph_off + 8, interp_off as u64);
+    put_u64(&mut elf, ph_off + 16, 0x1100);
+    put_u64(&mut elf, ph_off + 32, (interp_path.len() + 1) as u64);
+    put_u64(&mut elf, ph_off + 40, (interp_path.len() + 1) as u64);
+    put_u64(&mut elf, ph_off + 48, 1);
+
+    let code_ph = ph_off + 56;
+    put_u32(&mut elf, code_ph, 1);
+    put_u32(&mut elf, code_ph + 4, 5);
+    put_u64(&mut elf, code_ph + 8, 0);
+    put_u64(&mut elf, code_ph + 16, 0x1000);
+    put_u64(&mut elf, code_ph + 32, data_off as u64);
+    put_u64(&mut elf, code_ph + 40, data_off as u64);
+    put_u64(&mut elf, code_ph + 48, 0x1000);
+
+    let data_ph = ph_off + 112;
+    put_u32(&mut elf, data_ph, 1);
+    put_u32(&mut elf, data_ph + 4, 6);
+    put_u64(&mut elf, data_ph + 8, data_off as u64);
+    put_u64(&mut elf, data_ph + 16, 0x3000);
+    put_u64(&mut elf, data_ph + 32, data.len() as u64);
+    put_u64(&mut elf, data_ph + 40, data.len() as u64 + 0x100);
+    put_u64(&mut elf, data_ph + 48, 0x1000);
+
+    elf[interp_off..interp_off + interp_path.len()].copy_from_slice(interp_path);
+    elf[interp_off + interp_path.len()] = 0;
+    elf[code_off..code_off + code.len()].copy_from_slice(code);
+    elf[data_off..data_off + data.len()].copy_from_slice(data);
+    elf
+}
+
+fn build_test_elf_dyn_with_interp_dynamic(code: &[u8], data: &[u8], interp_path: &[u8]) -> Vec<u8> {
+    fn put_u16(buf: &mut [u8], off: usize, value: u16) {
+        buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u32(buf: &mut [u8], off: usize, value: u32) {
+        buf[off..off + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    fn put_u64(buf: &mut [u8], off: usize, value: u64) {
+        buf[off..off + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    let ph_off = 64usize;
+    let interp_off = 0x100usize;
+    let code_off = 0x200usize;
+    let data_off = 0x300usize;
+    let dynamic_off = 0x320usize;
+    let dynamic_vaddr = 0x3020u64;
+    let entry = 0x1000u64 + code_off as u64;
+    let second_filesz = (dynamic_off + 64 - data_off).max(data.len());
+    let total_len = data_off + second_filesz;
+    let mut elf = vec![0u8; total_len];
+    elf[0] = 0x7f;
+    elf[1] = b'E';
+    elf[2] = b'L';
+    elf[3] = b'F';
+    elf[4] = 2;
+    elf[5] = 1;
+    elf[6] = 1;
+    put_u16(&mut elf, 16, 3);
+    put_u16(&mut elf, 18, 243);
+    put_u32(&mut elf, 20, 1);
+    put_u64(&mut elf, 24, entry);
+    put_u64(&mut elf, 32, ph_off as u64);
+    put_u16(&mut elf, 52, 64);
+    put_u16(&mut elf, 54, 56);
+    put_u16(&mut elf, 56, 4);
+
+    put_u32(&mut elf, ph_off, 3);
+    put_u32(&mut elf, ph_off + 4, 4);
+    put_u64(&mut elf, ph_off + 8, interp_off as u64);
+    put_u64(&mut elf, ph_off + 16, 0x1100);
+    put_u64(&mut elf, ph_off + 32, (interp_path.len() + 1) as u64);
+    put_u64(&mut elf, ph_off + 40, (interp_path.len() + 1) as u64);
+    put_u64(&mut elf, ph_off + 48, 1);
+
+    let code_ph = ph_off + 56;
+    put_u32(&mut elf, code_ph, 1);
+    put_u32(&mut elf, code_ph + 4, 5);
+    put_u64(&mut elf, code_ph + 8, 0);
+    put_u64(&mut elf, code_ph + 16, 0x1000);
+    put_u64(&mut elf, code_ph + 32, data_off as u64);
+    put_u64(&mut elf, code_ph + 40, data_off as u64);
+    put_u64(&mut elf, code_ph + 48, 0x1000);
+
+    let data_ph = ph_off + 112;
+    put_u32(&mut elf, data_ph, 1);
+    put_u32(&mut elf, data_ph + 4, 6);
+    put_u64(&mut elf, data_ph + 8, data_off as u64);
+    put_u64(&mut elf, data_ph + 16, 0x3000);
+    put_u64(&mut elf, data_ph + 32, second_filesz as u64);
+    put_u64(&mut elf, data_ph + 40, second_filesz as u64 + 0x100);
+    put_u64(&mut elf, data_ph + 48, 0x1000);
+
+    let dynamic_ph = ph_off + 168;
+    put_u32(&mut elf, dynamic_ph, 2);
+    put_u32(&mut elf, dynamic_ph + 4, 6);
+    put_u64(&mut elf, dynamic_ph + 8, dynamic_off as u64);
+    put_u64(&mut elf, dynamic_ph + 16, dynamic_vaddr);
+    put_u64(&mut elf, dynamic_ph + 32, 4 * 16);
+    put_u64(&mut elf, dynamic_ph + 40, 4 * 16);
+    put_u64(&mut elf, dynamic_ph + 48, 8);
+
+    elf[interp_off..interp_off + interp_path.len()].copy_from_slice(interp_path);
+    elf[interp_off + interp_path.len()] = 0;
+    elf[code_off..code_off + code.len()].copy_from_slice(code);
+    elf[data_off..data_off + data.len()].copy_from_slice(data);
+    put_u64(&mut elf, dynamic_off, 7);
+    put_u64(&mut elf, dynamic_off + 8, 0x3300);
+    put_u64(&mut elf, dynamic_off + 16, 8);
+    put_u64(&mut elf, dynamic_off + 24, 24);
+    put_u64(&mut elf, dynamic_off + 32, 0x6fff_ffff);
+    put_u64(&mut elf, dynamic_off + 40, 5);
+    put_u64(&mut elf, dynamic_off + 48, 0);
+    put_u64(&mut elf, dynamic_off + 56, 0);
     elf
 }
 
@@ -272,7 +662,10 @@ fn spawn_handoff_exports_round_trip() {
 
     let ino = tidemark_kernel::fs::memfs::create_file(1, b"test", 0o755);
     assert_ne!(ino, 0);
-    assert_eq!(tidemark_kernel::fs::memfs::write_file(ino, 0, &elf), elf.len() as i64);
+    assert_eq!(
+        tidemark_kernel::fs::memfs::write_file(ino, 0, &elf),
+        elf.len() as i64
+    );
     let path_addr = t.scratch;
     t.write_mem(path_addr, b"/test\0");
 
@@ -404,6 +797,7 @@ fn process_create_populates_initial_stack_contract() {
     assert_eq!(aux_pagesz_val, 4096);
 
     let mut found_random = false;
+    let mut found_execfn = false;
     let mut cursor = auxv_start;
     for _ in 0..16 {
         let tag = unsafe { tidemark_kernel::guest_mem::read_u64(guest_base, cursor) };
@@ -415,9 +809,17 @@ fn process_create_populates_initial_stack_contract() {
             found_random = true;
             assert_ne!(val, 0);
         }
+        if tag == tidemark_kernel::elf::AT_EXECFN {
+            found_execfn = true;
+            let mut execfn = [0u8; 32];
+            let execfn_len =
+                unsafe { tidemark_kernel::guest_mem::read_cstr(guest_base, val, &mut execfn) };
+            assert_eq!(&execfn[..execfn_len], b"/bin/test");
+        }
         cursor += 16;
     }
     assert!(found_random, "AT_RANDOM must be present in auxv");
+    assert!(found_execfn, "AT_EXECFN must be present in auxv");
 }
 
 #[test]
@@ -467,9 +869,462 @@ fn process_create_with_pt_interp_preserves_executable_entry_in_auxv() {
     assert_ne!(vm_ptr, 0);
 
     let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
-    assert_eq!(vm.pc, 0x1000);
-    assert_eq!(find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_ENTRY), Some(0x1200));
+    assert_eq!(vm.pc, 0x3000);
+    assert_eq!(
+        find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_ENTRY),
+        Some(0x1200)
+    );
+    assert_eq!(
+        find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_BASE),
+        Some(0x2000)
+    );
     assert!(find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_PHDR).is_some());
+}
+
+#[test]
+fn process_create_with_pt_interp_preserves_executable_tls_base() {
+    let _t = TestVm::new();
+    let ram_size = 64 * 1024 * 1024;
+    let guest_base = process_guest_base(ram_size);
+    let elf = build_test_elf_with_interp_and_tls(
+        &[0x13, 0x05, 0x70, 0x00],
+        b"/lib/ld-test.so",
+        &[0x41, 0x42, 0x43, 0x44],
+        0x20,
+    );
+    let interp = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    install_file_at(b"/lib/ld-test.so", &interp, 0o755);
+
+    let elf_ptr = unsafe { tidemark_kernel::alloc::alloc_zeroed(0x1000, 16) };
+    assert_ne!(elf_ptr, 0);
+    unsafe {
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64, &elf);
+        tidemark_kernel::guest_mem::write_bytes(
+            0,
+            elf_ptr as u64 + 0x800,
+            b"/bin/test-interp-tls\0",
+        );
+    }
+
+    process_clear_args();
+    process_push_arg(elf_ptr + 0x800);
+
+    let vm_ptr = process_create(elf_ptr, elf.len() as u32, ram_size, 1024 * 1024);
+    assert_ne!(vm_ptr, 0);
+
+    let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
+    assert_eq!(vm.pc, 0x5000);
+    assert_eq!(vm.tls_base, 0x3000);
+    assert_eq!(vm.x[4], 0x3000);
+    assert_eq!(
+        find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_ENTRY),
+        Some(0x1300)
+    );
+}
+
+#[test]
+fn process_create_with_pt_interp_preserves_biased_dynamic_tls_base() {
+    let _t = TestVm::new();
+    let ram_size = 64 * 1024 * 1024;
+    let guest_base = process_guest_base(ram_size);
+    let elf = build_test_elf_dyn_with_interp_and_tls(
+        &[0x13, 0x05, 0x70, 0x00],
+        b"/lib/ld-test.so",
+        &[0x41, 0x42, 0x43, 0x44],
+        0x20,
+    );
+    let interp = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    install_file_at(b"/lib/ld-test.so", &interp, 0o755);
+
+    let elf_ptr = unsafe { tidemark_kernel::alloc::alloc_zeroed(0x1000, 16) };
+    assert_ne!(elf_ptr, 0);
+    unsafe {
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64, &elf);
+        tidemark_kernel::guest_mem::write_bytes(
+            0,
+            elf_ptr as u64 + 0x800,
+            b"/bin/test-dyn-interp-tls\0",
+        );
+    }
+
+    process_clear_args();
+    process_push_arg(elf_ptr + 0x800);
+
+    let vm_ptr = process_create(elf_ptr, elf.len() as u32, ram_size, 1024 * 1024);
+    assert_ne!(vm_ptr, 0);
+
+    let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
+    assert_eq!(vm.pc, 0x6000);
+    assert_eq!(vm.tls_base, 0x4000);
+    assert_eq!(vm.x[4], 0x4000);
+    assert_eq!(
+        find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_ENTRY),
+        Some(0x2300)
+    );
+    assert_eq!(
+        find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_BASE),
+        Some(0x5000)
+    );
+}
+
+#[test]
+fn process_inspect_elf_brk_accepts_et_dyn() {
+    let _t = TestVm::new();
+    let ram_size = 64 * 1024 * 1024;
+    let elf = build_test_elf_dyn(&[0x13, 0x05, 0x70, 0x00]);
+
+    let elf_ptr = unsafe { tidemark_kernel::alloc::alloc_zeroed(0x1000, 16) };
+    assert_ne!(elf_ptr, 0);
+    unsafe {
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64, &elf);
+    }
+
+    assert_eq!(
+        process_inspect_elf_brk(elf_ptr, elf.len() as u32, ram_size),
+        0x2000
+    );
+}
+
+#[test]
+fn process_create_with_pt_interp_accepts_et_dyn_interpreter() {
+    let _t = TestVm::new();
+    let ram_size = 64 * 1024 * 1024;
+    let guest_base = process_guest_base(ram_size);
+    let elf = build_test_elf_with_interp(&[0x13, 0x05, 0x70, 0x00], b"/lib/ld-test.so");
+    let interp = build_test_elf_dyn(&[0x13, 0x05, 0x70, 0x00]);
+    install_file_at(b"/lib/ld-test.so", &interp, 0o755);
+
+    let elf_ptr = unsafe { tidemark_kernel::alloc::alloc_zeroed(0x1000, 16) };
+    assert_ne!(elf_ptr, 0);
+    unsafe {
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64, &elf);
+        tidemark_kernel::guest_mem::write_bytes(
+            0,
+            elf_ptr as u64 + 0x400,
+            b"/bin/test-dyn-interp\0",
+        );
+    }
+
+    process_clear_args();
+    process_push_arg(elf_ptr + 0x400);
+
+    let vm_ptr = process_create(elf_ptr, elf.len() as u32, ram_size, 1024 * 1024);
+    assert_ne!(vm_ptr, 0);
+
+    let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
+    assert_eq!(vm.pc, 0x3000);
+    assert_eq!(
+        find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_ENTRY),
+        Some(0x1200)
+    );
+    assert_eq!(
+        find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_BASE),
+        Some(0x2000)
+    );
+    let mut code = [0u8; 4];
+    unsafe {
+        tidemark_kernel::guest_mem::read_bytes(guest_base, vm.pc, &mut code);
+    }
+    assert_eq!(code, [0x13, 0x05, 0x70, 0x00]);
+}
+
+#[test]
+fn process_create_with_pt_interp_accepts_et_dyn_two_load_interpreter() {
+    let _t = TestVm::new();
+    let ram_size = 64 * 1024 * 1024;
+    let guest_base = process_guest_base(ram_size);
+    let elf = build_test_elf_with_interp(&[0x13, 0x05, 0x70, 0x00], b"/lib/ld-test.so");
+    let interp = build_test_elf_dyn_two_loads(&[0x13, 0x05, 0x70, 0x00], &[0xaa, 0xbb, 0xcc, 0xdd]);
+    install_file_at(b"/lib/ld-test.so", &interp, 0o755);
+
+    let elf_ptr = unsafe { tidemark_kernel::alloc::alloc_zeroed(0x1000, 16) };
+    assert_ne!(elf_ptr, 0);
+    unsafe {
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64, &elf);
+        tidemark_kernel::guest_mem::write_bytes(
+            0,
+            elf_ptr as u64 + 0x400,
+            b"/bin/test-dyn-two-load-interp\0",
+        );
+    }
+
+    process_clear_args();
+    process_push_arg(elf_ptr + 0x400);
+
+    let vm_ptr = process_create(elf_ptr, elf.len() as u32, ram_size, 1024 * 1024);
+    assert_ne!(vm_ptr, 0);
+
+    let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
+    assert_eq!(vm.pc, 0x3000);
+    assert_eq!(
+        find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_ENTRY),
+        Some(0x1200)
+    );
+    assert_eq!(
+        find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_BASE),
+        Some(0x2000)
+    );
+}
+
+#[test]
+fn process_create_with_pt_interp_biases_et_dyn_main_executable() {
+    let _t = TestVm::new();
+    let ram_size = 64 * 1024 * 1024;
+    let guest_base = process_guest_base(ram_size);
+    let main_code = [0x13, 0x05, 0x70, 0x00];
+    let elf = build_test_elf_dyn_with_interp(&main_code, b"/lib/ld-test.so");
+    let interp = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    install_file_at(b"/lib/ld-test.so", &interp, 0o755);
+
+    let elf_ptr = unsafe { tidemark_kernel::alloc::alloc_zeroed(0x1000, 16) };
+    assert_ne!(elf_ptr, 0);
+    unsafe {
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64, &elf);
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64 + 0x400, b"/bin/test-dyn-main\0");
+    }
+
+    process_clear_args();
+    process_push_arg(elf_ptr + 0x400);
+
+    let vm_ptr = process_create(elf_ptr, elf.len() as u32, ram_size, 1024 * 1024);
+    assert_ne!(vm_ptr, 0);
+
+    let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
+    assert_eq!(vm.pc, 0x4000);
+    assert_eq!(
+        find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_ENTRY),
+        Some(0x2200)
+    );
+    assert_eq!(
+        find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_PHDR),
+        Some(0x2040)
+    );
+    assert_eq!(
+        find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_BASE),
+        Some(0x3000)
+    );
+
+    let mut interp = [0u8; 32];
+    let interp_len =
+        unsafe { tidemark_kernel::guest_mem::read_cstr(guest_base, 0x2100, &mut interp) };
+    assert_eq!(&interp[..interp_len], b"/lib/ld-test.so");
+
+    let mut code = [0u8; 4];
+    unsafe {
+        tidemark_kernel::guest_mem::read_bytes(guest_base, 0x2200, &mut code);
+    }
+    assert_eq!(code, main_code);
+}
+
+#[test]
+fn process_create_with_pt_interp_biases_et_dyn_two_load_main_executable() {
+    let _t = TestVm::new();
+    let ram_size = 64 * 1024 * 1024;
+    let guest_base = process_guest_base(ram_size);
+    let main_code = [0x13, 0x05, 0x70, 0x00];
+    let main_data = [0xaa, 0xbb, 0xcc, 0xdd];
+    let elf = build_test_elf_dyn_with_interp_two_loads(&main_code, &main_data, b"/lib/ld-test.so");
+    let interp = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    install_file_at(b"/lib/ld-test.so", &interp, 0o755);
+
+    let elf_ptr = unsafe { tidemark_kernel::alloc::alloc_zeroed(0x1000, 16) };
+    assert_ne!(elf_ptr, 0);
+    unsafe {
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64, &elf);
+        tidemark_kernel::guest_mem::write_bytes(
+            0,
+            elf_ptr as u64 + 0x400,
+            b"/bin/test-dyn-two-load-main\0",
+        );
+    }
+
+    process_clear_args();
+    process_push_arg(elf_ptr + 0x400);
+
+    let vm_ptr = process_create(elf_ptr, elf.len() as u32, ram_size, 1024 * 1024);
+    assert_ne!(vm_ptr, 0);
+
+    let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
+    assert_eq!(vm.pc, 0x6000);
+    assert_eq!(
+        find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_ENTRY),
+        Some(0x2200)
+    );
+    assert_eq!(
+        find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_PHDR),
+        Some(0x2040)
+    );
+    assert_eq!(
+        find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_BASE),
+        Some(0x5000)
+    );
+
+    let mut data = [0u8; 4];
+    unsafe {
+        tidemark_kernel::guest_mem::read_bytes(guest_base, 0x4000, &mut data);
+    }
+    assert_eq!(data, main_data);
+}
+
+#[test]
+fn process_create_with_pt_interp_preserves_biased_main_dynamic_section() {
+    let _t = TestVm::new();
+    let ram_size = 64 * 1024 * 1024;
+    let guest_base = process_guest_base(ram_size);
+    let elf = build_test_elf_dyn_with_interp_dynamic(
+        &[0x13, 0x05, 0x70, 0x00],
+        &[0xaa, 0xbb, 0xcc, 0xdd],
+        b"/lib/ld-test.so",
+    );
+    let interp = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    install_file_at(b"/lib/ld-test.so", &interp, 0o755);
+
+    let elf_ptr = unsafe { tidemark_kernel::alloc::alloc_zeroed(0x1000, 16) };
+    assert_ne!(elf_ptr, 0);
+    unsafe {
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64, &elf);
+        tidemark_kernel::guest_mem::write_bytes(
+            0,
+            elf_ptr as u64 + 0x400,
+            b"/bin/test-dyn-dynamic\0",
+        );
+    }
+
+    process_clear_args();
+    process_push_arg(elf_ptr + 0x400);
+
+    let vm_ptr = process_create(elf_ptr, elf.len() as u32, ram_size, 1024 * 1024);
+    assert_ne!(vm_ptr, 0);
+
+    let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
+    assert_eq!(vm.pc, 0x6000);
+    assert_eq!(
+        find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_ENTRY),
+        Some(0x2200)
+    );
+    assert_eq!(
+        find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_PHDR),
+        Some(0x2040)
+    );
+    assert_eq!(
+        find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_BASE),
+        Some(0x5000)
+    );
+
+    let dyn_base = 0x4020u64;
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(guest_base, dyn_base) },
+        7
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(guest_base, dyn_base + 8) },
+        0x3300
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(guest_base, dyn_base + 16) },
+        8
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(guest_base, dyn_base + 24) },
+        24
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(guest_base, dyn_base + 32) },
+        0x6fff_ffff
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(guest_base, dyn_base + 40) },
+        5
+    );
+}
+
+#[test]
+fn process_create_with_pt_interp_zero_fills_interpreter_brk_padding() {
+    let _t = TestVm::new();
+    let ram_size = 64 * 1024 * 1024;
+    let guest_base = process_guest_base(ram_size);
+    let main_code = [0x13, 0x05, 0x70, 0x00];
+    let main_elf = build_test_elf_with_interp(&main_code, b"/lib/ld-test.so");
+    let interp_elf = build_test_elf_dyn_low(&[0x13, 0x06, 0x80, 0x00]);
+    install_file_at(b"/lib/ld-test.so", &interp_elf, 0o755);
+
+    let dirty_addr = 0x2ff0u64;
+    assert!(unsafe {
+        tidemark_kernel::syscall::memory::ensure_guest_memory_capacity(guest_base, dirty_addr + 16)
+    });
+    unsafe {
+        tidemark_kernel::guest_mem::write_bytes(guest_base, dirty_addr, &[0xa5; 16]);
+    }
+
+    let elf_ptr = unsafe { tidemark_kernel::alloc::alloc_zeroed(0x1000, 16) };
+    assert_ne!(elf_ptr, 0);
+    unsafe {
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64, &main_elf);
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64 + 0x400, b"/bin/test-pad\0");
+    }
+
+    process_clear_args();
+    process_push_arg(elf_ptr + 0x400);
+
+    let vm_ptr = process_create(elf_ptr, main_elf.len() as u32, ram_size, 1024 * 1024);
+    assert_ne!(vm_ptr, 0);
+
+    let mut padding = [0u8; 16];
+    unsafe {
+        tidemark_kernel::guest_mem::read_bytes(guest_base, dirty_addr, &mut padding);
+    }
+    assert_eq!(padding, [0u8; 16]);
+}
+
+#[test]
+#[ignore = "requires PT_INTERP loader to keep the main executable image mapped"]
+fn process_create_with_pt_interp_maps_main_executable_image() {
+    let _t = TestVm::new();
+    let ram_size = 64 * 1024 * 1024;
+    let guest_base = process_guest_base(ram_size);
+    let main_code = [0x13, 0x05, 0x70, 0x00];
+    let main_elf = build_test_elf_with_interp(&main_code, b"/lib/ld-test.so");
+    let interp_elf = build_test_elf_dyn_low(&[0x13, 0x06, 0x80, 0x00]);
+    install_file_at(b"/lib/ld-test.so", &interp_elf, 0o755);
+
+    let elf_ptr = unsafe { tidemark_kernel::alloc::alloc_zeroed(0x1000, 16) };
+    assert_ne!(elf_ptr, 0);
+    unsafe {
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64, &main_elf);
+        tidemark_kernel::guest_mem::write_bytes(
+            0,
+            elf_ptr as u64 + 0x400,
+            b"/bin/test-main-mapped\0",
+        );
+    }
+
+    process_clear_args();
+    process_push_arg(elf_ptr + 0x400);
+
+    let vm_ptr = process_create(elf_ptr, main_elf.len() as u32, ram_size, 1024 * 1024);
+    assert_ne!(vm_ptr, 0);
+
+    let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
+    assert_eq!(vm.pc, 0x2040);
+    assert_eq!(
+        find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_ENTRY),
+        Some(0x1200)
+    );
+    assert_eq!(
+        find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_BASE),
+        Some(0x2000)
+    );
+
+    let mut interp = [0u8; 32];
+    let interp_len =
+        unsafe { tidemark_kernel::guest_mem::read_cstr(guest_base, 0x1100, &mut interp) };
+    assert_eq!(&interp[..interp_len], b"/lib/ld-test.so");
+
+    let mut code = [0u8; 4];
+    unsafe {
+        tidemark_kernel::guest_mem::read_bytes(guest_base, 0x1200, &mut code);
+    }
+    assert_eq!(code, main_code);
 }
 
 #[test]
