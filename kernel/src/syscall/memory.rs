@@ -293,7 +293,7 @@ fn ensure_memory_capacity_for_guest_range(base: u32, guest_end: u64) -> bool {
     let grow_unit = 16u64 * 65536; // 1 MB
     let grow_bytes = deficit.div_ceil(grow_unit) * grow_unit;
     let pages = (grow_bytes / 65536) as usize;
-    core::arch::wasm32::memory_grow(0, pages as usize) != usize::MAX
+    core::arch::wasm32::memory_grow(0, pages) != usize::MAX
 }
 
 pub fn ensure_guest_memory_capacity(base: u32, guest_end: u64) -> bool {

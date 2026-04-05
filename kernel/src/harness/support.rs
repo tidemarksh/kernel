@@ -1,24 +1,30 @@
-#![allow(dead_code)]
+#[cfg(any(test, feature = "harness"))]
+use alloc_crate::vec;
+use alloc_crate::vec::Vec;
 
-use alloc_crate::{vec, vec::Vec};
-
+#[cfg(any(test, feature = "harness"))]
 use crate::abi::MAP_SHARED;
+#[cfg(any(test, feature = "harness"))]
 use crate::guest_mem;
+#[cfg(any(test, feature = "harness"))]
 use crate::syscall::memory;
 
 const HARNESS_RUNTIME_SUPPORT_ENABLED: bool = cfg!(any(test, feature = "harness"));
 
+#[cfg(any(test, feature = "harness"))]
 struct SharedMappingSnapshot {
     start: u64,
     bytes: Vec<u8>,
 }
 
 struct PlainForkFutexWait {
+    #[cfg_attr(not(any(test, feature = "harness")), allow(dead_code))]
     pid: i32,
     addr: u32,
     woken: bool,
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub struct PlainForkSnapshot {
     mm_state: memory::AddressSpaceSnapshot,
 }
@@ -26,12 +32,14 @@ pub struct PlainForkSnapshot {
 static mut GUEST_OUTPUT: Option<Vec<u8>> = None;
 static mut PLAIN_FORK_FUTEX_WAITS: Option<Vec<PlainForkFutexWait>> = None;
 
+#[cfg(any(test, feature = "harness"))]
 pub fn snapshot_plain_fork() -> PlainForkSnapshot {
     PlainForkSnapshot {
         mm_state: memory::snapshot_for_plain_fork(),
     }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn clear_guest_output() {
     if !HARNESS_RUNTIME_SUPPORT_ENABLED {
         return;
@@ -41,6 +49,7 @@ pub fn clear_guest_output() {
     }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn clear_plain_fork_futex_waits() {
     if !HARNESS_RUNTIME_SUPPORT_ENABLED {
         return;
@@ -53,6 +62,7 @@ pub fn clear_plain_fork_futex_waits() {
     }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn register_plain_fork_futex_wait(pid: i32, addr: u32) {
     if !HARNESS_RUNTIME_SUPPORT_ENABLED {
         return;
@@ -77,6 +87,7 @@ pub fn register_plain_fork_futex_wait(pid: i32, addr: u32) {
     }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn clear_plain_fork_futex_wait(pid: i32) {
     if !HARNESS_RUNTIME_SUPPORT_ENABLED {
         return;
@@ -147,6 +158,7 @@ pub fn requeue_plain_fork_futex_waits(addr: u32, new_addr: u32, max_requeue: u32
     }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn take_plain_fork_futex_wake(pid: i32, addr: u32) -> bool {
     if !HARNESS_RUNTIME_SUPPORT_ENABLED {
         return false;
@@ -185,6 +197,7 @@ pub fn append_guest_output(bytes: &[u8]) {
     }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn take_guest_output() -> Vec<u8> {
     if !HARNESS_RUNTIME_SUPPORT_ENABLED {
         return Vec::new();
@@ -195,6 +208,7 @@ pub fn take_guest_output() -> Vec<u8> {
     }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn restore_plain_fork_parent<F, E>(
     base: u32,
     guest_limit: u64,
@@ -213,6 +227,7 @@ where
     Ok(())
 }
 
+#[cfg(any(test, feature = "harness"))]
 fn snapshot_shared_mappings(
     base: u32,
     guest_limit: u64,
@@ -241,6 +256,7 @@ fn snapshot_shared_mappings(
     snapshots
 }
 
+#[cfg(any(test, feature = "harness"))]
 fn restore_shared_mappings(base: u32, snapshots: &[SharedMappingSnapshot]) {
     for snapshot in snapshots {
         unsafe {

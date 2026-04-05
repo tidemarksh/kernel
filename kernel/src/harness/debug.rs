@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct WriteTraceSummary {
@@ -220,6 +218,7 @@ static mut THREAD_COUNT_TRACE: [ThreadCountTraceEntry; THREAD_COUNT_TRACE_CAP] =
 static mut THREAD_COUNT_TRACE_LEN: u32 = 0;
 static mut THREAD_COUNT_TRACE_NEXT: u32 = 0;
 
+#[cfg(any(test, feature = "harness"))]
 pub fn clear_write_trace() {
     if !RUNTIME_DEBUG_ENABLED {
         return;
@@ -248,6 +247,7 @@ pub fn clear_write_trace() {
     }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn clear_syscall_trace() {
     if !RUNTIME_DEBUG_ENABLED {
         return;
@@ -339,6 +339,7 @@ pub fn record_thread_count(
     }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn thread_count_trace_len() -> u32 {
     if !RUNTIME_DEBUG_ENABLED {
         return 0;
@@ -346,6 +347,7 @@ pub fn thread_count_trace_len() -> u32 {
     unsafe { THREAD_COUNT_TRACE_LEN }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn thread_count_trace_entry(index: u32) -> ThreadCountTraceEntry {
     if !RUNTIME_DEBUG_ENABLED {
         let _ = index;
@@ -379,6 +381,7 @@ pub fn thread_count_trace_entry(index: u32) -> ThreadCountTraceEntry {
     }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn epoll_wait_trace() -> EpollWaitTraceSummary {
     if !RUNTIME_DEBUG_ENABLED {
         return EpollWaitTraceSummary {
@@ -396,6 +399,7 @@ pub fn epoll_wait_trace() -> EpollWaitTraceSummary {
     unsafe { core::ptr::read(core::ptr::addr_of!(EPOLL_WAIT_TRACE)) }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn clear_memory_trace() {
     if !RUNTIME_DEBUG_ENABLED {
         return;
@@ -502,6 +506,7 @@ pub fn record_pipe_close_event(
     }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn pipe_close_trace_summary() -> PipeCloseTraceSummary {
     if !RUNTIME_DEBUG_ENABLED {
         return PipeCloseTraceSummary {
@@ -653,6 +658,7 @@ pub fn record_fd_syscall(
     }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn fd_syscall_trace_len() -> u32 {
     if !RUNTIME_DEBUG_ENABLED {
         return 0;
@@ -660,6 +666,7 @@ pub fn fd_syscall_trace_len() -> u32 {
     unsafe { FD_SYSCALL_TRACE_LEN }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn fd_syscall_trace_entry(index: u32) -> FdSyscallTraceEntry {
     if !RUNTIME_DEBUG_ENABLED {
         let _ = index;
@@ -750,6 +757,7 @@ pub fn record_path_syscall(
     }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn path_syscall_trace_len() -> u32 {
     if !RUNTIME_DEBUG_ENABLED {
         return 0;
@@ -757,6 +765,7 @@ pub fn path_syscall_trace_len() -> u32 {
     unsafe { PATH_SYSCALL_TRACE_LEN }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn path_syscall_trace_entry(index: u32) -> PathSyscallTraceEntry {
     if !RUNTIME_DEBUG_ENABLED {
         let _ = index;
@@ -793,6 +802,7 @@ pub fn path_syscall_trace_entry(index: u32) -> PathSyscallTraceEntry {
     }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn path_syscall_trace_path_ptr(index: u32) -> u32 {
     if !RUNTIME_DEBUG_ENABLED {
         let _ = index;
@@ -813,6 +823,7 @@ pub fn path_syscall_trace_path_ptr(index: u32) -> u32 {
     }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn completed_sync_effects() -> u32 {
     if !RUNTIME_DEBUG_ENABLED {
         return 0;
@@ -852,6 +863,7 @@ pub fn record_execve_stage(stage: u32, value0: u64, value1: u64) {
     }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn write_trace_summary() -> WriteTraceSummary {
     if !RUNTIME_DEBUG_ENABLED {
         return WriteTraceSummary {
@@ -873,6 +885,7 @@ pub fn write_trace_summary() -> WriteTraceSummary {
     unsafe { *core::ptr::addr_of!(WRITE_TRACE) }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn write_trace_ptr() -> u32 {
     if !RUNTIME_DEBUG_ENABLED {
         return 0;
@@ -880,6 +893,7 @@ pub fn write_trace_ptr() -> u32 {
     core::ptr::addr_of!(LAST_WRITE_BYTES) as u32
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn write_trace_len() -> u32 {
     if !RUNTIME_DEBUG_ENABLED {
         return 0;
@@ -887,6 +901,7 @@ pub fn write_trace_len() -> u32 {
     unsafe { core::ptr::read(core::ptr::addr_of!(LAST_WRITE_BYTES_LEN)) }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn syscall_trace_summary() -> SyscallTraceSummary {
     if !RUNTIME_DEBUG_ENABLED {
         return SyscallTraceSummary {
@@ -899,6 +914,7 @@ pub fn syscall_trace_summary() -> SyscallTraceSummary {
     unsafe { *core::ptr::addr_of!(SYSCALL_TRACE) }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn memory_trace_summary() -> MemoryTraceSummary {
     if !RUNTIME_DEBUG_ENABLED {
         return MemoryTraceSummary {
@@ -913,6 +929,7 @@ pub fn memory_trace_summary() -> MemoryTraceSummary {
     unsafe { *core::ptr::addr_of!(MEMORY_TRACE) }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn execve_stage() -> u32 {
     if !RUNTIME_DEBUG_ENABLED {
         return 0;
@@ -920,6 +937,7 @@ pub fn execve_stage() -> u32 {
     unsafe { core::ptr::read(core::ptr::addr_of!(LAST_EXECVE_STAGE)) }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn execve_value0() -> u64 {
     if !RUNTIME_DEBUG_ENABLED {
         return 0;
@@ -927,6 +945,7 @@ pub fn execve_value0() -> u64 {
     unsafe { core::ptr::read(core::ptr::addr_of!(LAST_EXECVE_VALUE0)) }
 }
 
+#[cfg(any(test, feature = "harness"))]
 pub fn execve_value1() -> u64 {
     if !RUNTIME_DEBUG_ENABLED {
         return 0;

@@ -3,7 +3,6 @@
 //! All guest memory reads/writes go through this module.
 //! Seqlock: when thread_count > 1, stores bump a generation counter
 //! for LR/SC reservation invalidation. When thread_count == 1, plain writes.
-#![allow(clippy::missing_safety_doc)]
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -71,6 +70,10 @@ unsafe fn is_multi_threaded() -> bool {
 /// Read a u32 with seqlock protection. Checks generation slot before and after
 /// the read; retries if the slot was bumped (indicates concurrent write).
 /// Returns the read value. For single-threaded execution, skips the check.
+///
+/// # Safety
+/// `base + addr` must point to a readable 4-byte guest location in the current
+/// WASM linear memory for the duration of the call.
 #[inline(always)]
 pub unsafe fn read_u32_seqlock(base: u32, addr: u64) -> u32 {
     if !unsafe { is_multi_threaded() } {
@@ -92,6 +95,10 @@ pub unsafe fn read_u32_seqlock(base: u32, addr: u64) -> u32 {
 }
 
 /// Read a u64 with seqlock protection.
+///
+/// # Safety
+/// `base + addr` must point to a readable 8-byte guest location in the current
+/// WASM linear memory for the duration of the call.
 #[inline(always)]
 pub unsafe fn read_u64_seqlock(base: u32, addr: u64) -> u64 {
     if !unsafe { is_multi_threaded() } {
@@ -121,18 +128,31 @@ unsafe fn read_gen(slot: usize) -> u32 {
     unsafe { (*p.add(slot)).load(Ordering::Acquire) }
 }
 
+/// Read one byte from guest memory.
+///
+/// # Safety
+/// `base + addr` must point to a readable guest byte in the current WASM
+/// linear memory.
 #[inline(always)]
 pub unsafe fn read_u8(base: u32, addr: u64) -> u8 {
     record_access(addr, 1, ACCESS_READ);
     unsafe { *((base + addr as u32) as *const u8) }
 }
 
+/// Read an unaligned little-endian `u16` from guest memory.
+///
+/// # Safety
+/// `base + addr..base + addr + 2` must be readable guest memory.
 #[inline(always)]
 pub unsafe fn read_u16(base: u32, addr: u64) -> u16 {
     record_access(addr, 2, ACCESS_READ);
     unsafe { ((base + addr as u32) as *const u16).read_unaligned() }
 }
 
+/// Read a `u32` from guest memory.
+///
+/// # Safety
+/// `base + addr..base + addr + 4` must be readable guest memory.
 #[inline(always)]
 pub unsafe fn read_u32(base: u32, addr: u64) -> u32 {
     record_access(addr, 4, ACCESS_READ);
@@ -144,6 +164,10 @@ pub unsafe fn read_u32(base: u32, addr: u64) -> u32 {
     }
 }
 
+/// Read a `u64` from guest memory.
+///
+/// # Safety
+/// `base + addr..base + addr + 8` must be readable guest memory.
 #[inline(always)]
 pub unsafe fn read_u64(base: u32, addr: u64) -> u64 {
     record_access(addr, 8, ACCESS_READ);
@@ -155,23 +179,43 @@ pub unsafe fn read_u64(base: u32, addr: u64) -> u64 {
     }
 }
 
+/// Read an `i8` from guest memory.
+///
+/// # Safety
+/// Inherits the safety requirements of [`read_u8`].
 #[inline(always)]
 pub unsafe fn read_i8(base: u32, addr: u64) -> i8 {
     (unsafe { read_u8(base, addr) }) as i8
 }
+/// Read an `i16` from guest memory.
+///
+/// # Safety
+/// Inherits the safety requirements of [`read_u16`].
 #[inline(always)]
 pub unsafe fn read_i16(base: u32, addr: u64) -> i16 {
     (unsafe { read_u16(base, addr) }) as i16
 }
+/// Read an `i32` from guest memory.
+///
+/// # Safety
+/// Inherits the safety requirements of [`read_u32`].
 #[inline(always)]
 pub unsafe fn read_i32(base: u32, addr: u64) -> i32 {
     (unsafe { read_u32(base, addr) }) as i32
 }
+/// Read an `i64` from guest memory.
+///
+/// # Safety
+/// Inherits the safety requirements of [`read_u64`].
 #[inline(always)]
 pub unsafe fn read_i64(base: u32, addr: u64) -> i64 {
     (unsafe { read_u64(base, addr) }) as i64
 }
 
+/// Copy bytes from guest memory into `buf`.
+///
+/// # Safety
+/// `base + addr..base + addr + buf.len()` must be readable guest memory.
 pub unsafe fn read_bytes(base: u32, addr: u64, buf: &mut [u8]) {
     if buf.is_empty() {
         return;
@@ -286,6 +330,11 @@ unsafe fn seqlock_end_mask(mask: u64) {
     }
 }
 
+/// Write one byte into guest memory.
+///
+/// # Safety
+/// `base + addr` must point to a writable guest byte in the current WASM
+/// linear memory.
 #[inline(always)]
 pub unsafe fn write_u8(base: u32, addr: u64, val: u8) {
     record_access(addr, 1, ACCESS_WRITE);
@@ -301,6 +350,10 @@ pub unsafe fn write_u8(base: u32, addr: u64, val: u8) {
     }
 }
 
+/// Write an unaligned little-endian `u16` into guest memory.
+///
+/// # Safety
+/// `base + addr..base + addr + 2` must be writable guest memory.
 #[inline(always)]
 pub unsafe fn write_u16(base: u32, addr: u64, val: u16) {
     record_access(addr, 2, ACCESS_WRITE);
@@ -316,6 +369,10 @@ pub unsafe fn write_u16(base: u32, addr: u64, val: u16) {
     }
 }
 
+/// Write a `u32` into guest memory.
+///
+/// # Safety
+/// `base + addr..base + addr + 4` must be writable guest memory.
 #[inline(always)]
 pub unsafe fn write_u32(base: u32, addr: u64, val: u32) {
     record_access(addr, 4, ACCESS_WRITE);
@@ -340,6 +397,10 @@ pub unsafe fn write_u32(base: u32, addr: u64, val: u32) {
     }
 }
 
+/// Write a `u64` into guest memory.
+///
+/// # Safety
+/// `base + addr..base + addr + 8` must be writable guest memory.
 #[inline(always)]
 pub unsafe fn write_u64(base: u32, addr: u64, val: u64) {
     record_access(addr, 8, ACCESS_WRITE);
@@ -368,6 +429,10 @@ pub unsafe fn write_u64(base: u32, addr: u64, val: u64) {
     }
 }
 
+/// Copy bytes from `data` into guest memory.
+///
+/// # Safety
+/// `base + addr..base + addr + data.len()` must be writable guest memory.
 pub unsafe fn write_bytes(base: u32, addr: u64, data: &[u8]) {
     if data.is_empty() {
         return;
@@ -391,6 +456,10 @@ pub unsafe fn write_bytes(base: u32, addr: u64, data: &[u8]) {
     }
 }
 
+/// Zero a guest memory range.
+///
+/// # Safety
+/// `base + addr..base + addr + len` must be writable guest memory.
 pub unsafe fn zero_mem(base: u32, addr: u64, len: usize) {
     if len == 0 {
         return;
@@ -411,6 +480,10 @@ pub unsafe fn zero_mem(base: u32, addr: u64, len: usize) {
 }
 
 /// Read null-terminated string from guest memory. Returns length (excluding null).
+///
+/// # Safety
+/// `base + addr` must point to a readable NUL-terminated guest string, and
+/// the string including its terminator must fit in `buf`.
 pub unsafe fn read_cstr(base: u32, addr: u64, buf: &mut [u8]) -> usize {
     let src = (base + addr as u32) as *const u8;
     let max = buf.len() - 1;

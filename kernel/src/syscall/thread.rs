@@ -86,7 +86,7 @@ fn thread_state_from_record_ptr(thread_ptr: u32) -> Option<*mut ThreadState> {
     }
 
     let end = absolute.checked_add(core::mem::size_of::<ThreadState>())?;
-    let memory_size = (core::arch::wasm32::memory_size(0) as usize).checked_mul(65536)?;
+    let memory_size = core::arch::wasm32::memory_size(0).checked_mul(65536)?;
     if end > memory_size {
         return None;
     }
