@@ -50,6 +50,10 @@ fn contract_spawn_from_clone_initializes_child_thread_state() {
     t.vm.sigaltstack_sp = 0x9000;
     t.vm.sigaltstack_size = 4096;
     t.vm.sigaltstack_flags = 1;
+    t.vm.x[1] = 0x1234_5678;
+    t.vm.x[3] = 0x2345_6789;
+    t.vm.x[27] = 0x3456_789a;
+    t.vm.pc = 0x4567_89ab;
 
     let ps_ptr = t.vm.process_ptr as u64;
 
@@ -77,6 +81,10 @@ fn contract_spawn_from_clone_initializes_child_thread_state() {
 
     let child = unsafe { &*(child_ptr as *const ThreadState) };
     assert_eq!(child.tid, ret as i32);
+    assert_eq!(child.pc, 0x4567_89ab);
+    assert_eq!(child.x[1], 0x1234_5678);
+    assert_eq!(child.x[3], 0x2345_6789);
+    assert_eq!(child.x[27], 0x3456_789a);
     assert_eq!(child.x[10], 0);
     assert_eq!(child.x[2], child_stack);
     assert_eq!(child.x[4], tls);

@@ -68,7 +68,7 @@ struct SignalTrace {
     pc: u64,
     ra: u64,
     sp: u64,
-    x27: u64,
+    s11: u64,
 }
 
 static mut LAST_SIGNAL_DELIVERY: SignalTrace = SignalTrace {
@@ -77,7 +77,7 @@ static mut LAST_SIGNAL_DELIVERY: SignalTrace = SignalTrace {
     pc: 0,
     ra: 0,
     sp: 0,
-    x27: 0,
+    s11: 0,
 };
 static mut LAST_SIGRETURN: SignalTrace = SignalTrace {
     sig: 0,
@@ -85,7 +85,7 @@ static mut LAST_SIGRETURN: SignalTrace = SignalTrace {
     pc: 0,
     ra: 0,
     sp: 0,
-    x27: 0,
+    s11: 0,
 };
 static mut LAST_TRAMPOLINE_PC: u64 = 0;
 static mut LAST_TRAMPOLINE_HIT_TID: i32 = 0;
@@ -132,14 +132,14 @@ pub fn process_pending_bytes() -> u32 {
 pub fn last_signal_delivery() -> (u32, u64, u64, u64, u64, u64) {
     unsafe {
         let t = LAST_SIGNAL_DELIVERY;
-        (t.sig, t.frame_base, t.pc, t.ra, t.sp, t.x27)
+        (t.sig, t.frame_base, t.pc, t.ra, t.sp, t.s11)
     }
 }
 
 pub fn last_sigreturn() -> (u32, u64, u64, u64, u64, u64) {
     unsafe {
         let t = LAST_SIGRETURN;
-        (t.sig, t.frame_base, t.pc, t.ra, t.sp, t.x27)
+        (t.sig, t.frame_base, t.pc, t.ra, t.sp, t.s11)
     }
 }
 
@@ -645,7 +645,7 @@ fn push_signal_frame(vm: &mut ThreadState, base: u32, sig: usize, action: &SigAc
             pc: vm.pc,
             ra: vm.x[1],
             sp: vm.x[2],
-            x27: vm.x[27],
+            s11: vm.x[27],
         };
         LAST_TRAMPOLINE_PC = frame_base + SIGFRAME_OFF_TRAMPOLINE;
     }
@@ -686,7 +686,7 @@ pub fn sys_rt_sigreturn(vm: &mut ThreadState, base: u32) {
             pc: vm.pc,
             ra: vm.x[1],
             sp: vm.x[2],
-            x27: vm.x[27],
+            s11: vm.x[27],
         };
         SIGRETURN_COUNT = SIGRETURN_COUNT.wrapping_add(1);
     }

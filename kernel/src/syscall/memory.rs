@@ -647,11 +647,8 @@ pub fn sys_mmap(
                 let mut off = 0usize;
                 while off < copy_len {
                     let chunk = (copy_len - off).min(tmp.len());
-                    let n = memfs::read_file(
-                        backing_ino,
-                        copy_start + off as u64,
-                        &mut tmp[..chunk],
-                    );
+                    let n =
+                        memfs::read_file(backing_ino, copy_start + off as u64, &mut tmp[..chunk]);
                     if n <= 0 {
                         break;
                     }

@@ -33,7 +33,9 @@ static mut WRITE_TRACE: WriteTraceSummary = WriteTraceSummary {
     last_pipe_read_open: 0,
     last_pipe_write_open: 0,
 };
-static mut LAST_WRITE_BYTES: [u8; 64] = [0; 64];
+const LAST_WRITE_BYTES_CAP: usize = 256;
+
+static mut LAST_WRITE_BYTES: [u8; LAST_WRITE_BYTES_CAP] = [0; LAST_WRITE_BYTES_CAP];
 static mut LAST_WRITE_BYTES_LEN: u32 = 0;
 
 #[repr(C)]
@@ -51,6 +53,15 @@ static mut SYSCALL_TRACE: SyscallTraceSummary = SyscallTraceSummary {
     result: 0,
     status: 0,
 };
+const SYSCALL_TRACE_CAP: usize = 64;
+static mut SYSCALL_TRACE_RING: [SyscallTraceSummary; SYSCALL_TRACE_CAP] = [SyscallTraceSummary {
+    vm_ptr: 0,
+    nr: 0,
+    result: 0,
+    status: 0,
+}; SYSCALL_TRACE_CAP];
+static mut SYSCALL_TRACE_RING_LEN: u32 = 0;
+static mut SYSCALL_TRACE_RING_NEXT: u32 = 0;
 
 const FD_SYSCALL_TRACE_CAP: usize = 1024;
 const PATH_SYSCALL_TRACE_CAP: usize = 128;
@@ -242,7 +253,10 @@ pub fn clear_write_trace() {
                 last_pipe_write_open: 0,
             },
         );
-        core::ptr::write(core::ptr::addr_of_mut!(LAST_WRITE_BYTES), [0; 64]);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_WRITE_BYTES),
+            [0; LAST_WRITE_BYTES_CAP],
+        );
         core::ptr::write(core::ptr::addr_of_mut!(LAST_WRITE_BYTES_LEN), 0);
     }
 }
@@ -262,6 +276,17 @@ pub fn clear_syscall_trace() {
                 status: 0,
             },
         );
+        core::ptr::write(
+            core::ptr::addr_of_mut!(SYSCALL_TRACE_RING),
+            [SyscallTraceSummary {
+                vm_ptr: 0,
+                nr: 0,
+                result: 0,
+                status: 0,
+            }; SYSCALL_TRACE_CAP],
+        );
+        core::ptr::write(core::ptr::addr_of_mut!(SYSCALL_TRACE_RING_LEN), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(SYSCALL_TRACE_RING_NEXT), 0);
         core::ptr::write(core::ptr::addr_of_mut!(COMPLETED_SYNC_EFFECTS), 0);
     }
 }
@@ -470,7 +495,7 @@ pub fn record_write_attempt(
         trace.last_pipe_read_open = pipe_read_open;
         trace.last_pipe_write_open = pipe_write_open;
 
-        let mut snapshot = [0u8; 64];
+        let mut snapshot = [0u8; LAST_WRITE_BYTES_CAP];
         let snapshot_len = bytes.map_or(0, |bytes| {
             let len = bytes.len().min(snapshot.len());
             snapshot[..len].copy_from_slice(&bytes[..len]);
@@ -535,6 +560,24 @@ pub fn record_syscall(vm_ptr: u32, nr: u64, result: i64, status: i32) {
                 status,
             },
         );
+        let next = core::ptr::read(core::ptr::addr_of!(SYSCALL_TRACE_RING_NEXT)) as usize;
+        core::ptr::write(
+            core::ptr::addr_of_mut!(SYSCALL_TRACE_RING[next]),
+            SyscallTraceSummary {
+                vm_ptr,
+                nr,
+                result,
+                status,
+            },
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!(SYSCALL_TRACE_RING_NEXT),
+            ((next + 1) % SYSCALL_TRACE_CAP) as u32,
+        );
+        let len = core::ptr::read(core::ptr::addr_of!(SYSCALL_TRACE_RING_LEN));
+        if len < SYSCALL_TRACE_CAP as u32 {
+            core::ptr::write(core::ptr::addr_of_mut!(SYSCALL_TRACE_RING_LEN), len + 1);
+        }
         if status == crate::abi::STATUS_OK {
             let effects = match nr {
                 crate::abi::SYS_READ
@@ -912,6 +955,45 @@ pub fn syscall_trace_summary() -> SyscallTraceSummary {
         };
     }
     unsafe { *core::ptr::addr_of!(SYSCALL_TRACE) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn syscall_trace_len() -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(SYSCALL_TRACE_RING_LEN)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn syscall_trace_entry(index: u32) -> SyscallTraceSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        return SyscallTraceSummary {
+            vm_ptr: 0,
+            nr: 0,
+            result: 0,
+            status: 0,
+        };
+    }
+    unsafe {
+        let len = core::ptr::read(core::ptr::addr_of!(SYSCALL_TRACE_RING_LEN));
+        if index >= len {
+            return SyscallTraceSummary {
+                vm_ptr: 0,
+                nr: 0,
+                result: 0,
+                status: 0,
+            };
+        }
+        let next = core::ptr::read(core::ptr::addr_of!(SYSCALL_TRACE_RING_NEXT)) as usize;
+        let len_usize = len as usize;
+        let slot = if len_usize < SYSCALL_TRACE_CAP {
+            index as usize
+        } else {
+            (next + index as usize) % SYSCALL_TRACE_CAP
+        };
+        core::ptr::read(core::ptr::addr_of!(SYSCALL_TRACE_RING[slot]))
+    }
 }
 
 #[cfg(any(test, feature = "harness"))]

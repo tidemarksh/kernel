@@ -568,6 +568,7 @@ pub fn rewrite_child_pid(
         }
 
         crate::syscall::signal::reassign_process_pid(old_pid, new_pid);
+        crate::syscall::resource::reassign_process_pid(old_pid, new_pid);
     }
 
     set_next_pid_floor(next_pid);
@@ -609,6 +610,7 @@ pub fn reset_process_lifecycle(
     crate::syscall::thread::init_main_thread(vm as *mut ThreadState as u32, base);
 
     crate::syscall::signal::reassign_process_pid(old_pid, pid);
+    crate::syscall::resource::reassign_process_pid(old_pid, pid);
 }
 
 fn set_spawn_handoff(
@@ -1665,6 +1667,7 @@ pub fn sys_vfork(vm: &mut ThreadState, base: u32) -> i32 {
         record_child(parent_pid, pid);
         inherit_process(parent_pid, parent_pid, pid, false);
         crate::syscall::signal::fork_from_parent(parent_pid, pid);
+        crate::syscall::resource::fork_from_parent(parent_pid, pid);
         pid
     } else {
         0

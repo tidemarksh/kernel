@@ -9,6 +9,7 @@ pub mod identity;
 pub mod memory;
 pub mod pipe;
 pub mod process;
+pub mod resource;
 pub mod signal;
 pub mod socket;
 pub mod thread;
@@ -357,7 +358,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             }
             ret
         }
-        SYS_FUTEX => {
+        SYS_FUTEX | SYS_FUTEX_TIME64 => {
             let ret = thread::sys_futex(vm, base, a0, a1, a2, a3, a4, vm.x[15]);
             if vm.status == abi::STATUS_FUTEX_WAIT {
                 return debug_return(vm, nr, ret, abi::STATUS_FUTEX_WAIT);
@@ -372,10 +373,12 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             let status = thread::sys_exit_group(vm, base, a0);
             return debug_return(vm, nr, vm.exit_code as i64, status);
         }
+        SYS_GETRLIMIT => resource::sys_getrlimit(vm, base, a0, a1),
+        SYS_SETRLIMIT => resource::sys_setrlimit(vm, base, a0, a1),
         SYS_PRCTL => 0,
         SYS_UMASK => 0o022, // return previous umask
         SYS_RSEQ => EINVAL,
-        261 => 0, // prlimit64: stub success
+        SYS_PRLIMIT64 => resource::sys_prlimit64(vm, base, a0 as i32, a1, a2, a3),
 
         // not yet implemented
         _ => ENOSYS,

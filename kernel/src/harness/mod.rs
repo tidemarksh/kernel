@@ -65,6 +65,7 @@ pub unsafe fn reset_state(heap_base: u32, brk_start: u64) {
     syscall::process::reset_for_tests();
     syscall::thread::init();
     syscall::signal::init();
+    syscall::resource::init();
     syscall::epoll::init();
     syscall::pipe::init();
     syscall::socket::init();
@@ -144,6 +145,7 @@ impl TestVm {
             crate::guest_mem::write_u32(base, ps_addr + fs_ring_off, fs_ring_base);
 
             syscall::signal::init_for_process(42);
+            syscall::resource::init_for_process(42);
             fs::fd_table::init_stdio(base, &mut vm);
 
             let ps = &*((base as u64 + vm.process_ptr as u64) as *const ProcessState);

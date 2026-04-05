@@ -28,16 +28,18 @@ struct CloneSpawnTrace {
     tid: i32,
     pc: u64,
     ra: u64,
+    gp: u64,
     sp: u64,
-    x27: u64,
+    s11: u64,
 }
 
 static mut LAST_CLONE_SPAWN: CloneSpawnTrace = CloneSpawnTrace {
     tid: 0,
     pc: 0,
     ra: 0,
+    gp: 0,
     sp: 0,
-    x27: 0,
+    s11: 0,
 };
 
 const THREAD_COUNT_TRACE_INIT_MAIN: u32 = 1;
@@ -46,10 +48,10 @@ const THREAD_COUNT_TRACE_EXIT_DEC: u32 = 3;
 const THREAD_COUNT_TRACE_TERMINATE: u32 = 4;
 const THREAD_COUNT_TRACE_EXEC_RESET: u32 = 5;
 
-pub fn last_clone_spawn() -> (i32, u64, u64, u64, u64) {
+pub fn last_clone_spawn() -> (i32, u64, u64, u64, u64, u64) {
     unsafe {
         let t = LAST_CLONE_SPAWN;
-        (t.tid, t.pc, t.ra, t.sp, t.x27)
+        (t.tid, t.pc, t.ra, t.gp, t.sp, t.s11)
     }
 }
 
@@ -689,8 +691,9 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
             tid: child.tid,
             pc: child.pc,
             ra: child.x[1],
+            gp: child.x[3],
             sp: child.x[2],
-            x27: child.x[27],
+            s11: child.x[27],
         };
 
         parent.clone_flags = 0;
@@ -879,7 +882,7 @@ pub fn resume_futex_wait_result(vm: &mut ThreadState, base: u32, result: i64) {
             (*record).state = THREAD_RUNNING;
             (*record).blocked_addr = 0;
             (*record).clear_child_tid = vm.clear_child_tid as u32;
-            }
+        }
     }
     vm.futex_wait_addr = 0;
     vm.futex_wait_timeout = 0;

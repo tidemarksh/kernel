@@ -18,7 +18,7 @@ pub extern "C" fn thread_gp(vm_ptr: u32) -> u64 {
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
-pub extern "C" fn thread_x27(vm_ptr: u32) -> u64 {
+pub extern "C" fn thread_s11(vm_ptr: u32) -> u64 {
     unsafe { (*(vm_ptr as *const crate::types::ThreadState)).x[27] }
 }
 
@@ -248,6 +248,36 @@ pub extern "C" fn debug_syscall_trace_result() -> i64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_syscall_trace_status() -> i32 {
     crate::harness_debug::syscall_trace_summary().status
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_syscall_trace_len() -> u32 {
+    crate::harness_debug::syscall_trace_len()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_syscall_trace_entry_vm_ptr(index: u32) -> u32 {
+    crate::harness_debug::syscall_trace_entry(index).vm_ptr
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_syscall_trace_entry_nr(index: u32) -> u64 {
+    crate::harness_debug::syscall_trace_entry(index).nr
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_syscall_trace_entry_result(index: u32) -> i64 {
+    crate::harness_debug::syscall_trace_entry(index).result
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_syscall_trace_entry_status(index: u32) -> i32 {
+    crate::harness_debug::syscall_trace_entry(index).status
 }
 
 #[cfg(any(test, feature = "harness"))]
@@ -510,7 +540,7 @@ pub extern "C" fn debug_signal_delivery_sp() -> u64 {
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
-pub extern "C" fn debug_signal_delivery_x27() -> u64 {
+pub extern "C" fn debug_signal_delivery_s11() -> u64 {
     crate::syscall::signal::last_signal_delivery().5
 }
 
@@ -540,7 +570,7 @@ pub extern "C" fn debug_sigreturn_sp() -> u64 {
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
-pub extern "C" fn debug_sigreturn_x27() -> u64 {
+pub extern "C" fn debug_sigreturn_s11() -> u64 {
     crate::syscall::signal::last_sigreturn().5
 }
 
@@ -564,14 +594,20 @@ pub extern "C" fn debug_clone_spawn_ra() -> u64 {
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
-pub extern "C" fn debug_clone_spawn_sp() -> u64 {
+pub extern "C" fn debug_clone_spawn_gp() -> u64 {
     crate::syscall::thread::last_clone_spawn().3
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
-pub extern "C" fn debug_clone_spawn_x27() -> u64 {
+pub extern "C" fn debug_clone_spawn_sp() -> u64 {
     crate::syscall::thread::last_clone_spawn().4
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_clone_spawn_s11() -> u64 {
+    crate::syscall::thread::last_clone_spawn().5
 }
 
 #[cfg(any(test, feature = "harness"))]
@@ -625,67 +661,79 @@ pub extern "C" fn debug_jalr_pc() -> u64 {
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_zero_reg_pc() -> u64 {
+    crate::cpu::last_zero_reg_trace().1
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_zero_reg_tid() -> i32 {
     crate::cpu::last_zero_reg_trace().0
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_zero_reg_raw() -> u32 {
-    crate::cpu::last_zero_reg_trace().1
-}
-
-#[cfg(any(test, feature = "harness"))]
-#[unsafe(no_mangle)]
-pub extern "C" fn debug_zero_reg_index() -> u32 {
     crate::cpu::last_zero_reg_trace().2
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
-pub extern "C" fn debug_zero_reg_prev_value() -> u64 {
+pub extern "C" fn debug_zero_reg_index() -> u32 {
     crate::cpu::last_zero_reg_trace().3
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
-pub extern "C" fn debug_zero_reg_sp() -> u64 {
+pub extern "C" fn debug_zero_reg_prev_value() -> u64 {
     crate::cpu::last_zero_reg_trace().4
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
-pub extern "C" fn debug_zero_reg_x27() -> u64 {
+pub extern "C" fn debug_zero_reg_sp() -> u64 {
     crate::cpu::last_zero_reg_trace().5
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
-pub extern "C" fn debug_x27_write_pc() -> u64 {
-    crate::cpu::last_x27_write_trace().1
+pub extern "C" fn debug_zero_reg_s11() -> u64 {
+    crate::cpu::last_zero_reg_trace().6
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
-pub extern "C" fn debug_x27_write_raw() -> u32 {
-    crate::cpu::last_x27_write_trace().2
+pub extern "C" fn debug_s11_write_tid() -> i32 {
+    crate::cpu::last_s11_write_trace().0
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
-pub extern "C" fn debug_x27_write_source() -> u32 {
-    crate::cpu::last_x27_write_trace().3
+pub extern "C" fn debug_s11_write_pc() -> u64 {
+    crate::cpu::last_s11_write_trace().1
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
-pub extern "C" fn debug_x27_write_prev_value() -> u64 {
-    crate::cpu::last_x27_write_trace().4
+pub extern "C" fn debug_s11_write_raw() -> u32 {
+    crate::cpu::last_s11_write_trace().2
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
-pub extern "C" fn debug_x27_write_value() -> u64 {
-    crate::cpu::last_x27_write_trace().5
+pub extern "C" fn debug_s11_write_source() -> u32 {
+    crate::cpu::last_s11_write_trace().3
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_s11_write_prev_value() -> u64 {
+    crate::cpu::last_s11_write_trace().4
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_s11_write_value() -> u64 {
+    crate::cpu::last_s11_write_trace().5
 }
 
 #[cfg(any(test, feature = "harness"))]
@@ -764,6 +812,12 @@ pub extern "C" fn debug_sp_write_prev_value() -> u64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sp_write_value() -> u64 {
     crate::cpu::last_sp_write_trace().5
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_sp_write_tid() -> i32 {
+    crate::cpu::last_sp_write_trace().0
 }
 
 #[cfg(any(test, feature = "harness"))]

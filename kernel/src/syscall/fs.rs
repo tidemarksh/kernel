@@ -1659,13 +1659,7 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
             total += n;
         } else {
             let current_offset = fd_table::get_offset(base, vm, fd);
-            let n = write_regular_file_from_guest(
-                base,
-                iov_base,
-                iov_len,
-                ofd.ino,
-                current_offset,
-            );
+            let n = write_regular_file_from_guest(base, iov_base, iov_len, ofd.ino, current_offset);
             if n > 0 {
                 fd_table::advance_offset(base, vm, fd, n as u64);
             }
@@ -2043,7 +2037,7 @@ pub fn sys_lseek(vm: &mut ThreadState, base: u32, fd: u64, offset: i64, whence: 
     };
 
     let new_offset = match whence {
-        0 => offset as u64,                       // SEEK_SET
+        0 => offset as u64,                // SEEK_SET
         1 => (ofd.offset + offset) as u64, // SEEK_CUR
         2 => {
             // SEEK_END

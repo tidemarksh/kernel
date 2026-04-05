@@ -98,6 +98,7 @@ pub const SYS_WAITID: u64 = 95;
 pub const SYS_SET_TID_ADDRESS: u64 = 96;
 pub const SYS_SET_ROBUST_LIST: u64 = 99;
 pub const SYS_FUTEX: u64 = 98;
+pub const SYS_FUTEX_TIME64: u64 = 422;
 pub const SYS_NANOSLEEP: u64 = 101;
 pub const SYS_GETITIMER: u64 = 102;
 pub const SYS_SETITIMER: u64 = 103;
@@ -121,6 +122,8 @@ pub const SYS_GETRESUID: u64 = 148;
 pub const SYS_SETRESGID: u64 = 149;
 pub const SYS_GETRESGID: u64 = 150;
 pub const SYS_TIMES: u64 = 153;
+pub const SYS_GETRLIMIT: u64 = 163;
+pub const SYS_SETRLIMIT: u64 = 164;
 pub const SYS_SETPGID: u64 = 154;
 pub const SYS_GETPGID: u64 = 155;
 pub const SYS_GETPID: u64 = 172;
@@ -139,6 +142,7 @@ pub const SYS_EXECVE: u64 = 221;
 pub const SYS_MMAP: u64 = 222;
 pub const SYS_MPROTECT: u64 = 226;
 pub const SYS_WAIT4: u64 = 260;
+pub const SYS_PRLIMIT64: u64 = 261;
 pub const SYS_PRCTL: u64 = 167;
 pub const SYS_SETSID: u64 = 157;
 pub const SYS_GETRANDOM: u64 = 278;
@@ -607,6 +611,7 @@ pub extern "C" fn kernel_init(heap_base: u32) {
     crate::syscall::time::init();
     crate::syscall::thread::init();
     crate::syscall::signal::init();
+    crate::syscall::resource::init();
     crate::syscall::epoll::init();
     crate::syscall::pipe::init();
     crate::syscall::socket::init();
@@ -1103,6 +1108,7 @@ pub extern "C" fn process_create(
             return 0;
         }
         crate::syscall::signal::init_for_process(2);
+        crate::syscall::resource::init_for_process(2);
 
         // Wire guest_mem to ProcessState reservation metadata and thread_count.
         let gen_ptr =

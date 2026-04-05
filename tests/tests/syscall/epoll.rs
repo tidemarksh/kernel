@@ -5,6 +5,7 @@ use tidemark_kernel::syscall::{epoll, fs, pipe};
 use tidemark_kernel::types::ProcessState;
 
 const EPOLL_CTL_ADD: u64 = 1;
+const EPOLL_CTL_DEL: u64 = 2;
 const EPOLLIN: u32 = 0x001;
 
 #[test]
@@ -166,6 +167,56 @@ fn epoll_pwait_pins_blocked_epoll_fd_and_releases_on_timeout() {
 }
 
 #[test]
+fn epoll_pwait_resume_reports_ready_events_with_ok_status() {
+    let mut t = TestVm::new();
+    let pipefd_addr = t.scratch + 0x1000;
+    assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) } as u64;
+    let write_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr + 4) } as i64;
+
+    let epfd = epoll::sys_epoll_create1(&mut t.vm, t.base, 0);
+    assert!(epfd >= 3);
+
+    let event_addr = t.scratch + 0x2000;
+    let out_addr = t.scratch + 0x3000;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, event_addr, EPOLLIN);
+        tidemark_kernel::guest_mem::write_u64(t.base, event_addr + 8, 0x77);
+    }
+
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            read_fd,
+            event_addr,
+        ),
+        0
+    );
+    assert_eq!(
+        epoll::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 1, -1, 0),
+        0
+    );
+    assert_eq!(t.vm.status, STATUS_EPOLL_WAIT);
+
+    assert_eq!(t.sys_write_data(write_fd, b"x"), 1);
+    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
+    assert_eq!(thread_resume_blocked_syscall(vm_ptr), 1);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.x[10], 1);
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
+        EPOLLIN
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, out_addr + 8) },
+        0x77
+    );
+}
+
+#[test]
 fn epoll_interest_follows_ofd_until_last_alias_and_not_reused_fd() {
     let mut t = TestVm::new();
     let pipefd_addr = t.scratch + 0x1000;
@@ -224,6 +275,67 @@ fn epoll_interest_follows_ofd_until_last_alias_and_not_reused_fd() {
     assert_eq!(
         epoll::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 1, 0, 0),
         0
+    );
+}
+
+#[test]
+fn epoll_keys_duplicate_aliases_by_fd_and_ofd() {
+    let mut t = TestVm::new();
+    let pipefd_addr = t.scratch + 0x1000;
+    assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) } as u64;
+    let write_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr + 4) } as i64;
+    let dup_fd = t.sys_dup(read_fd);
+    assert!(dup_fd >= 3);
+
+    let epfd = epoll::sys_epoll_create1(&mut t.vm, t.base, 0);
+    assert!(epfd >= 3);
+
+    let first_event_addr = t.scratch + 0x2000;
+    let second_event_addr = t.scratch + 0x2010;
+    let out_addr = t.scratch + 0x3000;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, first_event_addr, EPOLLIN);
+        tidemark_kernel::guest_mem::write_u64(t.base, first_event_addr + 8, 0x11);
+        tidemark_kernel::guest_mem::write_u32(t.base, second_event_addr, EPOLLIN);
+        tidemark_kernel::guest_mem::write_u64(t.base, second_event_addr + 8, 0x22);
+    }
+
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            read_fd,
+            first_event_addr,
+        ),
+        0
+    );
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            dup_fd as u64,
+            second_event_addr,
+        ),
+        0
+    );
+    assert_eq!(
+        epoll::sys_epoll_ctl(&mut t.vm, t.base, epfd as u64, EPOLL_CTL_DEL, read_fd, 0,),
+        0
+    );
+
+    assert_eq!(t.sys_write_data(write_fd, b"x"), 1);
+    assert_eq!(
+        epoll::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 4, 0, 0),
+        1
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, out_addr + 8) },
+        0x22
     );
 }
 

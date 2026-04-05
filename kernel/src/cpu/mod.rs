@@ -41,21 +41,23 @@ static mut LAST_JALR_TRACE: JalrTrace = JalrTrace {
 
 #[derive(Clone, Copy)]
 struct ZeroRegTrace {
+    tid: i32,
     pc: u64,
     raw: u32,
     reg: u32,
     prev_value: u64,
     sp: u64,
-    x27: u64,
+    s11: u64,
 }
 
 static mut LAST_ZERO_REG_TRACE: ZeroRegTrace = ZeroRegTrace {
+    tid: 0,
     pc: 0,
     raw: 0,
     reg: 0,
     prev_value: 0,
     sp: 0,
-    x27: 0,
+    s11: 0,
 };
 
 #[derive(Clone, Copy)]
@@ -70,7 +72,7 @@ struct RegWriteTrace {
     rs1_value: u64,
 }
 
-static mut LAST_X27_WRITE_TRACE: RegWriteTrace = RegWriteTrace {
+static mut LAST_S11_WRITE_TRACE: RegWriteTrace = RegWriteTrace {
     tid: 0,
     pc: 0,
     raw: 0,
@@ -110,7 +112,7 @@ static mut RECENT_EXEC_TRACE_STEP: [u32; EXEC_TRACE_LEN] = [0; EXEC_TRACE_LEN];
 static mut RECENT_EXEC_TRACE_SP: [u64; EXEC_TRACE_LEN] = [0; EXEC_TRACE_LEN];
 static mut RECENT_EXEC_TRACE_RA: [u64; EXEC_TRACE_LEN] = [0; EXEC_TRACE_LEN];
 static mut RECENT_EXEC_TRACE_A0: [u64; EXEC_TRACE_LEN] = [0; EXEC_TRACE_LEN];
-static mut RECENT_EXEC_TRACE_X27: [u64; EXEC_TRACE_LEN] = [0; EXEC_TRACE_LEN];
+static mut RECENT_EXEC_TRACE_S11: [u64; EXEC_TRACE_LEN] = [0; EXEC_TRACE_LEN];
 static mut RECENT_EXEC_TRACE_NEXT: u32 = 0;
 
 const REG_WRITE_SOURCE_STEP: u32 = 1;
@@ -130,7 +132,7 @@ fn note_exec_trace(pc: u64, raw: u32, step: u64, x: &[u64; 32]) {
         RECENT_EXEC_TRACE_SP[slot] = x[2];
         RECENT_EXEC_TRACE_RA[slot] = x[1];
         RECENT_EXEC_TRACE_A0[slot] = x[10];
-        RECENT_EXEC_TRACE_X27[slot] = x[27];
+        RECENT_EXEC_TRACE_S11[slot] = x[27];
         RECENT_EXEC_TRACE_NEXT = RECENT_EXEC_TRACE_NEXT.wrapping_add(1);
     }
 }
@@ -161,7 +163,7 @@ pub fn recent_exec_trace(index: u32) -> (u64, u32, u32, u64, u64, u64, u64) {
             RECENT_EXEC_TRACE_SP[slot],
             RECENT_EXEC_TRACE_RA[slot],
             RECENT_EXEC_TRACE_A0[slot],
-            RECENT_EXEC_TRACE_X27[slot],
+            RECENT_EXEC_TRACE_S11[slot],
         )
     }
 }
@@ -195,48 +197,51 @@ pub fn last_jalr_trace() -> (u64, u64, u64, u32, u32) {
 }
 
 #[inline(always)]
-fn note_zero_reg_transition(pc: u64, raw: u32, prev_sp: u64, prev_x27: u64, x: &[u64; 32]) {
+fn note_zero_reg_transition(tid: i32, pc: u64, raw: u32, prev_sp: u64, prev_s11: u64, x: &[u64; 32]) {
     if !HARNESS_TRACE_ENABLED {
         return;
     }
     unsafe {
-        if prev_x27 != 0 && x[27] == 0 {
+        if prev_s11 != 0 && x[27] == 0 {
             LAST_ZERO_REG_TRACE = ZeroRegTrace {
+                tid,
                 pc,
                 raw,
                 reg: 27,
-                prev_value: prev_x27,
+                prev_value: prev_s11,
                 sp: x[2],
-                x27: x[27],
+                s11: x[27],
             };
             return;
         }
         if prev_sp != 0 && x[2] == 0 {
             LAST_ZERO_REG_TRACE = ZeroRegTrace {
+                tid,
                 pc,
                 raw,
                 reg: 2,
                 prev_value: prev_sp,
                 sp: x[2],
-                x27: x[27],
+                s11: x[27],
             };
         }
     }
 }
 
-pub fn last_zero_reg_trace() -> (u64, u32, u32, u64, u64, u64) {
+pub fn last_zero_reg_trace() -> (i32, u64, u32, u32, u64, u64, u64) {
     if !HARNESS_TRACE_ENABLED {
-        return (0, 0, 0, 0, 0, 0);
+        return (0, 0, 0, 0, 0, 0, 0);
     }
     unsafe {
         let trace = LAST_ZERO_REG_TRACE;
         (
+            trace.tid,
             trace.pc,
             trace.raw,
             trace.reg,
             trace.prev_value,
             trace.sp,
-            trace.x27,
+            trace.s11,
         )
     }
 }
@@ -250,7 +255,7 @@ fn note_special_reg_transitions(
     source: u32,
     prev_sp: u64,
     prev_tp: u64,
-    prev_x27: u64,
+    prev_s11: u64,
     x: &[u64; 32],
 ) {
     if !HARNESS_TRACE_ENABLED {
@@ -259,13 +264,13 @@ fn note_special_reg_transitions(
     unsafe {
         let rs1 = if raw == 0 { 0 } else { decode::rs1(raw) as u32 };
         let rs1_value = if raw == 0 { 0 } else { x[rs1 as usize] };
-        if prev_x27 != x[27] {
-            LAST_X27_WRITE_TRACE = RegWriteTrace {
+        if prev_s11 != x[27] {
+            LAST_S11_WRITE_TRACE = RegWriteTrace {
                 tid,
                 pc,
                 raw,
                 source,
-                prev_value: prev_x27,
+                prev_value: prev_s11,
                 value: x[27],
                 rs1,
                 rs1_value,
@@ -298,12 +303,12 @@ fn note_special_reg_transitions(
     }
 }
 
-pub fn last_x27_write_trace() -> (i32, u64, u32, u32, u64, u64, u32, u64) {
+pub fn last_s11_write_trace() -> (i32, u64, u32, u32, u64, u64, u32, u64) {
     if !HARNESS_TRACE_ENABLED {
         return (0, 0, 0, 0, 0, 0, 0, 0);
     }
     unsafe {
-        let trace = LAST_X27_WRITE_TRACE;
+        let trace = LAST_S11_WRITE_TRACE;
         (
             trace.tid,
             trace.pc,
@@ -409,7 +414,17 @@ pub unsafe fn exec(
     jit_bitmap: Option<&JitBitmap>,
     trace_buf: Option<&mut TraceBuffer>,
 ) -> i32 {
-    unsafe { exec_at_base(vm, budget, ram_base(vm), cache, hot_counts, jit_bitmap, trace_buf) }
+    unsafe {
+        exec_at_base(
+            vm,
+            budget,
+            ram_base(vm),
+            cache,
+            hot_counts,
+            jit_bitmap,
+            trace_buf,
+        )
+    }
 }
 
 /// Execute up to `budget` guest instructions from a caller-specified RAM base.
@@ -443,7 +458,7 @@ pub unsafe fn exec_at_base(
                 // to syscall return boundaries.
                 let prev_sp = x[2];
                 let prev_tp = x[4];
-                let prev_x27 = x[27];
+                let prev_s11 = x[27];
                 vm.x = x;
                 vm.f = f;
                 vm.pc = pc;
@@ -460,7 +475,7 @@ pub unsafe fn exec_at_base(
                         REG_WRITE_SOURCE_VM_RESTORE,
                         prev_sp,
                         prev_tp,
-                        prev_x27,
+                        prev_s11,
                         &x,
                     );
                     if vm.status != abi::STATUS_OK {
@@ -472,7 +487,7 @@ pub unsafe fn exec_at_base(
             remaining -= 1;
             let prev_sp = x[2];
             let prev_tp = x[4];
-            let prev_x27 = x[27];
+            let prev_s11 = x[27];
             let instr_pc = pc;
 
             // Fetch instruction
@@ -509,7 +524,7 @@ pub unsafe fn exec_at_base(
                         REG_WRITE_SOURCE_VM_RESTORE,
                         prev_sp,
                         prev_tp,
-                        prev_x27,
+                        prev_s11,
                         &x,
                     );
                     if vm.status != abi::STATUS_OK {
@@ -698,7 +713,7 @@ pub unsafe fn exec_at_base(
                                     REG_WRITE_SOURCE_VM_RESTORE,
                                     prev_sp,
                                     prev_tp,
-                                    prev_x27,
+                                    prev_s11,
                                     &x,
                                 );
                                 if status != abi::STATUS_OK {
@@ -706,7 +721,7 @@ pub unsafe fn exec_at_base(
                                     return remaining;
                                 }
                                 x[0] = 0;
-                                note_zero_reg_transition(instr_pc, raw, prev_sp, prev_x27, &x);
+                                note_zero_reg_transition(vm.tid, instr_pc, raw, prev_sp, prev_s11, &x);
                                 continue;
                             }
                             1 => {
@@ -810,7 +825,7 @@ pub unsafe fn exec_at_base(
                         REG_WRITE_SOURCE_VM_RESTORE,
                         prev_sp,
                         prev_tp,
-                        prev_x27,
+                        prev_s11,
                         &x,
                     );
                     if vm.status != abi::STATUS_OK {
@@ -830,10 +845,10 @@ pub unsafe fn exec_at_base(
                 REG_WRITE_SOURCE_STEP,
                 prev_sp,
                 prev_tp,
-                prev_x27,
+                prev_s11,
                 &x,
             );
-            note_zero_reg_transition(instr_pc, raw, prev_sp, prev_x27, &x);
+                    note_zero_reg_transition(vm.tid, instr_pc, raw, prev_sp, prev_s11, &x);
         }
 
         vm.x = x;
@@ -877,7 +892,7 @@ unsafe fn exec_block(
             let op = blk.ops[i];
             let prev_sp = x[2];
             let prev_tp = x[4];
-            let prev_x27 = x[27];
+            let prev_s11 = x[27];
             let op_pc = cur_pc;
             let rd = op.rd();
             let r1 = op.rs1();
@@ -893,14 +908,8 @@ unsafe fn exec_block(
                     let r = match f3 {
                         0 => v.wrapping_add(imm),
                         1 => (x[r1] << (imm & 0x3F)) as i64,
-                        2
-                            if v < imm => {
-                                1
-                            }
-                        3
-                            if x[r1] < imm as u64 => {
-                                1
-                            }
+                        2 if v < imm => 1,
+                        3 if x[r1] < imm as u64 => 1,
                         4 => v ^ imm,
                         5 => {
                             let sh = imm & 0x3F;
@@ -951,14 +960,8 @@ unsafe fn exec_block(
                             }
                         }
                         1 => v1 << (v2 & 0x3F),
-                        2
-                            if (v1 as i64) < (v2 as i64) => {
-                                1
-                            }
-                        3
-                            if v1 < v2 => {
-                                1
-                            }
+                        2 if (v1 as i64) < (v2 as i64) => 1,
+                        3 if v1 < v2 => 1,
                         4 => v1 ^ v2,
                         5 => {
                             if op.f7b5() {
@@ -1035,10 +1038,10 @@ unsafe fn exec_block(
                                 v1 / v2
                             }
                         }
-            5 => {
-                let (u1, u2) = (v1 as u32, v2 as u32);
-                u1.checked_div(u2).map_or(u32::MAX as i32, |q| q as i32)
-            }
+                        5 => {
+                            let (u1, u2) = (v1 as u32, v2 as u32);
+                            u1.checked_div(u2).map_or(u32::MAX as i32, |q| q as i32)
+                        }
                         6 => {
                             if v2 == 0 {
                                 v1
@@ -1120,7 +1123,7 @@ unsafe fn exec_block(
                         REG_WRITE_SOURCE_BLOCK,
                         prev_sp,
                         prev_tp,
-                        prev_x27,
+                        prev_s11,
                         x,
                     );
                     return blk.total_budget as i32;
@@ -1139,7 +1142,7 @@ unsafe fn exec_block(
                         REG_WRITE_SOURCE_BLOCK,
                         prev_sp,
                         prev_tp,
-                        prev_x27,
+                        prev_s11,
                         x,
                     );
                     return blk.total_budget as i32;
@@ -1160,7 +1163,7 @@ unsafe fn exec_block(
                         REG_WRITE_SOURCE_BLOCK,
                         prev_sp,
                         prev_tp,
-                        prev_x27,
+                        prev_s11,
                         x,
                     );
                     return blk.total_budget as i32;
@@ -1177,7 +1180,7 @@ unsafe fn exec_block(
                         REG_WRITE_SOURCE_BLOCK,
                         prev_sp,
                         prev_tp,
-                        prev_x27,
+                        prev_s11,
                         x,
                     );
                     return i as i32;
@@ -1191,7 +1194,7 @@ unsafe fn exec_block(
                 REG_WRITE_SOURCE_BLOCK,
                 prev_sp,
                 prev_tp,
-                prev_x27,
+                prev_s11,
                 x,
             );
             cur_pc += step;
@@ -1215,15 +1218,9 @@ unsafe fn exec_op_imm(x: &mut [u64; 32], raw: u32, pc: &mut u64, step: u64) {
     let result = match decode::funct3(raw) {
         0 => v1.wrapping_add(imm),            // ADDI
         1 => (x[rs1] << (imm & 0x3F)) as i64, // SLLI
-        2
-            if v1 < imm => {
-                1
-            } // SLTI
-        3
-            if x[rs1] < imm as u64 => {
-                1
-            } // SLTIU
-        4 => v1 ^ imm, // XORI
+        2 if v1 < imm => 1,                   // SLTI
+        3 if x[rs1] < imm as u64 => 1,        // SLTIU
+        4 => v1 ^ imm,                        // XORI
         5 => {
             let shamt = imm & 0x3F;
             if (raw >> 30) & 1 != 0 {
@@ -1298,16 +1295,10 @@ unsafe fn exec_op(x: &mut [u64; 32], raw: u32, pc: &mut u64, step: u64) {
                     v1.wrapping_add(v2)
                 }
             } // ADD/SUB
-            1 => v1 << (v2 & 0x3F), // SLL
-            2
-                if (v1 as i64) < (v2 as i64) => {
-                    1
-                } // SLT
-            3
-                if v1 < v2 => {
-                    1
-                } // SLTU
-            4 => v1 ^ v2, // XOR
+            1 => v1 << (v2 & 0x3F),              // SLL
+            2 if (v1 as i64) < (v2 as i64) => 1, // SLT
+            3 if v1 < v2 => 1,                   // SLTU
+            4 => v1 ^ v2,                        // XOR
             5 => {
                 if f7 == 0x20 {
                     ((v1 as i64) >> (v2 & 0x3F)) as u64
@@ -1315,8 +1306,8 @@ unsafe fn exec_op(x: &mut [u64; 32], raw: u32, pc: &mut u64, step: u64) {
                     v1 >> (v2 & 0x3F)
                 }
             } // SRA/SRL
-            6 => v1 | v2, // OR
-            7 => v1 & v2, // AND
+            6 => v1 | v2,                        // OR
+            7 => v1 & v2,                        // AND
             _ => 0,
         }
     };
@@ -1927,303 +1918,293 @@ unsafe fn exec_op_fp(
     let f3 = decode::funct3(raw);
 
     match (funct5, fmt) {
-            // ========================= Double-precision (fmt=1) =========================
-            (0x00, 1) => {
-                // FADD.D
-                let a = f64::from_bits(f[rs1]);
-                let b = f64::from_bits(f[rs2]);
-                let r = canon_f64(a + b);
-                f[rd] = r.to_bits();
-                set_flags(fcsr, add_flags_f64(a, b, r));
+        // ========================= Double-precision (fmt=1) =========================
+        (0x00, 1) => {
+            // FADD.D
+            let a = f64::from_bits(f[rs1]);
+            let b = f64::from_bits(f[rs2]);
+            let r = canon_f64(a + b);
+            f[rd] = r.to_bits();
+            set_flags(fcsr, add_flags_f64(a, b, r));
+        }
+        (0x01, 1) => {
+            // FSUB.D
+            let a = f64::from_bits(f[rs1]);
+            let b = f64::from_bits(f[rs2]);
+            let r = canon_f64(a - b);
+            f[rd] = r.to_bits();
+            set_flags(fcsr, add_flags_f64(a, -b, r));
+        }
+        (0x02, 1) => {
+            // FMUL.D
+            let a = f64::from_bits(f[rs1]);
+            let b = f64::from_bits(f[rs2]);
+            let r = canon_f64(a * b);
+            f[rd] = r.to_bits();
+            set_flags(fcsr, mul_flags_f64(a, b, r));
+        }
+        (0x03, 1) => {
+            // FDIV.D
+            let a = f64::from_bits(f[rs1]);
+            let b = f64::from_bits(f[rs2]);
+            let r = canon_f64(a / b);
+            f[rd] = r.to_bits();
+            set_flags(fcsr, div_flags_f64(a, b, r));
+        }
+        (0x0B, 1) => {
+            // FSQRT.D
+            let a = f64::from_bits(f[rs1]);
+            let r = canon_f64(libm::sqrt(a));
+            f[rd] = r.to_bits();
+            set_flags(fcsr, sqrt_flags_f64(a, r));
+        }
+        (0x04, 1) => {
+            // FSGNJ.D / FSGNJN.D / FSGNJX.D
+            let a = f[rs1];
+            let b = f[rs2];
+            f[rd] = match f3 {
+                0 => (a & 0x7FFF_FFFF_FFFF_FFFF) | (b & 0x8000_0000_0000_0000),
+                1 => (a & 0x7FFF_FFFF_FFFF_FFFF) | (!b & 0x8000_0000_0000_0000),
+                _ => a ^ (b & 0x8000_0000_0000_0000),
+            };
+        }
+        (0x05, 1) => {
+            // FMIN.D / FMAX.D
+            let a = f64::from_bits(f[rs1]);
+            let b = f64::from_bits(f[rs2]);
+            f[rd] = match f3 {
+                0 => fmin_f64(a, b).to_bits(),
+                _ => fmax_f64(a, b).to_bits(),
+            };
+            // RISC-V ISA spec §11.6: signaling NaN inputs set NV, even when result is not NaN
+            if is_snan_f64(a) || is_snan_f64(b) {
+                set_flags(fcsr, NV);
             }
-            (0x01, 1) => {
-                // FSUB.D
-                let a = f64::from_bits(f[rs1]);
-                let b = f64::from_bits(f[rs2]);
-                let r = canon_f64(a - b);
-                f[rd] = r.to_bits();
-                set_flags(fcsr, add_flags_f64(a, -b, r));
+        }
+        (0x14, 1) => {
+            // FEQ.D / FLT.D / FLE.D → x[rd]
+            let a = f64::from_bits(f[rs1]);
+            let b = f64::from_bits(f[rs2]);
+            let r = match f3 {
+                2 => a == b,
+                1 => a < b,
+                0 => a <= b,
+                _ => false,
+            };
+            if rd != 0 {
+                x[rd] = r as u64;
             }
-            (0x02, 1) => {
-                // FMUL.D
-                let a = f64::from_bits(f[rs1]);
-                let b = f64::from_bits(f[rs2]);
-                let r = canon_f64(a * b);
-                f[rd] = r.to_bits();
-                set_flags(fcsr, mul_flags_f64(a, b, r));
-            }
-            (0x03, 1) => {
-                // FDIV.D
-                let a = f64::from_bits(f[rs1]);
-                let b = f64::from_bits(f[rs2]);
-                let r = canon_f64(a / b);
-                f[rd] = r.to_bits();
-                set_flags(fcsr, div_flags_f64(a, b, r));
-            }
-            (0x0B, 1) => {
-                // FSQRT.D
-                let a = f64::from_bits(f[rs1]);
-                let r = canon_f64(libm::sqrt(a));
-                f[rd] = r.to_bits();
-                set_flags(fcsr, sqrt_flags_f64(a, r));
-            }
-            (0x04, 1) => {
-                // FSGNJ.D / FSGNJN.D / FSGNJX.D
-                let a = f[rs1];
-                let b = f[rs2];
-                f[rd] = match f3 {
-                    0 => (a & 0x7FFF_FFFF_FFFF_FFFF) | (b & 0x8000_0000_0000_0000),
-                    1 => (a & 0x7FFF_FFFF_FFFF_FFFF) | (!b & 0x8000_0000_0000_0000),
-                    _ => a ^ (b & 0x8000_0000_0000_0000),
-                };
-            }
-            (0x05, 1) => {
-                // FMIN.D / FMAX.D
-                let a = f64::from_bits(f[rs1]);
-                let b = f64::from_bits(f[rs2]);
-                f[rd] = match f3 {
-                    0 => fmin_f64(a, b).to_bits(),
-                    _ => fmax_f64(a, b).to_bits(),
-                };
-                // RISC-V ISA spec §11.6: signaling NaN inputs set NV, even when result is not NaN
-                if is_snan_f64(a) || is_snan_f64(b) {
+            // RISC-V ISA spec §11.8: FLT/FLE set NV if either is NaN; FEQ sets NV only for sNaN
+            match f3 {
+                1 | 0 if (a.is_nan() || b.is_nan()) => {
                     set_flags(fcsr, NV);
                 }
-            }
-            (0x14, 1) => {
-                // FEQ.D / FLT.D / FLE.D → x[rd]
-                let a = f64::from_bits(f[rs1]);
-                let b = f64::from_bits(f[rs2]);
-                let r = match f3 {
-                    2 => a == b,
-                    1 => a < b,
-                    0 => a <= b,
-                    _ => false,
-                };
-                if rd != 0 {
-                    x[rd] = r as u64;
-                }
-                // RISC-V ISA spec §11.8: FLT/FLE set NV if either is NaN; FEQ sets NV only for sNaN
-                match f3 {
-                    1 | 0
-                        if (a.is_nan() || b.is_nan()) => {
-                            set_flags(fcsr, NV);
-                        }
-                    2
-                        if (is_snan_f64(a) || is_snan_f64(b)) => {
-                            set_flags(fcsr, NV);
-                        }
-                    _ => {}
-                }
-            }
-            (0x18, 1) => {
-                // FCVT.W[U].D / FCVT.L[U].D → x[rd]
-                let v = f64::from_bits(f[rs1]);
-                let r = match rs2 {
-                    0 => fcvt_w_f64(v) as i64 as u64,
-                    1 => (fcvt_wu_f64(v) as i32 as i64) as u64,
-                    2 => fcvt_l_f64(v) as u64,
-                    3 => fcvt_lu_f64(v),
-                    _ => 0,
-                };
-                if rd != 0 {
-                    x[rd] = r;
-                }
-                // RISC-V ISA spec §11.7 Table 11.4: NV if NaN/Inf/out-of-range after rounding.
-                // Use truncated value for range check to handle cases like -0.9 → 0 (in range for unsigned).
-                let trunc = if v.is_nan() || v.is_infinite() {
-                    None
-                } else {
-                    Some(v as i64)
-                };
-                let out_of_range = trunc.is_none()
-                    || match rs2 {
-                        0 => {
-                            trunc.unwrap() < (i32::MIN as i64) || trunc.unwrap() > (i32::MAX as i64)
-                        }
-                        1 => v < -1.0 + f64::EPSILON || v > (u32::MAX as f64) + 1.0 - f64::EPSILON,
-                        2 => v <= (i64::MIN as f64) - 1.0 || v >= (i64::MAX as f64) + 1.0,
-                        3 => v < -1.0 + f64::EPSILON || v > (u64::MAX as f64),
-                        _ => false,
-                    };
-                if out_of_range {
+                2 if (is_snan_f64(a) || is_snan_f64(b)) => {
                     set_flags(fcsr, NV);
-                } else {
-                    let exact = match rs2 {
-                        0 => v == (r as i32 as f64),
-                        1 => v == (r as u32 as f64),
-                        2 => v == (r as i64 as f64),
-                        3 => v == (r as f64),
-                        _ => true,
-                    };
-                    if !exact {
-                        set_flags(fcsr, NX);
-                    }
                 }
-            }
-            (0x1A, 1) => {
-                // FCVT.D.W[U] / FCVT.D.L[U] → f[rd]
-                f[rd] = match rs2 {
-                    0 => ((x[rs1] as i32) as f64).to_bits(), // FCVT.D.W
-                    1 => ((x[rs1] as u32) as f64).to_bits(), // FCVT.D.WU
-                    2 => ((x[rs1] as i64) as f64).to_bits(), // FCVT.D.L
-                    3 => (x[rs1] as f64).to_bits(), // FCVT.D.LU
-                    _ => 0,
-                };
-            }
-            (0x1C, 1) => match f3 {
-                // FMV.X.D / FCLASS.D → x[rd]
-                0
-                    if rd != 0 => {
-                        x[rd] = f[rs1];
-                    } // FMV.X.D
-                1
-                    if rd != 0 => {
-                        x[rd] = fclass_f64(f[rs1]);
-                    } // FCLASS.D
                 _ => {}
-            },
-            (0x1E, 1) => f[rd] = x[rs1], // FMV.D.X
-
-            // ========================= Single-precision (fmt=0) =========================
-            (0x00, 0) => {
-                let a = unbox_f32(f[rs1]);
-                let b = unbox_f32(f[rs2]);
-                let r = canon_f32(a + b);
-                f[rd] = box_f32(r);
-                set_flags(fcsr, add_flags_f32(a, b, r));
             }
-            (0x01, 0) => {
-                let a = unbox_f32(f[rs1]);
-                let b = unbox_f32(f[rs2]);
-                let r = canon_f32(a - b);
-                f[rd] = box_f32(r);
-                set_flags(fcsr, add_flags_f32(a, -b, r));
+        }
+        (0x18, 1) => {
+            // FCVT.W[U].D / FCVT.L[U].D → x[rd]
+            let v = f64::from_bits(f[rs1]);
+            let r = match rs2 {
+                0 => fcvt_w_f64(v) as i64 as u64,
+                1 => (fcvt_wu_f64(v) as i32 as i64) as u64,
+                2 => fcvt_l_f64(v) as u64,
+                3 => fcvt_lu_f64(v),
+                _ => 0,
+            };
+            if rd != 0 {
+                x[rd] = r;
             }
-            (0x02, 0) => {
-                let a = unbox_f32(f[rs1]);
-                let b = unbox_f32(f[rs2]);
-                let r = canon_f32(a * b);
-                f[rd] = box_f32(r);
-                set_flags(fcsr, mul_flags_f32(a, b, r));
-            }
-            (0x03, 0) => {
-                let a = unbox_f32(f[rs1]);
-                let b = unbox_f32(f[rs2]);
-                let r = canon_f32(a / b);
-                f[rd] = box_f32(r);
-                set_flags(fcsr, div_flags_f32(a, b, r));
-            }
-            (0x0B, 0) => {
-                let a = unbox_f32(f[rs1]);
-                let r = canon_f32(libm::sqrtf(a));
-                f[rd] = box_f32(r);
-                set_flags(fcsr, sqrt_flags_f32(a, r));
-            }
-            (0x04, 0) => {
-                // FSGNJ.S / FSGNJN.S / FSGNJX.S
-                let a = unbox_f32(f[rs1]).to_bits();
-                let b = unbox_f32(f[rs2]).to_bits();
-                let r = match f3 {
-                    0 => (a & 0x7FFF_FFFF) | (b & 0x8000_0000),
-                    1 => (a & 0x7FFF_FFFF) | (!b & 0x8000_0000),
-                    _ => a ^ (b & 0x8000_0000),
-                };
-                f[rd] = box_f32(f32::from_bits(r));
-            }
-            (0x05, 0) => {
-                // FMIN.S / FMAX.S
-                let a = unbox_f32(f[rs1]);
-                let b = unbox_f32(f[rs2]);
-                f[rd] = match f3 {
-                    0 => box_f32(fmin_f32(a, b)),
-                    _ => box_f32(fmax_f32(a, b)),
-                };
-                if is_snan_f32(a) || is_snan_f32(b) {
-                    set_flags(fcsr, NV);
-                }
-            }
-            (0x14, 0) => {
-                // FEQ.S / FLT.S / FLE.S → x[rd]
-                let a = unbox_f32(f[rs1]);
-                let b = unbox_f32(f[rs2]);
-                let r = match f3 {
-                    2 => a == b,
-                    1 => a < b,
-                    0 => a <= b,
+            // RISC-V ISA spec §11.7 Table 11.4: NV if NaN/Inf/out-of-range after rounding.
+            // Use truncated value for range check to handle cases like -0.9 → 0 (in range for unsigned).
+            let trunc = if v.is_nan() || v.is_infinite() {
+                None
+            } else {
+                Some(v as i64)
+            };
+            let out_of_range = trunc.is_none()
+                || match rs2 {
+                    0 => trunc.unwrap() < (i32::MIN as i64) || trunc.unwrap() > (i32::MAX as i64),
+                    1 => v < -1.0 + f64::EPSILON || v > (u32::MAX as f64) + 1.0 - f64::EPSILON,
+                    2 => v <= (i64::MIN as f64) - 1.0 || v >= (i64::MAX as f64) + 1.0,
+                    3 => v < -1.0 + f64::EPSILON || v > (u64::MAX as f64),
                     _ => false,
                 };
-                if rd != 0 {
-                    x[rd] = r as u64;
-                }
-                match f3 {
-                    1 | 0
-                        if (a.is_nan() || b.is_nan()) => {
-                            set_flags(fcsr, NV);
-                        }
-                    2
-                        if (is_snan_f32(a) || is_snan_f32(b)) => {
-                            set_flags(fcsr, NV);
-                        }
-                    _ => {}
+            if out_of_range {
+                set_flags(fcsr, NV);
+            } else {
+                let exact = match rs2 {
+                    0 => v == (r as i32 as f64),
+                    1 => v == (r as u32 as f64),
+                    2 => v == (r as i64 as f64),
+                    3 => v == (r as f64),
+                    _ => true,
+                };
+                if !exact {
+                    set_flags(fcsr, NX);
                 }
             }
-            (0x18, 0) => {
-                // FCVT.W[U].S / FCVT.L[U].S → x[rd]
-                let v = unbox_f32(f[rs1]);
-                let vd = v as f64;
-                let r = match rs2 {
-                    0 => fcvt_w_f32(v) as i64 as u64,
-                    1 => (fcvt_wu_f32(v) as i32 as i64) as u64,
-                    2 => fcvt_l_f32(v) as u64,
-                    3 => fcvt_lu_f32(v),
-                    _ => 0,
-                };
-                if rd != 0 {
-                    x[rd] = r;
-                }
-                // RISC-V ISA spec §11.7 Table 11.4: NV if NaN/Inf/out-of-range after rounding.
-                let trunc = if v.is_nan() || v.is_infinite() {
-                    None
-                } else {
-                    Some(vd as i64)
-                };
-                let out_of_range = trunc.is_none()
-                    || match rs2 {
-                        0 => {
-                            trunc.unwrap() < (i32::MIN as i64) || trunc.unwrap() > (i32::MAX as i64)
-                        }
-                        1 => trunc.unwrap() < 0 || trunc.unwrap() > (u32::MAX as i64),
-                        2 => vd <= (i64::MIN as f64) - 1.0 || vd >= (i64::MAX as f64) + 1.0,
-                        3 => vd < 0.0 && trunc.unwrap() < 0 || vd > (u64::MAX as f64),
-                        _ => false,
-                    };
-                if out_of_range {
+        }
+        (0x1A, 1) => {
+            // FCVT.D.W[U] / FCVT.D.L[U] → f[rd]
+            f[rd] = match rs2 {
+                0 => ((x[rs1] as i32) as f64).to_bits(), // FCVT.D.W
+                1 => ((x[rs1] as u32) as f64).to_bits(), // FCVT.D.WU
+                2 => ((x[rs1] as i64) as f64).to_bits(), // FCVT.D.L
+                3 => (x[rs1] as f64).to_bits(),          // FCVT.D.LU
+                _ => 0,
+            };
+        }
+        (0x1C, 1) => match f3 {
+            // FMV.X.D / FCLASS.D → x[rd]
+            0 if rd != 0 => {
+                x[rd] = f[rs1];
+            } // FMV.X.D
+            1 if rd != 0 => {
+                x[rd] = fclass_f64(f[rs1]);
+            } // FCLASS.D
+            _ => {}
+        },
+        (0x1E, 1) => f[rd] = x[rs1], // FMV.D.X
+
+        // ========================= Single-precision (fmt=0) =========================
+        (0x00, 0) => {
+            let a = unbox_f32(f[rs1]);
+            let b = unbox_f32(f[rs2]);
+            let r = canon_f32(a + b);
+            f[rd] = box_f32(r);
+            set_flags(fcsr, add_flags_f32(a, b, r));
+        }
+        (0x01, 0) => {
+            let a = unbox_f32(f[rs1]);
+            let b = unbox_f32(f[rs2]);
+            let r = canon_f32(a - b);
+            f[rd] = box_f32(r);
+            set_flags(fcsr, add_flags_f32(a, -b, r));
+        }
+        (0x02, 0) => {
+            let a = unbox_f32(f[rs1]);
+            let b = unbox_f32(f[rs2]);
+            let r = canon_f32(a * b);
+            f[rd] = box_f32(r);
+            set_flags(fcsr, mul_flags_f32(a, b, r));
+        }
+        (0x03, 0) => {
+            let a = unbox_f32(f[rs1]);
+            let b = unbox_f32(f[rs2]);
+            let r = canon_f32(a / b);
+            f[rd] = box_f32(r);
+            set_flags(fcsr, div_flags_f32(a, b, r));
+        }
+        (0x0B, 0) => {
+            let a = unbox_f32(f[rs1]);
+            let r = canon_f32(libm::sqrtf(a));
+            f[rd] = box_f32(r);
+            set_flags(fcsr, sqrt_flags_f32(a, r));
+        }
+        (0x04, 0) => {
+            // FSGNJ.S / FSGNJN.S / FSGNJX.S
+            let a = unbox_f32(f[rs1]).to_bits();
+            let b = unbox_f32(f[rs2]).to_bits();
+            let r = match f3 {
+                0 => (a & 0x7FFF_FFFF) | (b & 0x8000_0000),
+                1 => (a & 0x7FFF_FFFF) | (!b & 0x8000_0000),
+                _ => a ^ (b & 0x8000_0000),
+            };
+            f[rd] = box_f32(f32::from_bits(r));
+        }
+        (0x05, 0) => {
+            // FMIN.S / FMAX.S
+            let a = unbox_f32(f[rs1]);
+            let b = unbox_f32(f[rs2]);
+            f[rd] = match f3 {
+                0 => box_f32(fmin_f32(a, b)),
+                _ => box_f32(fmax_f32(a, b)),
+            };
+            if is_snan_f32(a) || is_snan_f32(b) {
+                set_flags(fcsr, NV);
+            }
+        }
+        (0x14, 0) => {
+            // FEQ.S / FLT.S / FLE.S → x[rd]
+            let a = unbox_f32(f[rs1]);
+            let b = unbox_f32(f[rs2]);
+            let r = match f3 {
+                2 => a == b,
+                1 => a < b,
+                0 => a <= b,
+                _ => false,
+            };
+            if rd != 0 {
+                x[rd] = r as u64;
+            }
+            match f3 {
+                1 | 0 if (a.is_nan() || b.is_nan()) => {
                     set_flags(fcsr, NV);
-                } else {
-                    let exact = match rs2 {
-                        0 => vd == (r as i32 as f64),
-                        1 => vd == (r as u32 as f64),
-                        2 => vd == (r as i64 as f64),
-                        3 => vd == (r as f64),
-                        _ => true,
-                    };
-                    if !exact {
-                        set_flags(fcsr, NX);
-                    }
+                }
+                2 if (is_snan_f32(a) || is_snan_f32(b)) => {
+                    set_flags(fcsr, NV);
+                }
+                _ => {}
+            }
+        }
+        (0x18, 0) => {
+            // FCVT.W[U].S / FCVT.L[U].S → x[rd]
+            let v = unbox_f32(f[rs1]);
+            let vd = v as f64;
+            let r = match rs2 {
+                0 => fcvt_w_f32(v) as i64 as u64,
+                1 => (fcvt_wu_f32(v) as i32 as i64) as u64,
+                2 => fcvt_l_f32(v) as u64,
+                3 => fcvt_lu_f32(v),
+                _ => 0,
+            };
+            if rd != 0 {
+                x[rd] = r;
+            }
+            // RISC-V ISA spec §11.7 Table 11.4: NV if NaN/Inf/out-of-range after rounding.
+            let trunc = if v.is_nan() || v.is_infinite() {
+                None
+            } else {
+                Some(vd as i64)
+            };
+            let out_of_range = trunc.is_none()
+                || match rs2 {
+                    0 => trunc.unwrap() < (i32::MIN as i64) || trunc.unwrap() > (i32::MAX as i64),
+                    1 => trunc.unwrap() < 0 || trunc.unwrap() > (u32::MAX as i64),
+                    2 => vd <= (i64::MIN as f64) - 1.0 || vd >= (i64::MAX as f64) + 1.0,
+                    3 => vd < 0.0 && trunc.unwrap() < 0 || vd > (u64::MAX as f64),
+                    _ => false,
+                };
+            if out_of_range {
+                set_flags(fcsr, NV);
+            } else {
+                let exact = match rs2 {
+                    0 => vd == (r as i32 as f64),
+                    1 => vd == (r as u32 as f64),
+                    2 => vd == (r as i64 as f64),
+                    3 => vd == (r as f64),
+                    _ => true,
+                };
+                if !exact {
+                    set_flags(fcsr, NX);
                 }
             }
-            (0x1A, 0) => {
-                // FCVT.S.W[U] / FCVT.S.L[U] → f[rd]
-                f[rd] = match rs2 {
-                    0 => box_f32((x[rs1] as i32) as f32),
-                    1 => box_f32((x[rs1] as u32) as f32),
-                    2 => box_f32((x[rs1] as i64) as f32),
-                    3 => box_f32(x[rs1] as f32),
-                    _ => 0,
-                };
-            }
-            (0x1C, 0) => match f3 {
+        }
+        (0x1A, 0) => {
+            // FCVT.S.W[U] / FCVT.S.L[U] → f[rd]
+            f[rd] = match rs2 {
+                0 => box_f32((x[rs1] as i32) as f32),
+                1 => box_f32((x[rs1] as u32) as f32),
+                2 => box_f32((x[rs1] as i64) as f32),
+                3 => box_f32(x[rs1] as f32),
+                _ => 0,
+            };
+        }
+        (0x1C, 0) => match f3 {
                 // FMV.X.W / FCLASS.S → x[rd]
                 0
                     // FMV.X.W: lower 32 bits, sign-extended to 64
@@ -2237,39 +2218,39 @@ unsafe fn exec_op_fp(
                     }
                 _ => {}
             },
-            (0x1E, 0) => {
-                // FMV.W.X: NaN-box lower 32 bits of x[rs1]
-                f[rd] = 0xFFFF_FFFF_0000_0000 | (x[rs1] as u32 as u64);
-            }
+        (0x1E, 0) => {
+            // FMV.W.X: NaN-box lower 32 bits of x[rs1]
+            f[rd] = 0xFFFF_FFFF_0000_0000 | (x[rs1] as u32 as u64);
+        }
 
-            // ========================= S↔D conversion (funct5=0x08) =========================
-            (0x08, 0) => {
-                // FCVT.S.D: double → single
-                let a = f64::from_bits(f[rs1]);
-                let r = canon_f32(a as f32);
-                f[rd] = box_f32(r);
-                // NX if precision lost, NV if sNaN input
-                if is_snan_f64(a) {
-                    set_flags(fcsr, NV);
-                } else if !a.is_nan() && !a.is_infinite() && (r as f64).to_bits() != a.to_bits() {
-                    set_flags(fcsr, NX);
-                }
+        // ========================= S↔D conversion (funct5=0x08) =========================
+        (0x08, 0) => {
+            // FCVT.S.D: double → single
+            let a = f64::from_bits(f[rs1]);
+            let r = canon_f32(a as f32);
+            f[rd] = box_f32(r);
+            // NX if precision lost, NV if sNaN input
+            if is_snan_f64(a) {
+                set_flags(fcsr, NV);
+            } else if !a.is_nan() && !a.is_infinite() && (r as f64).to_bits() != a.to_bits() {
+                set_flags(fcsr, NX);
             }
-            (0x08, 1) => {
-                // FCVT.D.S: single → double (always exact, but canonicalize NaN)
-                let a = unbox_f32(f[rs1]);
-                let r = if a.is_nan() {
-                    f64::from_bits(CANONICAL_NAN_F64)
-                } else {
-                    a as f64
-                };
-                f[rd] = r.to_bits();
-                if is_snan_f32(a) {
-                    set_flags(fcsr, NV);
-                }
+        }
+        (0x08, 1) => {
+            // FCVT.D.S: single → double (always exact, but canonicalize NaN)
+            let a = unbox_f32(f[rs1]);
+            let r = if a.is_nan() {
+                f64::from_bits(CANONICAL_NAN_F64)
+            } else {
+                a as f64
+            };
+            f[rd] = r.to_bits();
+            if is_snan_f32(a) {
+                set_flags(fcsr, NV);
             }
+        }
 
-            _ => {} // Q/H not supported
+        _ => {} // Q/H not supported
     }
     *pc += step;
 }
@@ -2293,103 +2274,103 @@ unsafe fn exec_fma(
     let fmt = (raw >> 25) & 3;
 
     match fmt {
-            0 => {
-                // Single-precision
-                let a = unbox_f32(f[rs1]);
-                let b = unbox_f32(f[rs2]);
-                let c = unbox_f32(f[rs3]);
-                let r = canon_f32(match opcode {
-                    decode::OP_FMADD => libm::fmaf(a, b, c),
-                    decode::OP_FMSUB => libm::fmaf(a, b, -c),
-                    decode::OP_FNMSUB => libm::fmaf(-a, b, c),
-                    decode::OP_FNMADD => libm::fmaf(-a, b, -c),
-                    _ => 0.0,
-                });
-                f[rd] = box_f32(r);
-                let mut fl = 0u32;
-                if (a.is_infinite() && b == 0.0) || (a == 0.0 && b.is_infinite()) {
-                    fl |= NV;
-                }
-                if is_snan_f32(a) || is_snan_f32(b) || is_snan_f32(c) {
-                    fl |= NV;
-                }
-                if r.is_nan() && (a.is_nan() || b.is_nan() || c.is_nan()) {
-                    fl |= NV;
-                }
-                if r.is_infinite() && !a.is_infinite() && !b.is_infinite() && !c.is_infinite() {
-                    fl |= OF | NX;
-                }
-                if !r.is_nan() && !r.is_infinite() {
-                    // Compute same operation in f64 and compare to detect inexact
-                    let wide = match opcode {
-                        decode::OP_FMADD => libm::fma(a as f64, b as f64, c as f64),
-                        decode::OP_FMSUB => libm::fma(a as f64, b as f64, -(c as f64)),
-                        decode::OP_FNMSUB => -libm::fma(a as f64, b as f64, -(c as f64)),
-                        decode::OP_FNMADD => -libm::fma(a as f64, b as f64, c as f64),
-                        _ => r as f64,
-                    };
-                    if wide != r as f64 {
-                        fl |= NX;
-                    }
-                }
-                set_flags(fcsr, fl);
+        0 => {
+            // Single-precision
+            let a = unbox_f32(f[rs1]);
+            let b = unbox_f32(f[rs2]);
+            let c = unbox_f32(f[rs3]);
+            let r = canon_f32(match opcode {
+                decode::OP_FMADD => libm::fmaf(a, b, c),
+                decode::OP_FMSUB => libm::fmaf(a, b, -c),
+                decode::OP_FNMSUB => libm::fmaf(-a, b, c),
+                decode::OP_FNMADD => libm::fmaf(-a, b, -c),
+                _ => 0.0,
+            });
+            f[rd] = box_f32(r);
+            let mut fl = 0u32;
+            if (a.is_infinite() && b == 0.0) || (a == 0.0 && b.is_infinite()) {
+                fl |= NV;
             }
-            1 => {
-                // Double-precision
-                let a = f64::from_bits(f[rs1]);
-                let b = f64::from_bits(f[rs2]);
-                let c = f64::from_bits(f[rs3]);
-                let r = canon_f64(match opcode {
-                    decode::OP_FMADD => libm::fma(a, b, c),
-                    decode::OP_FMSUB => libm::fma(a, b, -c),
-                    decode::OP_FNMSUB => libm::fma(-a, b, c),
-                    decode::OP_FNMADD => libm::fma(-a, b, -c),
-                    _ => 0.0,
-                });
-                f[rd] = r.to_bits();
-                let mut fl = 0u32;
-                if (a.is_infinite() && b == 0.0) || (a == 0.0 && b.is_infinite()) {
-                    fl |= NV;
-                }
-                if is_snan_f64(a) || is_snan_f64(b) || is_snan_f64(c) {
-                    fl |= NV;
-                }
-                if r.is_nan() && (a.is_nan() || b.is_nan() || c.is_nan()) {
-                    fl |= NV;
-                }
-                if r.is_infinite() && !a.is_infinite() && !b.is_infinite() && !c.is_infinite() {
-                    fl |= OF | NX;
-                }
-                if !r.is_nan() && !r.is_infinite() {
-                    // fma(a,b,c) = r is the correctly-rounded result from libm::fma.
-                    // Inexact iff the mathematical result a*b+c differs from r.
-                    // Use error-free transformation: prod = a*b, prod_err = fma(a,b,-prod)
-                    // Then mathematical a*b = prod + prod_err exactly.
-                    // mathematical a*b+c_eff = prod + c_eff + prod_err
-                    // The sum (prod + c_eff) may round, giving sum + sum_err = prod + c_eff exactly.
-                    // Total error = sum_err + prod_err. If nonzero, result is inexact.
-                    let c_eff = match opcode {
-                        decode::OP_FMSUB | decode::OP_FNMADD => -c,
-                        _ => c,
-                    };
-                    let prod = a * b;
-                    let prod_err = libm::fma(a, b, -prod);
-                    // Two-sum: sum + sum_err = prod + c_eff exactly
-                    let sum = prod + c_eff;
-                    let sum_err = if prod.abs() >= c_eff.abs() {
-                        (prod - sum) + c_eff
-                    } else {
-                        (c_eff - sum) + prod
-                    };
-                    let total_err = sum_err + prod_err;
-                    // Apply negation for FNMSUB/FNMADD (doesn't change whether it's inexact)
-                    if total_err != 0.0 {
-                        fl |= NX;
-                    }
-                }
-                set_flags(fcsr, fl);
+            if is_snan_f32(a) || is_snan_f32(b) || is_snan_f32(c) {
+                fl |= NV;
             }
-            _ => {} // Q/H not supported
+            if r.is_nan() && (a.is_nan() || b.is_nan() || c.is_nan()) {
+                fl |= NV;
+            }
+            if r.is_infinite() && !a.is_infinite() && !b.is_infinite() && !c.is_infinite() {
+                fl |= OF | NX;
+            }
+            if !r.is_nan() && !r.is_infinite() {
+                // Compute same operation in f64 and compare to detect inexact
+                let wide = match opcode {
+                    decode::OP_FMADD => libm::fma(a as f64, b as f64, c as f64),
+                    decode::OP_FMSUB => libm::fma(a as f64, b as f64, -(c as f64)),
+                    decode::OP_FNMSUB => -libm::fma(a as f64, b as f64, -(c as f64)),
+                    decode::OP_FNMADD => -libm::fma(a as f64, b as f64, c as f64),
+                    _ => r as f64,
+                };
+                if wide != r as f64 {
+                    fl |= NX;
+                }
+            }
+            set_flags(fcsr, fl);
+        }
+        1 => {
+            // Double-precision
+            let a = f64::from_bits(f[rs1]);
+            let b = f64::from_bits(f[rs2]);
+            let c = f64::from_bits(f[rs3]);
+            let r = canon_f64(match opcode {
+                decode::OP_FMADD => libm::fma(a, b, c),
+                decode::OP_FMSUB => libm::fma(a, b, -c),
+                decode::OP_FNMSUB => libm::fma(-a, b, c),
+                decode::OP_FNMADD => libm::fma(-a, b, -c),
+                _ => 0.0,
+            });
+            f[rd] = r.to_bits();
+            let mut fl = 0u32;
+            if (a.is_infinite() && b == 0.0) || (a == 0.0 && b.is_infinite()) {
+                fl |= NV;
+            }
+            if is_snan_f64(a) || is_snan_f64(b) || is_snan_f64(c) {
+                fl |= NV;
+            }
+            if r.is_nan() && (a.is_nan() || b.is_nan() || c.is_nan()) {
+                fl |= NV;
+            }
+            if r.is_infinite() && !a.is_infinite() && !b.is_infinite() && !c.is_infinite() {
+                fl |= OF | NX;
+            }
+            if !r.is_nan() && !r.is_infinite() {
+                // fma(a,b,c) = r is the correctly-rounded result from libm::fma.
+                // Inexact iff the mathematical result a*b+c differs from r.
+                // Use error-free transformation: prod = a*b, prod_err = fma(a,b,-prod)
+                // Then mathematical a*b = prod + prod_err exactly.
+                // mathematical a*b+c_eff = prod + c_eff + prod_err
+                // The sum (prod + c_eff) may round, giving sum + sum_err = prod + c_eff exactly.
+                // Total error = sum_err + prod_err. If nonzero, result is inexact.
+                let c_eff = match opcode {
+                    decode::OP_FMSUB | decode::OP_FNMADD => -c,
+                    _ => c,
+                };
+                let prod = a * b;
+                let prod_err = libm::fma(a, b, -prod);
+                // Two-sum: sum + sum_err = prod + c_eff exactly
+                let sum = prod + c_eff;
+                let sum_err = if prod.abs() >= c_eff.abs() {
+                    (prod - sum) + c_eff
+                } else {
+                    (c_eff - sum) + prod
+                };
+                let total_err = sum_err + prod_err;
+                // Apply negation for FNMSUB/FNMADD (doesn't change whether it's inexact)
+                if total_err != 0.0 {
+                    fl |= NX;
+                }
+            }
+            set_flags(fcsr, fl);
+        }
+        _ => {} // Q/H not supported
     }
     *pc += step;
 }

@@ -32,6 +32,7 @@ const EPOLL_EVENT_SIZE: u64 = 16;
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct EpollEntry {
+    fd: u32,
     ofd_id: u32,
     events: u32,
     data: u64,
@@ -236,7 +237,7 @@ pub fn sys_epoll_ctl(
             }
             // Check for duplicate
             for i in 0..inst.count as usize {
-                if inst.entries[i].ofd_id == watched_ofd_id {
+                if inst.entries[i].fd == fd as u32 && inst.entries[i].ofd_id == watched_ofd_id {
                     return EEXIST;
                 }
             }
@@ -244,6 +245,7 @@ pub fn sys_epoll_ctl(
             let data = unsafe { guest_mem::read_u64(base, event_addr + EPOLL_EVENT_DATA_OFFSET) };
             let idx = inst.count as usize;
             inst.entries[idx] = EpollEntry {
+                fd: fd as u32,
                 ofd_id: watched_ofd_id,
                 events,
                 data,
@@ -253,7 +255,7 @@ pub fn sys_epoll_ctl(
         }
         EPOLL_CTL_DEL => {
             for i in 0..inst.count as usize {
-                if inst.entries[i].ofd_id == watched_ofd_id {
+                if inst.entries[i].fd == fd as u32 && inst.entries[i].ofd_id == watched_ofd_id {
                     remove_entry(inst, i);
                     return 0;
                 }
@@ -262,7 +264,7 @@ pub fn sys_epoll_ctl(
         }
         EPOLL_CTL_MOD => {
             for i in 0..inst.count as usize {
-                if inst.entries[i].ofd_id == watched_ofd_id {
+                if inst.entries[i].fd == fd as u32 && inst.entries[i].ofd_id == watched_ofd_id {
                     inst.entries[i].events = unsafe { guest_mem::read_u32(base, event_addr) };
                     inst.entries[i].data =
                         unsafe { guest_mem::read_u64(base, event_addr + EPOLL_EVENT_DATA_OFFSET) };
@@ -378,7 +380,9 @@ pub fn sys_epoll_pwait(
     }
 
     if ready > 0 || timeout == 0 {
+        vm.status = STATUS_OK;
         vm.epoll_timeout_ms = 0;
+        vm.epoll_maxevents = 0;
         crate::harness_debug::record_epoll_wait(
             0,
             epfd,
