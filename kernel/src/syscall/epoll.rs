@@ -412,7 +412,7 @@ pub fn sys_epoll_pwait(
         0,
         EPOLL_WAIT_REASON_BLOCKED,
     );
-    return 0; // dispatch() checks vm.status and returns it
+    0 // dispatch() checks vm.status and returns it
 }
 
 pub fn resume_timeout(vm: &mut ThreadState) {

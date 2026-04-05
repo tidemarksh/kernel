@@ -38,7 +38,6 @@ const E_PHNUM: usize = 56;
 
 // ELF64 program header offsets
 const P_TYPE: usize = 0;
-const P_FLAGS: usize = 4;
 const P_OFFSET: usize = 8;
 const P_VADDR: usize = 16;
 const P_FILESZ: usize = 32;
@@ -88,6 +87,10 @@ pub struct ElfLoadResult {
 
 /// Validate an ELF image and compute the metadata needed for loading it
 /// without mutating guest memory.
+///
+/// # Safety
+/// `elf_ptr..elf_ptr+elf_len` must reference readable bytes in the current
+/// WASM linear memory for the duration of the call.
 pub unsafe fn inspect_elf(elf_ptr: u32, elf_len: u32, ram_size: u64) -> Result<ElfLoadResult, i32> {
     unsafe {
         if elf_len < 64 {
@@ -319,11 +322,21 @@ pub fn read_interp_path_bytes(elf: &[u8]) -> Result<Option<Vec<u8>>, i32> {
     Ok(None)
 }
 
+/// Read the `PT_INTERP` path from an ELF image when present.
+///
+/// # Safety
+/// `elf_ptr..elf_ptr+elf_len` must reference readable bytes in the current
+/// WASM linear memory for the duration of the call.
 pub unsafe fn read_interp_path(elf_ptr: u32, elf_len: u32) -> Result<Option<Vec<u8>>, i32> {
     let elf = unsafe { core::slice::from_raw_parts(elf_ptr as *const u8, elf_len as usize) };
     read_interp_path_bytes(elf)
 }
 
+/// Load an ELF image at the given guest RAM base using the provided load bias.
+///
+/// # Safety
+/// `elf_ptr..elf_ptr+elf_len` must be readable, and `ram_base..ram_base+ram_size`
+/// must be valid writable guest memory for every PT_LOAD segment selected.
 pub unsafe fn load_elf_at(
     ram_base: u32,
     ram_size: u64,
@@ -370,6 +383,10 @@ pub unsafe fn load_elf_at(
     }
 }
 
+/// Load an ELF image at load bias 0.
+///
+/// # Safety
+/// Inherits the safety requirements of [`load_elf_at`].
 pub unsafe fn load_elf(
     ram_base: u32,
     ram_size: u64,

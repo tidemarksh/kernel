@@ -174,16 +174,6 @@ fn dir_entries() -> &'static mut [DirEntry] {
     unsafe { core::slice::from_raw_parts_mut(h.dir_entries, MAX_INODES) }
 }
 
-fn data_slice() -> &'static [u8] {
-    let h = fs();
-    unsafe { core::slice::from_raw_parts(h.data, h.data_cap as usize) }
-}
-
-fn data_slice_mut() -> &'static mut [u8] {
-    let h = fs();
-    unsafe { core::slice::from_raw_parts_mut(h.data, h.data_cap as usize) }
-}
-
 /// Initialize MemFS. Allocates all data structures via alloc.rs.
 pub fn init() {
     unsafe {

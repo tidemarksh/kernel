@@ -118,12 +118,12 @@ pub fn init() {
 }
 
 /// Get the ProcessState from guest memory.
-unsafe fn get_process_state(base: u32, vm: &ThreadState) -> *mut ProcessState {
+fn get_process_state(base: u32, vm: &ThreadState) -> *mut ProcessState {
     (base as u64 + vm.process_ptr as u64) as *mut ProcessState
 }
 
 /// Get FD entry from ProcessState. Returns None if out of range or unused.
-unsafe fn get_fd_entry(base: u32, vm: &ThreadState, fd: u64) -> Option<&mut FdEntry> {
+unsafe fn get_fd_entry(base: u32, vm: &ThreadState, fd: u64) -> Option<*mut FdEntry> {
     if fd as usize >= MAX_FDS {
         return None;
     }
@@ -131,11 +131,13 @@ unsafe fn get_fd_entry(base: u32, vm: &ThreadState, fd: u64) -> Option<&mut FdEn
     if ps.is_null() {
         return None;
     }
-    let entry = &mut (*ps).fd_table[fd as usize];
-    if entry.ofd_id == 0 || entry.ofd_id as usize >= MAX_FDS {
-        return None;
+    unsafe {
+        let entry = core::ptr::addr_of_mut!((*ps).fd_table[fd as usize]);
+        if (*entry).ofd_id == 0 || (*entry).ofd_id as usize >= MAX_FDS {
+            return None;
+        }
+        Some(entry)
     }
-    Some(entry)
 }
 
 /// Find the lowest available FD >= min_fd.
@@ -144,9 +146,11 @@ unsafe fn find_free_fd(base: u32, vm: &ThreadState, min_fd: usize) -> Option<usi
     if ps.is_null() {
         return None;
     }
-    for i in min_fd..MAX_FDS {
-        if (*ps).fd_table[i].ofd_id == 0 {
-            return Some(i);
+    unsafe {
+        for i in min_fd..MAX_FDS {
+            if (*ps).fd_table[i].ofd_id == 0 {
+                return Some(i);
+            }
         }
     }
     None
@@ -156,9 +160,11 @@ unsafe fn process_has_ofd(ps: *const ProcessState, ofd_id: u32) -> bool {
     if ps.is_null() || ofd_id == 0 {
         return false;
     }
-    for entry in (*ps).fd_table.iter() {
-        if entry.ofd_id == ofd_id {
-            return true;
+    unsafe {
+        for entry in (*ps).fd_table.iter() {
+            if entry.ofd_id == ofd_id {
+                return true;
+            }
         }
     }
     false
@@ -579,7 +585,7 @@ fn flock_conflicts(held_mode: u32, requested_mode: u32) -> bool {
 pub fn sys_dup(vm: &mut ThreadState, base: u32, oldfd: u64) -> i64 {
     unsafe {
         let entry = match get_fd_entry(base, vm, oldfd) {
-            Some(e) => *e,
+            Some(entry) => *entry,
             None => return EBADF,
         };
         let newfd = match find_free_fd(base, vm, 0) {
@@ -606,7 +612,7 @@ pub fn sys_dup3(vm: &mut ThreadState, base: u32, oldfd: u64, newfd: u64, flags: 
         }
 
         let entry = match get_fd_entry(base, vm, oldfd) {
-            Some(e) => *e,
+            Some(entry) => *entry,
             None => return EBADF,
         };
 
@@ -644,7 +650,7 @@ pub fn sys_fcntl(vm: &mut ThreadState, base: u32, fd: u64, cmd: u64, arg: u64) -
         match cmd {
             F_DUPFD => {
                 let entry = match get_fd_entry(base, vm, fd) {
-                    Some(e) => *e,
+                    Some(entry) => *entry,
                     None => return EBADF,
                 };
                 let newfd = match find_free_fd(base, vm, arg as usize) {
@@ -660,7 +666,7 @@ pub fn sys_fcntl(vm: &mut ThreadState, base: u32, fd: u64, cmd: u64, arg: u64) -
             }
             F_DUPFD_CLOEXEC => {
                 let entry = match get_fd_entry(base, vm, fd) {
-                    Some(e) => *e,
+                    Some(entry) => *entry,
                     None => return EBADF,
                 };
                 let newfd = match find_free_fd(base, vm, arg as usize) {
@@ -675,31 +681,31 @@ pub fn sys_fcntl(vm: &mut ThreadState, base: u32, fd: u64, cmd: u64, arg: u64) -
                 newfd as i64
             }
             F_GETFD => match get_fd_entry(base, vm, fd) {
-                Some(e) => e.fd_flags as i64,
+                Some(entry) => (*entry).fd_flags as i64,
                 None => EBADF,
             },
             F_SETFD => match get_fd_entry(base, vm, fd) {
-                Some(e) => {
-                    e.fd_flags = arg as u32 & FD_CLOEXEC;
+                Some(entry) => {
+                    (*entry).fd_flags = arg as u32 & FD_CLOEXEC;
                     0
                 }
                 None => EBADF,
             },
             F_GETFL => {
                 let entry = match get_fd_entry(base, vm, fd) {
-                    Some(e) => e,
+                    Some(entry) => entry,
                     None => return EBADF,
                 };
-                ofd_table()[entry.ofd_id as usize].status_flags as i64
+                ofd_table()[(*entry).ofd_id as usize].status_flags as i64
             }
             F_SETFL => {
                 let entry = match get_fd_entry(base, vm, fd) {
-                    Some(e) => e,
+                    Some(entry) => entry,
                     None => return EBADF,
                 };
                 // Only O_APPEND, O_NONBLOCK, O_DSYNC, O_ASYNC can be changed
                 let changeable = O_APPEND | O_NONBLOCK;
-                let ofd = &mut ofd_table()[entry.ofd_id as usize];
+                let ofd = &mut ofd_table()[(*entry).ofd_id as usize];
                 ofd.status_flags = (ofd.status_flags & !changeable) | (arg as i32 & changeable);
                 0
             }
@@ -715,7 +721,7 @@ pub fn sys_fcntl(vm: &mut ThreadState, base: u32, fd: u64, cmd: u64, arg: u64) -
 pub fn sys_flock(vm: &mut ThreadState, base: u32, fd: u64, operation: u64) -> i64 {
     unsafe {
         let entry = match get_fd_entry(base, vm, fd) {
-            Some(e) => *e,
+            Some(entry) => *entry,
             None => return EBADF,
         };
         let request = match parse_flock_request(operation) {
@@ -830,7 +836,7 @@ pub fn open_file(vm: &mut ThreadState, base: u32, ino: u32, flags: i32) -> i64 {
 pub fn get_ofd(base: u32, vm: &ThreadState, fd: u64) -> Option<OpenFileDesc> {
     unsafe {
         let entry = get_fd_entry(base, vm, fd)?;
-        let ofd = &ofd_table()[entry.ofd_id as usize];
+        let ofd = &ofd_table()[(*entry).ofd_id as usize];
         Some(*ofd)
     }
 }
@@ -839,7 +845,7 @@ pub fn get_ofd(base: u32, vm: &ThreadState, fd: u64) -> Option<OpenFileDesc> {
 pub fn get_ofd_id(base: u32, vm: &ThreadState, fd: u64) -> Option<u32> {
     unsafe {
         let entry = get_fd_entry(base, vm, fd)?;
-        Some(entry.ofd_id)
+        Some((*entry).ofd_id)
     }
 }
 
@@ -848,13 +854,11 @@ pub fn get_ofd_by_id(ofd_id: u32) -> Option<OpenFileDesc> {
     if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
         return None;
     }
-    unsafe {
-        let ofd = &ofd_table()[ofd_id as usize];
-        if ofd.fd_type == FD_TYPE_NONE {
-            return None;
-        }
-        Some(*ofd)
+    let ofd = &ofd_table()[ofd_id as usize];
+    if ofd.fd_type == FD_TYPE_NONE {
+        return None;
     }
+    Some(*ofd)
 }
 
 /// Increment OFD refcounts for every distinct OFD held by the process.
@@ -934,7 +938,7 @@ pub fn close_all_for_process_without_backend_cleanup(base: u32, vm: &ThreadState
 pub fn get_offset(base: u32, vm: &ThreadState, fd: u64) -> u64 {
     unsafe {
         if let Some(entry) = get_fd_entry(base, vm, fd) {
-            ofd_table()[entry.ofd_id as usize].offset as u64
+            ofd_table()[(*entry).ofd_id as usize].offset as u64
         } else {
             0
         }
@@ -945,7 +949,7 @@ pub fn get_offset(base: u32, vm: &ThreadState, fd: u64) -> u64 {
 pub fn advance_offset(base: u32, vm: &ThreadState, fd: u64, delta: u64) {
     unsafe {
         if let Some(entry) = get_fd_entry(base, vm, fd) {
-            ofd_table()[entry.ofd_id as usize].offset += delta as i64;
+            ofd_table()[(*entry).ofd_id as usize].offset += delta as i64;
         }
     }
 }
@@ -954,7 +958,7 @@ pub fn advance_offset(base: u32, vm: &ThreadState, fd: u64, delta: u64) {
 pub fn set_offset(base: u32, vm: &ThreadState, fd: u64, offset: u64) {
     unsafe {
         if let Some(entry) = get_fd_entry(base, vm, fd) {
-            ofd_table()[entry.ofd_id as usize].offset = offset as i64;
+            ofd_table()[(*entry).ofd_id as usize].offset = offset as i64;
         }
     }
 }
@@ -964,6 +968,9 @@ pub fn set_offset(base: u32, vm: &ThreadState, fd: u64, offset: u64) {
 /// Runtime owns the hidden peer ends:
 /// - stdin: runtime writes, guest reads
 /// - stdout/stderr: guest writes, runtime reads
+///
+/// # Safety
+/// `base` and `vm.process_ptr` must describe a valid writable guest `ProcessState`.
 pub unsafe fn init_stdio(base: u32, vm: &mut ThreadState) {
     let ps = get_process_state(base, vm);
     if ps.is_null() {
@@ -993,7 +1000,9 @@ pub unsafe fn init_stdio(base: u32, vm: &mut ThreadState) {
         return;
     }
 
-    (*ps).stdin_pipe_slot = stdin_slot;
-    (*ps).stdout_pipe_slot = stdout_slot;
-    (*ps).stderr_pipe_slot = stderr_slot;
+    unsafe {
+        (*ps).stdin_pipe_slot = stdin_slot;
+        (*ps).stdout_pipe_slot = stdout_slot;
+        (*ps).stderr_pipe_slot = stderr_slot;
+    }
 }

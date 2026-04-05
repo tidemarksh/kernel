@@ -3,6 +3,7 @@
 //! All guest memory reads/writes go through this module.
 //! Seqlock: when thread_count > 1, stores bump a generation counter
 //! for LR/SC reservation invalidation. When thread_count == 1, plain writes.
+#![allow(clippy::missing_safety_doc)]
 
 use core::sync::atomic::{AtomicU32, Ordering};
 

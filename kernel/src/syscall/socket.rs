@@ -436,7 +436,7 @@ pub fn sys_bind(vm: &mut ThreadState, base: u32, fd: u64, addr: u64, addrlen: u6
     };
 
     let len = addrlen as usize;
-    if len < 2 || len > SOCKADDR_STORAGE_LEN {
+    if !(2..=SOCKADDR_STORAGE_LEN).contains(&len) {
         return EINVAL;
     }
 
@@ -495,7 +495,7 @@ pub fn sys_connect(vm: &mut ThreadState, base: u32, fd: u64, addr: u64, addrlen:
     };
 
     let len = addrlen as usize;
-    if len < 2 || len > SOCKADDR_STORAGE_LEN {
+    if !(2..=SOCKADDR_STORAGE_LEN).contains(&len) {
         return EINVAL;
     }
 
@@ -626,6 +626,7 @@ pub fn sys_accept4(
 // =========================================================================
 
 /// sendto(fd, buf, len, flags, dest_addr, addrlen) -> STATUS_SOCKET_SEND
+#[allow(clippy::too_many_arguments)]
 pub fn sys_sendto(
     vm: &mut ThreadState,
     base: u32,
@@ -681,6 +682,7 @@ pub fn sys_sendto(
 // =========================================================================
 
 /// recvfrom(fd, buf, len, flags, src_addr, addrlen) -> EAGAIN or STATUS_SOCKET_RECV
+#[allow(clippy::too_many_arguments)]
 pub fn sys_recvfrom(
     vm: &mut ThreadState,
     base: u32,
@@ -1187,7 +1189,6 @@ pub fn sys_getpeername(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::abi::*;
     use crate::harness::TestVm;
 
     #[test]

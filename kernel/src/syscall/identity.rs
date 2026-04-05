@@ -59,16 +59,16 @@ fn can_change_uid(vm: &ThreadState, uid: Option<u32>, euid: Option<u32>) -> bool
     if vm.euid == 0 {
         return true;
     }
-    uid.map_or(true, |id| id == vm.uid || id == vm.euid)
-        && euid.map_or(true, |id| id == vm.uid || id == vm.euid)
+    uid.is_none_or(|id| id == vm.uid || id == vm.euid)
+        && euid.is_none_or(|id| id == vm.uid || id == vm.euid)
 }
 
 fn can_change_gid(vm: &ThreadState, gid: Option<u32>, egid: Option<u32>) -> bool {
     if vm.euid == 0 {
         return true;
     }
-    gid.map_or(true, |id| id == vm.gid || id == vm.egid)
-        && egid.map_or(true, |id| id == vm.gid || id == vm.egid)
+    gid.is_none_or(|id| id == vm.gid || id == vm.egid)
+        && egid.is_none_or(|id| id == vm.gid || id == vm.egid)
 }
 
 /// getpid: return process ID from ProcessState in guest Memory.

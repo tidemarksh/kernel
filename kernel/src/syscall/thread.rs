@@ -58,19 +58,20 @@ pub fn init() {
     // so there is no thread subsystem global state to reset here.
 }
 
-unsafe fn process_state(base: u32, vm: &ThreadState) -> Option<&mut ProcessState> {
-    if vm.process_ptr == 0 {
+fn process_state_ptr(base: u32, process_ptr: u32) -> Option<*mut ProcessState> {
+    if process_ptr == 0 {
         return None;
     }
-    Some(&mut *((base as u64 + vm.process_ptr as u64) as *mut ProcessState))
+    Some((base as u64 + process_ptr as u64) as *mut ProcessState)
 }
 
-unsafe fn thread_record(vm: &ThreadState, base: u32) -> Option<&mut ThreadRecord> {
-    if vm.tid <= 0 || vm.tid as usize > MAX_THREADS {
+fn thread_record_ptr(base: u32, process_ptr: u32, tid: i32) -> Option<*mut ThreadRecord> {
+    if tid <= 0 || tid as usize > MAX_THREADS {
         return None;
     }
-    let ps = process_state(base, vm)?;
-    Some(&mut ps.threads[(vm.tid - 1) as usize])
+    let ps = process_state_ptr(base, process_ptr)?;
+    let thread_index = (tid - 1) as usize;
+    unsafe { Some(core::ptr::addr_of_mut!((*ps).threads[thread_index])) }
 }
 
 fn thread_state_from_record_ptr(thread_ptr: u32) -> Option<*mut ThreadState> {
@@ -253,37 +254,36 @@ fn cleanup_robust_futexes(process_ptr: u32, base: u32, owner_tid: u32, robust_he
 }
 
 fn decrement_thread_count(vm: &ThreadState, base: u32) -> u32 {
+    let Some(ps) = process_state_ptr(base, vm.process_ptr) else {
+        return 0;
+    };
     unsafe {
-        match process_state(base, vm) {
-            Some(ps) => {
-                let before = ps
-                    .thread_count
-                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-                        Some(count.saturating_sub(1))
-                    })
-                    .unwrap_or(0);
-                let after = before.saturating_sub(1);
-                crate::harness_debug::record_thread_count(
-                    THREAD_COUNT_TRACE_EXIT_DEC,
-                    vm as *const ThreadState as u32,
-                    vm.tid,
-                    vm.process_ptr,
-                    before,
-                    after,
-                );
-                after
-            }
-            None => 0,
-        }
+        let before = (*ps)
+            .thread_count
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                Some(count.saturating_sub(1))
+            })
+            .unwrap_or(0);
+        let after = before.saturating_sub(1);
+        crate::harness_debug::record_thread_count(
+            THREAD_COUNT_TRACE_EXIT_DEC,
+            vm as *const ThreadState as u32,
+            vm.tid,
+            vm.process_ptr,
+            before,
+            after,
+        );
+        after
     }
 }
 
 pub fn init_main_thread(vm_ptr: u32, base: u32) {
     unsafe {
         let vm = &*(vm_ptr as *const ThreadState);
-        let Some(ps) = process_state(base, vm) else {
+        let Some(ps) = process_state_ptr(base, vm.process_ptr) else {
             return;
         };
+        let ps = &mut *ps;
 
         let before = ps.thread_count.load(Ordering::Acquire);
         ps.thread_count.store(1, Ordering::Release);
@@ -315,9 +315,10 @@ pub fn init_main_thread(vm_ptr: u32, base: u32) {
 
 pub fn discard_other_threads_for_exec(vm: &ThreadState, base: u32) -> u32 {
     unsafe {
-        let Some(ps) = process_state(base, vm) else {
+        let Some(ps) = process_state_ptr(base, vm.process_ptr) else {
             return 0;
         };
+        let ps = &mut *ps;
         let current_idx = if vm.tid > 0 && vm.tid as usize <= MAX_THREADS {
             Some((vm.tid - 1) as usize)
         } else {
@@ -410,11 +411,11 @@ pub fn sys_exit(vm: &mut ThreadState, base: u32, exit_code: u64) -> i32 {
     }
 
     unsafe {
-        if let Some(record) = thread_record(vm, base) {
-            record.state = THREAD_EXITING;
-            record.blocked_addr = 0;
-            record.thread_ptr = 0;
-            record.clear_child_tid = vm.clear_child_tid as u32;
+        if let Some(record) = thread_record_ptr(base, vm.process_ptr, vm.tid) {
+            (*record).state = THREAD_EXITING;
+            (*record).blocked_addr = 0;
+            (*record).thread_ptr = 0;
+            (*record).clear_child_tid = vm.clear_child_tid as u32;
         }
     }
     cleanup_robust_futexes(vm.process_ptr, base, vm.tid as u32, vm.robust_list_head);
@@ -434,7 +435,7 @@ pub fn sys_exit(vm: &mut ThreadState, base: u32, exit_code: u64) -> i32 {
     }
 
     unsafe {
-        if let Some(record) = thread_record(vm, base) {
+        if let Some(record) = thread_record_ptr(base, vm.process_ptr, vm.tid) {
             *record = ThreadRecord::empty();
         }
     }
@@ -544,10 +545,10 @@ pub fn sys_clone(
         }
 
         unsafe {
-            let Some(ps) = process_state(base, vm) else {
+            let Some(ps) = process_state_ptr(base, vm.process_ptr) else {
                 return ESRCH;
             };
-            let before = ps.thread_count.fetch_add(1, Ordering::AcqRel);
+            let before = (*ps).thread_count.fetch_add(1, Ordering::AcqRel);
             crate::harness_debug::record_thread_count(
                 THREAD_COUNT_TRACE_CLONE_INC,
                 vm as *const ThreadState as u32,
@@ -559,7 +560,7 @@ pub fn sys_clone(
         }
 
         // Write child TID to parent_tidptr if CLONE_PARENT_SETTID
-        if clone_flags & CLONE_PARENT_SETTID as u64 != 0 && parent_tidptr != 0 {
+        if clone_flags & CLONE_PARENT_SETTID != 0 && parent_tidptr != 0 {
             unsafe { guest_mem::write_u32(base, parent_tidptr, new_tid as u32) };
         }
 
@@ -603,12 +604,10 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
             return 0;
         }
 
-        let child_ptr = unsafe {
-            crate::alloc::alloc_zeroed(
-                core::mem::size_of::<ThreadState>() as u32,
-                core::mem::align_of::<ThreadState>() as u32,
-            )
-        };
+        let child_ptr = crate::alloc::alloc_zeroed(
+            core::mem::size_of::<ThreadState>() as u32,
+            core::mem::align_of::<ThreadState>() as u32,
+        );
         if child_ptr == 0 {
             return 0;
         }
@@ -708,8 +707,8 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
 pub fn process_thread_count(vm_ptr: u32, base: u32) -> u32 {
     unsafe {
         let vm = &*(vm_ptr as *const ThreadState);
-        match process_state(base, vm) {
-            Some(ps) => ps.thread_count.load(Ordering::Acquire),
+        match process_state_ptr(base, vm.process_ptr) {
+            Some(ps) => (*ps).thread_count.load(Ordering::Acquire),
             None => 0,
         }
     }
@@ -722,20 +721,20 @@ pub fn thread_record_blocked_addr(vm: &ThreadState, base: u32) -> u32 {
         if vm.tid <= 0 || vm.tid as usize > MAX_THREADS {
             return u32::MAX;
         }
-        let Some(ps) = process_state(base, vm) else {
+        let Some(ps) = process_state_ptr(base, vm.process_ptr) else {
             return u32::MAX;
         };
-        ps.threads[(vm.tid - 1) as usize].blocked_addr
+        (*ps).threads[(vm.tid - 1) as usize].blocked_addr
     }
 }
 
 /// Allocate a new thread ID. Simple increment based on thread registry.
 fn allocate_tid(vm: &ThreadState, base: u32) -> i32 {
     unsafe {
-        let Some(ps) = process_state(base, vm) else {
+        let Some(ps) = process_state_ptr(base, vm.process_ptr) else {
             return -1;
         };
-        for (i, record) in ps.threads.iter_mut().enumerate() {
+        for (i, record) in (*ps).threads.iter_mut().enumerate() {
             if record.state == THREAD_NONE || record.state == THREAD_DEAD {
                 let tid = (i + 1) as i32;
                 *record = ThreadRecord::new(tid, crate::types::THREAD_STARTING, 0, 0, 0);
@@ -750,6 +749,7 @@ fn allocate_tid(vm: &ThreadState, base: u32) -> i32 {
 /// FUTEX_WAIT: if *addr == val, block (return STATUS_FUTEX_WAIT for TS to Atomics.wait)
 /// FUTEX_WAKE: wake up to `val` waiters on addr (return count woken)
 /// https://man7.org/linux/man-pages/man2/futex.2.html
+#[allow(clippy::too_many_arguments)]
 pub fn sys_futex(
     vm: &mut ThreadState,
     base: u32,
@@ -778,10 +778,10 @@ pub fn sys_futex(
                 return EAGAIN;
             }
             unsafe {
-                if let Some(record) = thread_record(vm, base) {
-                    record.state = THREAD_BLOCKED_FUTEX;
-                    record.blocked_addr = addr as u32;
-                    record.clear_child_tid = vm.clear_child_tid as u32;
+                if let Some(record) = thread_record_ptr(base, vm.process_ptr, vm.tid) {
+                    (*record).state = THREAD_BLOCKED_FUTEX;
+                    (*record).blocked_addr = addr as u32;
+                    (*record).clear_child_tid = vm.clear_child_tid as u32;
                 }
             }
             vm.futex_wait_addr = addr;
@@ -791,7 +791,7 @@ pub fn sys_futex(
             // Value matches — block. Return STATUS_FUTEX_WAIT for TS to Atomics.wait.
             vm.x[10] = addr; // stash addr for TS
             vm.status = STATUS_FUTEX_WAIT;
-            return 0;
+            0
         }
         FUTEX_WAKE | FUTEX_WAKE_BITSET => {
             let wake_bitset = if futex_op == FUTEX_WAKE_BITSET {
@@ -817,7 +817,7 @@ pub fn sys_futex(
             );
             #[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
             let external = 0u32;
-            return (local + external) as i64;
+            (local + external) as i64
         }
         FUTEX_CMP_REQUEUE => {
             if (val as i64) < 0 || (timeout_or_requeue as i64) < 0 {
@@ -873,13 +873,13 @@ pub fn resume_futex_wait(vm: &mut ThreadState, base: u32) {
 
 pub fn resume_futex_wait_result(vm: &mut ThreadState, base: u32, result: i64) {
     unsafe {
-        if let Some(record) = thread_record(vm, base) {
-            if record.state == THREAD_BLOCKED_FUTEX {
-                record.state = THREAD_RUNNING;
-                record.blocked_addr = 0;
-                record.clear_child_tid = vm.clear_child_tid as u32;
+        if let Some(record) = thread_record_ptr(base, vm.process_ptr, vm.tid)
+            && (*record).state == THREAD_BLOCKED_FUTEX
+        {
+            (*record).state = THREAD_RUNNING;
+            (*record).blocked_addr = 0;
+            (*record).clear_child_tid = vm.clear_child_tid as u32;
             }
-        }
     }
     vm.futex_wait_addr = 0;
     vm.futex_wait_timeout = 0;

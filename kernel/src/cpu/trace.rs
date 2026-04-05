@@ -74,6 +74,12 @@ impl TraceBuffer {
     }
 }
 
+impl Default for TraceBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Hot count table for backward branch targets.
 /// Indexed by (pc >> 1) & (HOT_TABLE_SIZE - 1).
 pub struct HotCounts {
@@ -112,6 +118,12 @@ impl HotCounts {
     }
 }
 
+impl Default for HotCounts {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// JIT readiness bitmap. Set by JS when a compiled module is available.
 pub struct JitBitmap {
     bits: [u8; HOT_TABLE_SIZE / 8],
@@ -137,6 +149,12 @@ impl JitBitmap {
 
     pub fn clear(&mut self) {
         self.bits = [0; HOT_TABLE_SIZE / 8];
+    }
+}
+
+impl Default for JitBitmap {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

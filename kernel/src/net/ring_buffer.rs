@@ -158,9 +158,9 @@ pub fn write(idx: u32, data: &[u8]) -> usize {
     let to_write = data.len().min(free);
     let dp = data_ptr(addr);
 
-    for i in 0..to_write {
+    for (i, byte) in data.iter().enumerate().take(to_write) {
         unsafe {
-            *dp.add((tail + i) % cap) = data[i];
+            *dp.add((tail + i) % cap) = *byte;
         }
     }
     set_tail(addr, ((tail + to_write) % cap) as u32);
@@ -187,8 +187,8 @@ pub fn read(idx: u32, buf: &mut [u8]) -> usize {
     let to_read = buf.len().min(avail);
     let dp = data_ptr(addr);
 
-    for i in 0..to_read {
-        buf[i] = unsafe { *dp.add((head + i) % cap) };
+    for (i, slot) in buf.iter_mut().enumerate().take(to_read) {
+        *slot = unsafe { *dp.add((head + i) % cap) };
     }
     set_head(addr, ((head + to_read) % cap) as u32);
 

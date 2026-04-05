@@ -1788,11 +1788,11 @@ pub extern "C" fn process_fd_flags(vm_ptr: u32, fd: u32) -> u32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn process_set_fd_entry(vm_ptr: u32, fd: u32, ofd_id: u32, fd_flags: u32) {
-    if let Some(ps) = process_state_from_vm(vm_ptr) {
-        if let Some(entry) = ps.fd_table.get_mut(fd as usize) {
-            entry.ofd_id = ofd_id;
-            entry.fd_flags = fd_flags;
-        }
+    if let Some(ps) = process_state_from_vm(vm_ptr)
+        && let Some(entry) = ps.fd_table.get_mut(fd as usize)
+    {
+        entry.ofd_id = ofd_id;
+        entry.fd_flags = fd_flags;
     }
 }
 

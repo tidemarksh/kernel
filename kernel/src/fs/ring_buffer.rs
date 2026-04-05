@@ -81,6 +81,7 @@ pub struct FsRequestInfo {
 /// In the current single-instance model, this is a no-op placeholder.
 /// The actual Atomics-based submit will be used when thread-worker
 /// and kernel Worker are separate WASM instances.
+#[allow(clippy::too_many_arguments)]
 pub fn submit_request(
     ring_base: u32,
     opcode: u32,

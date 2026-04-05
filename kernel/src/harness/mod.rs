@@ -41,6 +41,12 @@ pub struct TestVm {
     pub memfs: MemfsHelper,
 }
 
+/// Reset all kernel-owned state for a fresh harness instance.
+///
+/// # Safety
+/// The caller must ensure any previous guest/kernel state in the current WASM
+/// instance is no longer in use before resetting allocator, memory, and kernel
+/// subsystems in place.
 pub unsafe fn reset_state(heap_base: u32, brk_start: u64) {
     unsafe {
         crate::guest_mem::init(core::ptr::null(), core::ptr::null(), core::ptr::null());
@@ -67,6 +73,11 @@ pub unsafe fn reset_state(heap_base: u32, brk_start: u64) {
     fs::memfs::init();
 }
 
+/// Reset kernel-owned state using the default harness memory layout.
+///
+/// # Safety
+/// Equivalent to [`reset_state`] and inherits the same requirement that no
+/// live state from a previous harness instance is still being used.
 pub unsafe fn reset_default_state() {
     let heap_base = DEFAULT_GUEST_BASE_PADDING
         .saturating_add(DEFAULT_GUEST_RAM_SIZE)
@@ -93,7 +104,7 @@ impl TestVm {
                 base
             };
             let target_bytes = (base as u64).saturating_add(DEFAULT_GUEST_RAM_SIZE as u64);
-            let target_pages = ((target_bytes + 65535) / 65536) as usize;
+            let target_pages = target_bytes.div_ceil(65536) as usize;
             let target_pages = target_pages.max(DEFAULT_MEMORY_PAGES);
             if current_pages < target_pages {
                 let grown = core::arch::wasm32::memory_grow(0, target_pages - current_pages);
@@ -286,6 +297,12 @@ impl TestVm {
 
     pub fn sys_flock(&mut self, fd: u64, operation: u64) -> i64 {
         fs::fd_table::sys_flock(&mut self.vm, self.base, fd, operation)
+    }
+}
+
+impl Default for TestVm {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

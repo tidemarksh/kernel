@@ -298,7 +298,6 @@ pub const MAX_SIGNALS: usize = 64;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::abi::*;
 
     #[test]
     fn thread_state_layout() {

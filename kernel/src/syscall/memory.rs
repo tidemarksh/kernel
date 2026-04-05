@@ -57,6 +57,7 @@ struct ProcMapsEntry {
 
 /// Internal snapshot of address space state used by plain-fork handoff support.
 #[derive(Clone)]
+#[allow(dead_code)]
 pub(crate) struct AddressSpaceSnapshot {
     vmas: Vec<Vma>,
     brk_base: u64,
@@ -66,6 +67,7 @@ pub(crate) struct AddressSpaceSnapshot {
 }
 
 impl AddressSpaceSnapshot {
+    #[allow(dead_code)]
     pub(crate) fn vmas(&self) -> &[Vma] {
         &self.vmas
     }
@@ -136,6 +138,7 @@ pub fn has_prot_none() -> bool {
     ms().has_prot_none != 0
 }
 
+#[allow(dead_code)]
 pub(crate) fn snapshot_for_plain_fork() -> AddressSpaceSnapshot {
     let s = ms();
     AddressSpaceSnapshot {
@@ -149,6 +152,7 @@ pub(crate) fn snapshot_for_plain_fork() -> AddressSpaceSnapshot {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn restore_after_plain_fork(snapshot: &AddressSpaceSnapshot) {
     let s = ms();
     s.vmas = snapshot.vmas.clone();
@@ -287,7 +291,7 @@ fn ensure_memory_capacity_for_guest_range(base: u32, guest_end: u64) -> bool {
 
     let deficit = needed - mem_size;
     let grow_unit = 16u64 * 65536; // 1 MB
-    let grow_bytes = ((deficit + grow_unit - 1) / grow_unit) * grow_unit;
+    let grow_bytes = deficit.div_ceil(grow_unit) * grow_unit;
     let pages = (grow_bytes / 65536) as usize;
     core::arch::wasm32::memory_grow(0, pages as usize) != usize::MAX
 }
@@ -538,6 +542,7 @@ pub fn sys_brk(_vm: &mut ThreadState, base: u32, addr: u64) -> i64 {
 /// mmap: map pages into the guest address space.
 /// Supports MAP_ANONYMOUS and MAP_PRIVATE file-backed (eager populate).
 /// MAP_FIXED removes overlapping VMAs. WASM memory.grow on demand.
+#[allow(clippy::too_many_arguments)]
 pub fn sys_mmap(
     vm: &mut ThreadState,
     base: u32,
@@ -609,10 +614,8 @@ pub fn sys_mmap(
     let needs_materialization = !is_anon || prot as i32 != PROT_NONE;
     if needs_materialization {
         // PROT_NONE reservations do not require backing linear-memory pages yet.
-        unsafe {
-            if !ensure_memory_capacity_for_guest_range(base, start + len) {
-                return ENOMEM;
-            }
+        if !ensure_memory_capacity_for_guest_range(base, start + len) {
+            return ENOMEM;
         }
     }
 
@@ -634,7 +637,7 @@ pub fn sys_mmap(
         unsafe {
             guest_mem::zero_mem(base, start, len as usize);
         }
-        if let Some(st) = memfs::stat(backing_ino as u32) {
+        if let Some(st) = memfs::stat(backing_ino) {
             let file_size = st.size;
             let copy_start = offset.min(file_size);
             let copy_end = (offset + len).min(file_size);
@@ -645,7 +648,7 @@ pub fn sys_mmap(
                 while off < copy_len {
                     let chunk = (copy_len - off).min(tmp.len());
                     let n = memfs::read_file(
-                        backing_ino as u32,
+                        backing_ino,
                         copy_start + off as u64,
                         &mut tmp[..chunk],
                     );

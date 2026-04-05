@@ -36,7 +36,6 @@ const OFF_HEAD: u32 = 0;
 const OFF_TAIL: u32 = 4;
 const OFF_READ_OPEN: u32 = 8;
 const OFF_WRITE_OPEN: u32 = 12;
-const OFF_NOTIFY: u32 = 16;
 const OFF_DATA: u32 = 32;
 
 /// SAB page cache base address for pipe slots.
@@ -205,8 +204,8 @@ pub fn pipe_read(pipe_idx: u32, buf: &mut [u8]) -> i64 {
     let h = head as usize;
     let dp = data_ptr(addr);
 
-    for i in 0..to_read {
-        buf[i] = unsafe { *dp.add((h + i) % cap) };
+    for (i, slot) in buf.iter_mut().enumerate().take(to_read) {
+        *slot = unsafe { *dp.add((h + i) % cap) };
     }
     head_ptr(addr).store(((h + to_read) % cap) as u32, Ordering::Release);
 
@@ -238,9 +237,9 @@ pub fn pipe_write(pipe_idx: u32, data: &[u8]) -> i64 {
     let to_write = data.len().min(free);
     let dp = data_ptr(addr);
 
-    for i in 0..to_write {
+    for (i, byte) in data.iter().enumerate().take(to_write) {
         unsafe {
-            *dp.add((tail + i) % cap) = data[i];
+            *dp.add((tail + i) % cap) = *byte;
         }
     }
     tail_ptr(addr).store(((tail + to_write) % cap) as u32, Ordering::Release);
@@ -249,9 +248,9 @@ pub fn pipe_write(pipe_idx: u32, data: &[u8]) -> i64 {
 }
 
 /// Peek at pipe state without consuming data. Returns:
-///   > 0: number of bytes available to read
-///   0:   EOF (write end closed, no data)
-///   EAGAIN: empty but write end still open (would block)
+/// - `> 0`: number of bytes available to read
+/// - `0`: EOF (write end closed, no data)
+/// - `EAGAIN`: empty but write end still open (would block)
 pub fn pipe_peek(pipe_idx: u32) -> i64 {
     let addr = slot_addr(pipe_idx);
     let head = head_ptr(addr).load(Ordering::Acquire);

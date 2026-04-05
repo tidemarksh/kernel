@@ -242,6 +242,7 @@ pub fn last_zero_reg_trace() -> (u64, u32, u32, u64, u64, u64) {
 }
 
 #[inline(always)]
+#[allow(clippy::too_many_arguments)]
 fn note_special_reg_transitions(
     tid: i32,
     pc: u64,
@@ -366,6 +367,7 @@ fn guest_range_in_bounds(base: u32, addr: u64, len: u64) -> bool {
 }
 
 #[inline(always)]
+#[allow(clippy::too_many_arguments)]
 unsafe fn deliver_sync_sigsegv(
     vm: &mut ThreadState,
     x: &mut [u64; 32],
@@ -402,22 +404,12 @@ unsafe fn deliver_sync_sigsegv(
 pub unsafe fn exec(
     vm: &mut ThreadState,
     budget: i32,
-    mut cache: Option<&mut BlockCache>,
-    mut hot_counts: Option<&mut HotCounts>,
+    cache: Option<&mut BlockCache>,
+    hot_counts: Option<&mut HotCounts>,
     jit_bitmap: Option<&JitBitmap>,
-    mut trace_buf: Option<&mut TraceBuffer>,
+    trace_buf: Option<&mut TraceBuffer>,
 ) -> i32 {
-    unsafe {
-        exec_at_base(
-            vm,
-            budget,
-            ram_base(vm),
-            cache,
-            hot_counts,
-            jit_bitmap,
-            trace_buf,
-        )
-    }
+    unsafe { exec_at_base(vm, budget, ram_base(vm), cache, hot_counts, jit_bitmap, trace_buf) }
 }
 
 /// Execute up to `budget` guest instructions from a caller-specified RAM base.
@@ -541,18 +533,17 @@ pub unsafe fn exec_at_base(
             };
 
             // --- Trace recording (JIT the JIT compiler hook) ---
-            if let Some(ref mut tb) = trace_buf {
-                if tb.recording != 0 {
-                    if tb.record(pc, raw, step as u32) {
-                        // Buffer full → stop recording, signal trace ready
-                        tb.stop();
-                        vm.x = x;
-                        vm.f = f;
-                        vm.pc = pc;
-                        vm.status = abi::STATUS_JIT_READY;
-                        return remaining;
-                    }
-                }
+            if let Some(ref mut tb) = trace_buf
+                && tb.recording != 0
+                && tb.record(pc, raw, step as u32)
+            {
+                // Buffer full → stop recording, signal trace ready
+                tb.stop();
+                vm.x = x;
+                vm.f = f;
+                vm.pc = pc;
+                vm.status = abi::STATUS_JIT_READY;
+                return remaining;
             }
 
             let opcode = decode::opcode(raw);
@@ -628,24 +619,22 @@ pub unsafe fn exec_at_base(
                         // Backward branch → hot count check + JIT hook
                         if imm < 0 {
                             // Check JIT bitmap
-                            if let Some(ref bm) = jit_bitmap {
-                                if bm.is_ready(target) {
-                                    vm.x = x;
-                                    vm.f = f;
-                                    vm.pc = target;
-                                    vm.status = abi::STATUS_JIT_READY;
-                                    return remaining;
-                                }
+                            if let Some(bm) = jit_bitmap
+                                && bm.is_ready(target)
+                            {
+                                vm.x = x;
+                                vm.f = f;
+                                vm.pc = target;
+                                vm.status = abi::STATUS_JIT_READY;
+                                return remaining;
                             }
                             // Hot count → start trace recording
-                            if let Some(ref mut hc) = hot_counts {
-                                if hc.increment(target) {
-                                    if let Some(ref mut tb) = trace_buf {
-                                        if tb.recording == 0 {
-                                            tb.start(target);
-                                        }
-                                    }
-                                }
+                            if let Some(ref mut hc) = hot_counts
+                                && hc.increment(target)
+                                && let Some(ref mut tb) = trace_buf
+                                && tb.recording == 0
+                            {
+                                tb.start(target);
                             }
                         }
                     } else {
@@ -670,18 +659,17 @@ pub unsafe fn exec_at_base(
                     pc = target;
 
                     // JALR return prediction (): rs1==ra (x1) → execute cached block
-                    if rs1v == 1 {
-                        if let Some(ref mut bc) = cache {
-                            if let Some(blk) = bc.get(target) {
-                                let cost = blk.total_budget as i32;
-                                if remaining >= cost {
-                                    let executed = exec_block(blk, &mut x, &mut pc, base, vm.tid);
-                                    if executed > 0 {
-                                        remaining -= executed;
-                                        x[0] = 0;
-                                        continue;
-                                    }
-                                }
+                    if rs1v == 1
+                        && let Some(ref mut bc) = cache
+                        && let Some(blk) = bc.get(target)
+                    {
+                        let cost = blk.total_budget as i32;
+                        if remaining >= cost {
+                            let executed = exec_block(blk, &mut x, &mut pc, base, vm.tid);
+                            if executed > 0 {
+                                remaining -= executed;
+                                x[0] = 0;
+                                continue;
                             }
                         }
                     }
@@ -905,20 +893,14 @@ unsafe fn exec_block(
                     let r = match f3 {
                         0 => v.wrapping_add(imm),
                         1 => (x[r1] << (imm & 0x3F)) as i64,
-                        2 => {
-                            if v < imm {
+                        2
+                            if v < imm => {
                                 1
-                            } else {
-                                0
                             }
-                        }
-                        3 => {
-                            if x[r1] < imm as u64 {
+                        3
+                            if x[r1] < imm as u64 => {
                                 1
-                            } else {
-                                0
                             }
-                        }
                         4 => v ^ imm,
                         5 => {
                             let sh = imm & 0x3F;
@@ -969,20 +951,14 @@ unsafe fn exec_block(
                             }
                         }
                         1 => v1 << (v2 & 0x3F),
-                        2 => {
-                            if (v1 as i64) < (v2 as i64) {
+                        2
+                            if (v1 as i64) < (v2 as i64) => {
                                 1
-                            } else {
-                                0
                             }
-                        }
-                        3 => {
-                            if v1 < v2 {
+                        3
+                            if v1 < v2 => {
                                 1
-                            } else {
-                                0
                             }
-                        }
                         4 => v1 ^ v2,
                         5 => {
                             if op.f7b5() {
@@ -1059,14 +1035,10 @@ unsafe fn exec_block(
                                 v1 / v2
                             }
                         }
-                        5 => {
-                            let (u1, u2) = (v1 as u32, v2 as u32);
-                            if u2 == 0 {
-                                u32::MAX as i32
-                            } else {
-                                (u1 / u2) as i32
-                            }
-                        }
+            5 => {
+                let (u1, u2) = (v1 as u32, v2 as u32);
+                u1.checked_div(u2).map_or(u32::MAX as i32, |q| q as i32)
+            }
                         6 => {
                             if v2 == 0 {
                                 v1
@@ -1236,216 +1208,192 @@ unsafe fn exec_block(
 
 #[inline(always)]
 unsafe fn exec_op_imm(x: &mut [u64; 32], raw: u32, pc: &mut u64, step: u64) {
-    unsafe {
-        let rd = decode::rd(raw);
-        let rs1 = decode::rs1(raw);
-        let imm = decode::imm_i(raw);
-        let v1 = x[rs1] as i64;
-        let result = match decode::funct3(raw) {
-            0 => v1.wrapping_add(imm),            // ADDI
-            1 => (x[rs1] << (imm & 0x3F)) as i64, // SLLI
-            2 => {
-                if v1 < imm {
-                    1
-                } else {
-                    0
-                }
+    let rd = decode::rd(raw);
+    let rs1 = decode::rs1(raw);
+    let imm = decode::imm_i(raw);
+    let v1 = x[rs1] as i64;
+    let result = match decode::funct3(raw) {
+        0 => v1.wrapping_add(imm),            // ADDI
+        1 => (x[rs1] << (imm & 0x3F)) as i64, // SLLI
+        2
+            if v1 < imm => {
+                1
             } // SLTI
-            3 => {
-                if (x[rs1]) < (imm as u64) {
-                    1
-                } else {
-                    0
-                }
+        3
+            if x[rs1] < imm as u64 => {
+                1
             } // SLTIU
-            4 => v1 ^ imm,                        // XORI
-            5 => {
-                let shamt = imm & 0x3F;
-                if (raw >> 30) & 1 != 0 {
-                    v1 >> shamt // SRAI
-                } else {
-                    (x[rs1] >> shamt) as i64 // SRLI
-                }
+        4 => v1 ^ imm, // XORI
+        5 => {
+            let shamt = imm & 0x3F;
+            if (raw >> 30) & 1 != 0 {
+                v1 >> shamt // SRAI
+            } else {
+                (x[rs1] >> shamt) as i64 // SRLI
             }
-            6 => v1 | imm, // ORI
-            7 => v1 & imm, // ANDI
-            _ => 0,
-        };
-        if rd != 0 {
-            x[rd] = result as u64;
         }
-        *pc += step;
+        6 => v1 | imm, // ORI
+        7 => v1 & imm, // ANDI
+        _ => 0,
+    };
+    if rd != 0 {
+        x[rd] = result as u64;
     }
+    *pc += step;
 }
 
 #[inline(always)]
 unsafe fn exec_op_imm_32(x: &mut [u64; 32], raw: u32, pc: &mut u64, step: u64) {
-    unsafe {
-        let rd = decode::rd(raw);
-        let rs1 = decode::rs1(raw);
-        let imm = decode::imm_i(raw);
-        let v1 = x[rs1] as i32;
-        let result: i32 = match decode::funct3(raw) {
-            0 => v1.wrapping_add(imm as i32), // ADDIW
-            1 => v1 << (imm & 0x1F),          // SLLIW
-            5 => {
-                let shamt = (imm & 0x1F) as u32;
-                if (raw >> 30) & 1 != 0 {
-                    v1 >> shamt // SRAIW
-                } else {
-                    ((v1 as u32) >> shamt) as i32 // SRLIW
-                }
+    let rd = decode::rd(raw);
+    let rs1 = decode::rs1(raw);
+    let imm = decode::imm_i(raw);
+    let v1 = x[rs1] as i32;
+    let result: i32 = match decode::funct3(raw) {
+        0 => v1.wrapping_add(imm as i32), // ADDIW
+        1 => v1 << (imm & 0x1F),          // SLLIW
+        5 => {
+            let shamt = (imm & 0x1F) as u32;
+            if (raw >> 30) & 1 != 0 {
+                v1 >> shamt // SRAIW
+            } else {
+                ((v1 as u32) >> shamt) as i32 // SRLIW
             }
-            _ => 0,
-        };
-        if rd != 0 {
-            x[rd] = result as i64 as u64;
         }
-        *pc += step;
+        _ => 0,
+    };
+    if rd != 0 {
+        x[rd] = result as i64 as u64;
     }
+    *pc += step;
 }
 
 #[inline(always)]
 unsafe fn exec_op(x: &mut [u64; 32], raw: u32, pc: &mut u64, step: u64) {
-    unsafe {
-        let rd = decode::rd(raw);
-        let rs1 = decode::rs1(raw);
-        let rs2 = decode::rs2(raw);
-        let f7 = decode::funct7(raw);
-        let v1 = x[rs1];
-        let v2 = x[rs2];
+    let rd = decode::rd(raw);
+    let rs1 = decode::rs1(raw);
+    let rs2 = decode::rs2(raw);
+    let f7 = decode::funct7(raw);
+    let v1 = x[rs1];
+    let v2 = x[rs2];
 
-        let result: u64 = if f7 == 1 {
-            // M extension
-            match decode::funct3(raw) {
-                0 => (v1 as i64).wrapping_mul(v2 as i64) as u64, // MUL
-                1 => mulh(v1 as i64, v2 as i64) as u64,          // MULH
-                2 => mulhsu(v1 as i64, v2) as u64,               // MULHSU
-                3 => mulhu(v1, v2),                              // MULHU
-                4 => div_i64(v1 as i64, v2 as i64) as u64,       // DIV
-                5 => divu_64(v1, v2),                            // DIVU
-                6 => rem_i64(v1 as i64, v2 as i64) as u64,       // REM
-                7 => remu_64(v1, v2),                            // REMU
-                _ => 0,
-            }
-        } else {
-            match decode::funct3(raw) {
-                0 => {
-                    if f7 == 0x20 {
-                        (v1 as i64).wrapping_sub(v2 as i64) as u64
-                    } else {
-                        v1.wrapping_add(v2)
-                    }
-                } // ADD/SUB
-                1 => v1 << (v2 & 0x3F), // SLL
-                2 => {
-                    if (v1 as i64) < (v2 as i64) {
-                        1
-                    } else {
-                        0
-                    }
-                } // SLT
-                3 => {
-                    if v1 < v2 {
-                        1
-                    } else {
-                        0
-                    }
-                } // SLTU
-                4 => v1 ^ v2,           // XOR
-                5 => {
-                    if f7 == 0x20 {
-                        ((v1 as i64) >> (v2 & 0x3F)) as u64
-                    } else {
-                        v1 >> (v2 & 0x3F)
-                    }
-                } // SRA/SRL
-                6 => v1 | v2,           // OR
-                7 => v1 & v2,           // AND
-                _ => 0,
-            }
-        };
-        if rd != 0 {
-            x[rd] = result;
+    let result: u64 = if f7 == 1 {
+        // M extension
+        match decode::funct3(raw) {
+            0 => (v1 as i64).wrapping_mul(v2 as i64) as u64, // MUL
+            1 => mulh(v1 as i64, v2 as i64) as u64,          // MULH
+            2 => mulhsu(v1 as i64, v2) as u64,               // MULHSU
+            3 => mulhu(v1, v2),                              // MULHU
+            4 => div_i64(v1 as i64, v2 as i64) as u64,       // DIV
+            5 => divu_64(v1, v2),                            // DIVU
+            6 => rem_i64(v1 as i64, v2 as i64) as u64,       // REM
+            7 => remu_64(v1, v2),                            // REMU
+            _ => 0,
         }
-        *pc += step;
+    } else {
+        match decode::funct3(raw) {
+            0 => {
+                if f7 == 0x20 {
+                    (v1 as i64).wrapping_sub(v2 as i64) as u64
+                } else {
+                    v1.wrapping_add(v2)
+                }
+            } // ADD/SUB
+            1 => v1 << (v2 & 0x3F), // SLL
+            2
+                if (v1 as i64) < (v2 as i64) => {
+                    1
+                } // SLT
+            3
+                if v1 < v2 => {
+                    1
+                } // SLTU
+            4 => v1 ^ v2, // XOR
+            5 => {
+                if f7 == 0x20 {
+                    ((v1 as i64) >> (v2 & 0x3F)) as u64
+                } else {
+                    v1 >> (v2 & 0x3F)
+                }
+            } // SRA/SRL
+            6 => v1 | v2, // OR
+            7 => v1 & v2, // AND
+            _ => 0,
+        }
+    };
+    if rd != 0 {
+        x[rd] = result;
     }
+    *pc += step;
 }
 
 #[inline(always)]
 unsafe fn exec_op_32(x: &mut [u64; 32], raw: u32, pc: &mut u64, step: u64) {
-    unsafe {
-        let rd = decode::rd(raw);
-        let rs1 = decode::rs1(raw);
-        let rs2 = decode::rs2(raw);
-        let f7 = decode::funct7(raw);
-        let v1 = x[rs1] as i32;
-        let v2 = x[rs2] as i32;
+    let rd = decode::rd(raw);
+    let rs1 = decode::rs1(raw);
+    let rs2 = decode::rs2(raw);
+    let f7 = decode::funct7(raw);
+    let v1 = x[rs1] as i32;
+    let v2 = x[rs2] as i32;
 
-        let result: i32 = if f7 == 1 {
-            match decode::funct3(raw) {
-                0 => v1.wrapping_mul(v2), // MULW
-                4 => {
-                    if v2 == 0 {
-                        -1
-                    } else if v1 == i32::MIN && v2 == -1 {
-                        v1
-                    } else {
-                        v1 / v2
-                    }
-                } // DIVW
-                5 => {
-                    let u1 = v1 as u32;
-                    let u2 = v2 as u32;
-                    if u2 == 0 {
-                        u32::MAX as i32
-                    } else {
-                        (u1 / u2) as i32
-                    }
-                } // DIVUW
-                6 => {
-                    if v2 == 0 {
-                        v1
-                    } else if v1 == i32::MIN && v2 == -1 {
-                        0
-                    } else {
-                        v1 % v2
-                    }
-                } // REMW
-                7 => {
-                    let u1 = v1 as u32;
-                    let u2 = v2 as u32;
-                    if u2 == 0 { v1 } else { (u1 % u2) as i32 }
-                } // REMUW
-                _ => 0,
-            }
-        } else {
-            match decode::funct3(raw) {
-                0 => {
-                    if f7 == 0x20 {
-                        v1.wrapping_sub(v2)
-                    } else {
-                        v1.wrapping_add(v2)
-                    }
+    let result: i32 = if f7 == 1 {
+        match decode::funct3(raw) {
+            0 => v1.wrapping_mul(v2), // MULW
+            4 => {
+                if v2 == 0 {
+                    -1
+                } else if v1 == i32::MIN && v2 == -1 {
+                    v1
+                } else {
+                    v1 / v2
                 }
-                1 => v1 << (v2 & 0x1F), // SLLW
-                5 => {
-                    if f7 == 0x20 {
-                        v1 >> (v2 & 0x1F)
-                    }
-                    // SRAW
-                    else {
-                        ((v1 as u32) >> (v2 as u32 & 0x1F)) as i32
-                    }
-                } // SRLW
-                _ => 0,
-            }
-        };
-        if rd != 0 {
-            x[rd] = result as i64 as u64;
+            } // DIVW
+            5 => {
+                let u1 = v1 as u32;
+                let u2 = v2 as u32;
+                u1.checked_div(u2).map_or(u32::MAX as i32, |q| q as i32)
+            } // DIVUW
+            6 => {
+                if v2 == 0 {
+                    v1
+                } else if v1 == i32::MIN && v2 == -1 {
+                    0
+                } else {
+                    v1 % v2
+                }
+            } // REMW
+            7 => {
+                let u1 = v1 as u32;
+                let u2 = v2 as u32;
+                if u2 == 0 { v1 } else { (u1 % u2) as i32 }
+            } // REMUW
+            _ => 0,
         }
-        *pc += step;
+    } else {
+        match decode::funct3(raw) {
+            0 => {
+                if f7 == 0x20 {
+                    v1.wrapping_sub(v2)
+                } else {
+                    v1.wrapping_add(v2)
+                }
+            }
+            1 => v1 << (v2 & 0x1F), // SLLW
+            5 => {
+                if f7 == 0x20 {
+                    v1 >> (v2 & 0x1F)
+                }
+                // SRAW
+                else {
+                    ((v1 as u32) >> (v2 as u32 & 0x1F)) as i32
+                }
+            } // SRLW
+            _ => 0,
+        }
+    };
+    if rd != 0 {
+        x[rd] = result as i64 as u64;
     }
+    *pc += step;
 }
 
 #[inline(always)]
@@ -1970,16 +1918,15 @@ unsafe fn exec_op_fp(
     step: u64,
     fcsr: &mut u32,
 ) {
-    unsafe {
-        let rd = decode::rd(raw);
-        let rs1 = decode::rs1(raw);
-        let rs2 = decode::rs2(raw);
-        let f7 = decode::funct7(raw);
-        let funct5 = f7 >> 2;
-        let fmt = f7 & 3;
-        let f3 = decode::funct3(raw);
+    let rd = decode::rd(raw);
+    let rs1 = decode::rs1(raw);
+    let rs2 = decode::rs2(raw);
+    let f7 = decode::funct7(raw);
+    let funct5 = f7 >> 2;
+    let fmt = f7 & 3;
+    let f3 = decode::funct3(raw);
 
-        match (funct5, fmt) {
+    match (funct5, fmt) {
             // ========================= Double-precision (fmt=1) =========================
             (0x00, 1) => {
                 // FADD.D
@@ -2027,7 +1974,7 @@ unsafe fn exec_op_fp(
                 f[rd] = match f3 {
                     0 => (a & 0x7FFF_FFFF_FFFF_FFFF) | (b & 0x8000_0000_0000_0000),
                     1 => (a & 0x7FFF_FFFF_FFFF_FFFF) | (!b & 0x8000_0000_0000_0000),
-                    2 | _ => a ^ (b & 0x8000_0000_0000_0000),
+                    _ => a ^ (b & 0x8000_0000_0000_0000),
                 };
             }
             (0x05, 1) => {
@@ -2036,7 +1983,7 @@ unsafe fn exec_op_fp(
                 let b = f64::from_bits(f[rs2]);
                 f[rd] = match f3 {
                     0 => fmin_f64(a, b).to_bits(),
-                    1 | _ => fmax_f64(a, b).to_bits(),
+                    _ => fmax_f64(a, b).to_bits(),
                 };
                 // RISC-V ISA spec §11.6: signaling NaN inputs set NV, even when result is not NaN
                 if is_snan_f64(a) || is_snan_f64(b) {
@@ -2058,16 +2005,14 @@ unsafe fn exec_op_fp(
                 }
                 // RISC-V ISA spec §11.8: FLT/FLE set NV if either is NaN; FEQ sets NV only for sNaN
                 match f3 {
-                    1 | 0 => {
-                        if a.is_nan() || b.is_nan() {
+                    1 | 0
+                        if (a.is_nan() || b.is_nan()) => {
                             set_flags(fcsr, NV);
                         }
-                    }
-                    2 => {
-                        if is_snan_f64(a) || is_snan_f64(b) {
+                    2
+                        if (is_snan_f64(a) || is_snan_f64(b)) => {
                             set_flags(fcsr, NV);
                         }
-                    }
                     _ => {}
                 }
             }
@@ -2108,7 +2053,7 @@ unsafe fn exec_op_fp(
                         0 => v == (r as i32 as f64),
                         1 => v == (r as u32 as f64),
                         2 => v == (r as i64 as f64),
-                        3 => v == (r as u64 as f64),
+                        3 => v == (r as f64),
                         _ => true,
                     };
                     if !exact {
@@ -2122,22 +2067,20 @@ unsafe fn exec_op_fp(
                     0 => ((x[rs1] as i32) as f64).to_bits(), // FCVT.D.W
                     1 => ((x[rs1] as u32) as f64).to_bits(), // FCVT.D.WU
                     2 => ((x[rs1] as i64) as f64).to_bits(), // FCVT.D.L
-                    3 => ((x[rs1] as u64) as f64).to_bits(), // FCVT.D.LU
+                    3 => (x[rs1] as f64).to_bits(), // FCVT.D.LU
                     _ => 0,
                 };
             }
             (0x1C, 1) => match f3 {
                 // FMV.X.D / FCLASS.D → x[rd]
-                0 => {
-                    if rd != 0 {
+                0
+                    if rd != 0 => {
                         x[rd] = f[rs1];
-                    }
-                } // FMV.X.D
-                1 => {
-                    if rd != 0 {
+                    } // FMV.X.D
+                1
+                    if rd != 0 => {
                         x[rd] = fclass_f64(f[rs1]);
-                    }
-                } // FCLASS.D
+                    } // FCLASS.D
                 _ => {}
             },
             (0x1E, 1) => f[rd] = x[rs1], // FMV.D.X
@@ -2184,7 +2127,7 @@ unsafe fn exec_op_fp(
                 let r = match f3 {
                     0 => (a & 0x7FFF_FFFF) | (b & 0x8000_0000),
                     1 => (a & 0x7FFF_FFFF) | (!b & 0x8000_0000),
-                    2 | _ => a ^ (b & 0x8000_0000),
+                    _ => a ^ (b & 0x8000_0000),
                 };
                 f[rd] = box_f32(f32::from_bits(r));
             }
@@ -2194,7 +2137,7 @@ unsafe fn exec_op_fp(
                 let b = unbox_f32(f[rs2]);
                 f[rd] = match f3 {
                     0 => box_f32(fmin_f32(a, b)),
-                    1 | _ => box_f32(fmax_f32(a, b)),
+                    _ => box_f32(fmax_f32(a, b)),
                 };
                 if is_snan_f32(a) || is_snan_f32(b) {
                     set_flags(fcsr, NV);
@@ -2214,16 +2157,14 @@ unsafe fn exec_op_fp(
                     x[rd] = r as u64;
                 }
                 match f3 {
-                    1 | 0 => {
-                        if a.is_nan() || b.is_nan() {
+                    1 | 0
+                        if (a.is_nan() || b.is_nan()) => {
                             set_flags(fcsr, NV);
                         }
-                    }
-                    2 => {
-                        if is_snan_f32(a) || is_snan_f32(b) {
+                    2
+                        if (is_snan_f32(a) || is_snan_f32(b)) => {
                             set_flags(fcsr, NV);
                         }
-                    }
                     _ => {}
                 }
             }
@@ -2264,7 +2205,7 @@ unsafe fn exec_op_fp(
                         0 => vd == (r as i32 as f64),
                         1 => vd == (r as u32 as f64),
                         2 => vd == (r as i64 as f64),
-                        3 => vd == (r as u64 as f64),
+                        3 => vd == (r as f64),
                         _ => true,
                     };
                     if !exact {
@@ -2278,24 +2219,22 @@ unsafe fn exec_op_fp(
                     0 => box_f32((x[rs1] as i32) as f32),
                     1 => box_f32((x[rs1] as u32) as f32),
                     2 => box_f32((x[rs1] as i64) as f32),
-                    3 => box_f32((x[rs1] as u64) as f32),
+                    3 => box_f32(x[rs1] as f32),
                     _ => 0,
                 };
             }
             (0x1C, 0) => match f3 {
                 // FMV.X.W / FCLASS.S → x[rd]
-                0 => {
+                0
                     // FMV.X.W: lower 32 bits, sign-extended to 64
-                    if rd != 0 {
+                    if rd != 0 => {
                         x[rd] = (f[rs1] as u32 as i32 as i64) as u64;
                     }
-                }
-                1 => {
+                1
                     // FCLASS.S
-                    if rd != 0 {
+                    if rd != 0 => {
                         x[rd] = fclass_f32(unbox_f32(f[rs1]).to_bits());
                     }
-                }
                 _ => {}
             },
             (0x1E, 0) => {
@@ -2331,9 +2270,8 @@ unsafe fn exec_op_fp(
             }
 
             _ => {} // Q/H not supported
-        }
-        *pc += step;
     }
+    *pc += step;
 }
 
 /// RV64F + RV64D: fused multiply-add (FMADD, FMSUB, FNMSUB, FNMADD).
@@ -2348,14 +2286,13 @@ unsafe fn exec_fma(
     step: u64,
     fcsr: &mut u32,
 ) {
-    unsafe {
-        let rd = decode::rd(raw);
-        let rs1 = decode::rs1(raw);
-        let rs2 = decode::rs2(raw);
-        let rs3 = decode::rs3(raw);
-        let fmt = (raw >> 25) & 3;
+    let rd = decode::rd(raw);
+    let rs1 = decode::rs1(raw);
+    let rs2 = decode::rs2(raw);
+    let rs3 = decode::rs3(raw);
+    let fmt = (raw >> 25) & 3;
 
-        match fmt {
+    match fmt {
             0 => {
                 // Single-precision
                 let a = unbox_f32(f[rs1]);
@@ -2453,9 +2390,8 @@ unsafe fn exec_fma(
                 set_flags(fcsr, fl);
             }
             _ => {} // Q/H not supported
-        }
-        *pc += step;
     }
+    *pc += step;
 }
 
 #[inline(always)]
@@ -2501,6 +2437,7 @@ unsafe fn exec_amo(
 }
 
 #[inline(always)]
+#[allow(clippy::too_many_arguments)]
 unsafe fn exec_amo32_atomic(
     vm: &mut ThreadState,
     host_ptr: usize,
@@ -2911,6 +2848,7 @@ unsafe fn exec_amo32_nonatomic(
 }
 
 #[inline(always)]
+#[allow(clippy::too_many_arguments)]
 unsafe fn exec_amo64_atomic(
     vm: &mut ThreadState,
     host_ptr: usize,

@@ -90,6 +90,7 @@ fn set_current_dir_ino(base: u32, vm: &ThreadState, ino: u32) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn submit_fs_request(
     vm: &mut ThreadState,
     base: u32,
@@ -533,7 +534,7 @@ fn dirfd_base_ino(vm: &ThreadState, dirfd: u64, base: u32) -> Result<u32, i64> {
     }
 
     let ofd = fd_table::get_ofd(base, vm, dirfd).ok_or(EBADF)?;
-    let dir_ino = ofd.ino as u32;
+    let dir_ino = ofd.ino;
     let st = memfs::stat(dir_ino).ok_or(ENOENT)?;
     if st.mode & memfs::S_IFMT != memfs::S_IFDIR {
         return Err(ENOTDIR);
@@ -646,7 +647,7 @@ pub fn sys_statfs(vm: &ThreadState, base: u32, path_addr: u64, buf: u64) -> i64 
 
     unsafe {
         guest_mem::zero_mem(base, buf, 120);
-        guest_mem::write_u64(base, buf + 0, TMPFS_MAGIC);
+        guest_mem::write_u64(base, buf, TMPFS_MAGIC);
         guest_mem::write_u64(base, buf + 8, 4096);
         guest_mem::write_u64(base, buf + 16, 0);
         guest_mem::write_u64(base, buf + 24, 0);
@@ -945,7 +946,7 @@ pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) 
 
     let mut tmp = [0u8; 4096];
     let to_read = (count as usize).min(tmp.len());
-    let n = memfs::read_file(ofd.ino as u32, ofd.offset as u64, &mut tmp[..to_read]);
+    let n = memfs::read_file(ofd.ino, ofd.offset as u64, &mut tmp[..to_read]);
     if n > 0 {
         if !crate::syscall::memory::guest_range_accessible(base, buf, n as u64) {
             return EFAULT;
@@ -978,7 +979,7 @@ pub fn sys_pread64(
 
     let mut tmp = [0u8; 4096];
     let to_read = (count as usize).min(tmp.len());
-    let n = memfs::read_file(ofd.ino as u32, offset, &mut tmp[..to_read]);
+    let n = memfs::read_file(ofd.ino, offset, &mut tmp[..to_read]);
     if n > 0 {
         if !crate::syscall::memory::guest_range_accessible(base, buf, n as u64) {
             return EFAULT;
@@ -1012,7 +1013,7 @@ pub fn sys_pwrite64(
         return count as i64;
     }
 
-    write_regular_file_from_guest(base, buf, count, ofd.ino as u32, offset)
+    write_regular_file_from_guest(base, buf, count, ofd.ino, offset)
 }
 
 fn write_regular_file_from_guest(
@@ -1050,6 +1051,7 @@ fn write_regular_file_from_guest(
 
 /// write: write to file or pipe FD. Sends SIGPIPE on broken pipe.
 /// Also handles writev (dispatched by nr == SYS_WRITEV).
+#[allow(clippy::too_many_arguments)]
 fn trace_write_attempt(
     fd: u64,
     nr: u64,
@@ -1384,7 +1386,7 @@ pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64,
             guest_mem::read_bytes(base, buf, &mut trace[..to_trace]);
         }
     }
-    let n = write_regular_file_from_guest(base, buf, count, ofd.ino as u32, ofd.offset as u64);
+    let n = write_regular_file_from_guest(base, buf, count, ofd.ino, ofd.offset as u64);
     if n > 0 {
         fd_table::advance_offset(base, vm, fd, n as u64);
     }
@@ -1661,7 +1663,7 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
                 base,
                 iov_base,
                 iov_len,
-                ofd.ino as u32,
+                ofd.ino,
                 current_offset,
             );
             if n > 0 {
@@ -1763,7 +1765,7 @@ pub fn sys_fstat(vm: &mut ThreadState, base: u32, fd: u64, stat_buf: u64) -> i64
         }
         _ => {}
     }
-    write_stat(base, stat_buf, ofd.ino as u32)
+    write_stat(base, stat_buf, ofd.ino)
 }
 
 /// newfstatat: get file status by path. Writes 128-byte struct stat to guest memory.
@@ -1818,7 +1820,7 @@ fn write_stat(base: u32, stat_buf: u64, ino: u32) -> i64 {
     };
     unsafe {
         guest_mem::zero_mem(base, stat_buf, 128);
-        guest_mem::write_u64(base, stat_buf + 0, 1); // st_dev
+        guest_mem::write_u64(base, stat_buf, 1); // st_dev
         guest_mem::write_u64(base, stat_buf + 8, st.ino); // st_ino
         guest_mem::write_u32(base, stat_buf + 16, st.mode); // st_mode
         guest_mem::write_u32(base, stat_buf + 20, st.nlink); // st_nlink
@@ -1826,7 +1828,7 @@ fn write_stat(base: u32, stat_buf: u64, ino: u32) -> i64 {
         guest_mem::write_u32(base, stat_buf + 28, st.gid); // st_gid
         guest_mem::write_u64(base, stat_buf + 48, st.size); // st_size
         guest_mem::write_u32(base, stat_buf + 56, 4096u32); // st_blksize
-        let blocks = (st.size + 511) / 512;
+        let blocks = st.size.div_ceil(512);
         guest_mem::write_u64(base, stat_buf + 64, blocks); // st_blocks
     }
     0
@@ -1847,7 +1849,7 @@ fn write_synthetic_stat(
 ) {
     unsafe {
         guest_mem::zero_mem(base, stat_buf, 128);
-        guest_mem::write_u64(base, stat_buf + 0, 1); // st_dev
+        guest_mem::write_u64(base, stat_buf, 1); // st_dev
         guest_mem::write_u64(base, stat_buf + 8, ino); // st_ino
         guest_mem::write_u32(base, stat_buf + 16, mode); // st_mode
         guest_mem::write_u32(base, stat_buf + 20, 1); // st_nlink
@@ -1855,7 +1857,7 @@ fn write_synthetic_stat(
         guest_mem::write_u32(base, stat_buf + 28, gid); // st_gid
         guest_mem::write_u64(base, stat_buf + 48, size); // st_size
         guest_mem::write_u32(base, stat_buf + 56, 4096u32); // st_blksize
-        guest_mem::write_u64(base, stat_buf + 64, (size + 511) / 512); // st_blocks
+        guest_mem::write_u64(base, stat_buf + 64, size.div_ceil(512)); // st_blocks
     }
 }
 
@@ -1981,7 +1983,7 @@ pub fn sys_getdents64(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, buf_si
         None => return EBADF,
     };
 
-    let dir_ino = ofd.ino as u32;
+    let dir_ino = ofd.ino;
     let start_index = ofd.offset.max(0) as u64;
     let mut offset = 0u64;
     let max = buf_size;
@@ -2042,10 +2044,10 @@ pub fn sys_lseek(vm: &mut ThreadState, base: u32, fd: u64, offset: i64, whence: 
 
     let new_offset = match whence {
         0 => offset as u64,                       // SEEK_SET
-        1 => (ofd.offset as i64 + offset) as u64, // SEEK_CUR
+        1 => (ofd.offset + offset) as u64, // SEEK_CUR
         2 => {
             // SEEK_END
-            let st = memfs::stat(ofd.ino as u32);
+            let st = memfs::stat(ofd.ino);
             match st {
                 Some(s) => (s.size as i64 + offset) as u64,
                 None => return EINVAL,
@@ -2160,7 +2162,7 @@ pub fn sys_readlinkat(
             match fd_table::get_ofd(base, vm, dirfd) {
                 Some(ofd) => {
                     let mut link_buf = [0u8; 512];
-                    let n = memfs::read_link(ofd.ino as u32, &mut link_buf);
+                    let n = memfs::read_link(ofd.ino, &mut link_buf);
                     if n == 0 {
                         EINVAL
                     } else {
@@ -2219,7 +2221,7 @@ pub fn sys_ftruncate(vm: &mut ThreadState, base: u32, fd: u64, length: u64) -> i
         Some(o) => o,
         None => return EBADF,
     };
-    memfs::truncate(ofd.ino as u32, length)
+    memfs::truncate(ofd.ino, length)
 }
 
 /// truncate: truncate file at path to specified length.

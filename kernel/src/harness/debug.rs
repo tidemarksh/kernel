@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct WriteTraceSummary {
@@ -264,6 +266,7 @@ pub fn clear_syscall_trace() {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn record_epoll_wait(
     vm_ptr: u32,
     epfd: u64,
@@ -412,6 +415,7 @@ pub fn clear_memory_trace() {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn record_write_attempt(
     fd: u64,
     nr: u64,
@@ -579,6 +583,7 @@ pub fn record_syscall(vm_ptr: u32, nr: u64, result: i64, status: i32) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn record_fd_syscall(
     vm_ptr: u32,
     nr: u64,

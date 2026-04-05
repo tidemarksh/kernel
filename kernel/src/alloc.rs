@@ -10,6 +10,7 @@ static mut HEAP_BASE: u32 = 0;
 static mut HEAP_PTR: u32 = 0;
 
 /// Global allocator backed by the bump allocator.
+#[allow(dead_code)]
 struct BumpAlloc;
 
 unsafe impl GlobalAlloc for BumpAlloc {
@@ -53,6 +54,10 @@ pub unsafe fn init(base: u32) {
 /// rewinding the kernel bump allocator is correct there and keeps the guest
 /// address-space ceiling stable across the suite.
 #[cfg(any(test, feature = "harness"))]
+///
+/// # Safety
+/// The caller must ensure no live allocations from the previous harness state
+/// will be accessed after rewinding the bump allocator.
 pub unsafe fn reset(base: u32) {
     unsafe {
         HEAP_BASE = base;
@@ -74,7 +79,7 @@ pub unsafe fn alloc(size: u32, align: u32) -> u32 {
     let mem_size = (core::arch::wasm32::memory_size(0) as u64) * 65536;
     if end as u64 > mem_size {
         // Try to grow
-        let pages_needed = (((end as u64 - mem_size) + 65535) / 65536) as usize;
+        let pages_needed = (end as u64 - mem_size).div_ceil(65536) as usize;
         let result = core::arch::wasm32::memory_grow(0, pages_needed);
         if result == usize::MAX {
             return 0; // OOM

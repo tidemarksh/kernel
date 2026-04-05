@@ -313,7 +313,7 @@ pub fn shared_heap_alloc(size: u32, align: u32) -> Option<u32> {
         let end = aligned + size;
         let mem_size = (core::arch::wasm32::memory_size(0) as u64) * 65536;
         if end as u64 > mem_size {
-            let pages_needed = (((end as u64 - mem_size) + 65535) / 65536) as usize;
+            let pages_needed = (end as u64 - mem_size).div_ceil(65536) as usize;
             let result = core::arch::wasm32::memory_grow(0, pages_needed);
             if result == usize::MAX {
                 return Some(0);
@@ -333,11 +333,6 @@ pub fn shared_heap_alloc(size: u32, align: u32) -> Option<u32> {
 #[cfg(any(test, feature = "harness"))]
 pub(crate) fn reset_for_tests() {
     init();
-}
-
-#[cfg(test)]
-fn vfork_snapshot_active() -> bool {
-    prs().vfork_active != 0
 }
 
 pub fn vfork_active() -> bool {
@@ -578,6 +573,7 @@ pub fn rewrite_child_pid(
     set_next_pid_floor(next_pid);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn reset_process_lifecycle(
     vm: &mut ThreadState,
     base: u32,
@@ -988,7 +984,7 @@ fn ensure_guest_memory_capacity(base: u32, guest_end: u64) -> bool {
         return true;
     }
 
-    let pages = ((needed - mem_size) + 65535) / 65536;
+    let pages = (needed - mem_size).div_ceil(65536);
     core::arch::wasm32::memory_grow(0, pages as usize) != usize::MAX
 }
 
@@ -1582,6 +1578,7 @@ pub fn sys_getpgid(vm: &ThreadState, base: u32, pid: i64) -> i64 {
 /// - only the caller or its direct child may be targeted
 /// - session leaders cannot change PGID
 /// - joining a different group requires an existing group in the same session
+///
 /// https://man7.org/linux/man-pages/man2/setpgid.2.html
 pub fn sys_setpgid(vm: &ThreadState, base: u32, pid: i64, pgid: i64) -> i64 {
     if pgid < 0 {
@@ -1623,10 +1620,8 @@ pub fn sys_setpgid(vm: &ThreadState, base: u32, pid: i64, pgid: i64) -> i64 {
         return EPERM;
     }
 
-    if target_pgid != target.pid {
-        if !group_exists_in_session(target_pgid, target.sid) {
-            return EPERM;
-        }
+    if target_pgid != target.pid && !group_exists_in_session(target_pgid, target.sid) {
+        return EPERM;
     }
 
     target.pgid = target_pgid;

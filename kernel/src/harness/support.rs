@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use alloc_crate::{vec, vec::Vec};
 
 use crate::abi::MAP_SHARED;

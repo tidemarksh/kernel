@@ -541,7 +541,7 @@ mod tests {
     #[test]
     fn i_type_negative() {
         // addi x1, x0, -1
-        let insn = encode_i(OP_OP_IMM, 1, 0, 0, (-1i32 as u32));
+        let insn = encode_i(OP_OP_IMM, 1, 0, 0, -1i32 as u32);
         assert_eq!(imm_i(insn), -1);
     }
 
@@ -564,14 +564,14 @@ mod tests {
     #[test]
     fn b_type_negative() {
         // beq x1, x2, -8
-        let insn = encode_b(OP_BRANCH, 0, 1, 2, (-8i32 as u32));
+        let insn = encode_b(OP_BRANCH, 0, 1, 2, -8i32 as u32);
         assert_eq!(imm_b(insn), -8);
     }
 
     #[test]
     fn u_type_immediate() {
         // lui x1, 0x12345 → imm = 0x12345000
-        let insn = 0x12345_0B7; // lui x1, 0x12345
+        let insn = 0x1234_50B7; // lui x1, 0x12345
         assert_eq!(imm_u(insn), 0x12345000);
     }
 

@@ -27,11 +27,7 @@ use crate::types::{
 };
 
 // SA flags (https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/signal-defs.h)
-const SA_NOCLDSTOP: u64 = 0x00000001;
-const SA_NOCLDWAIT: u64 = 0x00000002;
-const SA_SIGINFO: u64 = 0x00000004;
 const SA_ONSTACK: u64 = 0x08000000;
-const SA_RESTART: u64 = 0x10000000;
 const SA_NODEFER: u64 = 0x40000000;
 const SA_RESETHAND: u64 = 0x80000000;
 
@@ -326,8 +322,7 @@ pub fn reset_on_execve(pid: i32) {
         return;
     }
     let table = sigactions_for(pid);
-    for sig in 1..MAX_SIGNALS {
-        let action = &mut table[sig];
+    for action in table.iter_mut().take(MAX_SIGNALS).skip(1) {
         if action.handler != SIG_DFL && action.handler != SIG_IGN {
             *action = SigAction {
                 handler: SIG_DFL,

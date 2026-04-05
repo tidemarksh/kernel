@@ -25,6 +25,7 @@ pub struct PackedOp {
 
 impl PackedOp {
     #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         op_id: u8,
         rd: u8,
@@ -130,6 +131,10 @@ impl BlockCache {
 
     /// Build a block starting at `pc` by decoding instructions from guest memory.
     /// Returns the block entry, or None if the first instruction is unsupported.
+    ///
+    /// # Safety
+    /// `ram_base` must point at readable guest RAM containing instructions for
+    /// every byte touched while decoding the block rooted at `pc`.
     pub unsafe fn build_block(&mut self, pc: u64, ram_base: u32) -> Option<&BlockEntry> {
         unsafe {
             let idx = ((pc >> 1) as usize) & (CACHE_SIZE - 1);
