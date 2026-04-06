@@ -307,7 +307,7 @@ pub fn sys_epoll_pwait(
     let epoll_ofd = match fd_table::get_ofd(base, vm, epfd) {
         Some(o) => o,
         None => {
-            crate::harness_debug::record_epoll_wait(
+            crate::harness_hooks::record_epoll_wait(
                 0,
                 epfd,
                 epoll_ofd_id,
@@ -322,7 +322,7 @@ pub fn sys_epoll_pwait(
         }
     };
     if epoll_ofd.fd_type != FD_TYPE_EPOLL {
-        crate::harness_debug::record_epoll_wait(
+        crate::harness_hooks::record_epoll_wait(
             0,
             epfd,
             epoll_ofd_id,
@@ -344,7 +344,7 @@ pub fn sys_epoll_pwait(
         unsafe { (*epoll_ptr_value).count }
     };
     let Some(inst) = validated_epoll_instance(epoll_ofd.ino as usize) else {
-        crate::harness_debug::record_epoll_wait(
+        crate::harness_hooks::record_epoll_wait(
             0,
             epfd,
             epoll_ofd_id,
@@ -383,7 +383,7 @@ pub fn sys_epoll_pwait(
         vm.status = STATUS_OK;
         vm.epoll_timeout_ms = 0;
         vm.epoll_maxevents = 0;
-        crate::harness_debug::record_epoll_wait(
+        crate::harness_hooks::record_epoll_wait(
             0,
             epfd,
             epoll_ofd_id,
@@ -405,7 +405,7 @@ pub fn sys_epoll_pwait(
     vm.epoll_timeout_ms = timeout;
     vm.epoll_maxevents = maxevents as u32;
     vm.status = STATUS_EPOLL_WAIT;
-    crate::harness_debug::record_epoll_wait(
+    crate::harness_hooks::record_epoll_wait(
         0,
         epfd,
         epoll_ofd_id,

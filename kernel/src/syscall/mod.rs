@@ -22,7 +22,7 @@ use crate::types::ThreadState;
 
 #[inline(always)]
 fn debug_return(vm: &ThreadState, nr: u64, result: i64, status: i32) -> i32 {
-    crate::harness_debug::record_syscall(vm as *const ThreadState as u32, nr, result, status);
+    crate::harness_hooks::record_syscall(vm as *const ThreadState as u32, nr, result, status);
     status
 }
 
@@ -30,7 +30,7 @@ fn debug_return(vm: &ThreadState, nr: u64, result: i64, status: i32) -> i32 {
 fn record_memory_trace(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64, result: i64) {
     match nr {
         SYS_BRK | SYS_MMAP | SYS_MUNMAP | SYS_MSYNC | SYS_MREMAP | SYS_MPROTECT => {
-            crate::harness_debug::record_memory_syscall(nr, a0, a1, a2, a3, result);
+            crate::harness_hooks::record_memory_syscall(nr, a0, a1, a2, a3, result);
         }
         _ => {}
     }
@@ -393,7 +393,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
     // Check and deliver pending signals at syscall return boundary
     signal::check_pending(vm, base);
     let status = vm.status;
-    crate::harness_debug::record_fd_syscall(
+    crate::harness_hooks::record_fd_syscall(
         vm as *const ThreadState as u32,
         nr,
         a0,
@@ -407,7 +407,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         result,
         status,
     );
-    crate::harness_debug::record_syscall(vm as *const ThreadState as u32, nr, result, status);
+    crate::harness_hooks::record_syscall(vm as *const ThreadState as u32, nr, result, status);
     if status != abi::STATUS_OK {
         return status;
     }

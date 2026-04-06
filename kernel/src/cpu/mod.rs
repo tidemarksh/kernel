@@ -104,7 +104,7 @@ pub unsafe fn exec_at_base(
                     f = vm.f;
                     pc = vm.pc;
                     fcsr = vm.fcsr;
-                    crate::harness_debug::record_special_reg_transitions(
+                    crate::harness_hooks::record_special_reg_transitions(
                         vm.tid,
                         pc,
                         0,
@@ -138,7 +138,7 @@ pub unsafe fn exec_at_base(
                 f = vm.f;
                 pc = vm.pc;
                 fcsr = vm.fcsr;
-                crate::harness_debug::record_special_reg_transitions(
+                crate::harness_hooks::record_special_reg_transitions(
                     vm.tid,
                     instr_pc,
                     0,
@@ -149,7 +149,7 @@ pub unsafe fn exec_at_base(
                     &x,
                 );
                 x[0] = 0;
-                crate::harness_debug::record_zero_reg_transition(
+                crate::harness_hooks::record_zero_reg_transition(
                     vm.tid, instr_pc, 0, prev_sp, prev_s11, &x,
                 );
                 continue;
@@ -179,7 +179,7 @@ pub unsafe fn exec_at_base(
                     f = vm.f;
                     pc = vm.pc;
                     fcsr = vm.fcsr;
-                    crate::harness_debug::record_special_reg_transitions(
+                    crate::harness_hooks::record_special_reg_transitions(
                         vm.tid,
                         instr_pc,
                         raw16 as u32,
@@ -223,7 +223,7 @@ pub unsafe fn exec_at_base(
                 return remaining;
             }
 
-            crate::harness_debug::record_exec_trace(instr_pc, raw, step, &x);
+            crate::harness_hooks::record_exec_trace(instr_pc, raw, step, &x);
             match exec_decoded(
                 vm,
                 raw,
@@ -250,7 +250,7 @@ pub unsafe fn exec_at_base(
 
             // Enforce x0 = 0
             x[0] = 0;
-            crate::harness_debug::record_special_reg_transitions(
+            crate::harness_hooks::record_special_reg_transitions(
                 vm.tid,
                 instr_pc,
                 raw,
@@ -260,7 +260,7 @@ pub unsafe fn exec_at_base(
                 prev_s11,
                 &x,
             );
-            crate::harness_debug::record_zero_reg_transition(
+            crate::harness_hooks::record_zero_reg_transition(
                 vm.tid, instr_pc, raw, prev_sp, prev_s11, &x,
             );
         }

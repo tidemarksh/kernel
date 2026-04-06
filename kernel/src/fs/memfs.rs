@@ -562,36 +562,36 @@ pub fn write_path(ino: u32, buf: &mut [u8]) -> usize {
 /// Returns the new inode number, or 0 on failure.
 /// https://man7.org/linux/man-pages/man2/symlinkat.2.html
 pub fn create_symlink(parent_ino: u32, name: &[u8], target: &[u8]) -> u32 {
-    crate::harness_debug::record_execve_stage(801, parent_ino as u64, target.len() as u64);
+    crate::harness_hooks::record_execve_stage(801, parent_ino as u64, target.len() as u64);
     let existing = lookup(parent_ino, name);
-    crate::harness_debug::record_execve_stage(802, existing as u64, name.len() as u64);
+    crate::harness_hooks::record_execve_stage(802, existing as u64, name.len() as u64);
     if existing != 0 {
         return 0;
     } // already exists
     let ino = alloc_inode(S_IFLNK | 0o777);
-    crate::harness_debug::record_execve_stage(803, ino as u64, 0);
+    crate::harness_hooks::record_execve_stage(803, ino as u64, 0);
     if ino == 0 {
         return 0;
     }
     // Store target as the inode's data
     let off = alloc_data(target.len() as u32);
-    crate::harness_debug::record_execve_stage(804, off as u64, fs().data_cap as u64);
+    crate::harness_hooks::record_execve_stage(804, off as u64, fs().data_cap as u64);
     if off == u32::MAX {
         return 0;
     }
     unsafe {
         core::ptr::copy_nonoverlapping(target.as_ptr(), fs().data.add(off as usize), target.len());
     }
-    crate::harness_debug::record_execve_stage(805, off as u64, target.len() as u64);
+    crate::harness_hooks::record_execve_stage(805, off as u64, target.len() as u64);
     inodes()[ino as usize].data_offset = off;
     inodes()[ino as usize].data_cap = target.len() as u32;
     inodes()[ino as usize].size = target.len() as u64;
     let added = add_dir_entry(parent_ino, name, ino);
-    crate::harness_debug::record_execve_stage(806, added as u64, ino as u64);
+    crate::harness_hooks::record_execve_stage(806, added as u64, ino as u64);
     if !added {
         return 0;
     }
-    crate::harness_debug::record_execve_stage(807, ino as u64, 0);
+    crate::harness_hooks::record_execve_stage(807, ino as u64, 0);
     ino
 }
 

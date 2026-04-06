@@ -895,14 +895,14 @@ fn load_execve_image(
 }
 
 fn install_proc_self_exe(target: &[u8]) {
-    crate::harness_debug::record_execve_stage(711, target.len() as u64, 0);
+    crate::harness_hooks::record_execve_stage(711, target.len() as u64, 0);
     let proc_ino = memfs::resolve_path(b"/proc");
     let proc_ino = if proc_ino == 0 {
         memfs::create_dir(1, b"proc", 0o555)
     } else {
         proc_ino
     };
-    crate::harness_debug::record_execve_stage(712, proc_ino as u64, 0);
+    crate::harness_hooks::record_execve_stage(712, proc_ino as u64, 0);
     if proc_ino == 0 {
         return;
     }
@@ -913,19 +913,19 @@ fn install_proc_self_exe(target: &[u8]) {
     } else {
         self_ino
     };
-    crate::harness_debug::record_execve_stage(713, self_ino as u64, 0);
+    crate::harness_hooks::record_execve_stage(713, self_ino as u64, 0);
     if self_ino == 0 {
         return;
     }
 
     let existing_exe = memfs::lookup(self_ino, b"exe");
-    crate::harness_debug::record_execve_stage(714, existing_exe as u64, self_ino as u64);
+    crate::harness_hooks::record_execve_stage(714, existing_exe as u64, self_ino as u64);
     if existing_exe != 0 {
         let _ = memfs::unlink(self_ino, b"exe");
     }
-    crate::harness_debug::record_execve_stage(715, self_ino as u64, target.len() as u64);
+    crate::harness_hooks::record_execve_stage(715, self_ino as u64, target.len() as u64);
     let exe_ino = memfs::create_symlink(self_ino, b"exe", target);
-    crate::harness_debug::record_execve_stage(716, exe_ino as u64, 0);
+    crate::harness_hooks::record_execve_stage(716, exe_ino as u64, 0);
 }
 
 const PROC_STAT_BYTES: &[u8] = b"cpu  1 1 1 1 0 0 0 0 0 0\ncpu0 1 1 1 1 0 0 0 0 0 0\n";
@@ -1085,7 +1085,7 @@ fn complete_execve_in_place_inner(
     if vm.spawn_kind != SPAWN_KIND_EXECVE {
         return EINVAL;
     }
-    crate::harness_debug::record_execve_stage(1, base as u64, ram_size);
+    crate::harness_hooks::record_execve_stage(1, base as u64, ram_size);
 
     let ExecveImage {
         path_bytes,
@@ -1112,7 +1112,7 @@ fn complete_execve_in_place_inner(
         .brk_start
         .max(interp_elf.as_ref().map(|elf| elf.brk_start).unwrap_or(0));
     let active_elf = interp_elf.as_ref().copied().unwrap_or(main_elf);
-    crate::harness_debug::record_execve_stage(2, load_brk_start, active_elf.entry);
+    crate::harness_hooks::record_execve_stage(2, load_brk_start, active_elf.entry);
 
     let ps_addr = vm.process_ptr as u64;
     let old_pid = unsafe {
@@ -1213,12 +1213,12 @@ fn complete_execve_in_place_inner(
     let ps_size = core::mem::size_of::<ProcessState>() as u64;
     let ps_align = core::mem::align_of::<ProcessState>() as u64;
     let new_ps_addr = (load_brk_start + ps_align - 1) & !(ps_align - 1);
-    crate::harness_debug::record_execve_stage(3, guest_limit, new_ps_addr + ps_size);
+    crate::harness_hooks::record_execve_stage(3, guest_limit, new_ps_addr + ps_size);
     // vfork+execve handoff starts from a bootstrap-sized child memory. Grow the
     // guest view to the full execve limit before resetting and loading ELF
     // segments, matching process_create()'s dynamic-growth contract.
     if !ensure_guest_memory_capacity(base, guest_limit) {
-        crate::harness_debug::record_execve_stage(11, guest_limit, new_ps_addr + ps_size);
+        crate::harness_hooks::record_execve_stage(11, guest_limit, new_ps_addr + ps_size);
         return ENOMEM;
     }
 
@@ -1281,31 +1281,31 @@ fn complete_execve_in_place_inner(
             );
         }
     }
-    crate::harness_debug::record_execve_stage(4, elf_result.brk_start, elf_result.entry);
+    crate::harness_hooks::record_execve_stage(4, elf_result.brk_start, elf_result.entry);
     let stack_top = crate::syscall::memory::map_initial_stack(
         base,
         guest_limit,
         crate::syscall::memory::DEFAULT_STACK_SIZE,
     );
     if stack_top < 0 {
-        crate::harness_debug::record_execve_stage(12, guest_limit, stack_top as u64);
+        crate::harness_hooks::record_execve_stage(12, guest_limit, stack_top as u64);
         return ENOMEM;
     }
     let stack_top = stack_top as u64;
-    crate::harness_debug::record_execve_stage(5, guest_limit, stack_top);
+    crate::harness_hooks::record_execve_stage(5, guest_limit, stack_top);
 
     let brk = crate::syscall::memory::current_brk();
     let ps_addr = (brk + ps_align - 1) & !(ps_align - 1);
     if crate::syscall::memory::grow_brk(base, ps_addr + ps_size) < (ps_addr + ps_size) as i64 {
-        crate::harness_debug::record_execve_stage(13, brk, ps_addr + ps_size);
+        crate::harness_hooks::record_execve_stage(13, brk, ps_addr + ps_size);
         return ENOMEM;
     }
-    crate::harness_debug::record_execve_stage(6, brk, ps_addr + ps_size);
-    crate::harness_debug::record_execve_stage(61, ps_addr, ps_size);
+    crate::harness_hooks::record_execve_stage(6, brk, ps_addr + ps_size);
+    crate::harness_hooks::record_execve_stage(61, ps_addr, ps_size);
     unsafe {
         guest_mem::zero_mem(base, ps_addr, ps_size as usize);
     }
-    crate::harness_debug::record_execve_stage(62, ps_addr, ps_size);
+    crate::harness_hooks::record_execve_stage(62, ps_addr, ps_size);
 
     let mut released_cloexec_ofds = [false; MAX_FDS];
     for entry in old_fd_table.iter().copied() {
@@ -1338,7 +1338,7 @@ fn complete_execve_in_place_inner(
             guest_mem::write_u32(base, entry_off + 4, entry.fd_flags);
         }
     }
-    crate::harness_debug::record_execve_stage(63, ps_addr, inherited_fds.len() as u64);
+    crate::harness_hooks::record_execve_stage(63, ps_addr, inherited_fds.len() as u64);
     let pid_off = core::mem::offset_of!(ProcessState, pid) as u64;
     let ppid_off = core::mem::offset_of!(ProcessState, ppid) as u64;
     let cwd_off = core::mem::offset_of!(ProcessState, cwd_ino) as u64;
@@ -1355,10 +1355,10 @@ fn complete_execve_in_place_inner(
         guest_mem::write_u32(base, ps_addr + stderr_pipe_off, old_stderr_pipe_slot);
         guest_mem::write_u32(base, ps_addr + fs_ring_off, old_fs_ring_base);
     }
-    crate::harness_debug::record_execve_stage(64, ps_addr + pid_off, ps_addr + fs_ring_off);
+    crate::harness_hooks::record_execve_stage(64, ps_addr + pid_off, ps_addr + fs_ring_off);
 
     let random_addr = stack_top.saturating_sub(16);
-    crate::harness_debug::record_execve_stage(65, stack_top, random_addr);
+    crate::harness_hooks::record_execve_stage(65, stack_top, random_addr);
     unsafe {
         guest_mem::write_bytes(base, random_addr, &[0x42u8; 16]);
     }
@@ -1368,12 +1368,12 @@ fn complete_execve_in_place_inner(
     let stack_setup_top = strings_start.saturating_sub(128);
     let cursor = {
         write_stack_strings(base, strings_start, &argv, &mut argv_ptrs);
-        crate::harness_debug::record_execve_stage(66, strings_start, argv.len() as u64);
+        crate::harness_hooks::record_execve_stage(66, strings_start, argv.len() as u64);
         let argv_bytes_end = strings_start.saturating_add(stack_string_bytes_total(&argv));
         write_stack_strings(base, argv_bytes_end, &envp, &mut envp_ptrs);
         argv_bytes_end
     };
-    crate::harness_debug::record_execve_stage(67, cursor, envp.len() as u64);
+    crate::harness_hooks::record_execve_stage(67, cursor, envp.len() as u64);
     let mut stack_elf = active_elf;
     stack_elf.entry = elf_result.entry;
     stack_elf.brk_start = elf_result.brk_start;
@@ -1397,7 +1397,7 @@ fn complete_execve_in_place_inner(
             argv_ptrs[0],
         )
     };
-    crate::harness_debug::record_execve_stage(68, sp, stack_setup_top);
+    crate::harness_hooks::record_execve_stage(68, sp, stack_setup_top);
 
     vm.x = [0; 32];
     vm.pc = elf_result.entry;
@@ -1432,22 +1432,22 @@ fn complete_execve_in_place_inner(
     vm.blocked_ofd_id = 0;
     clear_wait4_state(vm);
     clear_spawn_handoff(vm);
-    crate::harness_debug::record_execve_stage(69, vm.pc, vm.x[2]);
+    crate::harness_hooks::record_execve_stage(69, vm.pc, vm.x[2]);
 
     crate::syscall::thread::init_main_thread(vm as *mut ThreadState as u32, base);
-    crate::harness_debug::record_execve_stage(70, vm.pc, vm.x[2]);
+    crate::harness_hooks::record_execve_stage(70, vm.pc, vm.x[2]);
     crate::syscall::signal::reset_on_execve(target_pid);
-    crate::harness_debug::record_execve_stage(71, target_pid as u64, 0);
+    crate::harness_hooks::record_execve_stage(71, target_pid as u64, 0);
     if flush_shared_mappings {
         install_proc_self_exe(&path_bytes);
-        crate::harness_debug::record_execve_stage(72, path_bytes.len() as u64, 0);
+        crate::harness_hooks::record_execve_stage(72, path_bytes.len() as u64, 0);
     }
     if let Some(slot) = ensure_process(target_pid, target_ppid) {
         slot.did_exec = true;
     }
-    crate::harness_debug::record_execve_stage(73, target_pid as u64, target_ppid as u64);
+    crate::harness_hooks::record_execve_stage(73, target_pid as u64, target_ppid as u64);
 
-    crate::harness_debug::record_execve_stage(7, vm.pc, vm.x[2]);
+    crate::harness_hooks::record_execve_stage(7, vm.pc, vm.x[2]);
     0
 }
 
@@ -1895,7 +1895,7 @@ pub fn sys_execve(
     argv_addr: u64,
     envp_addr: u64,
 ) -> i64 {
-    crate::harness_debug::record_execve_stage(0, 0, 0);
+    crate::harness_hooks::record_execve_stage(0, 0, 0);
     let current_pid = match ensure_current_process(vm, base) {
         Some(slot) => slot.pid,
         None => return ESRCH,

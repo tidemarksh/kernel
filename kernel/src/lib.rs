@@ -49,6 +49,8 @@ pub mod harness;
 mod harness_debug;
 #[path = "harness/exports.rs"]
 mod harness_exports;
+#[path = "harness/hooks.rs"]
+mod harness_hooks;
 #[path = "harness/support.rs"]
 mod harness_support;
 pub mod jit;

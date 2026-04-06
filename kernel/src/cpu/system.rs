@@ -50,7 +50,7 @@ pub(super) unsafe fn exec_system(
                 *f = vm.f;
                 *pc = vm.pc;
                 *fcsr = vm.fcsr;
-                crate::harness_debug::record_special_reg_transitions(
+                crate::harness_hooks::record_special_reg_transitions(
                     vm.tid,
                     instr_pc,
                     raw,
@@ -65,7 +65,7 @@ pub(super) unsafe fn exec_system(
                     return StepOutcome::Return(remaining);
                 }
                 x[0] = 0;
-                crate::harness_debug::record_zero_reg_transition(
+                crate::harness_hooks::record_zero_reg_transition(
                     vm.tid, instr_pc, raw, prev_sp, prev_s11, x,
                 );
                 StepOutcome::Restart
@@ -119,7 +119,7 @@ pub(super) unsafe fn handle_illegal_instruction(
     *f = vm.f;
     *pc = vm.pc;
     *fcsr = vm.fcsr;
-    crate::harness_debug::record_special_reg_transitions(
+    crate::harness_hooks::record_special_reg_transitions(
         vm.tid,
         instr_pc,
         raw,

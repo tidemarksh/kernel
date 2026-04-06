@@ -271,7 +271,7 @@ fn decrement_thread_count(vm: &ThreadState, base: u32) -> u32 {
             })
             .unwrap_or(0);
         let after = before.saturating_sub(1);
-        crate::harness_debug::record_thread_count(
+        crate::harness_hooks::record_thread_count(
             THREAD_COUNT_TRACE_EXIT_DEC,
             vm as *const ThreadState as u32,
             vm.tid,
@@ -308,7 +308,7 @@ pub fn init_main_thread(vm_ptr: u32, base: u32) {
             core::ptr::addr_of!(ps.reservation_lock) as *const core::sync::atomic::AtomicU32;
         let tc_ptr = core::ptr::addr_of!(ps.thread_count);
         guest_mem::init(gen_ptr, lock_ptr, tc_ptr);
-        crate::harness_debug::record_thread_count(
+        crate::harness_hooks::record_thread_count(
             THREAD_COUNT_TRACE_INIT_MAIN,
             vm_ptr,
             vm.tid,
@@ -370,7 +370,7 @@ pub fn discard_other_threads_for_exec(vm: &ThreadState, base: u32) -> u32 {
                 0,
             );
             ps.thread_count.store(1, Ordering::Release);
-            crate::harness_debug::record_thread_count(
+            crate::harness_hooks::record_thread_count(
                 THREAD_COUNT_TRACE_EXEC_RESET,
                 vm as *const ThreadState as u32,
                 vm.tid,
@@ -505,7 +505,7 @@ pub fn terminate_process_with_reason(
                 *record = ThreadRecord::empty();
             }
             ps.thread_count.store(0, Ordering::Release);
-            crate::harness_debug::record_thread_count(
+            crate::harness_hooks::record_thread_count(
                 THREAD_COUNT_TRACE_TERMINATE,
                 vm as *const ThreadState as u32,
                 vm.tid,
@@ -565,7 +565,7 @@ pub fn sys_clone(
                 return ESRCH;
             };
             let before = (*ps).thread_count.fetch_add(1, Ordering::AcqRel);
-            crate::harness_debug::record_thread_count(
+            crate::harness_hooks::record_thread_count(
                 THREAD_COUNT_TRACE_CLONE_INC,
                 vm as *const ThreadState as u32,
                 vm.tid,
