@@ -126,8 +126,8 @@ fn get_process_state(base: u32, vm: &ThreadState) -> *mut ProcessState {
 #[inline(always)]
 unsafe fn load_fd_entry_ptr(entry: *const FdEntry) -> FdEntry {
     unsafe {
-        let ofd_id = (&*(core::ptr::addr_of!((*entry).ofd_id) as *const AtomicU32))
-            .load(Ordering::Acquire);
+        let ofd_id =
+            (&*(core::ptr::addr_of!((*entry).ofd_id) as *const AtomicU32)).load(Ordering::Acquire);
         let fd_flags = (&*(core::ptr::addr_of!((*entry).fd_flags) as *const AtomicU32))
             .load(Ordering::Relaxed);
         FdEntry { ofd_id, fd_flags }
@@ -336,7 +336,13 @@ pub fn patch_blocked_fd_entry_for_resume(base: u32, vm: &ThreadState) -> Option<
         let entry = core::ptr::addr_of_mut!((*ps).fd_table[fd]);
         let saved = load_fd_entry_ptr(entry);
         if saved.ofd_id != ofd_id {
-            store_fd_entry_ptr(entry, FdEntry { ofd_id, fd_flags: saved.fd_flags });
+            store_fd_entry_ptr(
+                entry,
+                FdEntry {
+                    ofd_id,
+                    fd_flags: saved.fd_flags,
+                },
+            );
         }
         Some(saved)
     }
@@ -443,7 +449,10 @@ pub fn open_pipe(
         let ps = get_process_state(base, vm);
         store_fd_entry_ptr(
             core::ptr::addr_of_mut!((*ps).fd_table[newfd]),
-            FdEntry { ofd_id, fd_flags: cloexec },
+            FdEntry {
+                ofd_id,
+                fd_flags: cloexec,
+            },
         );
         newfd as i64
     }
@@ -484,7 +493,10 @@ pub fn open_socket(vm: &mut ThreadState, base: u32, socket_idx: u32, flags: i32)
         let ps = get_process_state(base, vm);
         store_fd_entry_ptr(
             core::ptr::addr_of_mut!((*ps).fd_table[newfd]),
-            FdEntry { ofd_id, fd_flags: cloexec },
+            FdEntry {
+                ofd_id,
+                fd_flags: cloexec,
+            },
         );
         newfd as i64
     }
@@ -515,7 +527,10 @@ pub fn open_epoll(vm: &mut ThreadState, base: u32, epoll_idx: u32, flags: i32) -
         let ps = get_process_state(base, vm);
         store_fd_entry_ptr(
             core::ptr::addr_of_mut!((*ps).fd_table[newfd]),
-            FdEntry { ofd_id, fd_flags: cloexec },
+            FdEntry {
+                ofd_id,
+                fd_flags: cloexec,
+            },
         );
         newfd as i64
     }
@@ -544,7 +559,10 @@ pub fn open_eventfd(vm: &mut ThreadState, base: u32, initval: u64, flags: i32) -
         let ps = get_process_state(base, vm);
         store_fd_entry_ptr(
             core::ptr::addr_of_mut!((*ps).fd_table[newfd]),
-            FdEntry { ofd_id, fd_flags: cloexec },
+            FdEntry {
+                ofd_id,
+                fd_flags: cloexec,
+            },
         );
         newfd as i64
     }
@@ -573,7 +591,10 @@ pub fn open_devnull(vm: &mut ThreadState, base: u32, flags: i32) -> i64 {
         let ps = get_process_state(base, vm);
         store_fd_entry_ptr(
             core::ptr::addr_of_mut!((*ps).fd_table[newfd]),
-            FdEntry { ofd_id, fd_flags: cloexec },
+            FdEntry {
+                ofd_id,
+                fd_flags: cloexec,
+            },
         );
         newfd as i64
     }
@@ -673,7 +694,10 @@ pub fn sys_dup3(vm: &mut ThreadState, base: u32, oldfd: u64, newfd: u64, flags: 
         };
         store_fd_entry_ptr(
             core::ptr::addr_of_mut!((*ps).fd_table[newfd as usize]),
-            FdEntry { ofd_id: entry.ofd_id, fd_flags: cloexec },
+            FdEntry {
+                ofd_id: entry.ofd_id,
+                fd_flags: cloexec,
+            },
         );
         newfd as i64
     }
@@ -695,7 +719,10 @@ pub fn sys_fcntl(vm: &mut ThreadState, base: u32, fd: u64, cmd: u64, arg: u64) -
                 let ps = get_process_state(base, vm);
                 store_fd_entry_ptr(
                     core::ptr::addr_of_mut!((*ps).fd_table[newfd]),
-                    FdEntry { ofd_id: entry.ofd_id, fd_flags: 0 },
+                    FdEntry {
+                        ofd_id: entry.ofd_id,
+                        fd_flags: 0,
+                    },
                 );
                 newfd as i64
             }
@@ -711,7 +738,10 @@ pub fn sys_fcntl(vm: &mut ThreadState, base: u32, fd: u64, cmd: u64, arg: u64) -
                 let ps = get_process_state(base, vm);
                 store_fd_entry_ptr(
                     core::ptr::addr_of_mut!((*ps).fd_table[newfd]),
-                    FdEntry { ofd_id: entry.ofd_id, fd_flags: FD_CLOEXEC },
+                    FdEntry {
+                        ofd_id: entry.ofd_id,
+                        fd_flags: FD_CLOEXEC,
+                    },
                 );
                 newfd as i64
             }
@@ -724,7 +754,10 @@ pub fn sys_fcntl(vm: &mut ThreadState, base: u32, fd: u64, cmd: u64, arg: u64) -
                     let ps = get_process_state(base, vm);
                     store_fd_entry_ptr(
                         core::ptr::addr_of_mut!((*ps).fd_table[fd as usize]),
-                        FdEntry { ofd_id: entry.ofd_id, fd_flags: arg as u32 & FD_CLOEXEC },
+                        FdEntry {
+                            ofd_id: entry.ofd_id,
+                            fd_flags: arg as u32 & FD_CLOEXEC,
+                        },
                     );
                     0
                 }
@@ -865,7 +898,10 @@ pub fn open_file(vm: &mut ThreadState, base: u32, ino: u32, flags: i32) -> i64 {
         let ps = get_process_state(base, vm);
         store_fd_entry_ptr(
             core::ptr::addr_of_mut!((*ps).fd_table[newfd]),
-            FdEntry { ofd_id, fd_flags: cloexec },
+            FdEntry {
+                ofd_id,
+                fd_flags: cloexec,
+            },
         );
         newfd as i64
     }
@@ -973,7 +1009,10 @@ pub fn close_all_for_process_without_backend_cleanup(base: u32, vm: &ThreadState
 
 /// Get the current offset of the OFD associated with fd.
 pub fn get_offset(base: u32, vm: &ThreadState, fd: u64) -> u64 {
-    unsafe { get_fd_entry(base, vm, fd).map_or(0, |entry| ofd_table()[entry.ofd_id as usize].offset as u64) }
+    unsafe {
+        get_fd_entry(base, vm, fd)
+            .map_or(0, |entry| ofd_table()[entry.ofd_id as usize].offset as u64)
+    }
 }
 
 /// Advance the offset of the OFD associated with fd.

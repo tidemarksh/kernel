@@ -392,7 +392,9 @@ unsafe fn write_scalar_with_mode(
     use_gen: bool,
     bytewise: bool,
 ) {
-    unsafe { write_scalar_with_mode_and_sync(base, addr, bytes, use_lock, use_gen, bytewise, None) };
+    unsafe {
+        write_scalar_with_mode_and_sync(base, addr, bytes, use_lock, use_gen, bytewise, None)
+    };
 }
 
 #[inline(always)]
@@ -410,7 +412,11 @@ unsafe fn write_scalar_with_mode_and_sync(
     let reservation_lock = sync.map_or(unsafe { RESERVATION_LOCK }, |ctx| ctx.reservation_lock);
     let thread_count = sync.map_or(unsafe { THREAD_COUNT }, |ctx| ctx.thread_count);
     let is_multi = unsafe { is_multi_threaded_with(thread_count) };
-    let mask = if is_multi { stripe_mask(addr, bytes.len()) } else { 0 };
+    let mask = if is_multi {
+        stripe_mask(addr, bytes.len())
+    } else {
+        0
+    };
     if is_multi {
         if use_lock {
             unsafe { lock_mask_with(reservation_lock, mask) };

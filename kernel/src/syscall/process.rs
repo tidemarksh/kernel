@@ -1250,7 +1250,11 @@ fn complete_execve_in_place_inner(
     crate::elf::zero_fill_load_padding(base, loaded_end, load_brk_start);
     elf_result.brk_start = load_brk_start;
     let main_segments = unsafe {
-        crate::elf::collect_load_segments(main_bytes.as_ptr() as u32, main_bytes.len() as u32, main_bias)
+        crate::elf::collect_load_segments(
+            main_bytes.as_ptr() as u32,
+            main_bytes.len() as u32,
+            main_bias,
+        )
     };
     let Ok(main_segments) = main_segments else {
         return ENOEXEC;

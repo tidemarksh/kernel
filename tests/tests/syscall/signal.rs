@@ -300,8 +300,7 @@ fn signal_trampoline_step_restores_context_without_executable_stack() {
     // Simulate a handler that immediately returns with `ret`.
     t.vm.pc = trampoline_pc;
 
-    let remaining =
-        tidemark_kernel::abi::thread_step(&mut t.vm as *mut ThreadState as u32, 1);
+    let remaining = tidemark_kernel::abi::thread_step(&mut t.vm as *mut ThreadState as u32, 1);
     assert_eq!(remaining, 0);
     assert_eq!(t.vm.status, STATUS_OK);
     assert_eq!(t.vm.pc, original_pc);

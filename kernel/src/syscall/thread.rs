@@ -451,13 +451,7 @@ pub fn sys_exit(vm: &mut ThreadState, base: u32, exit_code: u64) -> i32 {
 }
 
 pub fn terminate_process(vm: &mut ThreadState, base: u32, exit_code: i32, term_signal: i32) -> i32 {
-    terminate_process_with_reason(
-        vm,
-        base,
-        exit_code,
-        term_signal,
-        TERMINATE_REASON_UNKNOWN,
-    )
+    terminate_process_with_reason(vm, base, exit_code, term_signal, TERMINATE_REASON_UNKNOWN)
 }
 
 pub fn terminate_process_with_reason(
