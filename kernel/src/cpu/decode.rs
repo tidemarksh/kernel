@@ -2,7 +2,7 @@
 //!
 //! Reference: RISC-V ISA spec V20191213
 //!   (https://github.com/riscv/riscv-isa-manual/releases/tag/Ratified-IMAFDQC)
-//!   §2 (RV32I), §5 (RV64I), §7 (M), §8 (A), §12 (C)
+//!   §2 (RV32I), §5 (RV64I), §7 (M), §8 (A), §16 (C)
 //!
 //! All immediate extraction follows the spec's bit numbering exactly.
 

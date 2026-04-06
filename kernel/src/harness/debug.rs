@@ -1034,3 +1034,365 @@ pub fn execve_value1() -> u64 {
     }
     unsafe { core::ptr::read(core::ptr::addr_of!(LAST_EXECVE_VALUE1)) }
 }
+
+const CPU_EXEC_TRACE_CAP: usize = 64;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct JalrTraceSummary {
+    pub pc: u64,
+    pub rs1_value: u64,
+    pub target: u64,
+    pub rd: u32,
+    pub rs1: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ZeroRegTraceSummary {
+    pub tid: i32,
+    pub pc: u64,
+    pub raw: u32,
+    pub reg: u32,
+    pub prev_value: u64,
+    pub sp: u64,
+    pub s11: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RegWriteTraceSummary {
+    pub tid: i32,
+    pub pc: u64,
+    pub raw: u32,
+    pub source: u32,
+    pub prev_value: u64,
+    pub value: u64,
+    pub rs1: u32,
+    pub rs1_value: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ExecTraceEntry {
+    pub pc: u64,
+    pub raw: u32,
+    pub step: u32,
+    pub sp: u64,
+    pub ra: u64,
+    pub a0: u64,
+    pub s11: u64,
+}
+
+static mut LAST_JALR_TRACE: JalrTraceSummary = JalrTraceSummary {
+    pc: 0,
+    rs1_value: 0,
+    target: 0,
+    rd: 0,
+    rs1: 0,
+};
+
+static mut LAST_ZERO_REG_TRACE: ZeroRegTraceSummary = ZeroRegTraceSummary {
+    tid: 0,
+    pc: 0,
+    raw: 0,
+    reg: 0,
+    prev_value: 0,
+    sp: 0,
+    s11: 0,
+};
+
+static mut LAST_S11_WRITE_TRACE: RegWriteTraceSummary = RegWriteTraceSummary {
+    tid: 0,
+    pc: 0,
+    raw: 0,
+    source: 0,
+    prev_value: 0,
+    value: 0,
+    rs1: 0,
+    rs1_value: 0,
+};
+
+static mut LAST_SP_WRITE_TRACE: RegWriteTraceSummary = RegWriteTraceSummary {
+    tid: 0,
+    pc: 0,
+    raw: 0,
+    source: 0,
+    prev_value: 0,
+    value: 0,
+    rs1: 0,
+    rs1_value: 0,
+};
+
+static mut LAST_TP_WRITE_TRACE: RegWriteTraceSummary = RegWriteTraceSummary {
+    tid: 0,
+    pc: 0,
+    raw: 0,
+    source: 0,
+    prev_value: 0,
+    value: 0,
+    rs1: 0,
+    rs1_value: 0,
+};
+
+static mut EXEC_TRACE_RING: [ExecTraceEntry; CPU_EXEC_TRACE_CAP] = [ExecTraceEntry {
+    pc: 0,
+    raw: 0,
+    step: 0,
+    sp: 0,
+    ra: 0,
+    a0: 0,
+    s11: 0,
+}; CPU_EXEC_TRACE_CAP];
+static mut EXEC_TRACE_RING_LEN: u32 = 0;
+static mut EXEC_TRACE_RING_NEXT: u32 = 0;
+
+pub fn record_exec_trace(pc: u64, raw: u32, step: u64, x: &[u64; 32]) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (pc, raw, step, x);
+        return;
+    }
+    unsafe {
+        let next = core::ptr::read(core::ptr::addr_of!(EXEC_TRACE_RING_NEXT));
+        let slot = (next as usize) % CPU_EXEC_TRACE_CAP;
+        core::ptr::write(
+            core::ptr::addr_of_mut!(EXEC_TRACE_RING[slot]),
+            ExecTraceEntry {
+                pc,
+                raw,
+                step: step as u32,
+                sp: x[2],
+                ra: x[1],
+                a0: x[10],
+                s11: x[27],
+            },
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!(EXEC_TRACE_RING_LEN),
+            core::ptr::read(core::ptr::addr_of!(EXEC_TRACE_RING_LEN))
+                .saturating_add(1)
+                .min(CPU_EXEC_TRACE_CAP as u32),
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!(EXEC_TRACE_RING_NEXT),
+            next.wrapping_add(1),
+        );
+    }
+}
+
+pub fn record_jalr(pc: u64, rd: usize, rs1: usize, rs1_value: u64, target: u64) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (pc, rd, rs1, rs1_value, target);
+        return;
+    }
+    if rs1 == 1 || target < 0x1000 {
+        unsafe {
+            core::ptr::write(
+                core::ptr::addr_of_mut!(LAST_JALR_TRACE),
+                JalrTraceSummary {
+                    pc,
+                    rs1_value,
+                    target,
+                    rd: rd as u32,
+                    rs1: rs1 as u32,
+                },
+            );
+        }
+    }
+}
+
+pub fn record_zero_reg_transition(
+    tid: i32,
+    pc: u64,
+    raw: u32,
+    prev_sp: u64,
+    prev_s11: u64,
+    x: &[u64; 32],
+) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (tid, pc, raw, prev_sp, prev_s11, x);
+        return;
+    }
+    unsafe {
+        if prev_s11 != 0 && x[27] == 0 {
+            core::ptr::write(
+                core::ptr::addr_of_mut!(LAST_ZERO_REG_TRACE),
+                ZeroRegTraceSummary {
+                    tid,
+                    pc,
+                    raw,
+                    reg: 27,
+                    prev_value: prev_s11,
+                    sp: x[2],
+                    s11: x[27],
+                },
+            );
+            return;
+        }
+        if prev_sp != 0 && x[2] == 0 {
+            core::ptr::write(
+                core::ptr::addr_of_mut!(LAST_ZERO_REG_TRACE),
+                ZeroRegTraceSummary {
+                    tid,
+                    pc,
+                    raw,
+                    reg: 2,
+                    prev_value: prev_sp,
+                    sp: x[2],
+                    s11: x[27],
+                },
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn record_special_reg_transitions(
+    tid: i32,
+    pc: u64,
+    raw: u32,
+    source: u32,
+    prev_sp: u64,
+    prev_tp: u64,
+    prev_s11: u64,
+    x: &[u64; 32],
+) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (tid, pc, raw, source, prev_sp, prev_tp, prev_s11, x);
+        return;
+    }
+    unsafe {
+        let rs1 = if raw == 0 {
+            0
+        } else {
+            crate::cpu::decode::rs1(raw) as u32
+        };
+        let rs1_value = if raw == 0 { 0 } else { x[rs1 as usize] };
+        if prev_s11 != x[27] {
+            core::ptr::write(
+                core::ptr::addr_of_mut!(LAST_S11_WRITE_TRACE),
+                RegWriteTraceSummary {
+                    tid,
+                    pc,
+                    raw,
+                    source,
+                    prev_value: prev_s11,
+                    value: x[27],
+                    rs1,
+                    rs1_value,
+                },
+            );
+        }
+        if prev_sp != x[2] {
+            core::ptr::write(
+                core::ptr::addr_of_mut!(LAST_SP_WRITE_TRACE),
+                RegWriteTraceSummary {
+                    tid,
+                    pc,
+                    raw,
+                    source,
+                    prev_value: prev_sp,
+                    value: x[2],
+                    rs1,
+                    rs1_value,
+                },
+            );
+        }
+        if prev_tp != x[4] {
+            core::ptr::write(
+                core::ptr::addr_of_mut!(LAST_TP_WRITE_TRACE),
+                RegWriteTraceSummary {
+                    tid,
+                    pc,
+                    raw,
+                    source,
+                    prev_value: prev_tp,
+                    value: x[4],
+                    rs1,
+                    rs1_value,
+                },
+            );
+        }
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn last_jalr_trace() -> JalrTraceSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        return JalrTraceSummary {
+            pc: 0,
+            rs1_value: 0,
+            target: 0,
+            rd: 0,
+            rs1: 0,
+        };
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(LAST_JALR_TRACE)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn last_zero_reg_trace() -> ZeroRegTraceSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        return ZeroRegTraceSummary {
+            tid: 0,
+            pc: 0,
+            raw: 0,
+            reg: 0,
+            prev_value: 0,
+            sp: 0,
+            s11: 0,
+        };
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(LAST_ZERO_REG_TRACE)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn last_s11_write_trace() -> RegWriteTraceSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        return RegWriteTraceSummary {
+            tid: 0,
+            pc: 0,
+            raw: 0,
+            source: 0,
+            prev_value: 0,
+            value: 0,
+            rs1: 0,
+            rs1_value: 0,
+        };
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(LAST_S11_WRITE_TRACE)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn last_sp_write_trace() -> RegWriteTraceSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        return RegWriteTraceSummary {
+            tid: 0,
+            pc: 0,
+            raw: 0,
+            source: 0,
+            prev_value: 0,
+            value: 0,
+            rs1: 0,
+            rs1_value: 0,
+        };
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(LAST_SP_WRITE_TRACE)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn last_tp_write_trace() -> RegWriteTraceSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        return RegWriteTraceSummary {
+            tid: 0,
+            pc: 0,
+            raw: 0,
+            source: 0,
+            prev_value: 0,
+            value: 0,
+            rs1: 0,
+            rs1_value: 0,
+        };
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(LAST_TP_WRITE_TRACE)) }
+}
