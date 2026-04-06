@@ -39,6 +39,18 @@ use crate::types::ThreadState;
 pub const SYSINFO_TOTALRAM_BYTES: u64 = 256 * 1024 * 1024;
 pub const SYSINFO_FREERAM_BYTES: u64 = 128 * 1024 * 1024;
 pub const SYSINFO_MEM_UNIT: u32 = 1;
+const RISCV_HWPROBE_KEY_MVENDORID: i64 = 0;
+const RISCV_HWPROBE_KEY_MARCHID: i64 = 1;
+const RISCV_HWPROBE_KEY_MIMPID: i64 = 2;
+const RISCV_HWPROBE_KEY_BASE_BEHAVIOR: i64 = 3;
+const RISCV_HWPROBE_KEY_IMA_EXT_0: i64 = 4;
+const RISCV_HWPROBE_KEY_CPUPERF_0: i64 = 5;
+const RISCV_HWPROBE_KEY_ZICBOZ_BLOCK_SIZE: i64 = 6;
+const RISCV_HWPROBE_BASE_BEHAVIOR_IMA: u64 = 1 << 0;
+const RISCV_HWPROBE_IMA_FD: u64 = 1 << 0;
+const RISCV_HWPROBE_IMA_C: u64 = 1 << 1;
+const RISCV_HWPROBE_MISALIGNED_UNKNOWN: u64 = 0;
+const RISCV_HWPROBE_WHICH_CPUS: u64 = 1 << 0;
 
 fn guest_range_valid(addr: u64, len: usize) -> bool {
     let len = len as u64;
@@ -170,6 +182,68 @@ pub fn sys_getrandom(vm: &ThreadState, base: u32, buf: u64, len: u64, _flags: u6
         }
     }
     count as i64
+}
+
+pub fn sys_riscv_hwprobe(
+    _vm: &ThreadState,
+    base: u32,
+    pairs_addr: u64,
+    pair_count: u64,
+    cpusetsize: u64,
+    cpus_addr: u64,
+    flags: u64,
+) -> i64 {
+    if (flags & !RISCV_HWPROBE_WHICH_CPUS) != 0 {
+        return EINVAL;
+    }
+    let pairs_len = match (pair_count as usize).checked_mul(16) {
+        Some(len) => len,
+        None => return EFAULT,
+    };
+    if pair_count != 0
+        && (!guest_range_valid(pairs_addr, pairs_len)
+            || crate::syscall::memory::range_has_prot_none(pairs_addr, pairs_len as u64))
+    {
+        return EFAULT;
+    }
+    if cpus_addr != 0
+        && cpusetsize != 0
+        && (!guest_range_valid(cpus_addr, cpusetsize as usize)
+            || crate::syscall::memory::range_has_prot_none(cpus_addr, cpusetsize))
+    {
+        return EFAULT;
+    }
+
+    for index in 0..pair_count {
+        let pair_addr = pairs_addr + index * 16;
+        let key = unsafe { guest_mem::read_i64(base, pair_addr) };
+        let value = match key {
+            RISCV_HWPROBE_KEY_MVENDORID | RISCV_HWPROBE_KEY_MARCHID | RISCV_HWPROBE_KEY_MIMPID => 0,
+            RISCV_HWPROBE_KEY_BASE_BEHAVIOR => RISCV_HWPROBE_BASE_BEHAVIOR_IMA,
+            RISCV_HWPROBE_KEY_IMA_EXT_0 => RISCV_HWPROBE_IMA_FD | RISCV_HWPROBE_IMA_C,
+            RISCV_HWPROBE_KEY_CPUPERF_0 => RISCV_HWPROBE_MISALIGNED_UNKNOWN,
+            RISCV_HWPROBE_KEY_ZICBOZ_BLOCK_SIZE => 0,
+            _ => {
+                unsafe {
+                    guest_mem::write_u64(base, pair_addr, (-1i64) as u64);
+                    guest_mem::write_u64(base, pair_addr + 8, 0);
+                }
+                continue;
+            }
+        };
+        unsafe {
+            guest_mem::write_u64(base, pair_addr + 8, value);
+        }
+    }
+
+    if (flags & RISCV_HWPROBE_WHICH_CPUS) != 0 && cpus_addr != 0 && cpusetsize != 0 {
+        unsafe {
+            guest_mem::zero_mem(base, cpus_addr, cpusetsize as usize);
+            guest_mem::write_u8(base, cpus_addr, 1);
+        }
+    }
+
+    0
 }
 
 /// getuid/geteuid/getgid/getegid: read credentials from ThreadState.

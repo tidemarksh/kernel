@@ -1249,6 +1249,34 @@ fn complete_execve_in_place_inner(
         .max(interp_elf.map(|elf| elf.load_end).unwrap_or(0));
     crate::elf::zero_fill_load_padding(base, loaded_end, load_brk_start);
     elf_result.brk_start = load_brk_start;
+    let main_segments = unsafe {
+        crate::elf::collect_load_segments(main_bytes.as_ptr() as u32, main_bytes.len() as u32, main_bias)
+    };
+    let Ok(main_segments) = main_segments else {
+        return ENOEXEC;
+    };
+    for segment in main_segments {
+        crate::syscall::memory::register_elf_load_segment(segment.start, segment.end, segment.prot);
+    }
+    if let Some(interp_bytes) = interp_bytes.as_deref() {
+        let interp_segments = unsafe {
+            crate::elf::collect_load_segments(
+                interp_bytes.as_ptr() as u32,
+                interp_bytes.len() as u32,
+                interp_bias,
+            )
+        };
+        let Ok(interp_segments) = interp_segments else {
+            return ENOEXEC;
+        };
+        for segment in interp_segments {
+            crate::syscall::memory::register_elf_load_segment(
+                segment.start,
+                segment.end,
+                segment.prot,
+            );
+        }
+    }
     crate::harness_debug::record_execve_stage(4, elf_result.brk_start, elf_result.entry);
     let stack_top = crate::syscall::memory::map_initial_stack(
         base,

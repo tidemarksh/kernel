@@ -6,6 +6,28 @@
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
+#[derive(Clone, Copy)]
+pub struct GuestMemorySyncContext {
+    reservation_gen: *const AtomicU32,
+    reservation_lock: *const AtomicU32,
+    thread_count: *const AtomicU32,
+}
+
+impl GuestMemorySyncContext {
+    #[inline(always)]
+    pub const fn new(
+        reservation_gen: *const AtomicU32,
+        reservation_lock: *const AtomicU32,
+        thread_count: *const AtomicU32,
+    ) -> Self {
+        Self {
+            reservation_gen,
+            reservation_lock,
+            thread_count,
+        }
+    }
+}
+
 /// Reservation table pointers (set once during process init).
 static mut RESERVATION_GEN: *const AtomicU32 = core::ptr::null();
 /// Granule spinlocks for LR/SC + ordinary store serialization.
@@ -59,8 +81,12 @@ pub unsafe fn init(
 
 #[inline(always)]
 unsafe fn is_multi_threaded() -> bool {
-    let p = unsafe { THREAD_COUNT };
-    !p.is_null() && unsafe { (*p).load(Ordering::Relaxed) } > 1
+    unsafe { is_multi_threaded_with(THREAD_COUNT) }
+}
+
+#[inline(always)]
+unsafe fn is_multi_threaded_with(thread_count: *const AtomicU32) -> bool {
+    !thread_count.is_null() && unsafe { (*thread_count).load(Ordering::Relaxed) } > 1
 }
 
 // ---------------------------------------------------------------------------
@@ -157,11 +183,7 @@ pub unsafe fn read_u16(base: u32, addr: u64) -> u16 {
 pub unsafe fn read_u32(base: u32, addr: u64) -> u32 {
     record_access(addr, 4, ACCESS_READ);
     let ptr = (base + addr as u32) as usize;
-    if (ptr & 3) == 0 {
-        unsafe { (*(ptr as *const AtomicU32)).load(Ordering::Relaxed) }
-    } else {
-        unsafe { (ptr as *const u32).read_unaligned() }
-    }
+    unsafe { (ptr as *const u32).read_unaligned() }
 }
 
 /// Read a `u64` from guest memory.
@@ -172,11 +194,7 @@ pub unsafe fn read_u32(base: u32, addr: u64) -> u32 {
 pub unsafe fn read_u64(base: u32, addr: u64) -> u64 {
     record_access(addr, 8, ACCESS_READ);
     let ptr = (base + addr as u32) as usize;
-    if (ptr & 7) == 0 {
-        unsafe { (*(ptr as *const core::sync::atomic::AtomicU64)).load(Ordering::Relaxed) }
-    } else {
-        unsafe { (ptr as *const u64).read_unaligned() }
-    }
+    unsafe { (ptr as *const u64).read_unaligned() }
 }
 
 /// Read an `i8` from guest memory.
@@ -236,7 +254,12 @@ pub unsafe fn read_bytes(base: u32, addr: u64, buf: &mut [u8]) {
 
 #[inline(always)]
 unsafe fn bump_gen(slot: usize) {
-    let p = unsafe { RESERVATION_GEN };
+    unsafe { bump_gen_with(RESERVATION_GEN, slot) };
+}
+
+#[inline(always)]
+unsafe fn bump_gen_with(reservation_gen: *const AtomicU32, slot: usize) {
+    let p = reservation_gen;
     if !p.is_null() {
         unsafe { (*p.add(slot)).fetch_add(1, Ordering::SeqCst) };
     }
@@ -244,7 +267,12 @@ unsafe fn bump_gen(slot: usize) {
 
 #[inline(always)]
 unsafe fn lock_slot(slot: usize) {
-    let p = unsafe { RESERVATION_LOCK };
+    unsafe { lock_slot_with(RESERVATION_LOCK, slot) };
+}
+
+#[inline(always)]
+unsafe fn lock_slot_with(reservation_lock: *const AtomicU32, slot: usize) {
+    let p = reservation_lock;
     if p.is_null() {
         return;
     }
@@ -259,7 +287,12 @@ unsafe fn lock_slot(slot: usize) {
 
 #[inline(always)]
 unsafe fn unlock_slot(slot: usize) {
-    let p = unsafe { RESERVATION_LOCK };
+    unsafe { unlock_slot_with(RESERVATION_LOCK, slot) };
+}
+
+#[inline(always)]
+unsafe fn unlock_slot_with(reservation_lock: *const AtomicU32, slot: usize) {
+    let p = reservation_lock;
     if p.is_null() {
         return;
     }
@@ -296,37 +329,114 @@ fn stripe_mask(addr: u64, len: usize) -> u64 {
 
 #[inline(always)]
 unsafe fn lock_mask(mask: u64) {
+    unsafe { lock_mask_with(RESERVATION_LOCK, mask) };
+}
+
+#[inline(always)]
+unsafe fn lock_mask_with(reservation_lock: *const AtomicU32, mask: u64) {
     for slot in 0..64 {
         if mask & (1u64 << slot) != 0 {
-            unsafe { lock_slot(slot) };
+            unsafe { lock_slot_with(reservation_lock, slot) };
         }
     }
 }
 
 #[inline(always)]
 unsafe fn unlock_mask(mask: u64) {
+    unsafe { unlock_mask_with(RESERVATION_LOCK, mask) };
+}
+
+#[inline(always)]
+unsafe fn unlock_mask_with(reservation_lock: *const AtomicU32, mask: u64) {
     for slot in (0..64).rev() {
         if mask & (1u64 << slot) != 0 {
-            unsafe { unlock_slot(slot) };
+            unsafe { unlock_slot_with(reservation_lock, slot) };
         }
     }
 }
 
 #[inline(always)]
 unsafe fn seqlock_begin_mask(mask: u64) {
+    unsafe { seqlock_begin_mask_with(RESERVATION_GEN, mask) };
+}
+
+#[inline(always)]
+unsafe fn seqlock_begin_mask_with(reservation_gen: *const AtomicU32, mask: u64) {
     for slot in 0..64 {
         if mask & (1u64 << slot) != 0 {
-            unsafe { bump_gen(slot) };
+            unsafe { bump_gen_with(reservation_gen, slot) };
         }
     }
 }
 
 #[inline(always)]
 unsafe fn seqlock_end_mask(mask: u64) {
+    unsafe { seqlock_end_mask_with(RESERVATION_GEN, mask) };
+}
+
+#[inline(always)]
+unsafe fn seqlock_end_mask_with(reservation_gen: *const AtomicU32, mask: u64) {
     for slot in 0..64 {
         if mask & (1u64 << slot) != 0 {
-            unsafe { bump_gen(slot) };
+            unsafe { bump_gen_with(reservation_gen, slot) };
         }
+    }
+}
+
+#[inline(always)]
+unsafe fn write_scalar_with_mode(
+    base: u32,
+    addr: u64,
+    bytes: &[u8],
+    use_lock: bool,
+    use_gen: bool,
+    bytewise: bool,
+) {
+    unsafe { write_scalar_with_mode_and_sync(base, addr, bytes, use_lock, use_gen, bytewise, None) };
+}
+
+#[inline(always)]
+unsafe fn write_scalar_with_mode_and_sync(
+    base: u32,
+    addr: u64,
+    bytes: &[u8],
+    use_lock: bool,
+    use_gen: bool,
+    bytewise: bool,
+    sync: Option<GuestMemorySyncContext>,
+) {
+    let dst = (base + addr as u32) as *mut u8;
+    let reservation_gen = sync.map_or(unsafe { RESERVATION_GEN }, |ctx| ctx.reservation_gen);
+    let reservation_lock = sync.map_or(unsafe { RESERVATION_LOCK }, |ctx| ctx.reservation_lock);
+    let thread_count = sync.map_or(unsafe { THREAD_COUNT }, |ctx| ctx.thread_count);
+    let is_multi = unsafe { is_multi_threaded_with(thread_count) };
+    let mask = if is_multi { stripe_mask(addr, bytes.len()) } else { 0 };
+    if is_multi {
+        if use_lock {
+            unsafe { lock_mask_with(reservation_lock, mask) };
+        }
+        if use_gen {
+            unsafe { seqlock_begin_mask_with(reservation_gen, mask) };
+        }
+        if bytewise {
+            for (index, byte) in bytes.iter().copied().enumerate() {
+                unsafe { dst.add(index).write(byte) };
+            }
+        } else {
+            unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len()) };
+        }
+        if use_gen {
+            unsafe { seqlock_end_mask_with(reservation_gen, mask) };
+        }
+        if use_lock {
+            unsafe { unlock_mask_with(reservation_lock, mask) };
+        }
+    } else if bytewise {
+        for (index, byte) in bytes.iter().copied().enumerate() {
+            unsafe { dst.add(index).write(byte) };
+        }
+    } else {
+        unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len()) };
     }
 }
 
@@ -376,25 +486,8 @@ pub unsafe fn write_u16(base: u32, addr: u64, val: u16) {
 #[inline(always)]
 pub unsafe fn write_u32(base: u32, addr: u64, val: u32) {
     record_access(addr, 4, ACCESS_WRITE);
-    let ptr = (base + addr as u32) as usize;
-    if unsafe { is_multi_threaded() } {
-        let mask = stripe_mask(addr, 4);
-        unsafe { lock_mask(mask) };
-        unsafe { seqlock_begin_mask(mask) };
-        if (ptr & 3) == 0 {
-            unsafe { (*(ptr as *const AtomicU32)).store(val, Ordering::Relaxed) };
-        } else {
-            unsafe { (ptr as *mut u32).write_unaligned(val) };
-        }
-        unsafe { seqlock_end_mask(mask) };
-        unsafe { unlock_mask(mask) };
-    } else {
-        if (ptr & 3) == 0 {
-            unsafe { (*(ptr as *const AtomicU32)).store(val, Ordering::Relaxed) };
-        } else {
-            unsafe { (ptr as *mut u32).write_unaligned(val) };
-        }
-    }
+    let bytes = val.to_le_bytes();
+    unsafe { write_scalar_with_mode(base, addr, &bytes, true, true, false) };
 }
 
 /// Write a `u64` into guest memory.
@@ -404,29 +497,52 @@ pub unsafe fn write_u32(base: u32, addr: u64, val: u32) {
 #[inline(always)]
 pub unsafe fn write_u64(base: u32, addr: u64, val: u64) {
     record_access(addr, 8, ACCESS_WRITE);
-    let ptr = (base + addr as u32) as usize;
-    if unsafe { is_multi_threaded() } {
-        let mask = stripe_mask(addr, 8);
-        unsafe { lock_mask(mask) };
-        unsafe { seqlock_begin_mask(mask) };
-        if (ptr & 7) == 0 {
-            unsafe {
-                (*(ptr as *const core::sync::atomic::AtomicU64)).store(val, Ordering::Relaxed)
-            };
-        } else {
-            unsafe { (ptr as *mut u64).write_unaligned(val) };
-        }
-        unsafe { seqlock_end_mask(mask) };
-        unsafe { unlock_mask(mask) };
-    } else {
-        if (ptr & 7) == 0 {
-            unsafe {
-                (*(ptr as *const core::sync::atomic::AtomicU64)).store(val, Ordering::Relaxed)
-            };
-        } else {
-            unsafe { (ptr as *mut u64).write_unaligned(val) };
-        }
+    let bytes = val.to_le_bytes();
+    unsafe { write_scalar_with_mode(base, addr, &bytes, true, true, false) };
+}
+
+#[inline(always)]
+pub unsafe fn sync_context_from_process(
+    base: u32,
+    process_ptr: u32,
+) -> Option<GuestMemorySyncContext> {
+    if process_ptr == 0 {
+        return None;
     }
+    let ps = unsafe { &*((base as u64 + process_ptr as u64) as *const crate::types::ProcessState) };
+    Some(GuestMemorySyncContext::new(
+        core::ptr::addr_of!(ps.reservation_gen) as *const AtomicU32,
+        core::ptr::addr_of!(ps.reservation_lock) as *const AtomicU32,
+        core::ptr::addr_of!(ps.thread_count),
+    ))
+}
+
+#[inline(always)]
+pub unsafe fn write_u8_with_sync(base: u32, addr: u64, val: u8, sync: GuestMemorySyncContext) {
+    record_access(addr, 1, ACCESS_WRITE);
+    let bytes = [val];
+    unsafe { write_scalar_with_mode_and_sync(base, addr, &bytes, true, true, false, Some(sync)) };
+}
+
+#[inline(always)]
+pub unsafe fn write_u16_with_sync(base: u32, addr: u64, val: u16, sync: GuestMemorySyncContext) {
+    record_access(addr, 2, ACCESS_WRITE);
+    let bytes = val.to_le_bytes();
+    unsafe { write_scalar_with_mode_and_sync(base, addr, &bytes, true, true, false, Some(sync)) };
+}
+
+#[inline(always)]
+pub unsafe fn write_u32_with_sync(base: u32, addr: u64, val: u32, sync: GuestMemorySyncContext) {
+    record_access(addr, 4, ACCESS_WRITE);
+    let bytes = val.to_le_bytes();
+    unsafe { write_scalar_with_mode_and_sync(base, addr, &bytes, true, true, false, Some(sync)) };
+}
+
+#[inline(always)]
+pub unsafe fn write_u64_with_sync(base: u32, addr: u64, val: u64, sync: GuestMemorySyncContext) {
+    record_access(addr, 8, ACCESS_WRITE);
+    let bytes = val.to_le_bytes();
+    unsafe { write_scalar_with_mode_and_sync(base, addr, &bytes, true, true, false, Some(sync)) };
 }
 
 /// Copy bytes from `data` into guest memory.

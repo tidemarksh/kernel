@@ -753,11 +753,12 @@ pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
                 SIGCHLD | SIGURG | SIGWINCH => {} // ignore by default
                 SIGCONT => {}                     // ignore (no job control)
                 _ => {
-                    crate::syscall::thread::terminate_process(
+                    crate::syscall::thread::terminate_process_with_reason(
                         vm,
                         base,
                         128 + sig as i32,
                         sig as i32,
+                        crate::syscall::thread::TERMINATE_REASON_DEFAULT_SIGNAL,
                     );
                 }
             }

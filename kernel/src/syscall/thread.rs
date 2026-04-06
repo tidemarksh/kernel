@@ -48,6 +48,10 @@ const THREAD_COUNT_TRACE_EXIT_DEC: u32 = 3;
 const THREAD_COUNT_TRACE_TERMINATE: u32 = 4;
 const THREAD_COUNT_TRACE_EXEC_RESET: u32 = 5;
 
+pub const TERMINATE_REASON_UNKNOWN: u32 = 0;
+pub const TERMINATE_REASON_EXIT_GROUP: u32 = 1;
+pub const TERMINATE_REASON_DEFAULT_SIGNAL: u32 = 2;
+
 pub fn last_clone_spawn() -> (i32, u64, u64, u64, u64, u64) {
     unsafe {
         let t = LAST_CLONE_SPAWN;
@@ -447,6 +451,22 @@ pub fn sys_exit(vm: &mut ThreadState, base: u32, exit_code: u64) -> i32 {
 }
 
 pub fn terminate_process(vm: &mut ThreadState, base: u32, exit_code: i32, term_signal: i32) -> i32 {
+    terminate_process_with_reason(
+        vm,
+        base,
+        exit_code,
+        term_signal,
+        TERMINATE_REASON_UNKNOWN,
+    )
+}
+
+pub fn terminate_process_with_reason(
+    vm: &mut ThreadState,
+    base: u32,
+    exit_code: i32,
+    term_signal: i32,
+    _reason: u32,
+) -> i32 {
     vm.exit_code = exit_code;
     vm.term_signal = term_signal;
 
@@ -520,7 +540,7 @@ pub fn terminate_process(vm: &mut ThreadState, base: u32, exit_code: i32, term_s
 /// Marks the entire process dead so runtime/process teardown can proceed.
 /// https://man7.org/linux/man-pages/man2/exit_group.2.html
 pub fn sys_exit_group(vm: &mut ThreadState, base: u32, exit_code: u64) -> i32 {
-    terminate_process(vm, base, exit_code as i32, 0)
+    terminate_process_with_reason(vm, base, exit_code as i32, 0, TERMINATE_REASON_EXIT_GROUP)
 }
 
 /// clone: create a new thread or process.

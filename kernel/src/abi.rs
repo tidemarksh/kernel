@@ -141,6 +141,7 @@ pub const SYS_CLONE: u64 = 220;
 pub const SYS_EXECVE: u64 = 221;
 pub const SYS_MMAP: u64 = 222;
 pub const SYS_MPROTECT: u64 = 226;
+pub const SYS_RISCV_HWPROBE: u64 = 258;
 pub const SYS_WAIT4: u64 = 260;
 pub const SYS_PRLIMIT64: u64 = 261;
 pub const SYS_PRCTL: u64 = 167;
@@ -463,6 +464,7 @@ export_const_u64!(abi_sys_getegid, SYS_GETEGID);
 export_const_u64!(abi_sys_sysinfo, SYS_SYSINFO);
 export_const_u64!(abi_sys_mremap, SYS_MREMAP);
 export_const_u64!(abi_sys_mprotect, SYS_MPROTECT);
+export_const_u64!(abi_sys_riscv_hwprobe, SYS_RISCV_HWPROBE);
 export_const_u64!(abi_sys_prctl, SYS_PRCTL);
 export_const_u64!(abi_sys_getrandom, SYS_GETRANDOM);
 export_const_u64!(abi_sys_rseq, SYS_RSEQ);
@@ -1083,6 +1085,32 @@ pub extern "C" fn process_create(
         elf_result.brk_start = load_brk_start;
 
         crate::syscall::memory::init(elf_result.brk_start);
+        if let Ok(segments) = crate::elf::collect_load_segments(elf_ptr, elf_len, main_load_bias) {
+            for segment in segments {
+                crate::syscall::memory::register_elf_load_segment(
+                    segment.start,
+                    segment.end,
+                    segment.prot,
+                );
+            }
+        } else {
+            return 0;
+        }
+        if let Some((interp_ptr, interp_len, interp_bias, _)) = interp_load {
+            if let Ok(segments) =
+                crate::elf::collect_load_segments(interp_ptr, interp_len, interp_bias)
+            {
+                for segment in segments {
+                    crate::syscall::memory::register_elf_load_segment(
+                        segment.start,
+                        segment.end,
+                        segment.prot,
+                    );
+                }
+            } else {
+                return 0;
+            }
+        }
 
         // ProcessState lives in guest Memory (shared WebAssembly.Memory),
         // not in kernel Worker private memory (alloc.rs).

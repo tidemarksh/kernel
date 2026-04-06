@@ -25,6 +25,9 @@ const EM_RISCV: u16 = 243;
 const PT_INTERP: u32 = 3;
 const PT_LOAD: u32 = 1;
 const PT_TLS: u32 = 7;
+const PF_X: u32 = 0x1;
+const PF_W: u32 = 0x2;
+const PF_R: u32 = 0x4;
 
 // ELF64 header offsets
 const EI_CLASS: usize = 4;
@@ -38,6 +41,7 @@ const E_PHNUM: usize = 56;
 
 // ELF64 program header offsets
 const P_TYPE: usize = 0;
+const P_FLAGS: usize = 4;
 const P_OFFSET: usize = 8;
 const P_VADDR: usize = 16;
 const P_FILESZ: usize = 32;
@@ -83,6 +87,13 @@ pub struct ElfLoadResult {
     pub aux_phnum: u16,
     /// AT_BASE value exposed to the new process image.
     pub aux_base: u64,
+}
+
+#[derive(Clone, Copy)]
+pub struct ElfLoadSegment {
+    pub start: u64,
+    pub end: u64,
+    pub prot: i32,
 }
 
 /// Validate an ELF image and compute the metadata needed for loading it
@@ -268,6 +279,66 @@ pub fn zero_fill_load_padding(ram_base: u32, load_end: u64, brk_start: u64) {
     }
     unsafe {
         guest_mem::zero_mem(ram_base, load_end, (brk_start - load_end) as usize);
+    }
+}
+
+pub unsafe fn collect_load_segments(
+    elf_ptr: u32,
+    elf_len: u32,
+    load_bias: u64,
+) -> Result<Vec<ElfLoadSegment>, i32> {
+    unsafe {
+        let elf = core::slice::from_raw_parts(elf_ptr as *const u8, elf_len as usize);
+        if elf.len() < 64 {
+            return Err(-1);
+        }
+        if elf[0] != EI_MAG0 || elf[1] != EI_MAG1 || elf[2] != EI_MAG2 || elf[3] != EI_MAG3 {
+            return Err(-1);
+        }
+        let ph_off = read_u64_le(elf, E_PHOFF).ok_or(-6)? as usize;
+        let ph_entsize = read_u16_le(elf, E_PHENTSIZE).ok_or(-6)? as usize;
+        let ph_num = read_u16_le(elf, E_PHNUM).ok_or(-6)? as usize;
+        if ph_entsize < 56 {
+            return Err(-6);
+        }
+        let ph_size = ph_num.checked_mul(ph_entsize).ok_or(-6)?;
+        let ph_end = ph_off.checked_add(ph_size).ok_or(-6)?;
+        if ph_end > elf.len() {
+            return Err(-6);
+        }
+
+        let mut segments = Vec::new();
+        for index in 0..ph_num {
+            let start = ph_off + index * ph_entsize;
+            let ph = &elf[start..start + ph_entsize];
+            if read_u32_le(ph, P_TYPE) != Some(PT_LOAD) {
+                continue;
+            }
+            let p_vaddr = read_u64_le(ph, P_VADDR).ok_or(-6)?;
+            let p_memsz = read_u64_le(ph, P_MEMSZ).ok_or(-6)?;
+            if p_memsz == 0 {
+                continue;
+            }
+            let seg_start = p_vaddr.checked_add(load_bias).ok_or(-6)?;
+            let seg_end = seg_start.checked_add(p_memsz).ok_or(-6)?;
+            let flags = read_u32_le(ph, P_FLAGS).ok_or(-6)?;
+            let mut prot = crate::abi::PROT_NONE;
+            if (flags & PF_R) != 0 {
+                prot |= crate::abi::PROT_READ;
+            }
+            if (flags & PF_W) != 0 {
+                prot |= crate::abi::PROT_WRITE;
+            }
+            if (flags & PF_X) != 0 {
+                prot |= crate::abi::PROT_EXEC;
+            }
+            segments.push(ElfLoadSegment {
+                start: seg_start,
+                end: seg_end,
+                prot,
+            });
+        }
+        Ok(segments)
     }
 }
 

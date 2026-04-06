@@ -115,3 +115,32 @@ fn identity_syscalls() {
     }
     assert!(bytes.iter().any(|&b| b != 0));
 }
+
+#[test]
+fn riscv_hwprobe_reports_base_ima_and_common_ima_extensions() {
+    let t = TestVm::new();
+    let pairs = t.scratch + 0x4000;
+    let cpus = t.scratch + 0x4100;
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, pairs, 3);
+        tidemark_kernel::guest_mem::write_u64(t.base, pairs + 8, 0);
+        tidemark_kernel::guest_mem::write_u64(t.base, pairs + 16, 4);
+        tidemark_kernel::guest_mem::write_u64(t.base, pairs + 24, 0);
+        tidemark_kernel::guest_mem::write_u64(t.base, pairs + 32, 99);
+        tidemark_kernel::guest_mem::write_u64(t.base, pairs + 40, 0);
+        tidemark_kernel::guest_mem::write_u8(t.base, cpus, 0);
+    }
+
+    assert_eq!(
+        tidemark_kernel::syscall::identity::sys_riscv_hwprobe(&t.vm, t.base, pairs, 3, 8, cpus, 1),
+        0
+    );
+    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_i64(t.base, pairs) }, 3);
+    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u64(t.base, pairs + 8) }, 1);
+    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_i64(t.base, pairs + 16) }, 4);
+    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u64(t.base, pairs + 24) }, 0b11);
+    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_i64(t.base, pairs + 32) }, -1);
+    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u64(t.base, pairs + 40) }, 0);
+    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u8(t.base, cpus) }, 1);
+}

@@ -232,6 +232,69 @@ pub fn guest_range_accessible(base: u32, start: u64, len: u64) -> bool {
     !range_has_prot_none(start, len)
 }
 
+fn range_cover_end_with_prot(s: &AddressSpaceState, addr: u64, prot: i32) -> u64 {
+    let mut cover_end = 0u64;
+
+    if (prot & PROT_EXEC) == 0 && addr >= s.brk_base && addr < s.brk_current {
+        cover_end = s.brk_current;
+    }
+
+    for v in s.vmas.iter() {
+        if addr < v.start || addr >= v.end {
+            continue;
+        }
+        if v.prot == PROT_NONE || (v.prot & prot) != prot {
+            continue;
+        }
+        cover_end = cover_end.max(v.end);
+    }
+
+    cover_end
+}
+
+pub fn guest_range_permitted(start: u64, len: u64, prot: i32) -> bool {
+    if len == 0 {
+        return true;
+    }
+    let Some(end) = start.checked_add(len) else {
+        return false;
+    };
+    if start > u32::MAX as u64 || end > 0x8000_0000 || end > u32::MAX as u64 {
+        return false;
+    }
+
+    let s = ms();
+    let mut cur = start;
+    while cur < end {
+        let cover_end = range_cover_end_with_prot(s, cur, prot);
+        if cover_end <= cur {
+            return false;
+        }
+        cur = cover_end.min(end);
+    }
+    true
+}
+
+pub fn register_elf_load_segment(start: u64, end: u64, prot: i32) {
+    if start >= end {
+        return;
+    }
+    let start = page_align_down(start);
+    let end = page_align_up(end);
+    let s = ms();
+    s.vmas.push(Vma {
+        start,
+        end,
+        prot,
+        flags: (MAP_PRIVATE | MAP_FIXED) as i32,
+        fd: -1,
+        _pad: 0,
+        offset: 0,
+    });
+    s.vmas.sort_by_key(|v| v.start);
+    recompute_prot_none(s);
+}
+
 // =========================================================================
 // brk
 // =========================================================================

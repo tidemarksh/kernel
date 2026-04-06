@@ -1,6 +1,6 @@
 use tidemark_kernel::abi::{
-    self, CLONE_FS, CLONE_SIGHAND, CLONE_THREAD, CLONE_VM, EINTR, SIGALRM, SIGURG, STATUS_FAULT,
-    STATUS_OK, SYS_RT_SIGRETURN,
+    self, CLONE_FS, CLONE_SIGHAND, CLONE_THREAD, CLONE_VM, EINTR, SIGABRT, SIGALRM, SIGURG,
+    STATUS_FAULT, STATUS_OK, SYS_RT_SIGRETURN, SYS_TGKILL,
 };
 use tidemark_kernel::harness::TestVm;
 use tidemark_kernel::syscall::signal;
@@ -197,6 +197,30 @@ fn send_signal_to_tid_targets_requested_thread() {
 }
 
 #[test]
+fn tgkill_self_with_default_sigabrt_stops_at_syscall_boundary() {
+    let mut t = TestVm::new();
+    let pid = signal::pid_from_vm(&t.vm, t.base) as u64;
+    let tid = t.vm.tid as u64;
+
+    t.vm.x[10] = pid;
+    t.vm.x[11] = tid;
+    t.vm.x[12] = SIGABRT as u64;
+    t.vm.x[17] = SYS_TGKILL;
+
+    let status = tidemark_kernel::syscall::dispatch(&mut t.vm, t.base);
+    assert_eq!(status, STATUS_FAULT);
+    assert_eq!(t.vm.status, STATUS_FAULT);
+    assert_eq!(t.vm.exit_code, 128 + SIGABRT);
+    assert_eq!(t.vm.term_signal, SIGABRT);
+    assert_eq!(t.vm.x[10], 0);
+    let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+    assert_eq!(
+        ps.thread_count.load(core::sync::atomic::Ordering::Acquire),
+        0
+    );
+}
+
+#[test]
 fn rt_sigreturn_dispatch_preserves_restored_registers() {
     let mut t = TestVm::new();
 
@@ -276,7 +300,8 @@ fn signal_trampoline_step_restores_context_without_executable_stack() {
     // Simulate a handler that immediately returns with `ret`.
     t.vm.pc = trampoline_pc;
 
-    let remaining = tidemark_kernel::abi::thread_step(&mut t.vm as *mut ThreadState as u32, 1);
+    let remaining =
+        tidemark_kernel::abi::thread_step(&mut t.vm as *mut ThreadState as u32, 1);
     assert_eq!(remaining, 0);
     assert_eq!(t.vm.status, STATUS_OK);
     assert_eq!(t.vm.pc, original_pc);

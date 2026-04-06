@@ -513,6 +513,7 @@ mod tests {
 
         // Add entry
         inst.entries[0] = EpollEntry {
+            fd: 7,
             ofd_id: 5,
             events: EPOLLIN,
             data: 0x42,

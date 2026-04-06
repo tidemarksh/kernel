@@ -377,6 +377,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_SETRLIMIT => resource::sys_setrlimit(vm, base, a0, a1),
         SYS_PRCTL => 0,
         SYS_UMASK => 0o022, // return previous umask
+        SYS_RISCV_HWPROBE => identity::sys_riscv_hwprobe(vm, base, a0, a1, a2, a3, a4),
         SYS_RSEQ => EINVAL,
         SYS_PRLIMIT64 => resource::sys_prlimit64(vm, base, a0 as i32, a1, a2, a3),
 
@@ -407,5 +408,8 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         status,
     );
     crate::harness_debug::record_syscall(vm as *const ThreadState as u32, nr, result, status);
+    if status != abi::STATUS_OK {
+        return status;
+    }
     abi::STATUS_OK
 }
