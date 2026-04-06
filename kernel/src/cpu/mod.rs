@@ -492,6 +492,30 @@ pub unsafe fn exec_at_base(
 
             // Fetch instruction
             crate::syscall::signal::note_pc(vm, pc);
+            if crate::syscall::signal::is_current_sigreturn_trampoline(x[2], pc) {
+                vm.x = x;
+                vm.f = f;
+                vm.pc = pc;
+                vm.fcsr = fcsr;
+                crate::syscall::signal::sys_rt_sigreturn(vm, base);
+                x = vm.x;
+                f = vm.f;
+                pc = vm.pc;
+                fcsr = vm.fcsr;
+                note_special_reg_transitions(
+                    vm.tid,
+                    instr_pc,
+                    0,
+                    REG_WRITE_SOURCE_VM_RESTORE,
+                    prev_sp,
+                    prev_tp,
+                    prev_s11,
+                    &x,
+                );
+                x[0] = 0;
+                note_zero_reg_transition(vm.tid, instr_pc, 0, prev_sp, prev_s11, &x);
+                continue;
+            }
             if !guest_range_in_bounds(base, pc, 2) {
                 let fault_addr = pc;
                 if !deliver_sync_sigsegv(

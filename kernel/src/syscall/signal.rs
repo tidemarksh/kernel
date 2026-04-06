@@ -163,6 +163,11 @@ pub fn note_pc(vm: &ThreadState, pc: u64) {
     }
 }
 
+#[inline(always)]
+pub fn is_current_sigreturn_trampoline(sp: u64, pc: u64) -> bool {
+    sp != 0 && pc == sp + SIGFRAME_OFF_TRAMPOLINE
+}
+
 pub fn signal_action_table_bytes() -> u32 {
     core::mem::size_of::<[SigAction; MAX_SIGNALS]>() as u32
 }
@@ -688,6 +693,7 @@ pub fn sys_rt_sigreturn(vm: &mut ThreadState, base: u32) {
             sp: vm.x[2],
             s11: vm.x[27],
         };
+        LAST_TRAMPOLINE_PC = 0;
         SIGRETURN_COUNT = SIGRETURN_COUNT.wrapping_add(1);
     }
 }
