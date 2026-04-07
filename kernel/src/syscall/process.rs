@@ -101,6 +101,8 @@ struct VforkSnapshot {
     futex_wait_timeout: u64,
     futex_wait_expected: u32,
     futex_wait_bitset: u32,
+    futex_wait_absolute: u32,
+    futex_wait_flags: u32,
     epoll_timeout_ms: i64,
     epoll_maxevents: u32,
     blocked_fd: u32,
@@ -188,6 +190,8 @@ fn empty_vfork_snapshot() -> VforkSnapshot {
         futex_wait_timeout: 0,
         futex_wait_expected: 0,
         futex_wait_bitset: 0,
+        futex_wait_absolute: 0,
+        futex_wait_flags: 0,
         epoll_timeout_ms: 0,
         epoll_maxevents: 0,
         blocked_fd: 0,
@@ -1426,6 +1430,8 @@ fn complete_execve_in_place_inner(
     vm.futex_wait_timeout = 0;
     vm.futex_wait_expected = 0;
     vm.futex_wait_bitset = 0;
+    vm.futex_wait_absolute = 0;
+    vm.futex_wait_flags = 0;
     vm.epoll_timeout_ms = 0;
     vm.epoll_maxevents = 0;
     vm.blocked_fd = 0;
@@ -1767,6 +1773,8 @@ pub fn sys_vfork(vm: &mut ThreadState, base: u32) -> i32 {
         futex_wait_timeout: vm.futex_wait_timeout,
         futex_wait_expected: vm.futex_wait_expected,
         futex_wait_bitset: vm.futex_wait_bitset,
+        futex_wait_absolute: vm.futex_wait_absolute,
+        futex_wait_flags: vm.futex_wait_flags,
         epoll_timeout_ms: vm.epoll_timeout_ms,
         epoll_maxevents: vm.epoll_maxevents,
         blocked_fd: vm.blocked_fd,
@@ -1850,6 +1858,8 @@ fn vfork_parent_resume_inner(vm: &mut ThreadState, child_pid: i32, cleanup_child
     vm.futex_wait_timeout = snap.futex_wait_timeout;
     vm.futex_wait_expected = snap.futex_wait_expected;
     vm.futex_wait_bitset = snap.futex_wait_bitset;
+    vm.futex_wait_absolute = snap.futex_wait_absolute;
+    vm.futex_wait_flags = snap.futex_wait_flags;
     vm.epoll_timeout_ms = snap.epoll_timeout_ms;
     vm.epoll_maxevents = snap.epoll_maxevents;
     vm.blocked_fd = snap.blocked_fd;

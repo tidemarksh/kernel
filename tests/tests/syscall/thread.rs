@@ -211,6 +211,41 @@ fn contract_futex_bitset_rejects_zero_mask() {
 }
 
 #[test]
+fn contract_futex_wait_bitset_captures_realtime_flag_and_clears_on_resume() {
+    let mut t = TestVm::new();
+    let addr = t.scratch + 0x518;
+    let timeout = t.scratch + 0x540;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, addr, 3);
+        tidemark_kernel::guest_mem::write_u64(t.base, timeout, 1);
+        tidemark_kernel::guest_mem::write_u64(t.base, timeout + 8, 0);
+    }
+
+    let wait_ret = thread_impl::sys_futex(
+        &mut t.vm,
+        t.base,
+        addr,
+        (FUTEX_WAIT_BITSET | FUTEX_CLOCK_REALTIME) as u64,
+        3,
+        timeout,
+        0,
+        FUTEX_BITSET_MATCH_ANY as u64,
+    );
+    assert_eq!(wait_ret, 0);
+    assert_eq!(t.vm.status, STATUS_FUTEX_WAIT);
+    assert_eq!(t.vm.futex_wait_timeout, timeout);
+    assert_eq!(t.vm.futex_wait_absolute, 1);
+    assert_eq!(t.vm.futex_wait_flags, FUTEX_CLOCK_REALTIME);
+
+    thread_impl::resume_futex_wait_result(&mut t.vm, t.base, ETIMEDOUT);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.futex_wait_timeout, 0);
+    assert_eq!(t.vm.futex_wait_absolute, 0);
+    assert_eq!(t.vm.futex_wait_flags, 0);
+    assert_eq!(t.vm.x[10] as i64, ETIMEDOUT);
+}
+
+#[test]
 fn contract_futex_cmp_requeue_moves_remaining_waiters() {
     let mut t = TestVm::new();
     let from_addr = t.scratch + 0x520;
@@ -221,8 +256,8 @@ fn contract_futex_cmp_requeue_moves_remaining_waiters() {
     let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
     ps.thread_count
         .store(3, core::sync::atomic::Ordering::Release);
-    ps.threads[1] = ThreadRecord::new(2, THREAD_BLOCKED_FUTEX, 0x1000, 0, from_addr as u32);
-    ps.threads[2] = ThreadRecord::new(3, THREAD_BLOCKED_FUTEX, 0x2000, 0, from_addr as u32);
+    ps.threads[1] = ThreadRecord::new(2, THREAD_BLOCKED_FUTEX, 0, 0, from_addr as u32);
+    ps.threads[2] = ThreadRecord::new(3, THREAD_BLOCKED_FUTEX, 0, 0, from_addr as u32);
 
     let ret = thread_impl::sys_futex(
         &mut t.vm,
@@ -286,6 +321,100 @@ fn contract_futex_cmp_requeue_validates_counts_and_compare_value() {
         12,
     );
     assert_eq!(mismatched, EAGAIN);
+}
+
+#[test]
+fn contract_clone_thread_subset_returns_enomem_once_max_threads_slots_are_consumed() {
+    let mut t = TestVm::new();
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    ps.thread_count
+        .store(MAX_THREADS as u32, core::sync::atomic::Ordering::Release);
+    for (idx, record) in ps.threads.iter_mut().enumerate() {
+        *record = ThreadRecord::new((idx + 1) as i32, THREAD_RUNNING, 0x1000 + idx as u32, 0, 0);
+    }
+
+    let flags = (CLONE_VM | CLONE_THREAD | CLONE_SIGHAND | CLONE_FS) as u64;
+    let ret = thread_impl::sys_clone(&mut t.vm, t.base, flags, 0, 0, 0, 0);
+
+    assert_eq!(ret, ENOMEM);
+    assert_eq!(t.vm.status, STATUS_OK);
+}
+
+#[test]
+fn contract_clone_thread_tid_starts_above_existing_leader_tid() {
+    let mut t = TestVm::new();
+    t.vm.tid = 3;
+    thread_impl::init_main_thread(&mut t.vm as *mut ThreadState as u32, t.base);
+
+    let flags = (CLONE_VM | CLONE_THREAD | CLONE_SIGHAND | CLONE_FS) as u64;
+    let ret = thread_impl::sys_clone(&mut t.vm, t.base, flags, 0, 0, 0, 0);
+
+    assert_eq!(ret, 4);
+    assert_eq!(t.vm.clone_child_tid, 4);
+}
+
+#[test]
+fn contract_clone_thread_tid_does_not_immediately_reuse_exited_tid() {
+    let mut t = TestVm::new();
+    t.vm.tid = 3;
+    thread_impl::init_main_thread(&mut t.vm as *mut ThreadState as u32, t.base);
+
+    let flags = (CLONE_VM | CLONE_THREAD | CLONE_SIGHAND | CLONE_FS) as u64;
+    let first = thread_impl::sys_clone(&mut t.vm, t.base, flags, 0, 0, 0, 0);
+    assert_eq!(first, 4);
+    let child_ptr = thread_impl::spawn_from_clone(&mut t.vm as *mut ThreadState as u32, t.base);
+    assert_ne!(child_ptr, 0);
+
+    let child_vm = unsafe { &mut *(child_ptr as *mut ThreadState) };
+    assert_eq!(child_vm.tid, 4);
+    assert_eq!(thread_impl::sys_exit(child_vm, t.base, 0), STATUS_FAULT);
+
+    let second = thread_impl::sys_clone(&mut t.vm, t.base, flags, 0, 0, 0, 0);
+    assert_eq!(second, 5);
+    assert_eq!(t.vm.clone_child_tid, 5);
+}
+
+#[test]
+fn contract_clone3_thread_subset_maps_clone_args_to_clone_handoff() {
+    let mut t = TestVm::new();
+    thread_impl::init_main_thread(&mut t.vm as *mut ThreadState as u32, t.base);
+
+    let args = t.scratch + 0x700;
+    let parent_tidptr = t.scratch + 0x760;
+    let child_tidptr = t.scratch + 0x768;
+    let stack_base = 0x88000u64;
+    let stack_size = 0x4000u64;
+    let tls = 0x1234_5000u64;
+    let flags = CLONE_VM
+        | CLONE_THREAD
+        | CLONE_SIGHAND
+        | CLONE_FS
+        | CLONE_SETTLS
+        | CLONE_PARENT_SETTID
+        | CLONE_CHILD_SETTID
+        | CLONE_CHILD_CLEARTID;
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, args, flags);
+        tidemark_kernel::guest_mem::write_u64(t.base, args + 8, 0);
+        tidemark_kernel::guest_mem::write_u64(t.base, args + 16, child_tidptr);
+        tidemark_kernel::guest_mem::write_u64(t.base, args + 24, parent_tidptr);
+        tidemark_kernel::guest_mem::write_u64(t.base, args + 32, 0);
+        tidemark_kernel::guest_mem::write_u64(t.base, args + 40, stack_base);
+        tidemark_kernel::guest_mem::write_u64(t.base, args + 48, stack_size);
+        tidemark_kernel::guest_mem::write_u64(t.base, args + 56, tls);
+    }
+
+    let ret = thread_impl::sys_clone3(&mut t.vm, t.base, args, 64);
+    assert!(ret > 0);
+    assert_eq!(t.vm.status, STATUS_CLONE_SPAWN);
+    assert_eq!(t.vm.clone_child_tid, ret as i32);
+    assert_eq!(t.vm.clone_child_stack, stack_base + stack_size);
+    assert_eq!(t.vm.clone_tls, tls);
+    assert_eq!(t.vm.clone_child_tidptr, child_tidptr);
+    let written_parent_tid =
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, parent_tidptr) };
+    assert_eq!(written_parent_tid, ret as u32);
 }
 
 #[test]
@@ -410,7 +539,7 @@ fn contract_init_main_thread_records_running_slot() {
 
 #[test]
 fn contract_discard_exec_ignores_invalid_stale_slots() {
-    let mut t = TestVm::new();
+    let t = TestVm::new();
     let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
     ps.thread_count
         .store(2, core::sync::atomic::Ordering::Release);

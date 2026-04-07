@@ -783,6 +783,15 @@ pub fn send_signal(vm: &mut ThreadState, sig: i32) {
     vm.sig_pending |= 1u64 << (sig - 1);
 }
 
+fn deliverable_pending_mask(vm: &ThreadState) -> u64 {
+    let synchronous = if vm.sig_info_code != 0 {
+        vm.sig_pending & SYNC_FAULT_SIGNAL_MASK
+    } else {
+        0
+    };
+    (vm.sig_pending & !vm.sig_mask) | synchronous
+}
+
 pub fn send_signal_with_code(vm: &mut ThreadState, sig: i32, code: i32) {
     send_signal(vm, sig);
     vm.sig_info_code = code;
@@ -805,6 +814,16 @@ pub fn send_signal_to_pid(vm: &mut ThreadState, base: u32, pid: i32, sig: i32) -
             for record in ps.threads.iter() {
                 if record.state != THREAD_BLOCKED_FUTEX || record.blocked_addr == 0 {
                     continue;
+                }
+                if record.tid == vm.tid {
+                    if deliverable_pending_mask(vm) == 0 {
+                        continue;
+                    }
+                } else if record.thread_ptr != 0 {
+                    let target = unsafe { &*(record.thread_ptr as *const ThreadState) };
+                    if (target.sig_pending | (1u64 << (sig - 1))) & !target.sig_mask == 0 {
+                        continue;
+                    }
                 }
                 crate::syscall::thread::notify_futex_addr(base, record.blocked_addr, 1);
             }
@@ -838,7 +857,10 @@ pub fn send_signal_to_tid(vm: &mut ThreadState, base: u32, tid: i32, sig: i32) -
         let target = unsafe { &mut *(record.thread_ptr as *mut ThreadState) };
         target.sig_pending |= 1u64 << (sig - 1);
         target.sig_info_code = SI_TKILL;
-        if record.state == THREAD_BLOCKED_FUTEX && record.blocked_addr != 0 {
+        if record.state == THREAD_BLOCKED_FUTEX
+            && record.blocked_addr != 0
+            && deliverable_pending_mask(target) != 0
+        {
             crate::syscall::thread::notify_futex_addr(base, record.blocked_addr, 1);
         }
         return 0;

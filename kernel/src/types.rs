@@ -127,6 +127,10 @@ pub struct ThreadState {
     pub futex_wait_expected: u32,
     /// FUTEX_WAIT_BITSET mask captured at entry (`FUTEX_BITSET_MATCH_ANY` for FUTEX_WAIT).
     pub futex_wait_bitset: u32,
+    /// Non-zero when the blocked wait uses absolute timeout semantics.
+    pub futex_wait_absolute: u32,
+    /// Saved FUTEX_* flags for timed wait handling (`FUTEX_CLOCK_REALTIME`, etc.).
+    pub futex_wait_flags: u32,
     /// epoll_wait timeout in milliseconds (-1 = infinite wait).
     pub epoll_timeout_ms: i64,
     /// maxevents captured for STATUS_EPOLL_WAIT retry.

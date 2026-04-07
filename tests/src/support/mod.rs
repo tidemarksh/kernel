@@ -3,11 +3,15 @@
 //! so any panic causes a WASM trap that terminates the entire test binary).
 
 use std::collections::VecDeque;
+use std::cell::RefCell;
 use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tidemark_kernel::abi::*;
+use tidemark_kernel::guest_mem;
 use tidemark_kernel::types::*;
 
 const GUEST_RAM_SIZE: u32 = 0x100_0000;
@@ -23,14 +27,79 @@ const INITIAL_PID: i32 = 2;
 const INITIAL_PPID: i32 = 1;
 const MAX_VM_INSTRUCTIONS: i64 = 500_000_000;
 
-static NEXT_GUEST_SNAPSHOT_ID: AtomicU64 = AtomicU64::new(1);
 static mut TEST_GUEST_BASE: u32 = 0;
+static NEXT_GUEST_SNAPSHOT_ID: AtomicU64 = AtomicU64::new(1);
 
 struct DeferredPlainFork {
     pid: i32,
     vm: ThreadState,
     guest_memory: GuestMemorySnapshot,
     mm_state: tidemark_kernel::harness::support::PlainForkSnapshot,
+}
+
+#[derive(Clone, Copy)]
+struct DeferredCloneThread {
+    owner_pid: i32,
+    child_ptr: u32,
+}
+
+fn enqueue_deferred_clone_thread(
+    deferred_clone_threads: &mut VecDeque<DeferredCloneThread>,
+    owner_pid: i32,
+    child_ptr: u32,
+) {
+    if child_ptr != 0
+        && !deferred_clone_threads
+            .iter()
+            .any(|queued| queued.owner_pid == owner_pid && queued.child_ptr == child_ptr)
+    {
+        deferred_clone_threads.push_back(DeferredCloneThread { owner_pid, child_ptr });
+    }
+}
+
+fn status_label(status: i32) -> &'static str {
+    match status {
+        STATUS_OK => "STATUS_OK",
+        STATUS_FS => "STATUS_FS",
+        STATUS_VFORK_WAIT => "STATUS_VFORK_WAIT",
+        STATUS_EXECVE_SPAWN => "STATUS_EXECVE_SPAWN",
+        STATUS_CLONE_SPAWN => "STATUS_CLONE_SPAWN",
+        STATUS_WAIT4 => "STATUS_WAIT4",
+        STATUS_FUTEX_WAIT => "STATUS_FUTEX_WAIT",
+        STATUS_PIPE_WAIT => "STATUS_PIPE_WAIT",
+        STATUS_FAULT => "STATUS_FAULT",
+        STATUS_SLEEP => "STATUS_SLEEP",
+        STATUS_EPOLL_WAIT => "STATUS_EPOLL_WAIT",
+        _ => "STATUS_OTHER",
+    }
+}
+
+fn describe_deferred_plain_forks(deferred_plain_forks: &VecDeque<DeferredPlainFork>) -> String {
+    let mut parts = Vec::with_capacity(deferred_plain_forks.len());
+    for deferred in deferred_plain_forks.iter() {
+        let blocked_ofd = tidemark_kernel::fs::fd_table::get_ofd_by_id(deferred.vm.blocked_ofd_id)
+            .map(|ofd| {
+                format!(
+                    "type={} host_fd={} status_flags=0x{:x} offset={} ino={}",
+                    ofd.fd_type, ofd.host_fd, ofd.status_flags, ofd.offset, ofd.ino
+                )
+            })
+            .unwrap_or_else(|| "missing".to_string());
+        parts.push(format!(
+            "pid={} status={}({}) pc=0x{:x} blocked_fd={} blocked_ofd={} [{}] a0={} a1={} a2={}",
+            deferred.pid,
+            deferred.vm.status,
+            status_label(deferred.vm.status),
+            deferred.vm.pc,
+            deferred.vm.blocked_fd,
+            deferred.vm.blocked_ofd_id,
+            blocked_ofd,
+            deferred.vm.x[10] as i64,
+            deferred.vm.x[11] as i64,
+            deferred.vm.x[12] as i64,
+        ));
+    }
+    parts.join("; ")
 }
 
 enum VmRunOutcome {
@@ -45,22 +114,34 @@ struct HostHelperBinary {
 
 struct GuestMemorySnapshot {
     path: PathBuf,
+    file: RefCell<File>,
     len: usize,
 }
 
 impl GuestMemorySnapshot {
     fn capture(base: u32) -> Result<Self, String> {
         let len = guest_window_size(base);
-        let mut path = PathBuf::from("/tmp");
+        let mut path = snapshot_root_dir();
+        std::fs::create_dir_all(&path)
+            .map_err(|e| format!("failed to create {}: {}", path.display(), e))?;
         let id = NEXT_GUEST_SNAPSHOT_ID.fetch_add(1, Ordering::Relaxed);
-        path.push(format!("tidemark-guest-snapshot-{}.bin", id));
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        path.push(format!("tidemark-guest-snapshot-{stamp}-{id}.bin"));
 
-        let mut file = File::create(&path)
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
             .map_err(|e| format!("failed to create {}: {}", path.display(), e))?;
         let mut buf = vec![0u8; GUEST_SNAPSHOT_CHUNK];
         let mut off = 0usize;
         while off < len {
-            let chunk = (len - off).min(buf.len());
+            let chunk = (len - off).min(GUEST_SNAPSHOT_CHUNK);
             unsafe {
                 tidemark_kernel::guest_mem::read_bytes(base, off as u64, &mut buf[..chunk]);
             }
@@ -68,23 +149,40 @@ impl GuestMemorySnapshot {
                 .map_err(|e| format!("failed to write {}: {}", path.display(), e))?;
             off += chunk;
         }
-        file.flush()
-            .map_err(|e| format!("failed to flush {}: {}", path.display(), e))?;
+        file.set_len(len as u64)
+            .map_err(|e| format!("failed to size {}: {}", path.display(), e))?;
+        file.sync_all()
+            .map_err(|e| format!("failed to sync {}: {}", path.display(), e))?;
+        file.seek(SeekFrom::Start(0))
+            .map_err(|e| format!("failed to rewind {}: {}", path.display(), e))?;
 
-        Ok(Self { path, len })
+        Ok(Self {
+            path,
+            file: RefCell::new(file),
+            len,
+        })
     }
 
     fn restore(&self, base: u32) -> Result<(), String> {
-        let mut file = File::open(&self.path)
-            .map_err(|e| format!("failed to open {}: {}", self.path.display(), e))?;
+        let mut file = self.file.borrow_mut();
+        file.seek(SeekFrom::Start(0))
+            .map_err(|e| format!("failed to rewind {}: {}", self.path.display(), e))?;
         let mut buf = vec![0u8; GUEST_SNAPSHOT_CHUNK];
         let mut off = 0usize;
         while off < self.len {
             let chunk = (self.len - off).min(buf.len());
-            file.read_exact(&mut buf[..chunk])
-                .map_err(|e| format!("failed to read {}: {}", self.path.display(), e))?;
+            file.read_exact(&mut buf[..chunk]).map_err(|e| {
+                format!(
+                    "failed to read {}: {} (expected_len={} actual_len={})",
+                    self.path.display(),
+                    e,
+                    self.len,
+                    file.metadata().map(|m| m.len()).unwrap_or(0)
+                )
+            })?;
             unsafe {
-                tidemark_kernel::guest_mem::write_bytes(base, off as u64, &buf[..chunk]);
+                let dst = (base + off as u32) as *mut u8;
+                core::ptr::copy_nonoverlapping(buf[..chunk].as_ptr(), dst, chunk);
             }
             off += chunk;
         }
@@ -98,19 +196,56 @@ impl GuestMemorySnapshot {
         if end > self.len {
             return Err(format!(
                 "snapshot read out of range: off={} len={}",
-                guest_addr, self.len
+                guest_addr,
+                self.len
             ));
         }
-
-        let mut file = File::open(&self.path)
-            .map_err(|e| format!("failed to open {}: {}", self.path.display(), e))?;
+        let mut file = self.file.borrow_mut();
         file.seek(SeekFrom::Start(guest_addr as u64))
             .map_err(|e| format!("failed to seek {}: {}", self.path.display(), e))?;
-        let mut bytes = [0u8; 4];
-        file.read_exact(&mut bytes)
+        let mut word = [0u8; 4];
+        file.read_exact(&mut word)
             .map_err(|e| format!("failed to read {}: {}", self.path.display(), e))?;
-        Ok(i32::from_le_bytes(bytes))
+        Ok(i32::from_le_bytes(word))
     }
+
+    fn restore_range(&self, base: u32, guest_addr: usize, len: usize) -> Result<(), String> {
+        let end = guest_addr
+            .checked_add(len)
+            .ok_or_else(|| "snapshot restore range overflow".to_string())?;
+        if end > self.len {
+            return Err(format!(
+                "snapshot restore out of range: off={} len={} snapshot_len={}",
+                guest_addr,
+                len,
+                self.len
+            ));
+        }
+        let mut file = self.file.borrow_mut();
+        file.seek(SeekFrom::Start(guest_addr as u64))
+            .map_err(|e| format!("failed to seek {}: {}", self.path.display(), e))?;
+        let mut buf = vec![0u8; len];
+        file.read_exact(&mut buf)
+            .map_err(|e| format!("failed to read {}: {}", self.path.display(), e))?;
+        unsafe {
+            let dst = (base + guest_addr as u32) as *mut u8;
+            core::ptr::copy_nonoverlapping(buf.as_ptr(), dst, len);
+        }
+        Ok(())
+    }
+}
+
+fn snapshot_root_dir() -> PathBuf {
+    if let Some(root) = std::env::var_os("TIDEMARK_KERNEL_ROOT") {
+        let mut path = PathBuf::from(root);
+        path.push("target");
+        path.push("tidemark-snapshots");
+        return path;
+    }
+
+    let mut path = PathBuf::from("target");
+    path.push("tidemark-snapshots");
+    path
 }
 
 impl Drop for GuestMemorySnapshot {
@@ -166,6 +301,8 @@ fn ensure_file(parent_ino: u32, name: &[u8], data: &[u8], mode: u32) -> Result<u
 }
 const PROC_MEMINFO_BYTES: &[u8] =
     b"MemTotal: 262144 kB\nMemFree: 131072 kB\nMemAvailable: 131072 kB\nCached: 0 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n";
+const PROC_CPUINFO_BYTES: &[u8] =
+    b"processor\t: 0\nhart\t\t: 0\nisa\t\t: rv64imafdc\nmmu\t\t: sv39\n";
 const PROC_PID1_STAT_BYTES: &[u8] = b"1 (init) S 0 1\n";
 const ETC_PASSWD_BYTES: &[u8] = b"root:x:0:0:root:/root:/bin/sh\nbin:x:1:1:bin:/bin:/bin/sh\ndaemon:x:2:2:daemon:/usr/sbin:/bin/sh\nnobody:x:65534:65534:nobody:/nonexistent:/bin/sh\n";
 const ETC_GROUP_BYTES: &[u8] = b"root:x:0:\nbin:x:1:\ndaemon:x:2:\nnobody:x:65534:\n";
@@ -243,6 +380,111 @@ fn ensure_proc_pid_stat(pid: i32, ppid: i32, state: u8, pgrp: i32) -> Result<(),
     let mut stat = [0u8; 64];
     let stat_bytes = proc_pid_stat_bytes(pid, ppid, state, pgrp, &mut stat);
     let _ = ensure_file(pid_ino, b"stat", stat_bytes, 0o444)?;
+    Ok(())
+}
+
+fn remove_proc_pid_task_entry(task_ino: u32, tid: i32) {
+    let mut tid_name = [0u8; 16];
+    let tid_name_len = write_i32_decimal(tid, &mut tid_name);
+    let tid_name = &tid_name[..tid_name_len];
+    let tid_ino = tidemark_kernel::fs::memfs::lookup(task_ino, tid_name);
+    if tid_ino == 0 {
+        return;
+    }
+    let _ = tidemark_kernel::fs::memfs::unlink(tid_ino, b"stat");
+    let _ = tidemark_kernel::fs::memfs::rmdir(task_ino, tid_name);
+}
+
+fn proc_thread_state_char(
+    vm: &ThreadState,
+    base: u32,
+    record: &ThreadRecord,
+    current_state: u8,
+) -> Option<u8> {
+    if record.tid <= 0 || matches!(record.state, THREAD_NONE | THREAD_DEAD) {
+        return None;
+    }
+    if record.tid == vm.tid {
+        return Some(current_state);
+    }
+
+    let state = match record.state {
+        THREAD_BLOCKED_FUTEX | THREAD_BLOCKED_POLL | THREAD_EXITING => b'S',
+        THREAD_STARTING => b'R',
+        THREAD_RUNNING => {
+            if record.thread_ptr != 0 {
+                let thread_vm = unsafe { &*(record.thread_ptr as *const ThreadState) };
+                match thread_vm.status {
+                    STATUS_SLEEP | STATUS_WAIT4 | STATUS_FUTEX_WAIT | STATUS_PIPE_WAIT
+                    | STATUS_EPOLL_WAIT => b'S',
+                    _ => b'R',
+                }
+            } else {
+                b'R'
+            }
+        }
+        _ => b'R',
+    };
+    let _ = base;
+    Some(state)
+}
+
+fn proc_state_for_tid(vm: &ThreadState, base: u32, tid: i32, current_state: u8) -> Option<u8> {
+    if vm.process_ptr == 0 || tid <= 0 || tid as usize > MAX_THREADS {
+        return None;
+    }
+
+    let ps = unsafe { &*((base as u64 + vm.process_ptr as u64) as *const ProcessState) };
+    let record = &ps.threads[(tid - 1) as usize];
+    proc_thread_state_char(vm, base, record, current_state)
+}
+
+fn ensure_proc_pid_task_entries(
+    vm: &ThreadState,
+    base: u32,
+    current_state: u8,
+) -> Result<(), String> {
+    if vm.process_ptr == 0 {
+        return Ok(());
+    }
+
+    let pid = process_pid(base, vm.process_ptr);
+    let ppid = process_ppid(base, vm.process_ptr);
+    let pgrp = process_pgid(vm, base);
+
+    let proc_ino = ensure_dir(1, b"proc", 0o555)?;
+    let mut pid_dir_name = [0u8; 16];
+    let pid_dir_name_len = write_i32_decimal(pid, &mut pid_dir_name);
+    let pid_ino = ensure_dir(proc_ino, &pid_dir_name[..pid_dir_name_len], 0o555)?;
+    let task_ino = ensure_dir(pid_ino, b"task", 0o555)?;
+
+    let ps = unsafe { &*((base as u64 + vm.process_ptr as u64) as *const ProcessState) };
+    let mut present = [false; MAX_THREADS + 1];
+
+    for record in ps.threads.iter() {
+        let Some(state) = proc_thread_state_char(vm, base, record, current_state) else {
+            continue;
+        };
+        let tid = record.tid;
+        if tid <= 0 || tid as usize > MAX_THREADS {
+            continue;
+        }
+        present[tid as usize] = true;
+
+        let mut tid_name = [0u8; 16];
+        let tid_name_len = write_i32_decimal(tid, &mut tid_name);
+        let tid_ino = ensure_dir(task_ino, &tid_name[..tid_name_len], 0o555)?;
+        let mut stat = [0u8; 64];
+        let stat_bytes = proc_pid_stat_bytes(tid, ppid, state, pgrp, &mut stat);
+        let _ = ensure_file(tid_ino, b"stat", stat_bytes, 0o444)?;
+    }
+
+    for tid in 1..=MAX_THREADS as i32 {
+        if !present[tid as usize] {
+            remove_proc_pid_task_entry(task_ino, tid);
+        }
+    }
+
     Ok(())
 }
 
@@ -328,6 +570,14 @@ fn process_pgid(vm: &ThreadState, base: u32) -> i32 {
     }
 }
 
+fn vm_pid(vm: &ThreadState, base: u32) -> i32 {
+    if vm.process_ptr != 0 {
+        process_pid(base, vm.process_ptr)
+    } else {
+        0
+    }
+}
+
 fn refresh_proc_pid_stat(vm: &ThreadState, base: u32, state: u8) -> Result<(), String> {
     if vm.process_ptr == 0 {
         return Ok(());
@@ -335,7 +585,32 @@ fn refresh_proc_pid_stat(vm: &ThreadState, base: u32, state: u8) -> Result<(), S
     let pid = process_pid(base, vm.process_ptr);
     let ppid = process_ppid(base, vm.process_ptr);
     let pgrp = process_pgid(vm, base);
-    ensure_proc_pid_stat(pid, ppid, state, pgrp)
+    let leader_state = proc_state_for_tid(vm, base, pid, state).unwrap_or(state);
+    ensure_proc_pid_stat(pid, ppid, leader_state, pgrp)?;
+    ensure_proc_pid_task_entries(vm, base, state)
+}
+
+fn describe_process_threads(vm: &ThreadState, base: u32) -> String {
+    if vm.process_ptr == 0 {
+        return "process_ptr=0".to_string();
+    }
+    let ps = unsafe { &*((base as u64 + vm.process_ptr as u64) as *const ProcessState) };
+    let thread_count = ps.thread_count.load(std::sync::atomic::Ordering::Acquire);
+    let mut parts = Vec::new();
+    for record in ps.threads.iter() {
+        if matches!(record.state, THREAD_NONE | THREAD_DEAD) {
+            continue;
+        }
+        parts.push(format!(
+            "tid={} state={} thread_ptr=0x{:x} blocked=0x{:x} clear_child_tid=0x{:x}",
+            record.tid,
+            record.state,
+            record.thread_ptr,
+            record.blocked_addr,
+            record.clear_child_tid
+        ));
+    }
+    format!("thread_count={} [{}]", thread_count, parts.join(" | "))
 }
 
 fn set_process_identity(base: u32, process_ptr: u32, pid: i32, ppid: i32) {
@@ -373,13 +648,70 @@ fn snapshot_pid(snapshot: &GuestMemorySnapshot, process_ptr: u32) -> Result<i32,
     snapshot.read_i32(off)
 }
 
+fn restore_process_state_snapshot(
+    snapshot: &GuestMemorySnapshot,
+    base: u32,
+    process_ptr: u32,
+) -> Result<(), String> {
+    snapshot.restore_range(base, process_ptr as usize, core::mem::size_of::<ProcessState>())?;
+
+    let pid_off = process_ptr as usize + core::mem::offset_of!(ProcessState, pid);
+    let ppid_off = process_ptr as usize + core::mem::offset_of!(ProcessState, ppid);
+    let thread_count_off = process_ptr as usize + core::mem::offset_of!(ProcessState, thread_count);
+    let pid = snapshot.read_i32(pid_off)? as u32;
+    let ppid = snapshot.read_i32(ppid_off)? as u32;
+    let thread_count = snapshot.read_i32(thread_count_off)? as u32;
+
+    unsafe {
+        guest_mem::write_u32(base, process_ptr as u64 + core::mem::offset_of!(ProcessState, pid) as u64, pid);
+        guest_mem::write_u32(base, process_ptr as u64 + core::mem::offset_of!(ProcessState, ppid) as u64, ppid);
+        guest_mem::write_u32(
+            base,
+            process_ptr as u64 + core::mem::offset_of!(ProcessState, thread_count) as u64,
+            thread_count,
+        );
+    }
+    Ok(())
+}
+
+fn repair_current_main_thread_record(vm: &ThreadState, base: u32) {
+    if vm.process_ptr == 0 || vm.tid <= 0 || vm.tid as usize > MAX_THREADS {
+        return;
+    }
+    let vm_ptr = vm as *const ThreadState as u32;
+    unsafe {
+        let ps = &mut *((base as u64 + vm.process_ptr as u64) as *mut ProcessState);
+        let idx = (vm.tid - 1) as usize;
+        let record = &mut ps.threads[idx];
+        let valid = record.tid == vm.tid
+            && !matches!(record.state, THREAD_NONE | THREAD_DEAD)
+            && record.thread_ptr == vm_ptr;
+        if valid
+            && ps.thread_count.load(std::sync::atomic::Ordering::Acquire) > 0
+        {
+            return;
+        }
+        *record = ThreadRecord::new(vm.tid, THREAD_RUNNING, vm_ptr, vm.clear_child_tid as u32, 0);
+        ps.thread_count.store(1, std::sync::atomic::Ordering::Release);
+    }
+}
+
 fn run_vm(
     vm: &mut ThreadState,
     base: u32,
     use_cache: bool,
     deferred_plain_forks: &mut VecDeque<DeferredPlainFork>,
+    deferred_clone_threads: &mut VecDeque<DeferredCloneThread>,
 ) -> Result<(i32, u64), String> {
-    match run_vm_inner(vm, base, use_cache, deferred_plain_forks, false)? {
+    match run_vm_inner(
+        vm,
+        base,
+        use_cache,
+        deferred_plain_forks,
+        deferred_clone_threads,
+        false,
+        true,
+    )? {
         VmRunOutcome::Exited(code, pc) => Ok((code, pc)),
         VmRunOutcome::Deferred(pc) => {
             Err(format!("top-level VM deferred unexpectedly at 0x{pc:x}"))
@@ -392,14 +724,28 @@ fn run_vm_inner(
     base: u32,
     use_cache: bool,
     deferred_plain_forks: &mut VecDeque<DeferredPlainFork>,
+    deferred_clone_threads: &mut VecDeque<DeferredCloneThread>,
     allow_plain_fork_defer: bool,
+    service_deferred_clones: bool,
 ) -> Result<VmRunOutcome, String> {
     let mut cache = allocate_cache(use_cache);
     let mut total = 0i64;
     let vm_ptr = vm as *mut ThreadState as u32;
     let mut vfork_child_active = false;
+    let mut skip_deferred_clone_service_once = false;
 
     loop {
+        if service_deferred_clones && !skip_deferred_clone_service_once {
+            let _ = service_ready_deferred_clone_threads(
+                base,
+                use_cache,
+                deferred_plain_forks,
+                deferred_clone_threads,
+                vm_pid(vm, base),
+            )?;
+        }
+        skip_deferred_clone_service_once = false;
+        refresh_proc_pid_stat(vm, base, b'R')?;
         let budget = 500_000i32;
         vm.status = STATUS_OK;
         let rem = unsafe {
@@ -441,6 +787,7 @@ fn run_vm_inner(
                     use_cache,
                     vfork_child_active,
                     deferred_plain_forks,
+                    deferred_clone_threads,
                 )?;
                 vfork_child_active = false;
             }
@@ -450,22 +797,32 @@ fn run_vm_inner(
                     return Err("spawn_from_clone failed".into());
                 }
                 let child_vm = unsafe { &mut *(child_ptr as *mut ThreadState) };
-                match run_vm_inner(child_vm, base, use_cache, deferred_plain_forks, true)? {
-                    VmRunOutcome::Exited(_, _) => {}
-                    VmRunOutcome::Deferred(_) => {}
-                }
+                enqueue_deferred_clone_thread(
+                    deferred_clone_threads,
+                    process_pid(base, child_vm.process_ptr),
+                    child_ptr,
+                );
+                refresh_proc_pid_stat(child_vm, base, b'R')?;
+                refresh_proc_pid_stat(vm, base, b'R')?;
                 vm.status = STATUS_OK;
+                skip_deferred_clone_service_once = true;
             }
             STATUS_WAIT4 if allow_plain_fork_defer => {
                 refresh_proc_pid_stat(vm, base, b'S')?;
                 return Ok(VmRunOutcome::Deferred(vm.pc));
             }
             STATUS_WAIT4 => {
-                service_blocked_wait4(vm, base, use_cache, deferred_plain_forks)?;
+                service_blocked_wait4(
+                    vm,
+                    base,
+                    use_cache,
+                    deferred_plain_forks,
+                    deferred_clone_threads,
+                )?;
             }
             STATUS_FUTEX_WAIT if allow_plain_fork_defer => {
                 refresh_proc_pid_stat(vm, base, b'S')?;
-                if vm.process_ptr != 0 {
+                if vm.process_ptr != 0 && process_pid(base, vm.process_ptr) == vm.tid {
                     tidemark_kernel::harness::support::register_plain_fork_futex_wait(
                         process_pid(base, vm.process_ptr),
                         vm.x[10] as u32,
@@ -474,7 +831,26 @@ fn run_vm_inner(
                 return Ok(VmRunOutcome::Deferred(vm.pc));
             }
             STATUS_FUTEX_WAIT => {
-                service_blocked_futex_wait(vm, base, use_cache, deferred_plain_forks)?;
+                service_blocked_futex_wait(
+                    vm,
+                    base,
+                    use_cache,
+                    deferred_plain_forks,
+                    deferred_clone_threads,
+                )?;
+            }
+            STATUS_PIPE_WAIT if allow_plain_fork_defer => {
+                refresh_proc_pid_stat(vm, base, b'S')?;
+                return Ok(VmRunOutcome::Deferred(vm.pc));
+            }
+            STATUS_PIPE_WAIT => {
+                service_blocked_pipe_wait(
+                    vm,
+                    base,
+                    use_cache,
+                    deferred_plain_forks,
+                    deferred_clone_threads,
+                )?;
             }
             STATUS_FAULT if vfork_child_active => {
                 let child_pid = tidemark_kernel::syscall::process::vfork_child_pid();
@@ -493,7 +869,10 @@ fn run_vm_inner(
                 refresh_proc_pid_stat(vm, base, b'S')?;
                 return Ok(VmRunOutcome::Deferred(vm.pc));
             }
-            STATUS_SLEEP => {}
+            STATUS_SLEEP => {
+                consume_sleep_duration(vm)?;
+                vm.status = STATUS_OK;
+            }
             _ => return Ok(VmRunOutcome::Exited(-vm.status, vm.pc)),
         }
     }
@@ -505,12 +884,23 @@ fn handle_process_spawn(
     use_cache: bool,
     vfork_child_active: bool,
     deferred_plain_forks: &mut VecDeque<DeferredPlainFork>,
+    deferred_clone_threads: &mut VecDeque<DeferredCloneThread>,
 ) -> Result<(), String> {
     match vm.spawn_kind {
-        SPAWN_KIND_FORK => handle_plain_fork(vm, base, use_cache, deferred_plain_forks),
-        SPAWN_KIND_EXECVE if vfork_child_active => {
-            handle_vfork_execve_spawn(vm, base, use_cache, deferred_plain_forks)
-        }
+        SPAWN_KIND_FORK => handle_plain_fork(
+            vm,
+            base,
+            use_cache,
+            deferred_plain_forks,
+            deferred_clone_threads,
+        ),
+        SPAWN_KIND_EXECVE if vfork_child_active => handle_vfork_execve_spawn(
+            vm,
+            base,
+            use_cache,
+            deferred_plain_forks,
+            deferred_clone_threads,
+        ),
         SPAWN_KIND_EXECVE => Err("unexpected execve spawn outside vfork path".into()),
         kind => Err(format!(
             "unsupported spawn_kind {} for STATUS_EXECVE_SPAWN",
@@ -524,6 +914,7 @@ fn handle_plain_fork(
     base: u32,
     _use_cache: bool,
     deferred_plain_forks: &mut VecDeque<DeferredPlainFork>,
+    deferred_clone_threads: &mut VecDeque<DeferredCloneThread>,
 ) -> Result<(), String> {
     let child_pid = parent_vm.x[10] as i32;
     if child_pid <= 0 {
@@ -600,8 +991,23 @@ fn handle_plain_fork(
     refresh_proc_pid_stat(&child_vm, base, b'R')?;
 
     if parent_pid == INITIAL_PID {
-        match run_vm_inner(&mut child_vm, base, _use_cache, deferred_plain_forks, true)? {
+        match run_vm_inner(
+            &mut child_vm,
+            base,
+            _use_cache,
+            deferred_plain_forks,
+            deferred_clone_threads,
+            true,
+            true,
+        )? {
             VmRunOutcome::Exited(child_exit, _child_pc) => {
+                drain_deferred_clone_threads_for_process(
+                    base,
+                    _use_cache,
+                    deferred_plain_forks,
+                    deferred_clone_threads,
+                    child_pid,
+                )?;
                 tidemark_kernel::harness::support::clear_plain_fork_futex_wait(child_pid);
                 tidemark_kernel::syscall::process::record_child_exit(
                     child_pid,
@@ -634,11 +1040,20 @@ fn handle_plain_fork(
         &parent_mm_state,
         || parent_memory.restore(base),
     )?;
+    let snapshot_parent_pid_after_child = snapshot_pid(&parent_memory, process_ptr)?;
+    let pid_after_parent_restore = process_pid(base, process_ptr);
+    restore_process_state_snapshot(&parent_memory, base, process_ptr)?;
+    repair_current_main_thread_record(parent_vm, base);
     let restored_pid = process_pid(base, process_ptr);
     if restored_pid != parent_pid {
         return Err(format!(
-            "plain fork restore corrupted parent pid: expected {}, got {}",
-            parent_pid, restored_pid
+            "plain fork restore corrupted parent pid: expected {}, got {}; snapshot_pid={} snapshot_pid_after_child={} pid_after_parent_restore={} process_ptr=0x{:x}",
+            parent_pid,
+            restored_pid,
+            snapshot_parent_pid,
+            snapshot_parent_pid_after_child,
+            pid_after_parent_restore,
+            process_ptr
         ));
     }
     refresh_proc_pid_stat(parent_vm, base, b'R')?;
@@ -659,6 +1074,7 @@ fn handle_vfork_execve_spawn(
     base: u32,
     use_cache: bool,
     deferred_plain_forks: &mut VecDeque<DeferredPlainFork>,
+    deferred_clone_threads: &mut VecDeque<DeferredCloneThread>,
 ) -> Result<(), String> {
     let child_pid = parent_vm.spawn_child_pid;
     if child_pid <= 0 {
@@ -701,7 +1117,13 @@ fn handle_vfork_execve_spawn(
         base,
     );
 
-    let (child_exit, _child_pc) = run_vm(&mut child_vm, base, use_cache, deferred_plain_forks)?;
+    let (child_exit, _child_pc) = run_vm(
+        &mut child_vm,
+        base,
+        use_cache,
+        deferred_plain_forks,
+        deferred_clone_threads,
+    )?;
     tidemark_kernel::syscall::process::record_child_exit(
         child_pid,
         child_wait_status(&child_vm, child_exit),
@@ -713,6 +1135,8 @@ fn handle_vfork_execve_spawn(
         &parent_mm_state,
         || parent_memory.restore(base),
     )?;
+    restore_process_state_snapshot(&parent_memory, base, process_ptr)?;
+    repair_current_main_thread_record(parent_vm, base);
     tidemark_kernel::syscall::process::vfork_parent_resume(parent_vm, child_pid);
 
     Ok(())
@@ -723,6 +1147,7 @@ fn run_next_deferred_plain_fork(
     base: u32,
     use_cache: bool,
     deferred_plain_forks: &mut VecDeque<DeferredPlainFork>,
+    deferred_clone_threads: &mut VecDeque<DeferredCloneThread>,
 ) -> Result<bool, String> {
     let Some(mut deferred) = deferred_plain_forks.pop_front() else {
         return Ok(false);
@@ -730,65 +1155,122 @@ fn run_next_deferred_plain_fork(
 
     let current_memory = snapshot_guest_memory(base)?;
     let current_mm_state = tidemark_kernel::harness::support::snapshot_plain_fork();
+    let deferred_pid = deferred.pid;
 
     tidemark_kernel::harness::support::restore_plain_fork_parent(
         base,
         guest_window_size(base) as u64,
         &deferred.mm_state,
-        || deferred.guest_memory.restore(base),
+        || {
+            deferred.guest_memory.restore(base).map_err(|e| {
+                format!(
+                    "restore deferred child pid {} guest memory: {}",
+                    deferred.pid, e
+                )
+            })
+        },
     )?;
+    restore_process_state_snapshot(&deferred.guest_memory, base, deferred.vm.process_ptr)?;
     refresh_proc_pid_stat(&deferred.vm, base, b'R')?;
 
-    match deferred.vm.status {
-        STATUS_SLEEP => deferred.vm.status = STATUS_OK,
-        STATUS_WAIT4 => {
-            let vm_ptr = &mut deferred.vm as *mut ThreadState as u32;
-            tidemark_kernel::syscall::process::resume_wait4(vm_ptr, base);
-        }
-        STATUS_FUTEX_WAIT => {
-            let futex_addr = deferred.vm.x[10] as u32;
-            if tidemark_kernel::harness::support::take_plain_fork_futex_wake(
-                deferred.pid,
-                futex_addr,
-            ) {
-                tidemark_kernel::syscall::thread::resume_futex_wait(&mut deferred.vm, base);
-            } else if current_vm.status == STATUS_WAIT4 && deferred.vm.futex_wait_timeout != 0 {
-                tidemark_kernel::syscall::thread::resume_futex_wait_result(
-                    &mut deferred.vm,
-                    base,
-                    tidemark_kernel::abi::ETIMEDOUT,
-                );
-            } else {
-                refresh_proc_pid_stat(&deferred.vm, base, b'S')?;
-                deferred.guest_memory = snapshot_guest_memory(base)?;
-                deferred.mm_state = tidemark_kernel::harness::support::snapshot_plain_fork();
-                deferred_plain_forks.push_back(deferred);
-                tidemark_kernel::harness::support::restore_plain_fork_parent(
-                    base,
-                    guest_window_size(base) as u64,
-                    &current_mm_state,
-                    || current_memory.restore(base),
-                )?;
-                current_vm.status = STATUS_OK;
-                return Ok(false);
+    let exited = loop {
+        match deferred.vm.status {
+            STATUS_SLEEP => {
+                consume_sleep_duration(&deferred.vm)?;
+                deferred.vm.status = STATUS_OK
             }
+            STATUS_WAIT4 => {
+                let vm_ptr = &mut deferred.vm as *mut ThreadState as u32;
+                tidemark_kernel::syscall::process::resume_wait4(vm_ptr, base);
+            }
+            STATUS_FUTEX_WAIT => {
+                let futex_addr = deferred.vm.x[10] as u32;
+                if tidemark_kernel::harness::support::take_plain_fork_futex_wake(
+                    deferred.pid,
+                    futex_addr,
+                ) {
+                    tidemark_kernel::syscall::thread::resume_futex_wait(&mut deferred.vm, base);
+                } else if count_deferred_clone_threads_for_process(
+                    deferred_clone_threads,
+                    deferred.pid,
+                ) > 0
+                {
+                    tidemark_kernel::harness::support::clear_plain_fork_futex_wait(deferred.pid);
+                    let _ = service_ready_deferred_clone_threads(
+                        base,
+                        use_cache,
+                        deferred_plain_forks,
+                        deferred_clone_threads,
+                        deferred.pid,
+                    )?;
+                    if tidemark_kernel::syscall::thread::thread_record_blocked_addr(
+                        &deferred.vm,
+                        base,
+                    ) == 0
+                    {
+                        tidemark_kernel::syscall::thread::resume_futex_wait(
+                            &mut deferred.vm,
+                            base,
+                        );
+                    } else {
+                        tidemark_kernel::harness::support::register_plain_fork_futex_wait(
+                            deferred.pid,
+                            futex_addr,
+                        );
+                        refresh_proc_pid_stat(&deferred.vm, base, b'S')?;
+                        deferred.guest_memory = snapshot_guest_memory(base)?;
+                        deferred.mm_state = tidemark_kernel::harness::support::snapshot_plain_fork();
+                        deferred_plain_forks.push_back(deferred);
+                        break false;
+                    }
+                } else if current_vm.status == STATUS_WAIT4 && deferred.vm.futex_wait_timeout != 0 {
+                    consume_relative_futex_timeout(&deferred.vm, base, Instant::now())?;
+                    tidemark_kernel::syscall::thread::resume_futex_wait_result(
+                        &mut deferred.vm,
+                        base,
+                        tidemark_kernel::abi::ETIMEDOUT,
+                    );
+                } else {
+                    tidemark_kernel::harness::support::register_plain_fork_futex_wait(
+                        deferred.pid,
+                        futex_addr,
+                    );
+                    refresh_proc_pid_stat(&deferred.vm, base, b'S')?;
+                    deferred.guest_memory = snapshot_guest_memory(base)?;
+                    deferred.mm_state = tidemark_kernel::harness::support::snapshot_plain_fork();
+                    deferred_plain_forks.push_back(deferred);
+                    break false;
+                }
+            }
+            STATUS_PIPE_WAIT => {
+                let vm_ptr = &mut deferred.vm as *mut ThreadState as u32;
+                tidemark_kernel::abi::thread_resume_blocked_syscall(vm_ptr);
+                if deferred.vm.status == STATUS_PIPE_WAIT {
+                    refresh_proc_pid_stat(&deferred.vm, base, b'S')?;
+                    deferred.guest_memory = snapshot_guest_memory(base)?;
+                    deferred.mm_state = tidemark_kernel::harness::support::snapshot_plain_fork();
+                    deferred_plain_forks.push_back(deferred);
+                    break false;
+                }
+            }
+            _ => {}
         }
-        _ => {}
-    }
 
-    let exited = match deferred.vm.status {
-        STATUS_WAIT4 => {
+        if deferred.vm.status == STATUS_WAIT4 {
             refresh_proc_pid_stat(&deferred.vm, base, b'S')?;
             deferred.guest_memory = snapshot_guest_memory(base)?;
             deferred.mm_state = tidemark_kernel::harness::support::snapshot_plain_fork();
             deferred_plain_forks.push_back(deferred);
-            false
+            break false;
         }
-        _ => match run_vm_inner(
+
+        match run_vm_inner(
             &mut deferred.vm,
             base,
             use_cache,
             deferred_plain_forks,
+            deferred_clone_threads,
+            true,
             true,
         )? {
             VmRunOutcome::Exited(child_exit, _child_pc) => {
@@ -797,26 +1279,178 @@ fn run_next_deferred_plain_fork(
                     deferred.pid,
                     child_wait_status(&deferred.vm, child_exit),
                 );
-                true
+                break true;
             }
             VmRunOutcome::Deferred(_child_pc) => {
+                if count_deferred_clone_threads_for_process(
+                    deferred_clone_threads,
+                    deferred.pid,
+                ) > 0
+                {
+                    continue;
+                }
+                if current_vm.status == STATUS_WAIT4
+                    && deferred.vm.status == STATUS_FUTEX_WAIT
+                    && deferred.vm.futex_wait_timeout != 0
+                {
+                    continue;
+                }
+                if deferred.vm.status == STATUS_FUTEX_WAIT {
+                    tidemark_kernel::harness::support::register_plain_fork_futex_wait(
+                        deferred.pid,
+                        deferred.vm.x[10] as u32,
+                    );
+                }
                 refresh_proc_pid_stat(&deferred.vm, base, b'S')?;
                 deferred.guest_memory = snapshot_guest_memory(base)?;
                 deferred.mm_state = tidemark_kernel::harness::support::snapshot_plain_fork();
                 deferred_plain_forks.push_back(deferred);
-                false
+                break false;
             }
-        },
+        }
     };
 
     tidemark_kernel::harness::support::restore_plain_fork_parent(
         base,
         guest_window_size(base) as u64,
         &current_mm_state,
-        || current_memory.restore(base),
+        || {
+            current_memory.restore(base).map_err(|e| {
+                format!(
+                    "restore current parent guest memory after running deferred child {}: {}",
+                    deferred_pid, e
+                )
+            })
+        },
     )?;
+    restore_process_state_snapshot(&current_memory, base, current_vm.process_ptr)?;
+    repair_current_main_thread_record(current_vm, base);
     current_vm.status = STATUS_OK;
     Ok(exited)
+}
+
+fn service_ready_deferred_clone_threads(
+    base: u32,
+    use_cache: bool,
+    deferred_plain_forks: &mut VecDeque<DeferredPlainFork>,
+    deferred_clone_threads: &mut VecDeque<DeferredCloneThread>,
+    current_pid: i32,
+) -> Result<u32, String> {
+    let mut progressed = 0u32;
+    let initial_len = deferred_clone_threads.len();
+
+    for _ in 0..initial_len {
+        let Some(deferred_thread) = deferred_clone_threads.pop_front() else {
+            break;
+        };
+        if deferred_thread.owner_pid != current_pid {
+            deferred_clone_threads.push_back(deferred_thread);
+            continue;
+        }
+        let child_ptr = deferred_thread.child_ptr;
+        let child_vm = unsafe { &mut *(child_ptr as *mut ThreadState) };
+
+        let runnable = match child_vm.status {
+            STATUS_OK => true,
+            STATUS_SLEEP => {
+                consume_sleep_duration(child_vm)?;
+                child_vm.status = STATUS_OK;
+                true
+            }
+            STATUS_WAIT4 => {
+                tidemark_kernel::syscall::process::resume_wait4(child_ptr, base);
+                child_vm.status != STATUS_WAIT4
+            }
+            STATUS_FUTEX_WAIT => {
+                if tidemark_kernel::syscall::thread::thread_record_blocked_addr(child_vm, base) == 0
+                {
+                    tidemark_kernel::syscall::thread::resume_futex_wait(child_vm, base);
+                    true
+                } else {
+                    false
+                }
+            }
+            STATUS_PIPE_WAIT | STATUS_EPOLL_WAIT => {
+                tidemark_kernel::abi::thread_resume_blocked_syscall(child_ptr);
+                child_vm.status != STATUS_PIPE_WAIT && child_vm.status != STATUS_EPOLL_WAIT
+            }
+            _ => false,
+        };
+
+        if !runnable {
+            deferred_clone_threads.push_back(deferred_thread);
+            continue;
+        }
+
+        progressed += 1;
+        match run_vm_inner(
+            child_vm,
+            base,
+            use_cache,
+            deferred_plain_forks,
+            deferred_clone_threads,
+            true,
+            false,
+        )? {
+            VmRunOutcome::Exited(_, _) => {
+                refresh_proc_pid_stat(child_vm, base, b'R')?;
+            }
+            VmRunOutcome::Deferred(_) => {
+                enqueue_deferred_clone_thread(
+                    deferred_clone_threads,
+                    current_pid,
+                    child_ptr,
+                );
+                refresh_proc_pid_stat(child_vm, base, b'S')?;
+            }
+        }
+    }
+
+    Ok(progressed)
+}
+
+fn count_deferred_clone_threads_for_process(
+    deferred_clone_threads: &VecDeque<DeferredCloneThread>,
+    pid: i32,
+) -> usize {
+    deferred_clone_threads
+        .iter()
+        .filter(|queued| queued.owner_pid == pid && queued.child_ptr != 0)
+        .count()
+}
+
+fn drain_deferred_clone_threads_for_process(
+    base: u32,
+    use_cache: bool,
+    deferred_plain_forks: &mut VecDeque<DeferredPlainFork>,
+    deferred_clone_threads: &mut VecDeque<DeferredCloneThread>,
+    pid: i32,
+) -> Result<(), String> {
+    for _ in 0..1024 {
+        let pending = count_deferred_clone_threads_for_process(deferred_clone_threads, pid);
+        if pending == 0 {
+            return Ok(());
+        }
+        let progressed = service_ready_deferred_clone_threads(
+            base,
+            use_cache,
+            deferred_plain_forks,
+            deferred_clone_threads,
+            pid,
+        )?;
+        let remaining = count_deferred_clone_threads_for_process(deferred_clone_threads, pid);
+        if remaining == 0 {
+            return Ok(());
+        }
+        if progressed == 0 || remaining >= pending {
+            return Err(format!(
+                "deferred clone threads for pid {pid} remained blocked: pending={remaining}"
+            ));
+        }
+    }
+    Err(format!(
+        "draining deferred clone threads for pid {pid} exceeded iteration budget"
+    ))
 }
 
 fn service_blocked_wait4(
@@ -824,6 +1458,7 @@ fn service_blocked_wait4(
     base: u32,
     use_cache: bool,
     deferred_plain_forks: &mut VecDeque<DeferredPlainFork>,
+    deferred_clone_threads: &mut VecDeque<DeferredCloneThread>,
 ) -> Result<(), String> {
     refresh_proc_pid_stat(vm, base, b'S')?;
     let vm_ptr = vm as *mut ThreadState as u32;
@@ -835,13 +1470,22 @@ fn service_blocked_wait4(
             if deferred_plain_forks.is_empty() {
                 return Err("wait4 blocked with no deferred plain-fork child".into());
             }
-            let _ = run_next_deferred_plain_fork(vm, base, use_cache, deferred_plain_forks)?;
+            let _ = run_next_deferred_plain_fork(
+                vm,
+                base,
+                use_cache,
+                deferred_plain_forks,
+                deferred_clone_threads,
+            )?;
             tidemark_kernel::syscall::process::resume_wait4(vm_ptr, base);
             if vm.status != STATUS_WAIT4 {
                 return Ok(());
             }
         }
-        Err("wait4 remained blocked after servicing deferred plain-fork children".into())
+        Err(format!(
+            "wait4 remained blocked after servicing deferred plain-fork children: {}",
+            describe_deferred_plain_forks(deferred_plain_forks)
+        ))
     })();
     refresh_proc_pid_stat(vm, base, b'R')?;
     result
@@ -852,6 +1496,7 @@ fn service_blocked_futex_wait(
     base: u32,
     use_cache: bool,
     deferred_plain_forks: &mut VecDeque<DeferredPlainFork>,
+    deferred_clone_threads: &mut VecDeque<DeferredCloneThread>,
 ) -> Result<(), String> {
     refresh_proc_pid_stat(vm, base, b'S')?;
     let pid = if vm.process_ptr != 0 {
@@ -859,22 +1504,41 @@ fn service_blocked_futex_wait(
     } else {
         0
     };
+    let is_process_leader = pid > 0 && vm.tid == pid;
     let futex_addr = vm.futex_wait_addr as u32;
     let timed_wait = vm.futex_wait_timeout != 0;
-    if pid > 0 {
-        tidemark_kernel::harness::support::register_plain_fork_futex_wait(pid, futex_addr);
-    }
+    let timeout_started = Instant::now();
+    let mut plain_fork_wait_registered = false;
 
     let result = (|| -> Result<(), String> {
         for _ in 0..1024 {
-            if pid > 0
+            if tidemark_kernel::syscall::thread::thread_record_blocked_addr(vm, base) == 0 {
+                tidemark_kernel::syscall::thread::resume_futex_wait(vm, base);
+                return Ok(());
+            }
+            if is_process_leader
+                && plain_fork_wait_registered
                 && tidemark_kernel::harness::support::take_plain_fork_futex_wake(pid, futex_addr)
             {
                 tidemark_kernel::syscall::thread::resume_futex_wait(vm, base);
                 return Ok(());
             }
+            if !deferred_clone_threads.is_empty() {
+                let _ = service_ready_deferred_clone_threads(
+                    base,
+                    use_cache,
+                    deferred_plain_forks,
+                    deferred_clone_threads,
+                    pid,
+                )?;
+                if tidemark_kernel::syscall::thread::thread_record_blocked_addr(vm, base) == 0 {
+                    tidemark_kernel::syscall::thread::resume_futex_wait(vm, base);
+                    return Ok(());
+                }
+            }
             if deferred_plain_forks.is_empty() {
                 if timed_wait {
+                    consume_relative_futex_timeout(vm, base, timeout_started)?;
                     tidemark_kernel::syscall::thread::resume_futex_wait_result(
                         vm,
                         base,
@@ -882,11 +1546,26 @@ fn service_blocked_futex_wait(
                     );
                     return Ok(());
                 }
-                return Err("futex wait blocked with no deferred plain-fork child".into());
+                return Err(format!(
+                    "futex wait blocked with no deferred plain-fork child; deferred_clone_threads={} {}",
+                    deferred_clone_threads.len(),
+                    describe_process_threads(vm, base)
+                ));
             }
-            let _ = run_next_deferred_plain_fork(vm, base, use_cache, deferred_plain_forks)?;
+            if is_process_leader && !plain_fork_wait_registered {
+                tidemark_kernel::harness::support::register_plain_fork_futex_wait(pid, futex_addr);
+                plain_fork_wait_registered = true;
+            }
+            let _ = run_next_deferred_plain_fork(
+                vm,
+                base,
+                use_cache,
+                deferred_plain_forks,
+                deferred_clone_threads,
+            )?;
         }
         if timed_wait {
+            consume_relative_futex_timeout(vm, base, timeout_started)?;
             tidemark_kernel::syscall::thread::resume_futex_wait_result(
                 vm,
                 base,
@@ -894,12 +1573,129 @@ fn service_blocked_futex_wait(
             );
             return Ok(());
         }
-        Err("futex wait remained blocked after servicing deferred plain-fork children".into())
+        Err(format!(
+            "futex wait remained blocked after servicing deferred plain-fork children; deferred_clone_threads={} {}",
+            deferred_clone_threads.len(),
+            describe_process_threads(vm, base)
+        ))
     })();
 
     if pid > 0 {
         tidemark_kernel::harness::support::clear_plain_fork_futex_wait(pid);
     }
+    refresh_proc_pid_stat(vm, base, b'R')?;
+    result
+}
+
+fn consume_relative_futex_timeout(
+    vm: &ThreadState,
+    base: u32,
+    _started_at: Instant,
+) -> Result<(), String> {
+    let Some(timeout) = read_guest_timespec_duration(base, vm.futex_wait_timeout)? else {
+        return Ok(());
+    };
+    if vm.futex_wait_absolute != 0 {
+        let clock_id = if (vm.futex_wait_flags & FUTEX_CLOCK_REALTIME) != 0 {
+            0
+        } else {
+            1
+        };
+        let Some((now_sec, now_nsec)) = tidemark_kernel::syscall::time::current_timespec(clock_id)
+        else {
+            return Err(format!("unsupported futex wait clock id {}", clock_id));
+        };
+        let target_sec =
+            unsafe { tidemark_kernel::guest_mem::read_u64(base, vm.futex_wait_timeout) };
+        let target_nsec =
+            unsafe { tidemark_kernel::guest_mem::read_u64(base, vm.futex_wait_timeout + 8) };
+        if target_nsec >= 1_000_000_000 {
+            return Err(format!(
+                "invalid absolute futex timeout timespec: sec={} nsec={}",
+                target_sec, target_nsec
+            ));
+        }
+        let remaining = if (target_sec, target_nsec) <= (now_sec, now_nsec) {
+            Duration::ZERO
+        } else {
+            let sec_delta = target_sec - now_sec;
+            let (sec_delta, nsec_delta) = if target_nsec >= now_nsec {
+                (sec_delta, target_nsec - now_nsec)
+            } else {
+                (
+                    sec_delta.saturating_sub(1),
+                    1_000_000_000 + target_nsec - now_nsec,
+                )
+            };
+            Duration::new(sec_delta, nsec_delta as u32)
+        };
+        tidemark_kernel::syscall::time::advance_monotonic_duration(remaining);
+        return Ok(());
+    }
+    tidemark_kernel::syscall::time::advance_monotonic_duration(timeout);
+    Ok(())
+}
+
+fn consume_sleep_duration(vm: &ThreadState) -> Result<(), String> {
+    if vm.fault_pc >= 1_000_000_000 {
+        return Err(format!(
+            "invalid sleep duration timespec: sec={} nsec={}",
+            vm.fault_addr, vm.fault_pc
+        ));
+    }
+    tidemark_kernel::syscall::time::advance_monotonic_duration(Duration::new(
+        vm.fault_addr,
+        vm.fault_pc as u32,
+    ));
+    Ok(())
+}
+
+fn read_guest_timespec_duration(base: u32, guest_addr: u64) -> Result<Option<Duration>, String> {
+    if guest_addr == 0 {
+        return Ok(None);
+    }
+    let sec = unsafe { tidemark_kernel::guest_mem::read_u64(base, guest_addr) };
+    let nsec = unsafe { tidemark_kernel::guest_mem::read_u64(base, guest_addr + 8) };
+    if nsec >= 1_000_000_000 {
+        return Err(format!(
+            "invalid futex timeout timespec: sec={} nsec={}",
+            sec, nsec
+        ));
+    }
+    Ok(Some(Duration::new(sec, nsec as u32)))
+}
+
+fn service_blocked_pipe_wait(
+    vm: &mut ThreadState,
+    base: u32,
+    use_cache: bool,
+    deferred_plain_forks: &mut VecDeque<DeferredPlainFork>,
+    deferred_clone_threads: &mut VecDeque<DeferredCloneThread>,
+) -> Result<(), String> {
+    refresh_proc_pid_stat(vm, base, b'S')?;
+    let vm_ptr = vm as *mut ThreadState as u32;
+    let result = (|| -> Result<(), String> {
+        for _ in 0..1024 {
+            tidemark_kernel::abi::thread_resume_blocked_syscall(vm_ptr);
+            if vm.status != STATUS_PIPE_WAIT {
+                return Ok(());
+            }
+            if deferred_plain_forks.is_empty() {
+                return Err("pipe/eventfd wait blocked with no deferred plain-fork child".into());
+            }
+            let _ = run_next_deferred_plain_fork(
+                vm,
+                base,
+                use_cache,
+                deferred_plain_forks,
+                deferred_clone_threads,
+            )?;
+        }
+        Err(
+            "pipe/eventfd wait remained blocked after servicing deferred plain-fork children"
+                .into(),
+        )
+    })();
     refresh_proc_pid_stat(vm, base, b'R')?;
     result
 }
@@ -929,6 +1725,7 @@ fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> Result<(i32, u64, Vec<u8>
     tidemark_kernel::harness::support::clear_guest_output();
     tidemark_kernel::harness::support::clear_plain_fork_futex_waits();
     let mut deferred_plain_forks = VecDeque::new();
+    let mut deferred_clone_threads = VecDeque::new();
     let result = (|| -> Result<(i32, u64), String> {
         unsafe {
             tidemark_kernel::guest_mem::init(
@@ -1025,6 +1822,7 @@ fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> Result<(i32, u64, Vec<u8>
                     PROC_MEMINFO_BYTES.len()
                 ));
             }
+            let _ = ensure_file(proc_ino, b"cpuinfo", PROC_CPUINFO_BYTES, 0o444)?;
             let mut pid_max = [0u8; 24];
             let _ = ensure_file(
                 proc_kernel_ino,
@@ -1052,12 +1850,18 @@ fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> Result<(i32, u64, Vec<u8>
             tidemark_kernel::guest_mem::write_bytes(base, argv0_addr, b"test\0");
             let env_path_addr = 0xBF_FDE0u64;
             tidemark_kernel::guest_mem::write_bytes(base, env_path_addr, b"PATH=/bin\0");
+            let env_virt_override_addr = 0xBF_FDC0u64;
+            tidemark_kernel::guest_mem::write_bytes(
+                base,
+                env_virt_override_addr,
+                b"LTP_VIRT_OVERRIDE=\0",
+            );
 
             let sp = tidemark_kernel::elf::setup_stack(
                 base,
                 0xBF_FD00,
                 &[argv0_addr],
-                &[env_path_addr],
+                &[env_path_addr, env_virt_override_addr],
                 &elf_result,
                 random_addr,
                 argv0_addr,
@@ -1068,6 +1872,7 @@ fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> Result<(i32, u64, Vec<u8>
             vm.x[2] = sp;
             vm.status = STATUS_OK;
             vm.tid = INITIAL_PID;
+            vm.guest_base = base;
 
             // Allocate ProcessState in guest Memory via brk (not alloc.rs).
             let ps_size = core::mem::size_of::<ProcessState>() as u64;
@@ -1109,7 +1914,13 @@ fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> Result<(i32, u64, Vec<u8>
                 0
             };
 
-            run_vm(&mut vm, base, use_cache, &mut deferred_plain_forks)
+            run_vm(
+                &mut vm,
+                base,
+                use_cache,
+                &mut deferred_plain_forks,
+                &mut deferred_clone_threads,
+            )
         }
     })();
     let output = tidemark_kernel::harness::support::take_guest_output();
@@ -1147,5 +1958,505 @@ pub fn assert_elf_pass_no_cache(name: &str, elf_bytes: &[u8]) -> Result<(), Stri
             "{} (no cache) failed: exit_code={}, last_pc=0x{:x}",
             name, code, pc
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tidemark_kernel::abi::{
+        CLONE_FS, CLONE_SIGHAND, CLONE_THREAD, CLONE_VM, FUTEX_WAIT, FUTEX_WAKE,
+        STATUS_FUTEX_WAIT,
+    };
+    use tidemark_kernel::fs::memfs;
+    use tidemark_kernel::guest_mem;
+    use tidemark_kernel::harness::TestVm;
+    use tidemark_kernel::syscall::thread as thread_impl;
+    use tidemark_kernel::types::{ProcessState, THREAD_NONE};
+
+    fn read_memfs_file(ino: u32) -> Vec<u8> {
+        let mut buf = vec![0u8; 128];
+        let n = memfs::read_file(ino, 0, &mut buf);
+        assert!(n >= 0);
+        buf.truncate(n as usize);
+        buf
+    }
+
+    fn proc_task_stat_ino(pid: i32, tid: i32) -> u32 {
+        let proc_ino = memfs::lookup(1, b"proc");
+        assert_ne!(proc_ino, 0);
+        let pid_name = pid.to_string();
+        let pid_ino = memfs::lookup(proc_ino, pid_name.as_bytes());
+        assert_ne!(pid_ino, 0);
+        let task_ino = memfs::lookup(pid_ino, b"task");
+        assert_ne!(task_ino, 0);
+        let tid_name = tid.to_string();
+        let tid_ino = memfs::lookup(task_ino, tid_name.as_bytes());
+        if tid_ino == 0 {
+            return 0;
+        }
+        memfs::lookup(tid_ino, b"stat")
+    }
+
+    fn proc_pid_stat_bytes(pid: i32) -> Vec<u8> {
+        let proc_ino = memfs::lookup(1, b"proc");
+        assert_ne!(proc_ino, 0);
+        let pid_name = pid.to_string();
+        let pid_ino = memfs::lookup(proc_ino, pid_name.as_bytes());
+        assert_ne!(pid_ino, 0);
+        let stat_ino = memfs::lookup(pid_ino, b"stat");
+        assert_ne!(stat_ino, 0);
+        read_memfs_file(stat_ino)
+    }
+
+    fn write_exit_program(base: u32, pc: u64, exit_code: u8) {
+        let code = [
+            0x13,
+            0x05,
+            exit_code << 4,
+            0x00, // addi a0, zero, exit_code
+            0x93,
+            0x08,
+            0xd0,
+            0x05, // addi a7, zero, 93 (SYS_exit)
+            0x73,
+            0x00,
+            0x00,
+            0x00, // ecall
+        ];
+        unsafe {
+            guest_mem::write_bytes(base, pc, &code);
+        }
+    }
+
+    fn write_futex_wake_then_exit_program(base: u32, pc: u64, exit_code: u8) {
+        let code = [
+            0x73, 0x00, 0x00, 0x00, // ecall (futex)
+            0x13, 0x05, exit_code << 4, 0x00, // addi a0, zero, exit_code
+            0x93, 0x08, 0xd0, 0x05, // addi a7, zero, 93 (SYS_exit)
+            0x73, 0x00, 0x00, 0x00, // ecall
+        ];
+        unsafe {
+            guest_mem::write_bytes(base, pc, &code);
+        }
+    }
+
+    fn write_futex_wake_return_then_exit_program(base: u32, pc: u64) {
+        let code = [
+            0x73, 0x00, 0x00, 0x00, // ecall (futex)
+            0x93, 0x08, 0xd0, 0x05, // addi a7, zero, 93 (SYS_exit)
+            0x73, 0x00, 0x00, 0x00, // ecall
+        ];
+        unsafe {
+            guest_mem::write_bytes(base, pc, &code);
+        }
+    }
+
+    #[test]
+    fn deferred_clone_thread_resumes_after_futex_wake() {
+        let mut t = TestVm::new();
+        let pid = process_pid(t.base, t.vm.process_ptr);
+        let futex_addr = t.scratch + 0x400;
+        let code_addr = t.scratch + 0x800;
+        write_exit_program(t.base, code_addr, 9);
+        unsafe {
+            guest_mem::write_u32(t.base, futex_addr, 0);
+        }
+
+        let flags = (CLONE_VM | CLONE_THREAD | CLONE_SIGHAND | CLONE_FS) as u64;
+        let child_tid = thread_impl::sys_clone(&mut t.vm, t.base, flags, 0, 0, 0, 0) as i32;
+        assert!(child_tid > 0);
+
+        let child_ptr = thread_impl::spawn_from_clone(&mut t.vm as *mut ThreadState as u32, t.base);
+        assert_ne!(child_ptr, 0);
+        let child_vm = unsafe { &mut *(child_ptr as *mut ThreadState) };
+        child_vm.pc = code_addr;
+
+        let wait_ret =
+            thread_impl::sys_futex(child_vm, t.base, futex_addr, FUTEX_WAIT as u64, 0, 0, 0, 0);
+        assert_eq!(wait_ret, 0);
+        assert_eq!(child_vm.status, STATUS_FUTEX_WAIT);
+
+        let mut deferred_plain_forks = VecDeque::new();
+        let mut deferred_clone_threads = VecDeque::new();
+        enqueue_deferred_clone_thread(&mut deferred_clone_threads, pid, child_ptr);
+
+        let wake_ret =
+            thread_impl::sys_futex(&mut t.vm, t.base, futex_addr, FUTEX_WAKE as u64, 1, 0, 0, 0);
+        assert_eq!(wake_ret, 1);
+
+        let progressed = service_ready_deferred_clone_threads(
+            t.base,
+            false,
+            &mut deferred_plain_forks,
+            &mut deferred_clone_threads,
+            pid,
+        )
+        .expect("deferred clone wake service should succeed");
+        assert_eq!(progressed, 1);
+        assert!(deferred_clone_threads.is_empty());
+
+        let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+        assert_eq!(
+            ps.thread_count.load(std::sync::atomic::Ordering::Acquire),
+            1
+        );
+        assert_eq!(ps.threads[(child_tid - 1) as usize].state, THREAD_DEAD);
+    }
+
+    #[test]
+    fn blocked_leader_futex_wait_services_deferred_clone_waker_thread() {
+        let mut t = TestVm::new();
+        let pid = 2;
+        set_process_identity(t.base, t.vm.process_ptr, pid, 1);
+        t.vm.tid = pid;
+        tidemark_kernel::syscall::thread::init_main_thread(
+            &mut t.vm as *mut ThreadState as u32,
+            t.base,
+        );
+
+        let futex_addr = t.scratch + 0x440;
+        let code_addr = t.scratch + 0x840;
+        write_futex_wake_then_exit_program(t.base, code_addr, 0);
+        unsafe {
+            guest_mem::write_u32(t.base, futex_addr, 0);
+        }
+
+        let flags = (CLONE_VM | CLONE_THREAD | CLONE_SIGHAND | CLONE_FS) as u64;
+        let child_tid = thread_impl::sys_clone(&mut t.vm, t.base, flags, 0, 0, 0, 0) as i32;
+        assert!(child_tid > 0);
+
+        let child_ptr = thread_impl::spawn_from_clone(&mut t.vm as *mut ThreadState as u32, t.base);
+        assert_ne!(child_ptr, 0);
+        let child_vm = unsafe { &mut *(child_ptr as *mut ThreadState) };
+        child_vm.pc = code_addr;
+        child_vm.x[10] = futex_addr;
+        child_vm.x[11] = FUTEX_WAKE as u64;
+        child_vm.x[12] = 1;
+        child_vm.x[13] = 0;
+        child_vm.x[14] = 0;
+        child_vm.x[15] = 0;
+        child_vm.x[17] = tidemark_kernel::abi::SYS_FUTEX;
+
+        let wait_ret =
+            thread_impl::sys_futex(&mut t.vm, t.base, futex_addr, FUTEX_WAIT as u64, 0, 0, 0, 0);
+        assert_eq!(wait_ret, 0);
+        assert_eq!(t.vm.status, STATUS_FUTEX_WAIT);
+
+        refresh_proc_pid_stat(child_vm, t.base, b'R').expect("proc refresh should succeed");
+        let stat = proc_pid_stat_bytes(pid);
+        let text = String::from_utf8(stat).expect("pid stat should be utf8");
+        assert!(text.contains(" S "), "expected sleeping leader state, got {text:?}");
+
+        let mut deferred_plain_forks = VecDeque::new();
+        let mut deferred_clone_threads = VecDeque::new();
+        enqueue_deferred_clone_thread(&mut deferred_clone_threads, pid, child_ptr);
+
+        service_blocked_futex_wait(
+            &mut t.vm,
+            t.base,
+            false,
+            &mut deferred_plain_forks,
+            &mut deferred_clone_threads,
+        )
+        .expect("leader futex wait should be serviced by deferred clone thread");
+
+        assert_eq!(t.vm.status, STATUS_OK);
+        assert_eq!(t.vm.x[10], 0);
+        assert!(deferred_clone_threads.is_empty());
+
+        let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+        assert_eq!(
+            ps.thread_count.load(std::sync::atomic::Ordering::Acquire),
+            1
+        );
+        assert_eq!(ps.threads[(child_tid - 1) as usize].state, THREAD_DEAD);
+    }
+
+    #[test]
+    fn blocked_leader_futex_wait_clone_waker_returns_single_wake_count() {
+        let mut t = TestVm::new();
+        let pid = 2;
+        set_process_identity(t.base, t.vm.process_ptr, pid, 1);
+        t.vm.tid = pid;
+        tidemark_kernel::syscall::thread::init_main_thread(
+            &mut t.vm as *mut ThreadState as u32,
+            t.base,
+        );
+
+        let futex_addr = t.scratch + 0x4c0;
+        let code_addr = t.scratch + 0x8c0;
+        write_futex_wake_return_then_exit_program(t.base, code_addr);
+        unsafe {
+            guest_mem::write_u32(t.base, futex_addr, 0);
+        }
+
+        let flags = (CLONE_VM | CLONE_THREAD | CLONE_SIGHAND | CLONE_FS) as u64;
+        let child_tid = thread_impl::sys_clone(&mut t.vm, t.base, flags, 0, 0, 0, 0) as i32;
+        assert!(child_tid > 0);
+
+        let child_ptr = thread_impl::spawn_from_clone(&mut t.vm as *mut ThreadState as u32, t.base);
+        assert_ne!(child_ptr, 0);
+        let child_vm = unsafe { &mut *(child_ptr as *mut ThreadState) };
+        child_vm.pc = code_addr;
+        child_vm.x[10] = futex_addr;
+        child_vm.x[11] = FUTEX_WAKE as u64;
+        child_vm.x[12] = 1;
+        child_vm.x[13] = 0;
+        child_vm.x[14] = 0;
+        child_vm.x[15] = 0;
+        child_vm.x[17] = tidemark_kernel::abi::SYS_FUTEX;
+
+        let wait_ret =
+            thread_impl::sys_futex(&mut t.vm, t.base, futex_addr, FUTEX_WAIT as u64, 0, 0, 0, 0);
+        assert_eq!(wait_ret, 0);
+        assert_eq!(t.vm.status, STATUS_FUTEX_WAIT);
+
+        let mut deferred_plain_forks = VecDeque::new();
+        let mut deferred_clone_threads = VecDeque::new();
+        enqueue_deferred_clone_thread(&mut deferred_clone_threads, pid, child_ptr);
+
+        service_blocked_futex_wait(
+            &mut t.vm,
+            t.base,
+            false,
+            &mut deferred_plain_forks,
+            &mut deferred_clone_threads,
+        )
+        .expect("leader futex wait should be serviced by deferred clone thread");
+
+        let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+        assert_eq!(ps.threads[(child_tid - 1) as usize].state, THREAD_DEAD);
+        assert_eq!(child_vm.exit_code, 1);
+    }
+
+    #[test]
+    fn deferred_plain_fork_futex_wait_clone_waker_does_not_double_count_external_wait() {
+        let mut t = TestVm::new();
+        let pid = 2;
+        set_process_identity(t.base, t.vm.process_ptr, pid, 1);
+        t.vm.tid = pid;
+        tidemark_kernel::syscall::thread::init_main_thread(
+            &mut t.vm as *mut ThreadState as u32,
+            t.base,
+        );
+
+        let futex_addr = t.scratch + 0x500;
+        let code_addr = t.scratch + 0x900;
+        write_futex_wake_return_then_exit_program(t.base, code_addr);
+        unsafe {
+            guest_mem::write_u32(t.base, futex_addr, 0);
+        }
+
+        let wait_ret =
+            thread_impl::sys_futex(&mut t.vm, t.base, futex_addr, FUTEX_WAIT as u64, 0, 0, 0, 0);
+        assert_eq!(wait_ret, 0);
+        assert_eq!(t.vm.status, STATUS_FUTEX_WAIT);
+
+        let flags = (CLONE_VM | CLONE_THREAD | CLONE_SIGHAND | CLONE_FS) as u64;
+        let child_tid = thread_impl::sys_clone(&mut t.vm, t.base, flags, 0, 0, 0, 0) as i32;
+        assert!(child_tid > 0);
+        let child_ptr = thread_impl::spawn_from_clone(&mut t.vm as *mut ThreadState as u32, t.base);
+        assert_ne!(child_ptr, 0);
+        let child_vm = unsafe { &mut *(child_ptr as *mut ThreadState) };
+        child_vm.pc = code_addr;
+        child_vm.x[10] = futex_addr;
+        child_vm.x[11] = FUTEX_WAKE as u64;
+        child_vm.x[12] = 1;
+        child_vm.x[13] = 0;
+        child_vm.x[14] = 0;
+        child_vm.x[15] = 0;
+        child_vm.x[17] = tidemark_kernel::abi::SYS_FUTEX;
+
+        tidemark_kernel::harness::support::register_plain_fork_futex_wait(pid, futex_addr as u32);
+        let mut deferred_plain_forks = VecDeque::new();
+        let mut deferred_clone_threads = VecDeque::new();
+        enqueue_deferred_clone_thread(&mut deferred_clone_threads, pid, child_ptr);
+
+        tidemark_kernel::harness::support::clear_plain_fork_futex_wait(pid);
+        let progressed = service_ready_deferred_clone_threads(
+            t.base,
+            false,
+            &mut deferred_plain_forks,
+            &mut deferred_clone_threads,
+            pid,
+        )
+        .expect("deferred clone thread should run");
+
+        assert_eq!(progressed, 1);
+        let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+        assert_eq!(ps.threads[(child_tid - 1) as usize].state, THREAD_DEAD);
+        assert_eq!(child_vm.exit_code, 1);
+    }
+
+    #[test]
+    fn deferred_clone_thread_is_not_serviced_under_foreign_pid_image() {
+        let mut t = TestVm::new();
+        let pid = 2;
+        set_process_identity(t.base, t.vm.process_ptr, pid, 1);
+        t.vm.tid = pid;
+        tidemark_kernel::syscall::thread::init_main_thread(
+            &mut t.vm as *mut ThreadState as u32,
+            t.base,
+        );
+
+        let flags = (CLONE_VM | CLONE_THREAD | CLONE_SIGHAND | CLONE_FS) as u64;
+        let child_tid = thread_impl::sys_clone(&mut t.vm, t.base, flags, 0, 0, 0, 0) as i32;
+        assert!(child_tid > 0);
+        let child_ptr = thread_impl::spawn_from_clone(&mut t.vm as *mut ThreadState as u32, t.base);
+        assert_ne!(child_ptr, 0);
+        let child_vm = unsafe { &mut *(child_ptr as *mut ThreadState) };
+        child_vm.status = STATUS_OK;
+
+        let mut deferred_plain_forks = VecDeque::new();
+        let mut deferred_clone_threads = VecDeque::new();
+        enqueue_deferred_clone_thread(&mut deferred_clone_threads, pid + 1, child_ptr);
+
+        let progressed = service_ready_deferred_clone_threads(
+            t.base,
+            false,
+            &mut deferred_plain_forks,
+            &mut deferred_clone_threads,
+            pid,
+        )
+        .expect("foreign-owned clone thread should be skipped cleanly");
+
+        assert_eq!(progressed, 0);
+        assert_eq!(deferred_clone_threads.len(), 1);
+        assert_eq!(deferred_clone_threads.front().map(|queued| queued.owner_pid), Some(pid + 1));
+        assert_eq!(deferred_clone_threads.front().map(|queued| queued.child_ptr), Some(child_ptr));
+    }
+
+    #[test]
+    fn proc_pid_stat_uses_leader_state_not_current_running_thread() {
+        let mut t = TestVm::new();
+        let pid = 2;
+        set_process_identity(t.base, t.vm.process_ptr, pid, 1);
+        t.vm.tid = pid;
+        tidemark_kernel::syscall::thread::init_main_thread(
+            &mut t.vm as *mut ThreadState as u32,
+            t.base,
+        );
+
+        let futex_addr = t.scratch + 0x480;
+        unsafe {
+            guest_mem::write_u32(t.base, futex_addr, 0);
+        }
+        let wait_ret =
+            thread_impl::sys_futex(&mut t.vm, t.base, futex_addr, FUTEX_WAIT as u64, 0, 0, 0, 0);
+        assert_eq!(wait_ret, 0);
+        assert_eq!(t.vm.status, STATUS_FUTEX_WAIT);
+
+        let flags = (CLONE_VM | CLONE_THREAD | CLONE_SIGHAND | CLONE_FS) as u64;
+        let child_tid = thread_impl::sys_clone(&mut t.vm, t.base, flags, 0, 0, 0, 0) as i32;
+        assert!(child_tid > 0);
+        let child_ptr = thread_impl::spawn_from_clone(&mut t.vm as *mut ThreadState as u32, t.base);
+        assert_ne!(child_ptr, 0);
+        let child_vm = unsafe { &mut *(child_ptr as *mut ThreadState) };
+        refresh_proc_pid_stat(child_vm, t.base, b'R').expect("proc refresh should succeed");
+
+        let stat = proc_pid_stat_bytes(pid);
+        let text = String::from_utf8(stat).expect("pid stat should be utf8");
+        assert!(text.contains(" S "), "expected sleeping leader state, got {text:?}");
+    }
+
+    #[test]
+    fn proc_task_entry_disappears_after_clone_thread_exit() {
+        let mut t = TestVm::new();
+        let pid = 2;
+        set_process_identity(t.base, t.vm.process_ptr, pid, 1);
+        t.vm.tid = pid;
+        tidemark_kernel::syscall::thread::init_main_thread(
+            &mut t.vm as *mut ThreadState as u32,
+            t.base,
+        );
+
+        let flags = (CLONE_VM | CLONE_THREAD | CLONE_SIGHAND | CLONE_FS) as u64;
+        let child_tid = thread_impl::sys_clone(&mut t.vm, t.base, flags, 0, 0, 0, 0) as i32;
+        assert!(child_tid > 0);
+        let child_ptr = thread_impl::spawn_from_clone(&mut t.vm as *mut ThreadState as u32, t.base);
+        assert_ne!(child_ptr, 0);
+        let child_vm = unsafe { &mut *(child_ptr as *mut ThreadState) };
+
+        refresh_proc_pid_stat(child_vm, t.base, b'R').expect("proc refresh should succeed");
+        assert_ne!(proc_task_stat_ino(pid, child_tid), 0);
+
+        assert_eq!(thread_impl::sys_exit(child_vm, t.base, 0), tidemark_kernel::abi::STATUS_FAULT);
+        refresh_proc_pid_stat(child_vm, t.base, b'R').expect("proc refresh after exit should succeed");
+        assert_eq!(proc_task_stat_ino(pid, child_tid), 0);
+    }
+
+    #[test]
+    fn plain_fork_parent_restore_preserves_process_identity() {
+        let t = TestVm::new();
+        let process_ptr = t.vm.process_ptr;
+        let initial_pid = process_pid(t.base, process_ptr);
+        let initial_ppid = process_ppid(t.base, process_ptr);
+        let snapshot = snapshot_guest_memory(t.base).expect("snapshot should succeed");
+        let mm_snapshot = tidemark_kernel::harness::support::snapshot_plain_fork();
+
+        set_process_identity(t.base, process_ptr, 99, 2);
+        assert_eq!(process_pid(t.base, process_ptr), 99);
+
+        tidemark_kernel::harness::support::restore_plain_fork_parent(
+            t.base,
+            guest_window_size(t.base) as u64,
+            &mm_snapshot,
+            || snapshot.restore(t.base),
+        )
+        .expect("plain-fork restore should succeed");
+        restore_process_state_snapshot(&snapshot, t.base, process_ptr)
+            .expect("process state restore should succeed");
+
+        assert_eq!(process_pid(t.base, process_ptr), initial_pid);
+        assert_eq!(process_ppid(t.base, process_ptr), initial_ppid);
+    }
+
+    #[test]
+    fn repair_current_main_thread_record_restores_parent_slot() {
+        let t = TestVm::new();
+        let tid = t.vm.tid;
+        let vm_ptr = &t.vm as *const ThreadState as u32;
+        let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+        ps.thread_count.store(0, std::sync::atomic::Ordering::Release);
+        ps.threads[(tid - 1) as usize] = ThreadRecord::new(0, THREAD_NONE, 0, 0, 0);
+
+        repair_current_main_thread_record(&t.vm, t.base);
+
+        assert_eq!(
+            ps.thread_count.load(std::sync::atomic::Ordering::Acquire),
+            1
+        );
+        assert_eq!(ps.threads[(tid - 1) as usize].tid, tid);
+        assert_eq!(ps.threads[(tid - 1) as usize].thread_ptr, vm_ptr);
+    }
+
+    #[test]
+    fn handle_plain_fork_restores_parent_after_exited_child() {
+        let mut t = TestVm::new();
+        set_process_identity(t.base, t.vm.process_ptr, INITIAL_PID, INITIAL_PPID);
+        t.vm.tid = INITIAL_PID;
+        tidemark_kernel::syscall::thread::init_main_thread(
+            &mut t.vm as *mut ThreadState as u32,
+            t.base,
+        );
+
+        write_exit_program(t.base, t.vm.pc, 0);
+        t.vm.x[10] = 3;
+
+        let mut deferred_plain_forks = VecDeque::new();
+        let mut deferred_clone_threads = VecDeque::new();
+        handle_plain_fork(
+            &mut t.vm,
+            t.base,
+            false,
+            &mut deferred_plain_forks,
+            &mut deferred_clone_threads,
+        )
+        .expect("plain fork should restore parent after child exit");
+
+        assert_eq!(process_pid(t.base, t.vm.process_ptr), INITIAL_PID);
+        assert_eq!(process_ppid(t.base, t.vm.process_ptr), INITIAL_PPID);
+        assert!(deferred_plain_forks.is_empty());
     }
 }

@@ -4,16 +4,27 @@ testcases/kernel/syscalls/close/close02.c verified close(2) EBADF on invalid fd
 testcases/kernel/syscalls/clone/clone08.c verified CLONE_PARENT, CLONE_CHILD_SETTID, CLONE_PARENT_SETTID, and CLONE_THREAD clear_child_tid/futex orchestration within the supported clone subset
 testcases/kernel/syscalls/epoll_create1/epoll_create1_01.c verified epoll_create1 CLOEXEC behavior
 testcases/kernel/syscalls/epoll_create1/epoll_create1_02.c verified epoll_create1 EINVAL on invalid flags
+testcases/kernel/syscalls/epoll_wait/epoll_wait07.c verified EPOLLONESHOT readiness suppression with epoll_create1-backed LTP coverage
 testcases/kernel/syscalls/exit/exit01.c verified exit(2) reports the expected wait status to the parent
 testcases/kernel/syscalls/exit/exit02.c verified exit(2) closes inherited file descriptors so child writes are visible without an explicit close
 testcases/kernel/syscalls/exit_group/exit_group01.c verified exit_group(2) terminates the entire thread group with the requested status
+testcases/kernel/syscalls/eventfd2/eventfd2_01.c verified eventfd2(2) CLOEXEC flag propagation
+testcases/kernel/syscalls/eventfd2/eventfd2_02.c verified eventfd2(2) O_NONBLOCK flag propagation
+testcases/kernel/syscalls/eventfd2/eventfd2_03.c verified EFD_SEMAPHORE plain-fork wake/resume semantics with local guest fixtures and full LTP pass
 testcases/kernel/syscalls/faccessat/faccessat01.c verified faccessat(2) relative/absolute/AT_FDCWD existence checks
 testcases/kernel/syscalls/faccessat/faccessat02.c verified faccessat(2) ENOTDIR and EBADF error paths
 testcases/kernel/syscalls/fstatat/fstatat01.c verified newfstatat basic path/dirfd errno handling
 testcases/kernel/syscalls/ftruncate/ftruncate01.c verified ftruncate(2) shrink and extend semantics
 testcases/kernel/syscalls/futex/futex_wake01.c verified futex(FUTEX_WAKE) returns 0 when no waiters are present
+testcases/kernel/syscalls/futex/futex_cmp_requeue02.c verified futex(FUTEX_CMP_REQUEUE) returns Linux-shaped EINVAL/EAGAIN for invalid wake counts, requeue counts, and compare mismatches
 testcases/kernel/syscalls/futex/futex_wait01.c verified futex(FUTEX_WAIT) returns ETIMEDOUT for timed waits and EWOULDBLOCK for value mismatches
 testcases/kernel/syscalls/futex/futex_wait02.c verified futex(FUTEX_WAIT) blocks on a shared futex and resumes when a forked child issues FUTEX_WAKE
+testcases/kernel/syscalls/futex/futex_wait03.c verified pthread-backed private FUTEX_WAIT wake/join fanout after suppressing duplicate plain-fork external wake accounting during deferred clone-thread service
+testcases/kernel/syscalls/futex/futex_wait04.c verified anonymous zero-page FUTEX_WAIT mismatch returns Linux-shaped EWOULDBLOCK on freshly mmapped private pages
+testcases/kernel/syscalls/futex/futex_wait05.c verified timed FUTEX_WAIT duration accounting once deferred plain-fork waits advance guest monotonic time instead of host wall time
+testcases/kernel/syscalls/futex/futex_wait_bitset01.c verified FUTEX_WAIT_BITSET absolute-timeout semantics for both CLOCK_MONOTONIC and FUTEX_CLOCK_REALTIME
+testcases/kernel/syscalls/futex/futex_wake02.c verified pthread-backed private FUTEX_WAKE fanout after restricting plain-fork futex bookkeeping to process leaders
+testcases/kernel/syscalls/futex/futex_wake03.c verified shared-process FUTEX_WAKE fanout after restoring non-aliased plain-fork snapshots and leader-only futex bookkeeping
 testcases/kernel/syscalls/getpgid/getpgid01.c verified getpgid(2) basic parent/child and init-process lookup semantics
 testcases/kernel/syscalls/getpgid/getpgid02.c verified getpgid(2) returns ESRCH for nonexistent pids
 testcases/kernel/syscalls/geteuid/geteuid01.c verified basic geteuid(2) success path
@@ -33,6 +44,8 @@ testcases/kernel/syscalls/setpgid/setpgid03.c verified setpgid(2) rejects moving
 testcases/kernel/syscalls/set_robust_list/set_robust_list01.c verified set_robust_list(2) accepts sizeof(robust_list_head) and rejects invalid len
 testcases/kernel/syscalls/set_tid_address/set_tid_address01.c verified set_tid_address(2) returns the thread-group leader tid for the main thread
 testcases/kernel/syscalls/setsid/setsid01.c verified setsid(2) rejects callers that are already process-group leaders after nested setpgid choreography
+testcases/kernel/syscalls/sigaltstack/sigaltstack02.c verified sigaltstack(2) reports EINVAL for invalid flags and ENOMEM for undersized alternate stacks
+testcases/kernel/syscalls/tgkill/tgkill03.c verified invalid/defunct tgkill errno surface and pthread-backed checkpoint fanout once deferred clone-thread ownership and plain-fork external futex wake accounting matched Linux-shaped behavior
 testcases/kernel/syscalls/sysinfo/sysinfo01.c verified sysinfo(2) success path
 testcases/kernel/syscalls/sysinfo/sysinfo02.c verified sysinfo(2) EFAULT on invalid address
 testcases/kernel/syscalls/truncate/truncate02.c verified truncate(2) shrink/extend semantics without changing file offset

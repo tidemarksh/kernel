@@ -935,6 +935,14 @@ fn contract_execve_with_pt_interp_enters_interpreter_and_sets_auxv() {
         Some(0x2000)
     );
     assert!(find_auxv_value(&t, tidemark_kernel::elf::AT_PHDR).is_some());
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_HWCAP),
+        Some(0x112D)
+    );
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_CLKTCK),
+        Some(100)
+    );
 }
 
 #[test]
@@ -1246,7 +1254,6 @@ fn install_procfs_snapshot_writes_linux_like_maps() {
 }
 
 #[test]
-#[ignore = "requires PT_INTERP execve loader to keep the main executable image mapped"]
 fn contract_execve_with_pt_interp_maps_main_executable_image() {
     let mut t = TestVm::new();
     let main_code = [0x13, 0x05, 0x70, 0x00];

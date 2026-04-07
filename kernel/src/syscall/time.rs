@@ -19,6 +19,7 @@ use crate::abi;
 use crate::alloc;
 use crate::guest_mem;
 use crate::types::ThreadState;
+use core::time::Duration;
 
 // Clock IDs (https://github.com/torvalds/linux/blob/v6.12/include/uapi/linux/time.h)
 const CLOCK_REALTIME: u64 = 0;
@@ -29,9 +30,11 @@ const CLOCK_MONOTONIC_RAW: u64 = 4;
 const CLOCK_REALTIME_COARSE: u64 = 5;
 const CLOCK_MONOTONIC_COARSE: u64 = 6;
 const CLOCK_BOOTTIME: u64 = 7;
+const TIMER_ABSTIME: u64 = 1;
 const ITIMER_REAL: u64 = 0;
 const ITIMER_VIRTUAL: u64 = 1;
 const ITIMER_PROF: u64 = 2;
+const TICKS_PER_SEC: u64 = 100_000_000;
 
 #[derive(Clone, Copy)]
 struct ItimerState {
@@ -119,6 +122,14 @@ pub fn advance_monotonic(ticks: u64) {
     ts().monotonic_ticks += ticks;
 }
 
+/// Advance monotonic time by an exact wall-clock duration in virtual time.
+pub fn advance_monotonic_duration(duration: Duration) {
+    let sec_ticks = duration.as_secs().saturating_mul(TICKS_PER_SEC);
+    let subsec_ticks =
+        (duration.subsec_nanos() as u64).saturating_mul(TICKS_PER_SEC) / 1_000_000_000;
+    advance_monotonic(sec_ticks.saturating_add(subsec_ticks));
+}
+
 pub fn sync_monotonic_ticks_floor(ticks: u64) {
     let state = ts();
     if ticks > state.monotonic_ticks {
@@ -139,9 +150,29 @@ fn base_time() -> (u64, u64) {
     }
 }
 
+pub fn current_timespec(clk_id: u64) -> Option<(u64, u64)> {
+    match clk_id {
+        CLOCK_REALTIME | CLOCK_REALTIME_COARSE => {
+            let (base_sec, base_nsec) = base_time();
+            let (mono_sec, mono_nsec) = ticks_to_timespec(monotonic_ticks());
+            let total_nsec = base_nsec + mono_nsec;
+            Some((
+                base_sec + mono_sec + total_nsec / 1_000_000_000,
+                total_nsec % 1_000_000_000,
+            ))
+        }
+        CLOCK_MONOTONIC | CLOCK_MONOTONIC_RAW | CLOCK_MONOTONIC_COARSE | CLOCK_BOOTTIME => {
+            Some(ticks_to_timespec(monotonic_ticks()))
+        }
+        CLOCK_PROCESS_CPUTIME_ID | CLOCK_THREAD_CPUTIME_ID => {
+            Some(ticks_to_timespec(monotonic_ticks()))
+        }
+        _ => None,
+    }
+}
+
 /// Convert monotonic ticks to (sec, nsec). Assumes ~100M instructions/sec.
 fn ticks_to_timespec(ticks: u64) -> (u64, u64) {
-    const TICKS_PER_SEC: u64 = 100_000_000;
     let sec = ticks / TICKS_PER_SEC;
     let nsec = (ticks % TICKS_PER_SEC) * (1_000_000_000 / TICKS_PER_SEC);
     (sec, nsec)
@@ -209,21 +240,8 @@ pub fn sys_clock_gettime(_vm: &ThreadState, base: u32, clk_id: u64, tp: u64) -> 
         return abi::EFAULT;
     }
 
-    let (sec, nsec) = match clk_id {
-        CLOCK_REALTIME | CLOCK_REALTIME_COARSE => {
-            let (base_sec, base_nsec) = base_time();
-            let (mono_sec, mono_nsec) = ticks_to_timespec(monotonic_ticks());
-            let total_nsec = base_nsec + mono_nsec;
-            (
-                base_sec + mono_sec + total_nsec / 1_000_000_000,
-                total_nsec % 1_000_000_000,
-            )
-        }
-        CLOCK_MONOTONIC | CLOCK_MONOTONIC_RAW | CLOCK_MONOTONIC_COARSE | CLOCK_BOOTTIME => {
-            ticks_to_timespec(monotonic_ticks())
-        }
-        CLOCK_PROCESS_CPUTIME_ID | CLOCK_THREAD_CPUTIME_ID => ticks_to_timespec(monotonic_ticks()),
-        _ => return abi::EINVAL,
+    let Some((sec, nsec)) = current_timespec(clk_id) else {
+        return abi::EINVAL;
     };
 
     unsafe {
@@ -311,6 +329,57 @@ pub fn sys_nanosleep(vm: &mut ThreadState, base: u32, req: u64, _rem: u64) -> i3
         vm.fault_pc = nsec;
     }
     vm.x[10] = 0; // return 0 on success
+    vm.status = abi::STATUS_SLEEP;
+    abi::STATUS_SLEEP
+}
+
+pub fn sys_clock_nanosleep(
+    vm: &mut ThreadState,
+    base: u32,
+    clk_id: u64,
+    flags: u64,
+    req: u64,
+    _rem: u64,
+) -> i32 {
+    let Some((req_sec, req_nsec)) = (|| {
+        if req == 0 {
+            return None;
+        }
+        Some(unsafe { (guest_mem::read_u64(base, req), guest_mem::read_u64(base, req + 8)) })
+    })() else {
+        vm.x[10] = abi::EFAULT as u64;
+        return abi::STATUS_OK;
+    };
+
+    if req_nsec >= 1_000_000_000 {
+        vm.x[10] = abi::EINVAL as u64;
+        return abi::STATUS_OK;
+    }
+    if current_timespec(clk_id).is_none() {
+        vm.x[10] = abi::EINVAL as u64;
+        return abi::STATUS_OK;
+    }
+
+    let (sleep_sec, sleep_nsec) = if flags & TIMER_ABSTIME != 0 {
+        let Some((now_sec, now_nsec)) = current_timespec(clk_id) else {
+            vm.x[10] = abi::EINVAL as u64;
+            return abi::STATUS_OK;
+        };
+        let now_total = now_sec.saturating_mul(1_000_000_000).saturating_add(now_nsec);
+        let req_total = req_sec.saturating_mul(1_000_000_000).saturating_add(req_nsec);
+        if req_total <= now_total {
+            (0, 0)
+        } else {
+            let delta = req_total - now_total;
+            (delta / 1_000_000_000, delta % 1_000_000_000)
+        }
+    } else {
+        (req_sec, req_nsec)
+    };
+
+    vm.fault_addr = sleep_sec;
+    vm.fault_pc = sleep_nsec;
+    vm.x[10] = 0;
     vm.status = abi::STATUS_SLEEP;
     abi::STATUS_SLEEP
 }

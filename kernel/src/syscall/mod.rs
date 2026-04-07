@@ -86,6 +86,10 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_GETITIMER => time::sys_getitimer(vm, base, a0, a1),
         SYS_SETITIMER => time::sys_setitimer(vm, base, a0, a1, a2),
         114 => time::sys_clock_getres(vm, base, a0, a1), // clock_getres
+        SYS_CLOCK_NANOSLEEP => {
+            let status = time::sys_clock_nanosleep(vm, base, a0, a1, a2, a3);
+            return debug_return(vm, nr, vm.x[10] as i64, status);
+        }
         SYS_NANOSLEEP => {
             let status = time::sys_nanosleep(vm, base, a0, a1);
             return debug_return(vm, nr, vm.x[10] as i64, status);
@@ -266,6 +270,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             }
             r
         }
+        SYS_SHUTDOWN => socket::sys_shutdown(vm, base, a0, a1),
         SYS_SETSOCKOPT => socket::sys_setsockopt(vm, base, a0, a1, a2, a3, a4),
         SYS_GETSOCKOPT => socket::sys_getsockopt(vm, base, a0, a1, a2, a3, a4),
         SYS_GETSOCKNAME => socket::sys_getsockname(vm, base, a0, a1, a2),
@@ -302,7 +307,9 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             } else {
                 a1 as i32
             };
-            if target_pid != self_pid {
+            if nr == SYS_TGKILL && target_pid <= 0 {
+                EINVAL
+            } else if target_pid != self_pid {
                 ESRCH
             } else {
                 signal::send_signal_to_tid(vm, base, target_tid, sig)
@@ -336,6 +343,13 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
                 }
                 ret
             }
+        }
+        SYS_CLONE3 => {
+            let ret = thread::sys_clone3(vm, base, a0, a1);
+            if vm.status == abi::STATUS_CLONE_SPAWN {
+                return debug_return(vm, nr, ret, abi::STATUS_CLONE_SPAWN);
+            }
+            ret
         }
         SYS_EXECVE => {
             let ret = process::sys_execve(vm, base, a0, a1, a2);
@@ -378,7 +392,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_PRCTL => 0,
         SYS_UMASK => 0o022, // return previous umask
         SYS_RISCV_HWPROBE => identity::sys_riscv_hwprobe(vm, base, a0, a1, a2, a3, a4),
-        SYS_RSEQ => EINVAL,
+        SYS_RSEQ => ENOSYS,
         SYS_PRLIMIT64 => resource::sys_prlimit64(vm, base, a0 as i32, a1, a2, a3),
 
         // not yet implemented

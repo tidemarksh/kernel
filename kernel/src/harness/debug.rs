@@ -53,7 +53,7 @@ static mut SYSCALL_TRACE: SyscallTraceSummary = SyscallTraceSummary {
     result: 0,
     status: 0,
 };
-const SYSCALL_TRACE_CAP: usize = 64;
+const SYSCALL_TRACE_CAP: usize = 256;
 static mut SYSCALL_TRACE_RING: [SyscallTraceSummary; SYSCALL_TRACE_CAP] = [SyscallTraceSummary {
     vm_ptr: 0,
     nr: 0,

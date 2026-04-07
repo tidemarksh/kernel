@@ -26,6 +26,9 @@ const EPOLLIN: u32 = 0x001;
 const EPOLLOUT: u32 = 0x004;
 const EPOLLERR: u32 = 0x008;
 const EPOLLHUP: u32 = 0x010;
+const EPOLLRDHUP: u32 = 0x2000;
+const SHUT_RD_MASK: u32 = 1 << 0;
+const SHUT_WR_MASK: u32 = 1 << 1;
 
 // Max sockaddr size we store (covers sockaddr_in and sockaddr_in6)
 const SOCKADDR_STORAGE_LEN: usize = 28;
@@ -67,6 +70,7 @@ struct SocketSlot {
     so_sndbuf: u32,
     so_rcvbuf: u32,
     tcp_nodelay: u32,
+    shutdown_mask: u32,
     accept_head: u32,
     accept_tail: u32,
     accept_queue: [i32; ACCEPT_QUEUE_SIZE],
@@ -154,6 +158,7 @@ fn alloc_socket_slot() -> Option<u32> {
                     so_sndbuf: DEFAULT_SOCKET_BUFFER,
                     so_rcvbuf: DEFAULT_SOCKET_BUFFER,
                     tcp_nodelay: 0,
+                    shutdown_mask: 0,
                     accept_head: 0,
                     accept_tail: 0,
                     accept_queue: [-1; ACCEPT_QUEUE_SIZE],
@@ -345,6 +350,7 @@ fn shutdown_slot(idx: usize) {
         slot.accept_head = 0;
         slot.accept_tail = 0;
         slot.accept_queue = [-1; ACCEPT_QUEUE_SIZE];
+        slot.shutdown_mask = SHUT_RD_MASK | SHUT_WR_MASK;
     }
 
     if peer_idx >= 0 && (peer_idx as usize) < MAX_SOCKETS && is_slot_used(peer_idx as u32) {
@@ -733,6 +739,25 @@ pub fn sys_recvfrom(
     n
 }
 
+pub fn sys_shutdown(vm: &mut ThreadState, base: u32, fd: u64, how: u64) -> i64 {
+    let idx = match get_socket_idx(base, vm, fd) {
+        Some(i) => i as usize,
+        None => return ENOTSOCK,
+    };
+    let slot = &mut socket_table()[idx];
+    if slot.state != SOCK_STATE_CONNECTED && slot.state != SOCK_STATE_SHUTDOWN {
+        return ENOTCONN;
+    }
+    let bits = match how as i32 {
+        SHUT_RD => SHUT_RD_MASK,
+        SHUT_WR => SHUT_WR_MASK,
+        SHUT_RDWR => SHUT_RD_MASK | SHUT_WR_MASK,
+        _ => return EINVAL,
+    };
+    slot.shutdown_mask |= bits;
+    0
+}
+
 pub fn socket_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, len: u64) -> i64 {
     let idx = match get_socket_idx(base, vm, fd) {
         Some(i) => i as usize,
@@ -819,6 +844,9 @@ pub fn poll_revents_ofd(ofd: &OpenFileDesc, interest: u32) -> u32 {
             revents |= EPOLLIN;
         }
     } else if slot.state == SOCK_STATE_CONNECTED || slot.state == SOCK_STATE_SHUTDOWN {
+        if slot.shutdown_mask & SHUT_RD_MASK != 0 {
+            revents |= EPOLLRDHUP;
+        }
         if socket_recv_available(idx) > 0 {
             revents |= EPOLLIN;
         } else if slot_peer_is_closed(idx) {
@@ -895,6 +923,7 @@ pub fn inject_http_connection(vm_ptr: u32, port: u16, request: &[u8]) -> i32 {
         so_sndbuf: DEFAULT_SOCKET_BUFFER,
         so_rcvbuf: DEFAULT_SOCKET_BUFFER,
         tcp_nodelay: 0,
+        shutdown_mask: 0,
         accept_head: 0,
         accept_tail: 0,
         accept_queue: [-1; ACCEPT_QUEUE_SIZE],
@@ -918,6 +947,7 @@ pub fn inject_http_connection(vm_ptr: u32, port: u16, request: &[u8]) -> i32 {
         so_sndbuf: DEFAULT_SOCKET_BUFFER,
         so_rcvbuf: DEFAULT_SOCKET_BUFFER,
         tcp_nodelay: 0,
+        shutdown_mask: 0,
         accept_head: 0,
         accept_tail: 0,
         accept_queue: [-1; ACCEPT_QUEUE_SIZE],

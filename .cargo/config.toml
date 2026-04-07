@@ -30,4 +30,4 @@ test-kernel-lib = "test -p tidemark-kernel --lib"
 test-kernel-riscv = "test -p tidemark-kernel-tests --test riscv_tests"
 test-kernel-ltp = "test -p tidemark-kernel-tests --test ltp ltp_"
 [target.wasm32-wasip1]
-runner = ["wasmtime", "--dir=/"]
+runner = ["./tests/support/wasmtime-runner.sh"]

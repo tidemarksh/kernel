@@ -4,6 +4,7 @@ use tidemark_kernel::harness::TestVm;
 const CLOCK_REALTIME: u64 = 0;
 const CLOCK_MONOTONIC: u64 = 1;
 const ITIMER_REAL: u64 = 0;
+const TIMER_ABSTIME: u64 = 1;
 
 #[test]
 fn clock_gettime_realtime_uses_base_plus_monotonic() {
@@ -72,6 +73,24 @@ fn clock_gettime_monotonic_is_nonzero_at_startup() {
     let sec = unsafe { tidemark_kernel::guest_mem::read_u64(t.base, tp) };
     let nsec = unsafe { tidemark_kernel::guest_mem::read_u64(t.base, tp + 8) };
     assert!(sec > 0 || nsec > 0);
+}
+
+#[test]
+fn advance_monotonic_duration_updates_monotonic_clock() {
+    let t = TestVm::new();
+    let tp = t.scratch;
+
+    tidemark_kernel::syscall::time::advance_monotonic_duration(core::time::Duration::from_millis(
+        50,
+    ));
+
+    assert_eq!(
+        tidemark_kernel::syscall::time::sys_clock_gettime(&t.vm, t.base, CLOCK_MONOTONIC, tp),
+        0
+    );
+    let sec = unsafe { tidemark_kernel::guest_mem::read_u64(t.base, tp) };
+    let nsec = unsafe { tidemark_kernel::guest_mem::read_u64(t.base, tp + 8) };
+    assert!(sec > 0 || nsec >= 50_000_000);
 }
 
 #[test]
@@ -184,4 +203,58 @@ fn sched_getaffinity_accepts_large_cpuset_buffers() {
         unsafe { tidemark_kernel::guest_mem::read_u64(t.base, mask_addr) },
         1
     );
+}
+
+#[test]
+fn clock_nanosleep_relative_sets_sleep_status() {
+    let mut t = TestVm::new();
+    let req = t.scratch + 0x500;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, req, 0);
+        tidemark_kernel::guest_mem::write_u64(t.base, req + 8, 50_000_000);
+    }
+
+    assert_eq!(
+        tidemark_kernel::syscall::time::sys_clock_nanosleep(
+            &mut t.vm,
+            t.base,
+            CLOCK_MONOTONIC,
+            0,
+            req,
+            0,
+        ),
+        abi::STATUS_SLEEP
+    );
+    assert_eq!(t.vm.fault_addr, 0);
+    assert_eq!(t.vm.fault_pc, 50_000_000);
+}
+
+#[test]
+fn clock_nanosleep_abstime_uses_deadline_delta() {
+    let mut t = TestVm::new();
+    let req = t.scratch + 0x540;
+    tidemark_kernel::syscall::time::advance_monotonic_duration(core::time::Duration::from_millis(
+        20,
+    ));
+    let (now_sec, now_nsec) =
+        tidemark_kernel::syscall::time::current_timespec(CLOCK_MONOTONIC).unwrap();
+    let target_nsec_total = now_nsec + 30_000_000;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, req, now_sec + target_nsec_total / 1_000_000_000);
+        tidemark_kernel::guest_mem::write_u64(t.base, req + 8, target_nsec_total % 1_000_000_000);
+    }
+
+    assert_eq!(
+        tidemark_kernel::syscall::time::sys_clock_nanosleep(
+            &mut t.vm,
+            t.base,
+            CLOCK_MONOTONIC,
+            TIMER_ABSTIME,
+            req,
+            0,
+        ),
+        abi::STATUS_SLEEP
+    );
+    assert_eq!(t.vm.fault_addr, 0);
+    assert_eq!(t.vm.fault_pc, 30_000_000);
 }

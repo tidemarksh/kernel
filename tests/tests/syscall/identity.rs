@@ -165,3 +165,11 @@ fn riscv_hwprobe_reports_base_ima_and_common_ima_extensions() {
         1
     );
 }
+
+#[test]
+fn rseq_reports_enosys_for_no_rseq_posture() {
+    let mut t = TestVm::new();
+    t.vm.x[17] = tidemark_kernel::abi::SYS_RSEQ;
+    assert_eq!(tidemark_kernel::syscall::dispatch(&mut t.vm, t.base), 0);
+    assert_eq!(t.vm.x[10] as i64, tidemark_kernel::abi::ENOSYS);
+}

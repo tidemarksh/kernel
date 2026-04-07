@@ -3,6 +3,7 @@ use tidemark_kernel::harness::TestVm;
 use tidemark_kernel::syscall::pipe::{self, PipeCloseOutcome};
 
 const OPEN_ACCESS_MODE_MASK: i64 = 0x3;
+const EFD_SEMAPHORE: u64 = 0x1;
 
 #[test]
 fn write_read_roundtrip() {
@@ -159,5 +160,203 @@ fn eventfd_roundtrip_and_nonblock_flags() {
     assert_eq!(
         tidemark_kernel::syscall::fs::sys_read(&mut t.vm, t.base, fd as u64, buf_addr, 8),
         EAGAIN
+    );
+}
+
+#[test]
+fn eventfd_read_reports_linux_shaped_error_cases() {
+    let mut t = TestVm::new();
+    let fd = pipe::sys_eventfd2(&mut t.vm, t.base, 10, O_NONBLOCK as u64);
+    assert!(fd >= 3);
+
+    let buf_addr = t.scratch + 0x1900;
+    assert_eq!(
+        tidemark_kernel::syscall::fs::sys_read(&mut t.vm, t.base, fd as u64, buf_addr, 8),
+        8
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, buf_addr) },
+        10
+    );
+    assert_eq!(
+        tidemark_kernel::syscall::fs::sys_read(&mut t.vm, t.base, fd as u64, buf_addr, 8),
+        EAGAIN
+    );
+
+    let fd2 = pipe::sys_eventfd2(&mut t.vm, t.base, 1, 0);
+    assert!(fd2 >= 3);
+    assert_eq!(
+        tidemark_kernel::syscall::fs::sys_read(&mut t.vm, t.base, fd2 as u64, buf_addr, 4),
+        EINVAL
+    );
+}
+
+#[test]
+fn eventfd_write_reports_linux_shaped_error_cases() {
+    let mut t = TestVm::new();
+    let fd = pipe::sys_eventfd2(&mut t.vm, t.base, 0, O_NONBLOCK as u64);
+    assert!(fd >= 3);
+
+    let buf_addr = t.scratch + 0x1a00;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, buf_addr, 12);
+    }
+    assert_eq!(
+        tidemark_kernel::syscall::fs::sys_write(
+            &mut t.vm, t.base, fd as u64, buf_addr, 8, SYS_WRITE
+        ),
+        8
+    );
+    assert_eq!(
+        tidemark_kernel::syscall::fs::sys_read(&mut t.vm, t.base, fd as u64, buf_addr, 8),
+        8
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, buf_addr) },
+        12
+    );
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, buf_addr, u64::MAX - 1);
+    }
+    assert_eq!(
+        tidemark_kernel::syscall::fs::sys_write(
+            &mut t.vm, t.base, fd as u64, buf_addr, 8, SYS_WRITE
+        ),
+        8
+    );
+    assert_eq!(
+        tidemark_kernel::syscall::fs::sys_write(
+            &mut t.vm, t.base, fd as u64, buf_addr, 8, SYS_WRITE
+        ),
+        EAGAIN
+    );
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, buf_addr, 7);
+    }
+    assert_eq!(
+        tidemark_kernel::syscall::fs::sys_write(
+            &mut t.vm, t.base, fd as u64, buf_addr, 4, SYS_WRITE
+        ),
+        EINVAL
+    );
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, buf_addr, u64::MAX);
+    }
+    assert_eq!(
+        tidemark_kernel::syscall::fs::sys_write(
+            &mut t.vm, t.base, fd as u64, buf_addr, 8, SYS_WRITE
+        ),
+        EINVAL
+    );
+}
+
+#[test]
+fn eventfd_semaphore_reads_one_per_token() {
+    let mut t = TestVm::new();
+    let fd = pipe::sys_eventfd2(&mut t.vm, t.base, 2, EFD_SEMAPHORE | O_NONBLOCK as u64);
+    assert!(fd >= 3);
+
+    let buf_addr = t.scratch + 0x1b00;
+    assert_eq!(
+        tidemark_kernel::syscall::fs::sys_read(&mut t.vm, t.base, fd as u64, buf_addr, 8),
+        8
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, buf_addr) },
+        1
+    );
+    assert_eq!(
+        tidemark_kernel::syscall::fs::sys_read(&mut t.vm, t.base, fd as u64, buf_addr, 8),
+        8
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, buf_addr) },
+        1
+    );
+    assert_eq!(
+        tidemark_kernel::syscall::fs::sys_read(&mut t.vm, t.base, fd as u64, buf_addr, 8),
+        EAGAIN
+    );
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, buf_addr, 5);
+    }
+    assert_eq!(
+        tidemark_kernel::syscall::fs::sys_write(
+            &mut t.vm, t.base, fd as u64, buf_addr, 8, SYS_WRITE
+        ),
+        8
+    );
+    for _ in 0..5 {
+        assert_eq!(
+            tidemark_kernel::syscall::fs::sys_read(&mut t.vm, t.base, fd as u64, buf_addr, 8),
+            8
+        );
+        assert_eq!(
+            unsafe { tidemark_kernel::guest_mem::read_u64(t.base, buf_addr) },
+            1
+        );
+    }
+}
+
+#[test]
+fn eventfd_blocked_read_resume_writes_guest_buffer_before_returning() {
+    let mut t = TestVm::new();
+    let fd = pipe::sys_eventfd2(&mut t.vm, t.base, 0, EFD_SEMAPHORE);
+    assert!(fd >= 3);
+
+    let buf_addr = t.scratch + 0x1b00;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, buf_addr, 0);
+    }
+
+    t.vm.x[17] = SYS_READ;
+    t.vm.x[10] = fd as u64;
+    t.vm.x[11] = buf_addr;
+    t.vm.x[12] = 8;
+    let status = tidemark_kernel::syscall::dispatch(&mut t.vm, t.base);
+    assert_eq!(status, STATUS_PIPE_WAIT);
+    assert_eq!(t.vm.status, STATUS_PIPE_WAIT);
+
+    tidemark_kernel::fs::fd_table::set_offset(t.base, &t.vm, fd as u64, 1);
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    assert_eq!(thread_resume_blocked_syscall(vm_ptr), 8);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, buf_addr) },
+        1
+    );
+}
+
+#[test]
+fn eventfd_blocked_read_resume_writes_stack_buffer_before_returning() {
+    let mut t = TestVm::new();
+    let fd = pipe::sys_eventfd2(&mut t.vm, t.base, 0, EFD_SEMAPHORE);
+    assert!(fd >= 3);
+
+    t.vm.x[2] = t.scratch + 0x2000;
+    let buf_addr = (t.vm.x[2] - 16) as u64;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, buf_addr, 0);
+    }
+
+    t.vm.x[17] = SYS_READ;
+    t.vm.x[10] = fd as u64;
+    t.vm.x[11] = buf_addr;
+    t.vm.x[12] = 8;
+    let status = tidemark_kernel::syscall::dispatch(&mut t.vm, t.base);
+    assert_eq!(status, STATUS_PIPE_WAIT);
+    assert_eq!(t.vm.status, STATUS_PIPE_WAIT);
+
+    tidemark_kernel::fs::fd_table::set_offset(t.base, &t.vm, fd as u64, 1);
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    assert_eq!(thread_resume_blocked_syscall(vm_ptr), 8);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, buf_addr) },
+        1
     );
 }

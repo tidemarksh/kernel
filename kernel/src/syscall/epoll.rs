@@ -26,6 +26,8 @@ pub(crate) const EPOLLIN: u32 = 0x001;
 const EPOLLOUT: u32 = 0x004;
 const EPOLLERR: u32 = 0x008;
 const EPOLLHUP: u32 = 0x010;
+const EPOLLONESHOT: u32 = 1 << 30;
+const EPOLLET: u32 = 1 << 31;
 const EPOLL_EVENT_DATA_OFFSET: u64 = 8;
 const EPOLL_EVENT_SIZE: u64 = 16;
 
@@ -36,6 +38,7 @@ struct EpollEntry {
     ofd_id: u32,
     events: u32,
     data: u64,
+    last_revents: u32,
 }
 
 /// Epoll instance state, allocated via alloc.rs.
@@ -249,6 +252,7 @@ pub fn sys_epoll_ctl(
                 ofd_id: watched_ofd_id,
                 events,
                 data,
+                last_revents: 0,
             };
             inst.count += 1;
             0
@@ -268,6 +272,7 @@ pub fn sys_epoll_ctl(
                     inst.entries[i].events = unsafe { guest_mem::read_u32(base, event_addr) };
                     inst.entries[i].data =
                         unsafe { guest_mem::read_u64(base, event_addr + EPOLL_EVENT_DATA_OFFSET) };
+                    inst.entries[i].last_revents = 0;
                     return 0;
                 }
             }
@@ -364,16 +369,26 @@ pub fn sys_epoll_pwait(
         if ready >= max {
             break;
         }
-        let e = &inst.entries[i];
-        let Some(ofd) = fd_table::get_ofd_by_id(e.ofd_id) else {
+        let entry = inst.entries[i];
+        let Some(ofd) = fd_table::get_ofd_by_id(entry.ofd_id) else {
             continue;
         };
-        let revents = poll_ofd(&ofd, e.events);
+        let polled_revents = poll_ofd(&ofd, entry.events);
+        let revents = if entry.events & EPOLLET != 0 {
+            polled_revents & !entry.last_revents
+        } else {
+            polled_revents
+        };
+        inst.entries[i].last_revents = polled_revents;
         if revents != 0 {
             let out_addr = events_addr + (ready as u64) * EPOLL_EVENT_SIZE;
             unsafe {
                 guest_mem::write_u32(base, out_addr, revents);
-                guest_mem::write_u64(base, out_addr + EPOLL_EVENT_DATA_OFFSET, e.data);
+                guest_mem::write_u64(base, out_addr + EPOLL_EVENT_DATA_OFFSET, entry.data);
+            }
+            if entry.events & EPOLLONESHOT != 0 {
+                inst.entries[i].events = 0;
+                inst.entries[i].last_revents = 0;
             }
             ready += 1;
         }
@@ -517,6 +532,7 @@ mod tests {
             ofd_id: 5,
             events: EPOLLIN,
             data: 0x42,
+            last_revents: 0,
         };
         inst.count = 1;
         assert_eq!(inst.count, 1);

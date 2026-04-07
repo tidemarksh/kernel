@@ -55,6 +55,8 @@ pub const AT_PHNUM: u64 = 5;
 pub const AT_PAGESZ: u64 = 6;
 pub const AT_BASE: u64 = 7;
 pub const AT_ENTRY: u64 = 9;
+pub const AT_HWCAP: u64 = 16;
+pub const AT_CLKTCK: u64 = 17;
 pub const AT_RANDOM: u64 = 25;
 pub const AT_EXECFN: u64 = 31;
 
@@ -503,13 +505,16 @@ pub unsafe fn setup_stack(
         let envc = envp.len();
 
         // Auxiliary vector entries
-        let auxv: [(u64, u64); 8] = [
+        // Match the legacy/core loader posture for rv64gc userland startup.
+        let auxv: [(u64, u64); 10] = [
             (AT_PAGESZ, 4096),
             (AT_PHDR, elf_result.aux_phdr_addr),
             (AT_PHENT, elf_result.aux_phent as u64),
             (AT_PHNUM, elf_result.aux_phnum as u64),
             (AT_BASE, elf_result.aux_base),
             (AT_ENTRY, elf_result.aux_entry),
+            (AT_HWCAP, 0x112D),
+            (AT_CLKTCK, 100),
             (AT_RANDOM, random_addr),
             (AT_EXECFN, execfn_addr),
         ];

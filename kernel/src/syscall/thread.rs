@@ -42,6 +42,8 @@ static mut LAST_CLONE_SPAWN: CloneSpawnTrace = CloneSpawnTrace {
     s11: 0,
 };
 
+static mut NEXT_TID_HINTS: [i32; MAX_PROCESSES] = [0; MAX_PROCESSES];
+
 const THREAD_COUNT_TRACE_INIT_MAIN: u32 = 1;
 const THREAD_COUNT_TRACE_CLONE_INC: u32 = 2;
 const THREAD_COUNT_TRACE_EXIT_DEC: u32 = 3;
@@ -60,8 +62,34 @@ pub fn last_clone_spawn() -> (i32, u64, u64, u64, u64, u64) {
 }
 
 pub fn init() {
-    // clone handoff scratch lives in ThreadState (shared guest-visible memory),
-    // so there is no thread subsystem global state to reset here.
+    unsafe {
+        core::ptr::write(core::ptr::addr_of_mut!(NEXT_TID_HINTS), [0; MAX_PROCESSES]);
+    }
+}
+
+fn process_slot_from_ptr(base: u32, process_ptr: u32) -> Option<usize> {
+    let ps = process_state_ptr(base, process_ptr)?;
+    let pid = unsafe { (*ps).pid };
+    if pid <= 0 || pid as usize > MAX_PROCESSES {
+        return None;
+    }
+    Some((pid - 1) as usize)
+}
+
+fn set_next_tid_hint(base: u32, process_ptr: u32, next_tid: i32) {
+    let Some(slot) = process_slot_from_ptr(base, process_ptr) else {
+        return;
+    };
+    unsafe {
+        NEXT_TID_HINTS[slot] = next_tid;
+    }
+}
+
+fn next_tid_hint(base: u32, process_ptr: u32) -> i32 {
+    let Some(slot) = process_slot_from_ptr(base, process_ptr) else {
+        return 1;
+    };
+    unsafe { NEXT_TID_HINTS[slot] }
 }
 
 fn process_state_ptr(base: u32, process_ptr: u32) -> Option<*mut ProcessState> {
@@ -316,6 +344,7 @@ pub fn init_main_thread(vm_ptr: u32, base: u32) {
             before,
             1,
         );
+        set_next_tid_hint(base, vm.process_ptr, vm.tid.saturating_add(1).max(1));
     }
 }
 
@@ -378,6 +407,7 @@ pub fn discard_other_threads_for_exec(vm: &ThreadState, base: u32) -> u32 {
                 before,
                 1,
             );
+            set_next_tid_hint(base, vm.process_ptr, vm.tid.saturating_add(1).max(1));
         }
 
         discarded
@@ -438,11 +468,12 @@ pub fn sys_exit(vm: &mut ThreadState, base: u32, exit_code: u64) -> i32 {
 
     if remaining_threads == 0 {
         crate::fs::fd_table::close_all_for_process(base, vm);
+        set_next_tid_hint(base, vm.process_ptr, 0);
     }
 
     unsafe {
         if let Some(record) = thread_record_ptr(base, vm.process_ptr, vm.tid) {
-            *record = ThreadRecord::empty();
+            record.write(ThreadRecord::new(vm.tid, THREAD_DEAD, 0, 0, 0));
         }
     }
 
@@ -513,6 +544,7 @@ pub fn terminate_process_with_reason(
                 before,
                 0,
             );
+            set_next_tid_hint(base, vm.process_ptr, 0);
         }
     }
 
@@ -609,6 +641,46 @@ pub fn sys_clone(
 
     // Other clone variants (fork, vfork) handled by process.rs
     ENOSYS
+}
+
+pub fn sys_clone3(vm: &mut ThreadState, base: u32, clone_args_ptr: u64, size: u64) -> i64 {
+    const CLONE_ARGS_V1_SIZE: u64 = 64;
+
+    if clone_args_ptr == 0 || size < CLONE_ARGS_V1_SIZE {
+        return EINVAL;
+    }
+
+    let flags = unsafe { guest_mem::read_u64(base, clone_args_ptr) };
+    let pidfd = unsafe { guest_mem::read_u64(base, clone_args_ptr + 8) };
+    let child_tidptr = unsafe { guest_mem::read_u64(base, clone_args_ptr + 16) };
+    let parent_tidptr = unsafe { guest_mem::read_u64(base, clone_args_ptr + 24) };
+    let exit_signal = unsafe { guest_mem::read_u64(base, clone_args_ptr + 32) };
+    let stack = unsafe { guest_mem::read_u64(base, clone_args_ptr + 40) };
+    let stack_size = unsafe { guest_mem::read_u64(base, clone_args_ptr + 48) };
+    let tls = unsafe { guest_mem::read_u64(base, clone_args_ptr + 56) };
+
+    let combined_flags = flags | (exit_signal & 0xff);
+    let child_stack = if stack != 0 && stack_size != 0 {
+        stack.saturating_add(stack_size)
+    } else {
+        stack
+    };
+
+    let result = sys_clone(
+        vm,
+        base,
+        combined_flags,
+        child_stack,
+        parent_tidptr,
+        tls,
+        child_tidptr,
+    );
+    if result > 0 && (combined_flags & CLONE_PIDFD) != 0 && pidfd != 0 {
+        unsafe {
+            guest_mem::write_u32(base, pidfd, result as u32);
+        }
+    }
+    result
 }
 
 /// Runtime handoff helper: allocate and initialize the child ThreadState for
@@ -751,10 +823,15 @@ fn allocate_tid(vm: &ThreadState, base: u32) -> i32 {
         let Some(ps) = process_state_ptr(base, vm.process_ptr) else {
             return -1;
         };
-        for (i, record) in (*ps).threads.iter_mut().enumerate() {
+        let mut start_tid = next_tid_hint(base, vm.process_ptr).max(1);
+        if start_tid <= vm.tid {
+            start_tid = vm.tid.saturating_add(1).max(1);
+        }
+        for tid in start_tid..=(MAX_THREADS as i32) {
+            let record = &mut (*ps).threads[(tid - 1) as usize];
             if record.state == THREAD_NONE || record.state == THREAD_DEAD {
-                let tid = (i + 1) as i32;
                 *record = ThreadRecord::new(tid, crate::types::THREAD_STARTING, 0, 0, 0);
+                set_next_tid_hint(base, vm.process_ptr, tid.saturating_add(1));
                 return tid;
             }
         }
@@ -777,7 +854,8 @@ pub fn sys_futex(
     addr2: u64,
     val3: u64,
 ) -> i64 {
-    let futex_op = (op as u32) & !(FUTEX_PRIVATE_FLAG | FUTEX_CLOCK_REALTIME);
+    let futex_flags = (op as u32) & (FUTEX_PRIVATE_FLAG | FUTEX_CLOCK_REALTIME);
+    let futex_op = (op as u32) & !futex_flags;
 
     match futex_op {
         FUTEX_WAIT | FUTEX_WAIT_BITSET => {
@@ -805,6 +883,8 @@ pub fn sys_futex(
             vm.futex_wait_timeout = timeout_or_requeue;
             vm.futex_wait_expected = val as u32;
             vm.futex_wait_bitset = bitset;
+            vm.futex_wait_absolute = if futex_op == FUTEX_WAIT_BITSET { 1 } else { 0 };
+            vm.futex_wait_flags = futex_flags;
             // Value matches — block. Return STATUS_FUTEX_WAIT for TS to Atomics.wait.
             vm.x[10] = addr; // stash addr for TS
             vm.status = STATUS_FUTEX_WAIT;
@@ -902,6 +982,8 @@ pub fn resume_futex_wait_result(vm: &mut ThreadState, base: u32, result: i64) {
     vm.futex_wait_timeout = 0;
     vm.futex_wait_expected = 0;
     vm.futex_wait_bitset = 0;
+    vm.futex_wait_absolute = 0;
+    vm.futex_wait_flags = 0;
     vm.status = STATUS_OK;
     vm.x[10] = result as u64;
     crate::syscall::signal::check_pending(vm, base);

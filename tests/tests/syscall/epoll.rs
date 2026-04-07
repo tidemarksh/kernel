@@ -1,12 +1,18 @@
 use tidemark_kernel::abi::*;
 use tidemark_kernel::fs::fd_table;
 use tidemark_kernel::harness::TestVm;
+use tidemark_kernel::syscall::socket;
 use tidemark_kernel::syscall::{epoll, fs, pipe};
 use tidemark_kernel::types::ProcessState;
 
 const EPOLL_CTL_ADD: u64 = 1;
 const EPOLL_CTL_DEL: u64 = 2;
+const EPOLL_CTL_MOD: u64 = 3;
 const EPOLLIN: u32 = 0x001;
+const EPOLLOUT: u32 = 0x004;
+const EPOLLRDHUP: u32 = 0x2000;
+const EPOLLONESHOT: u32 = 1 << 30;
+const EPOLLET: u32 = 1 << 31;
 
 #[test]
 fn close_epoll_clears_instance_slot() {
@@ -468,6 +474,173 @@ fn epoll_pwait_writes_riscv_event_array() {
 }
 
 #[test]
+fn epoll_pwait_oneshot_delivers_once_until_rearmed() {
+    let mut t = TestVm::new();
+    let pipefd_addr = t.scratch + 0x1000;
+    assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) } as u64;
+    let write_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr + 4) } as i64;
+
+    let epfd = epoll::sys_epoll_create1(&mut t.vm, t.base, 0);
+    assert!(epfd >= 3);
+
+    let event_addr = t.scratch + 0x2000;
+    let out_addr = t.scratch + 0x3000;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, event_addr, EPOLLIN | EPOLLONESHOT);
+        tidemark_kernel::guest_mem::write_u64(t.base, event_addr + 8, 0x5151);
+    }
+
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            read_fd,
+            event_addr,
+        ),
+        0
+    );
+
+    assert_eq!(t.sys_write_data(write_fd, b"a"), 1);
+    assert_eq!(
+        epoll::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 1, 0, 0),
+        1
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, out_addr + 8) },
+        0x5151
+    );
+
+    let mut buf = [0u8; 1];
+    assert_eq!(t.sys_read(read_fd as i64, &mut buf), 1);
+    assert_eq!(buf, [b'a']);
+    assert_eq!(
+        epoll::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 1, 0, 0),
+        0
+    );
+
+    assert_eq!(t.sys_write_data(write_fd, b"b"), 1);
+    assert_eq!(
+        epoll::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 1, 0, 0),
+        0
+    );
+
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_MOD,
+            read_fd,
+            event_addr,
+        ),
+        0
+    );
+    assert_eq!(
+        epoll::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 1, 0, 0),
+        1
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, out_addr + 8) },
+        0x5151
+    );
+}
+
+#[test]
+fn epoll_pwait_edge_trigger_reports_only_new_edges() {
+    let mut t = TestVm::new();
+    let pipefd_addr = t.scratch + 0x1000;
+    assert_eq!(
+        pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, O_NONBLOCK as u64),
+        0
+    );
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) } as u64;
+    let write_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr + 4) } as i64;
+
+    let epfd = epoll::sys_epoll_create1(&mut t.vm, t.base, 0);
+    assert!(epfd >= 3);
+
+    let read_event_addr = t.scratch + 0x2000;
+    let write_event_addr = t.scratch + 0x2010;
+    let out_addr = t.scratch + 0x3000;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, read_event_addr, EPOLLIN | EPOLLET);
+        tidemark_kernel::guest_mem::write_u64(t.base, read_event_addr + 8, 0x6060);
+        tidemark_kernel::guest_mem::write_u32(t.base, write_event_addr, EPOLLOUT | EPOLLET);
+        tidemark_kernel::guest_mem::write_u64(t.base, write_event_addr + 8, 0x7070);
+    }
+
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            read_fd,
+            read_event_addr,
+        ),
+        0
+    );
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            write_fd as u64,
+            write_event_addr,
+        ),
+        0
+    );
+
+    let payload = vec![b'a'; 512];
+    let mut written = 0usize;
+    loop {
+        let n = t.sys_write_data(write_fd, &payload);
+        if n <= 0 {
+            break;
+        }
+        written += n as usize;
+    }
+    assert!(
+        written > 1,
+        "pipe should accept enough bytes to test edge mode"
+    );
+    let half = written / 2;
+    assert_eq!(
+        epoll::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 1, 0, 0),
+        1
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, out_addr + 8) },
+        0x6060
+    );
+
+    let mut first_half = vec![0u8; half];
+    assert_eq!(t.sys_read(read_fd as i64, &mut first_half), half as i64);
+    assert_eq!(
+        epoll::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 1, 0, 0),
+        0
+    );
+
+    let mut second_half = vec![0u8; written - half];
+    assert_eq!(
+        t.sys_read(read_fd as i64, &mut second_half),
+        (written - half) as i64
+    );
+    assert_eq!(
+        epoll::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 1, 0, 0),
+        1
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, out_addr + 8) },
+        0x7070
+    );
+}
+
+#[test]
 fn epoll_ctl_rejects_regular_files_with_eperm() {
     let mut t = TestVm::new();
     t.memfs.create_file(b"regular.txt", b"hello");
@@ -493,5 +666,69 @@ fn epoll_ctl_rejects_regular_files_with_eperm() {
             event_addr,
         ),
         EPERM
+    );
+}
+
+#[test]
+fn epoll_pwait_reports_rd_hup_after_shutdown_read() {
+    let mut t = TestVm::new();
+    let listener_fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
+    assert!(listener_fd >= 0);
+    let sockaddr: [u8; 16] = [2, 0, 0x50, 0x00, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
+    let bind_addr = t.scratch + 0x340;
+    t.write_mem(bind_addr, &sockaddr);
+    assert_eq!(
+        socket::sys_bind(&mut t.vm, t.base, listener_fd as u64, bind_addr, 16),
+        0
+    );
+    assert_eq!(
+        socket::sys_listen(&mut t.vm, t.base, listener_fd as u64, 8),
+        0
+    );
+
+    let client_idx = socket::inject_http_connection(0, 0x5000, b"GET / HTTP/1.0\r\n\r\n");
+    assert!(client_idx >= 0);
+    let client_fd = fd_table::open_socket(&mut t.vm, t.base, client_idx as u32, 0);
+    assert!(client_fd >= 0);
+
+    let epfd = epoll::sys_epoll_create1(&mut t.vm, t.base, 0);
+    assert!(epfd >= 3);
+
+    let event_addr = t.scratch + 0x2200;
+    let out_addr = t.scratch + 0x3200;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, event_addr, EPOLLRDHUP);
+        tidemark_kernel::guest_mem::write_u64(t.base, event_addr + 8, 0x8888);
+    }
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            client_fd as u64,
+            event_addr,
+        ),
+        0
+    );
+    assert_eq!(
+        epoll::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 1, 0, 0),
+        0
+    );
+    assert_eq!(
+        socket::sys_shutdown(&mut t.vm, t.base, client_fd as u64, SHUT_RD as u64),
+        0
+    );
+    assert_eq!(
+        epoll::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 1, 0, 0),
+        1
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
+        EPOLLRDHUP
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, out_addr + 8) },
+        0x8888
     );
 }

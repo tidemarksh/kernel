@@ -139,35 +139,29 @@ testcases/kernel/syscalls/dup2/dup206.c not yet enabled in current syscall-confo
 testcases/kernel/syscalls/dup2/dup207.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/dup3/dup3_01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/dup3/dup3_02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/epoll/epoll-ltp.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/epoll_create/epoll_create01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/epoll_create/epoll_create02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/epoll_ctl/epoll_ctl02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/epoll_ctl/epoll_ctl03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/epoll_ctl/epoll_ctl04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/epoll_ctl/epoll_ctl05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/epoll_pwait/epoll_pwait01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/epoll_pwait/epoll_pwait02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/epoll_pwait/epoll_pwait03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/epoll_pwait/epoll_pwait04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/epoll_pwait/epoll_pwait05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/epoll_pwait/epoll_pwait06.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/epoll/epoll-ltp.c epoll dispatch exists and kernel contract tests cover core ready/blocking/eventfd/OFD semantics, but the aggregated LTP epoll harness is not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/epoll_create/epoll_create01.c the legacy epoll_create syscall is not implemented; the current surface only exposes epoll_create1
+testcases/kernel/syscalls/epoll_create/epoll_create02.c the legacy epoll_create syscall is not implemented; the current surface only exposes epoll_create1
+testcases/kernel/syscalls/epoll_ctl/epoll_ctl02.c epoll_ctl dispatch exists and kernel contract tests cover core add/del/reject semantics, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/epoll_ctl/epoll_ctl03.c epoll_ctl dispatch exists and kernel contract tests cover core add/del/reject semantics, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/epoll_ctl/epoll_ctl04.c epoll_ctl dispatch exists and kernel contract tests cover core add/del/reject semantics, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/epoll_ctl/epoll_ctl05.c epoll_ctl dispatch exists and kernel contract tests cover core add/del/reject semantics, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/epoll_pwait/epoll_pwait01.c epoll_pwait dispatch exists and kernel contract tests cover ready-event delivery, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/epoll_pwait/epoll_pwait02.c epoll_pwait dispatch exists and kernel contract tests cover ready-event delivery, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/epoll_pwait/epoll_pwait03.c epoll_pwait dispatch exists and kernel contract tests cover ready-event delivery, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/epoll_pwait/epoll_pwait04.c epoll_pwait dispatch exists and kernel contract tests cover ready-event delivery, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/epoll_pwait/epoll_pwait05.c epoll_pwait dispatch exists and kernel contract tests cover ready-event delivery, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/epoll_pwait/epoll_pwait06.c epoll_pwait dispatch exists and kernel contract tests cover ready-event delivery, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
 testcases/kernel/syscalls/epoll_wait/epoll_wait01.c epoll_wait01 depends on poll(2) in its harness, which is outside the current Phase4 syscall surface
-testcases/kernel/syscalls/epoll_wait/epoll_wait02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/epoll_wait/epoll_wait03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/epoll_wait/epoll_wait04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/epoll_wait/epoll_wait05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/epoll_wait/epoll_wait06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/epoll_wait/epoll_wait07.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/eventfd/eventfd01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/eventfd/eventfd02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/eventfd/eventfd03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/eventfd/eventfd04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/eventfd/eventfd05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/eventfd/eventfd06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/eventfd2/eventfd2_01.c eventfd2 currently returns ENOSYS
-testcases/kernel/syscalls/eventfd2/eventfd2_02.c eventfd2 currently returns ENOSYS
-testcases/kernel/syscalls/eventfd2/eventfd2_03.c eventfd2 currently returns ENOSYS
+testcases/kernel/syscalls/epoll_wait/epoll_wait02.c epoll_wait dispatch exists and kernel contract tests cover ready, blocking, timeout, eventfd, and OFD-alias semantics, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/epoll_wait/epoll_wait03.c epoll_wait dispatch exists and kernel contract tests cover ready, blocking, timeout, eventfd, and OFD-alias semantics, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/epoll_wait/epoll_wait04.c epoll_wait dispatch exists and kernel contract tests cover ready, blocking, timeout, eventfd, and OFD-alias semantics, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/eventfd/eventfd01.c local kernel contract tests pass for the read-side errno surface, but the upstream LTP binary still exits 2 without diagnostics, so the remaining blocker is LTP-specific harness/integration behavior
+testcases/kernel/syscalls/eventfd/eventfd02.c local kernel contract tests pass for the write-side errno surface, but the upstream LTP binary still exits 2 without diagnostics, so the remaining blocker is LTP-specific harness/integration behavior
+testcases/kernel/syscalls/eventfd/eventfd03.c direct eventfd2 coverage passes, but this case depends on the libc eventfd() wrapper plus select(2), neither of which is yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/eventfd/eventfd04.c eventfd/eventfd2 dispatch exists and kernel contract tests cover roundtrip/nonblock behavior, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/eventfd/eventfd05.c eventfd/eventfd2 dispatch exists and kernel contract tests cover roundtrip/nonblock behavior, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/eventfd/eventfd06.c eventfd/eventfd2 dispatch exists and kernel contract tests cover roundtrip/nonblock behavior, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
 testcases/kernel/syscalls/execl/execl01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/execl/execl01_child.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/execle/execle01.c not yet enabled in current syscall-conformance profile
@@ -348,22 +342,14 @@ testcases/kernel/syscalls/fsync/fsync03.c not yet enabled in current syscall-con
 testcases/kernel/syscalls/fsync/fsync04.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/ftruncate/ftruncate03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/ftruncate/ftruncate04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/futex/futex_cmp_requeue01.c futex currently implements only WAIT/WAKE
-testcases/kernel/syscalls/futex/futex_cmp_requeue02.c futex currently implements only WAIT/WAKE
-testcases/kernel/syscalls/futex/futex_wake02.c futex currently implements only WAIT/WAKE
-testcases/kernel/syscalls/futex/futex_wait03.c futex currently implements only WAIT/WAKE
-testcases/kernel/syscalls/futex/futex_wait04.c futex currently implements only WAIT/WAKE
-testcases/kernel/syscalls/futex/futex_wait05.c futex currently implements only WAIT/WAKE
-testcases/kernel/syscalls/futex/futex_wait_bitset01.c futex currently implements only WAIT/WAKE
-testcases/kernel/syscalls/futex/futex_waitv01.c futex currently implements only WAIT/WAKE
-testcases/kernel/syscalls/futex/futex_waitv02.c futex currently implements only WAIT/WAKE
-testcases/kernel/syscalls/futex/futex_waitv03.c futex currently implements only WAIT/WAKE
-testcases/kernel/syscalls/futex/futex_wake03.c futex currently implements only WAIT/WAKE
-testcases/kernel/syscalls/futex/futex_wake04.c futex currently implements only WAIT/WAKE
+testcases/kernel/syscalls/futex/futex_waitv01.c futex_waitv syscall dispatch is not yet implemented
+testcases/kernel/syscalls/futex/futex_waitv02.c futex_waitv syscall dispatch is not yet implemented
+testcases/kernel/syscalls/futex/futex_waitv03.c futex_waitv syscall dispatch is not yet implemented
+testcases/kernel/syscalls/futex/futex_wake04.c hugepage-backed futex key separation is not yet modeled in the current focused suite
 testcases/kernel/syscalls/futimesat/futimesat01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/get_mempolicy/get_mempolicy01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/get_mempolicy/get_mempolicy02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/get_robust_list/get_robust_list01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/get_robust_list/get_robust_list01.c get_robust_list is not yet implemented in syscall dispatch
 testcases/kernel/syscalls/getcontext/getcontext01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getcpu/getcpu01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getcpu/getcpu02.c not yet enabled in current syscall-conformance profile
@@ -778,7 +764,7 @@ testcases/kernel/syscalls/munmap/munmap04.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/name_to_handle_at/name_to_handle_at01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/name_to_handle_at/name_to_handle_at02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/name_to_handle_at/name_to_handle_at03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/nanosleep/nanosleep01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/nanosleep/nanosleep01.c timer harness now reaches the testcase body, but glibc nanosleep() lowers to clock_nanosleep(115) and SYS_clock_nanosleep is not implemented yet
 testcases/kernel/syscalls/nanosleep/nanosleep02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/nanosleep/nanosleep04.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/newuname/newuname01.c not yet enabled in current syscall-conformance profile
@@ -1111,8 +1097,7 @@ testcases/kernel/syscalls/shutdown/shutdown01.c not yet enabled in current sysca
 testcases/kernel/syscalls/shutdown/shutdown02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/sigaction/sigaction01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/sigaction/sigaction02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/sigaltstack/sigaltstack01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/sigaltstack/sigaltstack02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/sigaltstack/sigaltstack01.c sigaltstack dispatch exists and kernel contract tests cover roundtrip/disable semantics, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
 testcases/kernel/syscalls/sighold/sighold02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/signal/signal01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/signal/signal02.c not yet enabled in current syscall-conformance profile
@@ -1120,10 +1105,10 @@ testcases/kernel/syscalls/signal/signal03.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/signal/signal04.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/signal/signal05.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/signal/signal06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/signalfd/signalfd01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/signalfd/signalfd02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/signalfd4/signalfd4_01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/signalfd4/signalfd4_02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/signalfd/signalfd01.c signalfd/signalfd4 are not yet implemented in syscall dispatch
+testcases/kernel/syscalls/signalfd/signalfd02.c signalfd/signalfd4 are not yet implemented in syscall dispatch
+testcases/kernel/syscalls/signalfd4/signalfd4_01.c signalfd/signalfd4 are not yet implemented in syscall dispatch
+testcases/kernel/syscalls/signalfd4/signalfd4_02.c signalfd/signalfd4 are not yet implemented in syscall dispatch
 testcases/kernel/syscalls/sigpending/sigpending02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/sigprocmask/sigprocmask01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/sigrelse/sigrelse01.c not yet enabled in current syscall-conformance profile
@@ -1211,9 +1196,9 @@ testcases/kernel/syscalls/syslog/syslog11.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/syslog/syslog12.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/tee/tee01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/tee/tee02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/tgkill/tgkill01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/tgkill/tgkill02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/tgkill/tgkill03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/tgkill/tgkill01.c tgkill dispatch exists, but the specific-thread caught-handler delivery path exercised by this LTP case still hangs when targeting parallel guest pthreads
+testcases/kernel/syscalls/tgkill/tgkill02.c RLIMIT_SIGPENDING defaults and updates are covered, but this kernel tracks pending signals as bitsets rather than queued real-time signals, so the EAGAIN saturation path exercised by this LTP case is not implemented
+testcases/kernel/syscalls/futex/futex_cmp_requeue01.c local CMP_REQUEUE contracts pass, but the upstream testcase still hangs in shared-process wake/requeue integration
 testcases/kernel/syscalls/time/time01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/timer_create/timer_create01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/timer_create/timer_create02.c not yet enabled in current syscall-conformance profile
@@ -1225,13 +1210,13 @@ testcases/kernel/syscalls/timer_gettime/timer_gettime01.c not yet enabled in cur
 testcases/kernel/syscalls/timer_settime/timer_settime01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/timer_settime/timer_settime02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/timer_settime/timer_settime03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/timerfd/timerfd01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/timerfd/timerfd02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/timerfd/timerfd04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/timerfd/timerfd_create01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/timerfd/timerfd_gettime01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/timerfd/timerfd_settime01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/timerfd/timerfd_settime02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/timerfd/timerfd01.c timerfd syscalls have ABI constants but are not yet implemented in syscall dispatch
+testcases/kernel/syscalls/timerfd/timerfd02.c timerfd syscalls have ABI constants but are not yet implemented in syscall dispatch
+testcases/kernel/syscalls/timerfd/timerfd04.c timerfd syscalls have ABI constants but are not yet implemented in syscall dispatch
+testcases/kernel/syscalls/timerfd/timerfd_create01.c timerfd syscalls have ABI constants but are not yet implemented in syscall dispatch
+testcases/kernel/syscalls/timerfd/timerfd_gettime01.c timerfd syscalls have ABI constants but are not yet implemented in syscall dispatch
+testcases/kernel/syscalls/timerfd/timerfd_settime01.c timerfd syscalls have ABI constants but are not yet implemented in syscall dispatch
+testcases/kernel/syscalls/timerfd/timerfd_settime02.c timerfd syscalls have ABI constants but are not yet implemented in syscall dispatch
 testcases/kernel/syscalls/times/times01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/times/times03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/tkill/tkill01.c not yet enabled in current syscall-conformance profile
@@ -1311,3 +1296,5 @@ testcases/kernel/syscalls/writev/writev06.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/writev/writev07.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getppid/getppid01.c parent/child semantics belong to Phase 5 process support, not current Phase 4 conformance scope
 testcases/kernel/syscalls/statfs/statfs01.c LTP variant requires mount-device/all-filesystems harness support not present in current wasm test environment
+testcases/kernel/syscalls/epoll_wait/epoll_wait06.c local EPOLLET pipe edge-trigger contract now passes in kernel tests, but the upstream LTP binary still exits 2 without diagnostics, so the remaining blocker is LTP-specific harness/integration behavior
+testcases/kernel/syscalls/epoll_wait/epoll_wait05.c local `shutdown(SHUT_RD)` / `EPOLLRDHUP` gate now passes on injected connected sockets, but the upstream LTP binary still exits 2 on the real bind/listen/connect socket path, so the remaining blocker is socket network integration behavior rather than bare epoll event decoding

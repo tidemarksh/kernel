@@ -53,6 +53,10 @@ name = "syscall_signal"
 path = "tests/syscall/signal.rs"
 
 [[test]]
+name = "syscall_resource"
+path = "tests/syscall/resource.rs"
+
+[[test]]
 name = "fs_memfs"
 path = "tests/fs/memfs.rs"
 

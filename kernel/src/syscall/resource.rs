@@ -67,11 +67,28 @@ fn default_limits() -> [Rlimit64; RLIMIT_NLIMITS] {
     limits
 }
 
-fn rlimit_slots() -> &'static mut [*mut [Rlimit64; RLIMIT_NLIMITS]; MAX_PROCESSES] {
+fn ensure_rlimit_slots() -> *mut [*mut [Rlimit64; RLIMIT_NLIMITS]; MAX_PROCESSES] {
     unsafe {
         let ptr = core::ptr::read(core::ptr::addr_of!(RLIMIT_SLOTS_PTR));
-        &mut *ptr
+        if !ptr.is_null() {
+            return ptr;
+        }
+        let size = core::mem::size_of::<[*mut [Rlimit64; RLIMIT_NLIMITS]; MAX_PROCESSES]>() as u32;
+        let align = core::mem::align_of::<*mut [Rlimit64; RLIMIT_NLIMITS]>() as u32;
+        let fresh = crate::alloc::alloc_zeroed(size, align);
+        if fresh == 0 {
+            core::arch::wasm32::unreachable();
+        }
+        core::ptr::write(
+            core::ptr::addr_of_mut!(RLIMIT_SLOTS_PTR),
+            fresh as *mut [*mut [Rlimit64; RLIMIT_NLIMITS]; MAX_PROCESSES],
+        );
+        fresh as *mut [*mut [Rlimit64; RLIMIT_NLIMITS]; MAX_PROCESSES]
     }
+}
+
+fn rlimit_slots() -> &'static mut [*mut [Rlimit64; RLIMIT_NLIMITS]; MAX_PROCESSES] {
+    unsafe { &mut *ensure_rlimit_slots() }
 }
 
 fn limits_for(pid: i32) -> Option<&'static mut [Rlimit64; RLIMIT_NLIMITS]> {
@@ -119,17 +136,8 @@ pub fn init() {
             core::ptr::addr_of_mut!(RLIMIT_SLOTS_PTR),
             core::ptr::null_mut(),
         );
-        let size = core::mem::size_of::<[*mut [Rlimit64; RLIMIT_NLIMITS]; MAX_PROCESSES]>() as u32;
-        let align = core::mem::align_of::<*mut [Rlimit64; RLIMIT_NLIMITS]>() as u32;
-        let ptr = crate::alloc::alloc_zeroed(size, align);
-        if ptr == 0 {
-            core::arch::wasm32::unreachable();
-        }
-        core::ptr::write(
-            core::ptr::addr_of_mut!(RLIMIT_SLOTS_PTR),
-            ptr as *mut [*mut [Rlimit64; RLIMIT_NLIMITS]; MAX_PROCESSES],
-        );
     }
+    let _ = ensure_rlimit_slots();
 }
 
 pub fn init_for_process(pid: i32) {

@@ -136,6 +136,11 @@ fn build_ltp_tests(out_dir: &Path, pass_required: &[String], pass_optional: &[St
         .expect("failed to resolve LTP helper targets");
     let build_targets = merge_ltp_targets(&test_targets, &helper_targets);
     let ltp_work = out_dir.join("ltp-work");
+    let ltp_out = out_dir.join("ltp");
+
+    if ltp_outputs_ready(&ltp_out, &build_targets) {
+        return;
+    }
 
     if let Err(err) = prepare_ltp_workspace(ltp_root, &ltp_work) {
         eprintln!("Failed to prepare ltp workspace: {}", err);
@@ -174,7 +179,6 @@ fn build_ltp_tests(out_dir: &Path, pass_required: &[String], pass_optional: &[St
 
     let ltp_lib_dir = ltp_work.join("lib");
     let ltp_wldflags = format!("-L{} -static -no-pie", ltp_lib_dir.display());
-    let ltp_out = out_dir.join("ltp");
     std::fs::create_dir_all(&ltp_out).unwrap();
 
     for target in build_targets {
@@ -197,6 +201,15 @@ fn build_ltp_tests(out_dir: &Path, pass_required: &[String], pass_optional: &[St
             eprintln!("Failed to stage ltp test {}: {}", target.binary_name, err);
         }
     }
+}
+
+fn ltp_outputs_ready(ltp_out: &Path, build_targets: &[LtpTestTarget]) -> bool {
+    if !ltp_out.exists() {
+        return false;
+    }
+    build_targets
+        .iter()
+        .all(|target| ltp_out.join(&target.binary_name).exists())
 }
 
 fn load_ltp_manifest(dir: &Path) -> Result<LtpManifest, String> {

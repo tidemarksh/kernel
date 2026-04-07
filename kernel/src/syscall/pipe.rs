@@ -272,8 +272,12 @@ pub fn pipe_peek(pipe_idx: u32) -> i64 {
     available as i64
 }
 
-/// Check if the write side of a pipe has capacity.
-/// Returns true if at least 1 byte can be written.
+/// Check if the write side of a pipe should report writable to poll/epoll.
+///
+/// In this ring-buffer model, plain `write(2)` may still accept partial bytes
+/// before the buffer becomes fully empty again. For readiness notifications we
+/// keep a stricter threshold so edge-triggered `EPOLLOUT` matches Linux-shaped
+/// behavior on a once-full pipe.
 pub fn pipe_writable(pipe_idx: u32) -> bool {
     let addr = slot_addr(pipe_idx);
     if read_open_ptr(addr).load(Ordering::Acquire) <= 0 {
@@ -288,7 +292,7 @@ pub fn pipe_writable(pipe_idx: u32) -> bool {
         cap - head + tail
     };
     let free = cap - 1 - used;
-    free > 0
+    free == cap - 1
 }
 
 /// Close one end of a pipe (kernel Worker control plane).

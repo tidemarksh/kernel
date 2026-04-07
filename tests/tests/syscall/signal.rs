@@ -5,7 +5,10 @@ use tidemark_kernel::abi::{
 use tidemark_kernel::harness::TestVm;
 use tidemark_kernel::syscall::signal;
 use tidemark_kernel::syscall::thread as thread_impl;
-use tidemark_kernel::types::{ProcessState, SIG_DFL, SIG_IGN, SigAction, THREAD_NONE, ThreadState};
+use tidemark_kernel::types::{
+    ProcessState, SIG_DFL, SIG_IGN, SigAction, THREAD_BLOCKED_FUTEX, THREAD_DEAD, THREAD_NONE,
+    ThreadState,
+};
 
 const SA_SIGINFO: u64 = 0x00000004;
 const SA_ONSTACK: u64 = 0x08000000;
@@ -197,6 +200,39 @@ fn send_signal_to_tid_targets_requested_thread() {
 }
 
 #[test]
+fn tgkill_masked_signal_does_not_wake_blocked_futex_thread() {
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+
+    let flags = (CLONE_VM | CLONE_THREAD | CLONE_SIGHAND | CLONE_FS) as u64;
+    let child_tid = thread_impl::sys_clone(&mut t.vm, t.base, flags, 0x88000, 0, 0, 0) as i32;
+    assert!(child_tid > 0);
+
+    let child_ptr = thread_impl::spawn_from_clone(&t.vm as *const ThreadState as u32, t.base);
+    assert_ne!(child_ptr, 0);
+
+    let futex_addr = t.scratch + 0x200;
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    let record = &mut ps.threads[(child_tid - 1) as usize];
+    record.state = THREAD_BLOCKED_FUTEX;
+    record.blocked_addr = futex_addr as u32;
+    record.thread_ptr = child_ptr;
+
+    let child = unsafe { &mut *(child_ptr as *mut ThreadState) };
+    child.sig_mask = 1u64 << (SIGURG - 1);
+    child.sig_pending = 0;
+
+    assert_eq!(
+        signal::send_signal_to_tid(&mut t.vm, t.base, child_tid, SIGURG),
+        0
+    );
+
+    assert_ne!(child.sig_pending & (1u64 << (SIGURG - 1)), 0);
+    assert_eq!(child.sig_info_code, SI_TKILL);
+    assert_eq!(thread_impl::thread_record_blocked_addr(child, t.base), futex_addr as u32);
+}
+
+#[test]
 fn tgkill_self_with_default_sigabrt_stops_at_syscall_boundary() {
     let mut t = TestVm::new();
     let pid = signal::pid_from_vm(&t.vm, t.base) as u64;
@@ -218,6 +254,72 @@ fn tgkill_self_with_default_sigabrt_stops_at_syscall_boundary() {
         ps.thread_count.load(core::sync::atomic::Ordering::Acquire),
         0
     );
+}
+
+#[test]
+fn tgkill_reports_linux_shaped_error_cases_for_invalid_and_defunct_threads() {
+    let mut t = TestVm::new();
+    let pid = signal::pid_from_vm(&t.vm, t.base) as u64;
+
+    t.vm.x[10] = u64::MAX;
+    t.vm.x[11] = t.vm.tid as u64;
+    t.vm.x[12] = SIGURG as u64;
+    t.vm.x[17] = SYS_TGKILL;
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        STATUS_OK
+    );
+    assert_eq!(t.vm.x[10] as i64, tidemark_kernel::abi::EINVAL);
+
+    t.vm.status = STATUS_OK;
+    t.vm.x[10] = pid + 1;
+    t.vm.x[11] = t.vm.tid as u64;
+    t.vm.x[12] = SIGURG as u64;
+    t.vm.x[17] = SYS_TGKILL;
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        STATUS_OK
+    );
+    assert_eq!(t.vm.x[10] as i64, tidemark_kernel::abi::ESRCH);
+
+    t.vm.status = STATUS_OK;
+    t.vm.x[10] = pid;
+    t.vm.x[11] = u64::MAX;
+    t.vm.x[12] = SIGURG as u64;
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        STATUS_OK
+    );
+    assert_eq!(t.vm.x[10] as i64, tidemark_kernel::abi::EINVAL);
+
+    t.vm.status = STATUS_OK;
+    t.vm.x[10] = pid;
+    t.vm.x[11] = t.vm.tid as u64;
+    t.vm.x[12] = u64::MAX;
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        STATUS_OK
+    );
+    assert_eq!(t.vm.x[10] as i64, tidemark_kernel::abi::EINVAL);
+
+    let flags = (CLONE_VM | CLONE_THREAD | CLONE_SIGHAND | CLONE_FS) as u64;
+    let child_tid = thread_impl::sys_clone(&mut t.vm, t.base, flags, 0x88000, 0, 0, 0) as i32;
+    assert!(child_tid > 0);
+    let child_ptr = thread_impl::spawn_from_clone(&t.vm as *const ThreadState as u32, t.base);
+    assert_ne!(child_ptr, 0);
+
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    ps.threads[(child_tid - 1) as usize].state = THREAD_DEAD;
+
+    t.vm.status = STATUS_OK;
+    t.vm.x[10] = pid;
+    t.vm.x[11] = child_tid as u64;
+    t.vm.x[12] = SIGURG as u64;
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        STATUS_OK
+    );
+    assert_eq!(t.vm.x[10] as i64, tidemark_kernel::abi::ESRCH);
 }
 
 #[test]

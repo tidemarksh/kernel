@@ -100,6 +100,7 @@ pub const SYS_SET_ROBUST_LIST: u64 = 99;
 pub const SYS_FUTEX: u64 = 98;
 pub const SYS_FUTEX_TIME64: u64 = 422;
 pub const SYS_NANOSLEEP: u64 = 101;
+pub const SYS_CLOCK_NANOSLEEP: u64 = 115;
 pub const SYS_GETITIMER: u64 = 102;
 pub const SYS_SETITIMER: u64 = 103;
 pub const SYS_CLOCK_GETTIME: u64 = 113;
@@ -158,6 +159,7 @@ pub const SYS_SENDTO: u64 = 206;
 pub const SYS_RECVFROM: u64 = 207;
 pub const SYS_SETSOCKOPT: u64 = 208;
 pub const SYS_GETSOCKOPT: u64 = 209;
+pub const SYS_SHUTDOWN: u64 = 210;
 pub const SYS_GETSOCKNAME: u64 = 204;
 pub const SYS_GETPEERNAME: u64 = 205;
 pub const SYS_PPOLL: u64 = 73;
@@ -179,6 +181,7 @@ pub const CLONE_SIGHAND: u64 = 0x00000800;
 pub const CLONE_PARENT: u64 = 0x00008000;
 pub const CLONE_THREAD: u64 = 0x00010000;
 pub const CLONE_SETTLS: u64 = 0x00080000;
+pub const CLONE_PIDFD: u64 = 0x00001000;
 pub const CLONE_PARENT_SETTID: u64 = 0x00100000;
 pub const CLONE_CHILD_CLEARTID: u64 = 0x00200000;
 pub const CLONE_CHILD_SETTID: u64 = 0x01000000;
@@ -211,6 +214,9 @@ pub const O_APPEND: i32 = 0x400;
 pub const O_NONBLOCK: i32 = 0x800;
 pub const O_CLOEXEC: i32 = 0x80000;
 pub const O_DIRECTORY: i32 = 0x10000;
+pub const SHUT_RD: i32 = 0;
+pub const SHUT_WR: i32 = 1;
+pub const SHUT_RDWR: i32 = 2;
 
 // =============================================================================
 // Signal numbers
@@ -239,7 +245,7 @@ pub const SIGWINCH: i32 = 28;
 // Limits
 // =============================================================================
 pub const MAX_FDS: usize = 256;
-pub const MAX_THREADS: usize = 32;
+pub const MAX_THREADS: usize = 64;
 pub const MAX_MMAP_REGIONS: usize = 256;
 pub const MAX_SOCKETS: usize = 32;
 pub const MAX_EPOLL_ENTRIES: usize = 64;
@@ -406,6 +412,7 @@ export_const_u64!(abi_sys_wait4, SYS_WAIT4);
 export_const_u64!(abi_sys_getpid, SYS_GETPID);
 export_const_u64!(abi_sys_gettid, SYS_GETTID);
 export_const_u64!(abi_sys_nanosleep, SYS_NANOSLEEP);
+export_const_u64!(abi_sys_clock_nanosleep, SYS_CLOCK_NANOSLEEP);
 export_const_u64!(abi_sys_clock_gettime, SYS_CLOCK_GETTIME);
 export_const_u64!(abi_sys_getcwd, SYS_GETCWD);
 export_const_u64!(abi_sys_eventfd2, SYS_EVENTFD2);
@@ -896,7 +903,7 @@ fn process_stack_capacity(stack_size: u32) -> u64 {
 }
 
 fn process_stack_setup_bytes(argc: usize, envc: usize) -> u64 {
-    let auxv_size = 8u64 * 16; // 7 entries + AT_NULL
+    let auxv_size = 11u64 * 16; // 10 entries + AT_NULL
     let total_entries = (1 + argc + 1 + envc + 1) as u64; // argc + argv + NULL + envp + NULL
     total_entries * 8 + auxv_size
 }

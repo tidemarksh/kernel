@@ -798,6 +798,8 @@ fn process_create_populates_initial_stack_contract() {
 
     let mut found_random = false;
     let mut found_execfn = false;
+    let mut found_hwcap = false;
+    let mut found_clktck = false;
     let mut cursor = auxv_start;
     for _ in 0..16 {
         let tag = unsafe { tidemark_kernel::guest_mem::read_u64(guest_base, cursor) };
@@ -816,10 +818,20 @@ fn process_create_populates_initial_stack_contract() {
                 unsafe { tidemark_kernel::guest_mem::read_cstr(guest_base, val, &mut execfn) };
             assert_eq!(&execfn[..execfn_len], b"/bin/test");
         }
+        if tag == tidemark_kernel::elf::AT_HWCAP {
+            found_hwcap = true;
+            assert_eq!(val, 0x112D);
+        }
+        if tag == tidemark_kernel::elf::AT_CLKTCK {
+            found_clktck = true;
+            assert_eq!(val, 100);
+        }
         cursor += 16;
     }
     assert!(found_random, "AT_RANDOM must be present in auxv");
     assert!(found_execfn, "AT_EXECFN must be present in auxv");
+    assert!(found_hwcap, "AT_HWCAP must be present in auxv");
+    assert!(found_clktck, "AT_CLKTCK must be present in auxv");
 }
 
 #[test]
@@ -879,6 +891,14 @@ fn process_create_with_pt_interp_preserves_executable_entry_in_auxv() {
         Some(0x2000)
     );
     assert!(find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_PHDR).is_some());
+    assert_eq!(
+        find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_HWCAP),
+        Some(0x112D)
+    );
+    assert_eq!(
+        find_auxv_value(guest_base, vm.x[2], tidemark_kernel::elf::AT_CLKTCK),
+        Some(100)
+    );
 }
 
 #[test]
@@ -1277,7 +1297,6 @@ fn process_create_with_pt_interp_zero_fills_interpreter_brk_padding() {
 }
 
 #[test]
-#[ignore = "requires PT_INTERP loader to keep the main executable image mapped"]
 fn process_create_with_pt_interp_maps_main_executable_image() {
     let _t = TestVm::new();
     let ram_size = 64 * 1024 * 1024;
