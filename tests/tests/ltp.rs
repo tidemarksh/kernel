@@ -180,6 +180,7 @@ ltp_case!(ltp_futex_cmp_requeue01);
 ltp_case!(ltp_futex_wake01);
 ltp_case!(ltp_futex_wake02);
 ltp_case!(ltp_futex_wake03);
+ltp_case!(ltp_getcpu02);
 ltp_case!(ltp_geteuid01);
 ltp_case!(ltp_getpgid01);
 ltp_case!(ltp_getpgid02);

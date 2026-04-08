@@ -83,6 +83,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
 
         // time
         SYS_CLOCK_GETTIME => time::sys_clock_gettime(vm, base, a0, a1),
+        SYS_GETCPU => time::sys_getcpu(vm, base, a0, a1, a2),
         SYS_GETITIMER => time::sys_getitimer(vm, base, a0, a1),
         SYS_SETITIMER => time::sys_setitimer(vm, base, a0, a1, a2),
         114 => time::sys_clock_getres(vm, base, a0, a1), // clock_getres
@@ -392,6 +393,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_PRCTL => 0,
         SYS_UMASK => 0o022, // return previous umask
         SYS_RISCV_HWPROBE => identity::sys_riscv_hwprobe(vm, base, a0, a1, a2, a3, a4),
+        SYS_RISCV_FLUSH_ICACHE => identity::sys_riscv_flush_icache(vm, base, a0, a1, a2),
         SYS_RSEQ => ENOSYS,
         SYS_PRLIMIT64 => resource::sys_prlimit64(vm, base, a0 as i32, a1, a2, a3),
 

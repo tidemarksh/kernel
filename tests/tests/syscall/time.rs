@@ -206,6 +206,42 @@ fn sched_getaffinity_accepts_large_cpuset_buffers() {
 }
 
 #[test]
+fn getcpu_reports_single_online_cpu_and_node() {
+    let t = TestVm::new();
+    let cpu_addr = t.scratch + 0x500;
+    let node_addr = t.scratch + 0x504;
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, cpu_addr, u32::MAX);
+        tidemark_kernel::guest_mem::write_u32(t.base, node_addr, u32::MAX);
+    }
+
+    assert_eq!(
+        tidemark_kernel::syscall::time::sys_getcpu(&t.vm, t.base, cpu_addr, node_addr, 0),
+        0
+    );
+    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u32(t.base, cpu_addr) }, 0);
+    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u32(t.base, node_addr) }, 0);
+}
+
+#[test]
+fn getcpu_accepts_null_output_pointers_and_faults_bad_addresses() {
+    let t = TestVm::new();
+    assert_eq!(
+        tidemark_kernel::syscall::time::sys_getcpu(&t.vm, t.base, 0, 0, 0),
+        0
+    );
+    assert_eq!(
+        tidemark_kernel::syscall::time::sys_getcpu(&t.vm, t.base, u64::MAX, 0, 0),
+        abi::EFAULT
+    );
+    assert_eq!(
+        tidemark_kernel::syscall::time::sys_getcpu(&t.vm, t.base, 0, u64::MAX, 0),
+        abi::EFAULT
+    );
+}
+
+#[test]
 fn clock_nanosleep_relative_sets_sleep_status() {
     let mut t = TestVm::new();
     let req = t.scratch + 0x500;

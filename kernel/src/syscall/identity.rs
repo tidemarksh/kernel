@@ -246,6 +246,19 @@ pub fn sys_riscv_hwprobe(
     0
 }
 
+/// riscv_flush_icache: synchronize instruction visibility for the current process.
+/// Tidemark does not model per-core I-cache state, so this is a Linux-shaped no-op.
+/// The address range and flags are accepted and ignored.
+pub fn sys_riscv_flush_icache(
+    _vm: &ThreadState,
+    _base: u32,
+    _start: u64,
+    _end: u64,
+    _flags: u64,
+) -> i64 {
+    0
+}
+
 /// getuid/geteuid/getgid/getegid: read credentials from ThreadState.
 pub fn sys_getuid(vm: &ThreadState) -> i64 {
     vm.uid as i64

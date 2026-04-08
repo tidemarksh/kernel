@@ -28,6 +28,7 @@ testcases/kernel/syscalls/futex/futex_wake03.c verified shared-process FUTEX_WAK
 testcases/kernel/syscalls/getpgid/getpgid01.c verified getpgid(2) basic parent/child and init-process lookup semantics
 testcases/kernel/syscalls/getpgid/getpgid02.c verified getpgid(2) returns ESRCH for nonexistent pids
 testcases/kernel/syscalls/geteuid/geteuid01.c verified basic geteuid(2) success path
+testcases/kernel/syscalls/getcpu/getcpu02.c verified getcpu(2) EFAULT handling for cpu_id/node_id pointers outside the process address space
 testcases/kernel/syscalls/getuid/getuid01.c verified basic getuid(2) success path
 testcases/kernel/syscalls/lseek/lseek01.c verified lseek(2) basic offset movement and reads
 testcases/kernel/syscalls/mkdirat/mkdirat01.c verified mkdirat(2) relative/absolute dirfd handling

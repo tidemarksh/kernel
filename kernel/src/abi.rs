@@ -104,6 +104,7 @@ pub const SYS_CLOCK_NANOSLEEP: u64 = 115;
 pub const SYS_GETITIMER: u64 = 102;
 pub const SYS_SETITIMER: u64 = 103;
 pub const SYS_CLOCK_GETTIME: u64 = 113;
+pub const SYS_GETCPU: u64 = 168;
 pub const SYS_SCHED_GETAFFINITY: u64 = 123;
 pub const SYS_SCHED_YIELD: u64 = 124;
 pub const SYS_KILL: u64 = 129;
@@ -143,6 +144,7 @@ pub const SYS_EXECVE: u64 = 221;
 pub const SYS_MMAP: u64 = 222;
 pub const SYS_MPROTECT: u64 = 226;
 pub const SYS_RISCV_HWPROBE: u64 = 258;
+pub const SYS_RISCV_FLUSH_ICACHE: u64 = 259;
 pub const SYS_WAIT4: u64 = 260;
 pub const SYS_PRLIMIT64: u64 = 261;
 pub const SYS_PRCTL: u64 = 167;
@@ -414,6 +416,7 @@ export_const_u64!(abi_sys_gettid, SYS_GETTID);
 export_const_u64!(abi_sys_nanosleep, SYS_NANOSLEEP);
 export_const_u64!(abi_sys_clock_nanosleep, SYS_CLOCK_NANOSLEEP);
 export_const_u64!(abi_sys_clock_gettime, SYS_CLOCK_GETTIME);
+export_const_u64!(abi_sys_getcpu, SYS_GETCPU);
 export_const_u64!(abi_sys_getcwd, SYS_GETCWD);
 export_const_u64!(abi_sys_eventfd2, SYS_EVENTFD2);
 export_const_u64!(abi_sys_dup, SYS_DUP);
@@ -869,6 +872,19 @@ static mut STAGED: StagedArgs = StagedArgs {
     envc: 0,
 };
 
+static mut PROCESS_CREATE_LAST_ERROR: i32 = 0;
+
+fn set_process_create_last_error(code: i32) {
+    unsafe {
+        PROCESS_CREATE_LAST_ERROR = code;
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn process_create_last_error() -> i32 {
+    unsafe { PROCESS_CREATE_LAST_ERROR }
+}
+
 fn staged_args() -> &'static mut StagedArgs {
     unsafe { &mut *core::ptr::addr_of_mut!(STAGED) }
 }
@@ -1000,19 +1016,27 @@ pub extern "C" fn process_create(
     stack_size: u32,
 ) -> u32 {
     unsafe {
+        set_process_create_last_error(0);
         // Guest RAM lives above the kernel's reserved linear-memory region.
         let base = process_guest_base_for_ram(ram_size);
         if base == 0 {
+            set_process_create_last_error(1);
             return 0;
         }
         let guest_ram_size = process_guest_ram_size(ram_size, base);
         let mut main_inspected = match crate::elf::inspect_elf(elf_ptr, elf_len, guest_ram_size) {
             Ok(r) => r,
-            Err(_) => return 0,
+            Err(_) => {
+                set_process_create_last_error(2);
+                return 0;
+            }
         };
         let interp_path = match crate::elf::read_interp_path(elf_ptr, elf_len) {
             Ok(path) => path,
-            Err(_) => return 0,
+            Err(_) => {
+                set_process_create_last_error(3);
+                return 0;
+            }
         };
         let main_load_bias =
             crate::elf::main_executable_load_bias(&main_inspected, interp_path.is_some());
@@ -1025,31 +1049,43 @@ pub extern "C" fn process_create(
             Some(interp_path) => {
                 let interp_ino = crate::fs::memfs::resolve_path(&interp_path);
                 if interp_ino == 0 {
+                    set_process_create_last_error(4);
                     return 0;
                 }
                 let interp_st = match crate::fs::memfs::stat(interp_ino) {
                     Some(st) if st.mode & crate::fs::memfs::S_IFMT == crate::fs::memfs::S_IFREG => {
                         st
                     }
-                    _ => return 0,
+                    _ => {
+                        set_process_create_last_error(5);
+                        return 0;
+                    }
                 };
                 let interp_len = match u32::try_from(interp_st.size) {
                     Ok(len) if len > 0 => len,
-                    _ => return 0,
+                    _ => {
+                        set_process_create_last_error(6);
+                        return 0;
+                    }
                 };
                 let interp_ptr = crate::alloc::alloc_zeroed(interp_len, 16);
                 if interp_ptr == 0 {
+                    set_process_create_last_error(7);
                     return 0;
                 }
                 let interp_buf =
                     core::slice::from_raw_parts_mut(interp_ptr as *mut u8, interp_len as usize);
                 if crate::fs::memfs::read_file(interp_ino, 0, interp_buf) != interp_len as i64 {
+                    set_process_create_last_error(8);
                     return 0;
                 }
                 let interp_inspected =
                     match crate::elf::inspect_elf(interp_ptr, interp_len, guest_ram_size) {
                         Ok(r) => r,
-                        Err(_) => return 0,
+                        Err(_) => {
+                            set_process_create_last_error(9);
+                            return 0;
+                        }
                     };
                 let interp_bias = crate::elf::interpreter_load_bias(main_brk_start);
                 let interp_brk_start = interp_inspected.brk_start.saturating_add(interp_bias);
@@ -1058,13 +1094,37 @@ pub extern "C" fn process_create(
             }
             None => main_brk_start,
         };
+        let main_segments = match crate::elf::collect_load_segments(elf_ptr, elf_len, main_load_bias)
+        {
+            Ok(segments) => segments,
+            Err(_) => {
+                set_process_create_last_error(13);
+                return 0;
+            }
+        };
+        let interp_segments = match interp_load {
+            Some((interp_ptr, interp_len, interp_bias, _)) => {
+                match crate::elf::collect_load_segments(interp_ptr, interp_len, interp_bias) {
+                    Ok(segments) => Some(segments),
+                    Err(_) => {
+                        set_process_create_last_error(14);
+                        return 0;
+                    }
+                }
+            }
+            None => None,
+        };
         if !crate::syscall::memory::ensure_guest_memory_capacity(base, load_brk_start) {
+            set_process_create_last_error(10);
             return 0;
         }
         let main_loaded =
             match crate::elf::load_elf_at(base, guest_ram_size, elf_ptr, elf_len, main_load_bias) {
                 Ok(r) => r,
-                Err(_) => return 0,
+                Err(_) => {
+                    set_process_create_last_error(11);
+                    return 0;
+                }
             };
         let interp_loaded = match interp_load {
             Some((interp_ptr, interp_len, interp_bias, _interp_inspected)) => {
@@ -1076,7 +1136,10 @@ pub extern "C" fn process_create(
                     interp_bias,
                 ) {
                     Ok(result) => Some(result),
-                    Err(_) => return 0,
+                    Err(_) => {
+                        set_process_create_last_error(12);
+                        return 0;
+                    }
                 }
             }
             None => None,
@@ -1092,30 +1155,20 @@ pub extern "C" fn process_create(
         elf_result.brk_start = load_brk_start;
 
         crate::syscall::memory::init(elf_result.brk_start);
-        if let Ok(segments) = crate::elf::collect_load_segments(elf_ptr, elf_len, main_load_bias) {
+        for segment in main_segments {
+            crate::syscall::memory::register_elf_load_segment(
+                segment.start,
+                segment.end,
+                segment.prot,
+            );
+        }
+        if let Some(segments) = interp_segments {
             for segment in segments {
                 crate::syscall::memory::register_elf_load_segment(
                     segment.start,
                     segment.end,
                     segment.prot,
                 );
-            }
-        } else {
-            return 0;
-        }
-        if let Some((interp_ptr, interp_len, interp_bias, _)) = interp_load {
-            if let Ok(segments) =
-                crate::elf::collect_load_segments(interp_ptr, interp_len, interp_bias)
-            {
-                for segment in segments {
-                    crate::syscall::memory::register_elf_load_segment(
-                        segment.start,
-                        segment.end,
-                        segment.prot,
-                    );
-                }
-            } else {
-                return 0;
             }
         }
 
@@ -1129,6 +1182,7 @@ pub extern "C" fn process_create(
         let new_brk = ps_addr + ps_size;
         let brk_ret = crate::syscall::memory::grow_brk(base, new_brk);
         if brk_ret < new_brk as i64 {
+            set_process_create_last_error(15);
             return 0;
         }
         crate::guest_mem::zero_mem(base, ps_addr, ps_size as usize);
@@ -1140,6 +1194,7 @@ pub extern "C" fn process_create(
         ps.fs_ring_base =
             crate::alloc::alloc_zeroed(crate::fs::ring_buffer::RING_BUFFER_SIZE as u32, 16);
         if ps.fs_ring_base == 0 {
+            set_process_create_last_error(16);
             return 0;
         }
         crate::syscall::signal::init_for_process(2);
@@ -1158,6 +1213,7 @@ pub extern "C" fn process_create(
             core::mem::align_of::<crate::types::ThreadState>() as u32,
         );
         if ts_ptr == 0 {
+            set_process_create_last_error(17);
             return 0;
         }
         let ts = &mut *(ts_ptr as *mut crate::types::ThreadState);
@@ -1166,6 +1222,7 @@ pub extern "C" fn process_create(
         let stack_top =
             crate::syscall::memory::map_initial_stack(base, guest_ram_size, stack_size as u64);
         if stack_top < 0 {
+            set_process_create_last_error(18);
             return 0;
         }
         let stack_top = stack_top as u64;
@@ -1187,6 +1244,7 @@ pub extern "C" fn process_create(
         if required_stack_bytes > process_stack_capacity(stack_size) {
             staged.argc = 0;
             staged.envc = 0;
+            set_process_create_last_error(19);
             return 0;
         }
 

@@ -351,8 +351,7 @@ testcases/kernel/syscalls/get_mempolicy/get_mempolicy01.c not yet enabled in cur
 testcases/kernel/syscalls/get_mempolicy/get_mempolicy02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/get_robust_list/get_robust_list01.c get_robust_list is not yet implemented in syscall dispatch
 testcases/kernel/syscalls/getcontext/getcontext01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getcpu/getcpu01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getcpu/getcpu02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/getcpu/getcpu01.c getcpu01 depends on sched_setaffinity(2) and /sys NUMA/cpu topology enumeration; keep it unsupported until that affinity/topology surface is promoted
 testcases/kernel/syscalls/getcwd/getcwd01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getcwd/getcwd02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getcwd/getcwd03.c not yet enabled in current syscall-conformance profile

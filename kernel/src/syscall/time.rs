@@ -427,3 +427,27 @@ pub fn sys_sched_getaffinity(
     }
     8
 }
+
+/// getcpu: report the current CPU and NUMA node.
+/// Tidemark currently exposes a single online CPU on a single node, so both are 0.
+/// Either pointer may be NULL; the third argument is unused by modern Linux.
+/// https://man7.org/linux/man-pages/man2/getcpu.2.html
+pub fn sys_getcpu(_vm: &ThreadState, base: u32, cpu_addr: u64, node_addr: u64, _tcache: u64) -> i64 {
+    if cpu_addr != 0 {
+        if !crate::syscall::memory::guest_range_accessible(base, cpu_addr, 4) {
+            return abi::EFAULT;
+        }
+        unsafe {
+            guest_mem::write_u32(base, cpu_addr, 0);
+        }
+    }
+    if node_addr != 0 {
+        if !crate::syscall::memory::guest_range_accessible(base, node_addr, 4) {
+            return abi::EFAULT;
+        }
+        unsafe {
+            guest_mem::write_u32(base, node_addr, 0);
+        }
+    }
+    0
+}
