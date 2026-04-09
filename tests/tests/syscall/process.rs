@@ -1065,6 +1065,33 @@ fn contract_execve_with_pt_interp_accepts_et_dyn_two_load_interpreter() {
 }
 
 #[test]
+fn contract_execve_interpreter_script_enters_interpreter_and_rewrites_argv() {
+    let mut t = TestVm::new();
+    let interp_elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    install_exec_file_at(&t, b"/bin/interp", &interp_elf);
+    let path_addr = install_exec_file_at(&t, b"/bin/script", b"#!/bin/interp\nexit 0\n");
+    let argv_addr = write_strvec(&t, 0x400, &[b"/bin/script", b"arg1"]);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, argv_addr, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x1000);
+
+    let argc = unsafe { guest_mem::read_u64(t.base, t.vm.x[2]) };
+    assert_eq!(argc, 3);
+    let argv0 = unsafe { guest_mem::read_u64(t.base, t.vm.x[2] + 8) };
+    let argv1 = unsafe { guest_mem::read_u64(t.base, t.vm.x[2] + 16) };
+    let argv2 = unsafe { guest_mem::read_u64(t.base, t.vm.x[2] + 24) };
+    let mut buf = [0u8; 32];
+    let len0 = unsafe { guest_mem::read_cstr(t.base, argv0, &mut buf) };
+    assert_eq!(&buf[..len0], b"/bin/interp");
+    let len1 = unsafe { guest_mem::read_cstr(t.base, argv1, &mut buf) };
+    assert_eq!(&buf[..len1], b"/bin/script");
+    let len2 = unsafe { guest_mem::read_cstr(t.base, argv2, &mut buf) };
+    assert_eq!(&buf[..len2], b"arg1");
+}
+
+#[test]
 fn contract_execve_with_pt_interp_biases_et_dyn_main_executable() {
     let mut t = TestVm::new();
     let main_code = [0x13, 0x05, 0x70, 0x00];

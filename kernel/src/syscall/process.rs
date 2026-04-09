@@ -784,6 +784,40 @@ fn read_execve_elf_bytes(ino: u32, elf_len: u32) -> Result<Vec<u8>, i64> {
     Ok(elf_bytes)
 }
 
+fn parse_interpreter_script_header(file_bytes: &[u8]) -> Result<Option<(Vec<u8>, Option<Vec<u8>>)>, i64> {
+    if !file_bytes.starts_with(b"#!") {
+        return Ok(None);
+    }
+
+    let line_end = file_bytes
+        .iter()
+        .position(|b| *b == b'\n')
+        .unwrap_or(file_bytes.len());
+    let mut line = &file_bytes[2..line_end];
+    if let Some(stripped) = line.strip_suffix(b"\r") {
+        line = stripped;
+    }
+    line = line.trim_ascii_start();
+    if line.is_empty() {
+        return Err(ENOEXEC);
+    }
+
+    let interp_end = line
+        .iter()
+        .position(|b| *b == b' ' || *b == b'\t')
+        .unwrap_or(line.len());
+    if interp_end == 0 {
+        return Err(ENOEXEC);
+    }
+    let interp_path = line[..interp_end].to_vec();
+    let optional_arg = line[interp_end..].trim_ascii();
+    if optional_arg.is_empty() {
+        Ok(Some((interp_path, None)))
+    } else {
+        Ok(Some((interp_path, Some(optional_arg.to_vec()))))
+    }
+}
+
 fn inspect_execve_elf_bytes(
     elf_bytes: &[u8],
     ram_size: u64,
@@ -847,7 +881,57 @@ fn load_execve_image(
         Ok(len) if len > 0 => len,
         _ => return Err(ENOEXEC),
     };
-    let main_bytes = read_execve_elf_bytes(ino, elf_len)?;
+    let file_bytes = read_execve_elf_bytes(ino, elf_len)?;
+    let argv = read_guest_strvec(base, argv_addr)?;
+    let envp = read_guest_strvec(base, envp_addr)?;
+    let (path_bytes, main_bytes, mut argv) = match parse_interpreter_script_header(&file_bytes)? {
+        Some((interp_path, optional_arg)) => {
+            let interp_ino = memfs::resolve_path(&interp_path);
+            if interp_ino == 0 {
+                return Err(ENOENT);
+            }
+            let interp_st = memfs::stat(interp_ino).ok_or(ENOENT)?;
+            if interp_st.mode & memfs::S_IFMT != memfs::S_IFREG {
+                return Err(EACCES);
+            }
+            let interp_exec_mask = if current_effective_uid(vm) == 0 {
+                interp_st.mode & 0o111
+            } else if current_effective_uid(vm) == interp_st.uid {
+                interp_st.mode & 0o100
+            } else if current_effective_gid(vm) == interp_st.gid {
+                interp_st.mode & 0o010
+            } else {
+                interp_st.mode & 0o001
+            };
+            if interp_exec_mask == 0 {
+                return Err(EACCES);
+            }
+            if fd_table::inode_has_write_open(interp_ino) {
+                return Err(ETXTBSY);
+            }
+            let interp_len = u32::try_from(interp_st.size).map_err(|_| ENOEXEC)?;
+            if interp_len == 0 {
+                return Err(ENOEXEC);
+            }
+            let interp_bytes = read_execve_elf_bytes(interp_ino, interp_len)?;
+            let mut rewritten_argv = Vec::new();
+            let mut interp_argv0 = interp_path.clone();
+            interp_argv0.push(0);
+            rewritten_argv.push(interp_argv0);
+            if let Some(mut arg) = optional_arg {
+                arg.push(0);
+                rewritten_argv.push(arg);
+            }
+            let mut script_argv = path_bytes.clone();
+            script_argv.push(0);
+            rewritten_argv.push(script_argv);
+            for arg in argv.into_iter().skip(1) {
+                rewritten_argv.push(arg);
+            }
+            (interp_path, interp_bytes, rewritten_argv)
+        }
+        None => (path_bytes, file_bytes, argv),
+    };
     let mut elf = inspect_execve_elf_bytes(&main_bytes, ram_size)?;
     let interp_path = crate::elf::read_interp_path_bytes(&main_bytes).map_err(|_| ENOEXEC)?;
     let main_bias = crate::elf::main_executable_load_bias(&elf, interp_path.is_some());
@@ -877,8 +961,6 @@ fn load_execve_image(
         }
         None => (None, 0, None),
     };
-    let mut argv = read_guest_strvec(base, argv_addr)?;
-    let envp = read_guest_strvec(base, envp_addr)?;
     if argv.is_empty() {
         // Linux fills in a dummy argv[0] when execve() is called with an
         // empty argument vector, so post-exec user space never sees argc == 0.
