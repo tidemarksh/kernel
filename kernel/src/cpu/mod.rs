@@ -154,10 +154,11 @@ pub unsafe fn exec_at_base(
                 );
                 continue;
             }
-            if !guest_range_in_bounds(base, pc, 2) {
+            if !crate::syscall::memory::guest_range_permitted(pc, 2, abi::PROT_EXEC) {
                 let fault_addr = pc;
+                let accerr = guest_range_in_bounds(base, pc, 2);
                 if !deliver_sync_sigsegv(
-                    vm, &mut x, &mut f, &mut fcsr, &mut pc, base, fault_addr, false,
+                    vm, &mut x, &mut f, &mut fcsr, &mut pc, base, fault_addr, accerr,
                 ) {
                     return remaining;
                 }
@@ -197,10 +198,11 @@ pub unsafe fn exec_at_base(
                 }
                 (expanded, 2)
             } else {
-                if !guest_range_in_bounds(base, pc, 4) {
+                if !crate::syscall::memory::guest_range_permitted(pc, 4, abi::PROT_EXEC) {
                     let fault_addr = pc;
+                    let accerr = guest_range_in_bounds(base, pc, 4);
                     if !deliver_sync_sigsegv(
-                        vm, &mut x, &mut f, &mut fcsr, &mut pc, base, fault_addr, false,
+                        vm, &mut x, &mut f, &mut fcsr, &mut pc, base, fault_addr, accerr,
                     ) {
                         return remaining;
                     }

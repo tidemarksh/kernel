@@ -233,6 +233,50 @@ fn tgkill_masked_signal_does_not_wake_blocked_futex_thread() {
 }
 
 #[test]
+fn tgkill_unmasked_signal_delivers_default_action_for_blocked_futex_thread() {
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+
+    let flags = (CLONE_VM | CLONE_THREAD | CLONE_SIGHAND | CLONE_FS) as u64;
+    let child_tid = thread_impl::sys_clone(&mut t.vm, t.base, flags, 0x88000, 0, 0, 0) as i32;
+    assert!(child_tid > 0);
+
+    let child_ptr = thread_impl::spawn_from_clone(&t.vm as *const ThreadState as u32, t.base);
+    assert_ne!(child_ptr, 0);
+
+    let futex_addr = t.scratch + 0x200;
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    let record = &mut ps.threads[(child_tid - 1) as usize];
+    record.state = THREAD_BLOCKED_FUTEX;
+    record.blocked_addr = futex_addr as u32;
+    record.thread_ptr = child_ptr;
+
+    let child = unsafe { &mut *(child_ptr as *mut ThreadState) };
+    child.sig_mask = 0;
+    child.sig_pending = 0;
+
+    assert_eq!(
+        signal::send_signal_to_tid(&mut t.vm, t.base, child_tid, SIGABRT),
+        0
+    );
+
+    assert_ne!(child.sig_pending & (1u64 << (SIGABRT - 1)), 0);
+    assert_eq!(child.sig_info_code, SI_TKILL);
+    assert_eq!(thread_impl::thread_record_blocked_addr(child, t.base), futex_addr as u32);
+
+    assert!(signal::check_pending(child, t.base));
+    assert_eq!(child.status, STATUS_FAULT);
+    assert_eq!(child.exit_code, 128 + SIGABRT);
+    assert_eq!(child.term_signal, SIGABRT);
+    assert_eq!(child.sig_pending & (1u64 << (SIGABRT - 1)), 0);
+    assert_eq!(
+        ps.thread_count.load(core::sync::atomic::Ordering::Acquire),
+        0
+    );
+    assert_eq!(ps.threads[(child_tid - 1) as usize].state, THREAD_NONE);
+}
+
+#[test]
 fn tgkill_self_with_default_sigabrt_stops_at_syscall_boundary() {
     let mut t = TestVm::new();
     let pid = signal::pid_from_vm(&t.vm, t.base) as u64;

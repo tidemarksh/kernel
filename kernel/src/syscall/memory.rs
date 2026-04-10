@@ -557,6 +557,9 @@ pub fn grow_brk(base: u32, new_brk: u64) -> i64 {
     if new_brk > 0x8000_0000 {
         return s.brk_current as i64;
     }
+    if brk_growth_overlaps_vma(s, s.brk_current, new_brk) {
+        return s.brk_current as i64;
+    }
     unsafe {
         if !ensure_memory_capacity_for_guest_range(base, new_brk) {
             return s.brk_current as i64;
@@ -579,6 +582,9 @@ pub fn sys_brk(_vm: &mut ThreadState, base: u32, addr: u64) -> i64 {
     }
     // 2GB address space ceiling
     if addr > 0x8000_0000 {
+        return s.brk_current as i64;
+    }
+    if brk_growth_overlaps_vma(s, s.brk_current, addr) {
         return s.brk_current as i64;
     }
 
@@ -986,6 +992,15 @@ fn overlaps(s: &AddressSpaceState, start: u64, end: u64) -> bool {
         }
     }
     false
+}
+
+fn brk_growth_overlaps_vma(s: &AddressSpaceState, current_brk: u64, new_brk: u64) -> bool {
+    if new_brk <= current_brk {
+        return false;
+    }
+    let grow_start = page_align_up(current_brk);
+    let grow_end = page_align_up(new_brk);
+    grow_start < grow_end && overlaps(s, grow_start, grow_end)
 }
 
 fn overlaps_except(s: &AddressSpaceState, start: u64, end: u64, except: usize) -> bool {

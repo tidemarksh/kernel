@@ -162,6 +162,53 @@ fn brk_refuses_above_2gb() {
 }
 
 #[test]
+fn brk_refuses_growth_into_existing_vma() {
+    let mut t = TestVm::new();
+    let cur = t.sys_brk(0) as u64;
+    let map_start = (cur + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+    let mapped = t.sys_mmap(
+        map_start,
+        PAGE_SIZE,
+        PROT_READ | PROT_EXEC,
+        MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED,
+        -1,
+        0,
+    );
+    assert_eq!(mapped, map_start as i64);
+
+    let ret = t.sys_brk(map_start + PAGE_SIZE);
+    assert_eq!(ret, cur as i64, "brk should refuse growth into mapped VMA");
+    assert_eq!(t.sys_brk(0), cur as i64);
+}
+
+#[test]
+fn instruction_fetch_from_brk_heap_requires_prot_exec() {
+    let mut t = TestVm::new();
+    let heap_pc = t.sys_brk(0) as u64;
+    assert_eq!(t.sys_brk(heap_pc + 4), (heap_pc + 4) as i64);
+
+    // addi a0, zero, 42
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, heap_pc, 0x02a0_0513);
+    }
+
+    t.vm.pc = heap_pc;
+    t.vm.status = STATUS_OK;
+    t.vm.sig_mask = 0;
+    t.vm.sig_pending = 0;
+
+    unsafe {
+        tidemark_kernel::cpu::exec(&mut t.vm, 1, None, None, None, None);
+    }
+
+    assert_eq!(t.vm.status, STATUS_FAULT);
+    assert_eq!(t.vm.exit_code, 128 + SIGSEGV);
+    assert_eq!(t.vm.term_signal, SIGSEGV);
+    assert_eq!(t.vm.fault_pc, heap_pc);
+    assert_eq!(t.vm.fault_addr, heap_pc);
+}
+
+#[test]
 fn mmap_rejects_invalid_fd_for_file_backed() {
     let mut t = TestVm::new();
     let ret = t.sys_mmap(0, 4096, PROT_READ, MAP_PRIVATE, -1, 0);
