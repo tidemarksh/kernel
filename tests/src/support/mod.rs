@@ -949,7 +949,7 @@ fn handle_plain_fork(
     let fork_child_tidptr = parent_vm.clone_child_tidptr;
     let mut child_vm = unsafe { core::ptr::read(parent_vm as *const ThreadState) };
     child_vm.x[10] = 0;
-    child_vm.tid = child_pid;
+    child_vm.tid = 1;
     child_vm.status = STATUS_OK;
     child_vm.exit_code = 0;
     child_vm.term_signal = 0;
@@ -1785,6 +1785,7 @@ fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> Result<(i32, u64, Vec<u8>
             tidemark_kernel::syscall::signal::init();
             tidemark_kernel::syscall::epoll::init();
             tidemark_kernel::syscall::pipe::init();
+            tidemark_kernel::syscall::pty::init();
             tidemark_kernel::syscall::socket::init();
             tidemark_kernel::net::ring_buffer::init();
             tidemark_kernel::fs::fd_table::init();

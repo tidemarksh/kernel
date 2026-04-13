@@ -41,6 +41,12 @@ static mut LAST_ACCESS_KIND: u32 = 0;
 const ACCESS_READ: u32 = 1;
 const ACCESS_WRITE: u32 = 2;
 const ACCESS_ZERO: u32 = 3;
+const WRITE_OP_U8: u32 = 1;
+const WRITE_OP_U16: u32 = 2;
+const WRITE_OP_U32: u32 = 3;
+const WRITE_OP_U64: u32 = 4;
+const WRITE_OP_BYTES: u32 = 5;
+const WRITE_OP_ZERO: u32 = 6;
 
 #[inline(always)]
 fn record_access(addr: u64, len: u32, kind: u32) {
@@ -49,6 +55,14 @@ fn record_access(addr: u64, len: u32, kind: u32) {
         LAST_ACCESS_LEN = len;
         LAST_ACCESS_KIND = kind;
     }
+}
+
+#[inline(always)]
+fn sample_u64(bytes: &[u8]) -> (u64, u32) {
+    let sample_len = bytes.len().min(8) as u32;
+    let mut sample = [0u8; 8];
+    sample[..sample_len as usize].copy_from_slice(&bytes[..sample_len as usize]);
+    (u64::from_le_bytes(sample), sample_len)
 }
 
 pub fn last_access_addr() -> u64 {
@@ -79,6 +93,12 @@ pub unsafe fn init(
     }
 }
 
+pub fn init_single_threaded() {
+    unsafe {
+        init(core::ptr::null(), core::ptr::null(), core::ptr::null());
+    }
+}
+
 #[inline(always)]
 unsafe fn is_multi_threaded() -> bool {
     unsafe { is_multi_threaded_with(THREAD_COUNT) }
@@ -87,6 +107,16 @@ unsafe fn is_multi_threaded() -> bool {
 #[inline(always)]
 unsafe fn is_multi_threaded_with(thread_count: *const AtomicU32) -> bool {
     !thread_count.is_null() && unsafe { (*thread_count).load(Ordering::Relaxed) } > 1
+}
+
+#[inline(always)]
+unsafe fn debug_thread_count() -> u64 {
+    let thread_count = unsafe { THREAD_COUNT };
+    if thread_count.is_null() {
+        0
+    } else {
+        unsafe { (*thread_count).load(Ordering::Relaxed) as u64 }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -411,6 +441,21 @@ unsafe fn write_scalar_with_mode_and_sync(
     let reservation_gen = sync.map_or(unsafe { RESERVATION_GEN }, |ctx| ctx.reservation_gen);
     let reservation_lock = sync.map_or(unsafe { RESERVATION_LOCK }, |ctx| ctx.reservation_lock);
     let thread_count = sync.map_or(unsafe { THREAD_COUNT }, |ctx| ctx.thread_count);
+    let (sample, sample_len) = sample_u64(bytes);
+    let op = match bytes.len() {
+        1 => WRITE_OP_U8,
+        2 => WRITE_OP_U16,
+        4 => WRITE_OP_U32,
+        8 => WRITE_OP_U64,
+        _ => WRITE_OP_BYTES,
+    };
+    crate::harness_hooks::record_guest_write_overlap(
+        addr,
+        bytes.len().min(u32::MAX as usize) as u32,
+        op,
+        sample,
+        sample_len,
+    );
     let is_multi = unsafe { is_multi_threaded_with(thread_count) };
     let mask = if is_multi {
         stripe_mask(addr, bytes.len())
@@ -560,6 +605,14 @@ pub unsafe fn write_bytes(base: u32, addr: u64, data: &[u8]) {
         return;
     }
     record_access(addr, data.len() as u32, ACCESS_WRITE);
+    let (sample, sample_len) = sample_u64(data);
+    crate::harness_hooks::record_guest_write_overlap(
+        addr,
+        data.len().min(u32::MAX as usize) as u32,
+        WRITE_OP_BYTES,
+        sample,
+        sample_len,
+    );
     let dst = (base + addr as u32) as *mut u8;
     debug_assert!(
         !dst.is_null(),
@@ -587,17 +640,31 @@ pub unsafe fn zero_mem(base: u32, addr: u64, len: usize) {
         return;
     }
     record_access(addr, len.min(u32::MAX as usize) as u32, ACCESS_ZERO);
+    crate::harness_hooks::record_execve_stage(360, addr, len as u64);
+    crate::harness_hooks::record_guest_write_overlap(
+        addr,
+        len.min(u32::MAX as usize) as u32,
+        WRITE_OP_ZERO,
+        0,
+        0,
+    );
     if unsafe { is_multi_threaded() } && len > 0 {
         let mask = stripe_mask(addr, len);
+        crate::harness_hooks::record_execve_stage(361, unsafe { debug_thread_count() }, mask as u64);
         unsafe { lock_mask(mask) };
+        crate::harness_hooks::record_execve_stage(362, addr, len as u64);
         unsafe { seqlock_begin_mask(mask) };
         let dst = (base + addr as u32) as *mut u8;
         unsafe { core::ptr::write_bytes(dst, 0, len) };
+        crate::harness_hooks::record_execve_stage(363, addr, len as u64);
         unsafe { seqlock_end_mask(mask) };
         unsafe { unlock_mask(mask) };
+        crate::harness_hooks::record_execve_stage(364, addr, len as u64);
     } else {
+        crate::harness_hooks::record_execve_stage(365, unsafe { debug_thread_count() }, len as u64);
         let dst = (base + addr as u32) as *mut u8;
         unsafe { core::ptr::write_bytes(dst, 0, len) };
+        crate::harness_hooks::record_execve_stage(366, addr, len as u64);
     }
 }
 
@@ -680,5 +747,28 @@ mod tests {
             // Reset to single-threaded so subsequent tests are not affected.
             super::init(core::ptr::null(), core::ptr::null(), core::ptr::null());
         }
+    }
+
+    #[test]
+    fn watched_guest_write_overlap_records_sample_and_stage() {
+        unsafe {
+            super::init(core::ptr::null(), core::ptr::null(), core::ptr::null());
+        }
+        crate::harness_debug::clear_guest_write_watch_trace();
+        crate::harness_debug::record_execve_stage(716, 0, 0);
+        crate::harness_debug::configure_guest_write_watch(0, 0x2000, 0x2010);
+        unsafe {
+            super::write_u32(0, 0x2004, 0x1122_3344);
+        }
+        assert_eq!(crate::harness_debug::guest_write_overlap_trace_len(), 1);
+        let entry = crate::harness_debug::guest_write_overlap_trace_entry(0);
+        assert_eq!(entry.slot, 0);
+        assert_eq!(entry.op, super::WRITE_OP_U32);
+        assert_eq!(entry.addr, 0x2004);
+        assert_eq!(entry.len, 4);
+        assert_eq!(entry.sample_len, 4);
+        assert_eq!(entry.sample, 0x1122_3344);
+        assert_eq!(entry.execve_stage, 716);
+        crate::harness_debug::clear_guest_write_watch_trace();
     }
 }

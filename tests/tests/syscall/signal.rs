@@ -177,6 +177,34 @@ fn send_signal_to_pid_queues_process_pending_signal() {
 }
 
 #[test]
+fn clear_debug_trace_resets_last_signal_delivery_and_sigreturn_state() {
+    let mut t = TestVm::new();
+    let act_addr = t.scratch + 0x100;
+    write_sigaction(t.base, act_addr, 0x12345, 0, 0);
+    assert_eq!(
+        signal::sys_rt_sigaction(&mut t.vm, t.base, SIGURG as u64, act_addr, 0, 8),
+        0
+    );
+
+    t.vm.pc = 0x4000;
+    t.vm.x[1] = 0x4100;
+    t.vm.x[2] = t.scratch + 0x1800;
+    t.vm.x[27] = 0x4200;
+    signal::send_signal(&mut t.vm, SIGURG);
+    assert!(signal::check_pending(&mut t.vm, t.base));
+    signal::sys_rt_sigreturn(&mut t.vm, t.base);
+
+    assert_ne!(signal::last_signal_delivery().0, 0);
+    assert_ne!(signal::last_sigreturn().2, 0);
+
+    signal::clear_debug_trace();
+
+    assert_eq!(signal::last_signal_delivery(), (0, 0, 0, 0, 0, 0, 0, 0));
+    assert_eq!(signal::last_sigreturn(), (0, 0, 0, 0, 0, 0, 0, 0));
+    assert_eq!(signal::last_trampoline_hit(), (0, 0, 0));
+}
+
+#[test]
 fn send_signal_to_tid_targets_requested_thread() {
     let mut t = TestVm::new();
     t.vm.tid = 1;
@@ -193,10 +221,19 @@ fn send_signal_to_tid_targets_requested_thread() {
         0
     );
     assert_eq!(t.vm.sig_pending, 0);
+    let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+    let record = &ps.threads[(child_tid - 1) as usize];
+    assert_ne!(record.pending_sigset & (1u64 << (SIGURG - 1)), 0);
+    assert_eq!(record.pending_siginfo_code, SI_TKILL);
 
-    let child = unsafe { &*(child_ptr as *const ThreadState) };
-    assert_ne!(child.sig_pending & (1u64 << (SIGURG - 1)), 0);
-    assert_eq!(child.sig_info_code, SI_TKILL);
+    let child = unsafe { &mut *(child_ptr as *mut ThreadState) };
+    assert_eq!(child.sig_pending, 0);
+    assert!(signal::check_pending(child, t.base));
+    assert_eq!(child.sig_pending & (1u64 << (SIGURG - 1)), 0);
+    let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+    let record = &ps.threads[(child_tid - 1) as usize];
+    assert_eq!(record.pending_sigset, 0);
+    assert_eq!(record.pending_siginfo_code, 0);
 }
 
 #[test]
@@ -227,8 +264,9 @@ fn tgkill_masked_signal_does_not_wake_blocked_futex_thread() {
         0
     );
 
-    assert_ne!(child.sig_pending & (1u64 << (SIGURG - 1)), 0);
-    assert_eq!(child.sig_info_code, SI_TKILL);
+    assert_eq!(child.sig_pending, 0);
+    assert_ne!(record.pending_sigset & (1u64 << (SIGURG - 1)), 0);
+    assert_eq!(record.pending_siginfo_code, SI_TKILL);
     assert_eq!(thread_impl::thread_record_blocked_addr(child, t.base), futex_addr as u32);
 }
 
@@ -260,8 +298,9 @@ fn tgkill_unmasked_signal_delivers_default_action_for_blocked_futex_thread() {
         0
     );
 
-    assert_ne!(child.sig_pending & (1u64 << (SIGABRT - 1)), 0);
-    assert_eq!(child.sig_info_code, SI_TKILL);
+    assert_eq!(child.sig_pending, 0);
+    assert_ne!(record.pending_sigset & (1u64 << (SIGABRT - 1)), 0);
+    assert_eq!(record.pending_siginfo_code, SI_TKILL);
     assert_eq!(thread_impl::thread_record_blocked_addr(child, t.base), futex_addr as u32);
 
     assert!(signal::check_pending(child, t.base));
@@ -269,6 +308,8 @@ fn tgkill_unmasked_signal_delivers_default_action_for_blocked_futex_thread() {
     assert_eq!(child.exit_code, 128 + SIGABRT);
     assert_eq!(child.term_signal, SIGABRT);
     assert_eq!(child.sig_pending & (1u64 << (SIGABRT - 1)), 0);
+    assert_eq!(record.pending_sigset, 0);
+    assert_eq!(record.pending_siginfo_code, 0);
     assert_eq!(
         ps.thread_count.load(core::sync::atomic::Ordering::Acquire),
         0
@@ -563,4 +604,56 @@ fn synchronous_sigsegv_ignores_signal_mask() {
     assert_eq!(t.vm.fault_pc, 0x1234);
     assert_eq!(t.vm.fault_addr, 0x5678);
     assert_eq!(t.vm.sig_pending & (1u64 << (abi::SIGSEGV - 1)), 0);
+}
+
+#[test]
+fn synchronous_sigsegv_handler_entry_preserves_s11() {
+    let mut t = TestVm::new();
+    let handler = 0x88_000;
+    let act_addr = t.scratch;
+    t.vm.pc = 0x1234;
+    t.vm.x[1] = 0x4567;
+    t.vm.x[2] = 0x9fff0;
+    t.vm.x[27] = 0x7788_9900;
+
+    write_sigaction(t.base, act_addr, handler, SA_SIGINFO, 0);
+    assert_eq!(
+        signal::sys_rt_sigaction(&mut t.vm, t.base, abi::SIGSEGV as u64, act_addr, 0, 8),
+        0
+    );
+
+    let orig_s11 = t.vm.x[27];
+    signal::queue_sigsegv(&mut t.vm, 0x1234, 0x5678, false);
+
+    assert!(signal::check_pending(&mut t.vm, t.base));
+    assert_eq!(t.vm.pc, handler);
+    assert_eq!(t.vm.x[27], orig_s11);
+    assert_eq!(signal::last_signal_delivery().7, orig_s11);
+}
+
+#[test]
+fn thread_step_sync_fault_handler_entry_preserves_s11() {
+    let mut t = TestVm::new();
+    let handler = 0x88_000;
+    let act_addr = t.scratch;
+    t.vm.pc = 0x2;
+    t.vm.x[1] = 0x4567;
+    t.vm.x[2] = 0x9fff0;
+    t.vm.x[27] = 0x7788_9900;
+
+    write_sigaction(t.base, act_addr, handler, SA_SIGINFO, 0);
+    assert_eq!(
+        signal::sys_rt_sigaction(&mut t.vm, t.base, abi::SIGSEGV as u64, act_addr, 0, 8),
+        0
+    );
+
+    let orig_s11 = t.vm.x[27];
+    let remaining = tidemark_kernel::abi::thread_step(&mut t.vm as *mut ThreadState as u32, 1);
+
+    assert_eq!(remaining, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, handler);
+    assert_eq!(t.vm.x[27], orig_s11);
+    assert_eq!(signal::last_signal_delivery().2, 0x2);
+    assert_eq!(signal::last_signal_delivery().7, orig_s11);
 }

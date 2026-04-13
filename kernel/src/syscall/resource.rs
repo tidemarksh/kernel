@@ -179,6 +179,9 @@ pub fn reassign_process_pid(old_pid: i32, new_pid: i32) {
     if old_index >= MAX_PROCESSES || new_index >= MAX_PROCESSES {
         return;
     }
+    if !rlimit_slots()[new_index].is_null() {
+        return;
+    }
     let old_slot = rlimit_slots()[old_index];
     if !old_slot.is_null() {
         rlimit_slots()[new_index] = old_slot;

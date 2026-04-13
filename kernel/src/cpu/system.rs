@@ -41,6 +41,13 @@ pub(super) unsafe fn exec_system(
         let funct12 = raw >> 20;
         match funct12 {
             0 => {
+                if x[17] == crate::abi::SYS_EXECVE {
+                    crate::harness_debug::record_execve_ecall(
+                        vm.process_ptr as u64
+                            + core::mem::offset_of!(crate::types::ProcessState, pid) as u64,
+                        x[11],
+                    );
+                }
                 vm.x = *x;
                 vm.f = *f;
                 vm.pc = *pc + step;
@@ -51,6 +58,7 @@ pub(super) unsafe fn exec_system(
                 *pc = vm.pc;
                 *fcsr = vm.fcsr;
                 crate::harness_hooks::record_special_reg_transitions(
+                    vm as *const ThreadState as u32,
                     vm.tid,
                     instr_pc,
                     raw,
@@ -66,6 +74,7 @@ pub(super) unsafe fn exec_system(
                 }
                 x[0] = 0;
                 crate::harness_hooks::record_zero_reg_transition(
+                    vm as *const ThreadState as u32,
                     vm.tid, instr_pc, raw, prev_sp, prev_s11, x,
                 );
                 StepOutcome::Restart
@@ -120,6 +129,7 @@ pub(super) unsafe fn handle_illegal_instruction(
     *pc = vm.pc;
     *fcsr = vm.fcsr;
     crate::harness_hooks::record_special_reg_transitions(
+        vm as *const ThreadState as u32,
         vm.tid,
         instr_pc,
         raw,

@@ -681,12 +681,16 @@ fn spawn_handoff_exports_round_trip() {
     assert_eq!(thread_spawn_argv(vm_ptr), 0x1111);
     assert_eq!(thread_spawn_envp(vm_ptr), 0x2222);
 
-    thread_set_execve_handoff(vm_ptr, 0x4444, 0xAAAA, 0xBBBB, 0xCCCC);
+    thread_set_guest_ram_limit(vm_ptr, 0x12345678);
+    assert_eq!(thread_guest_ram_limit(vm_ptr), 0x12345678);
+
+    thread_set_execve_handoff(vm_ptr, 0x4444, 0xAAAA, 0xBBBB, 0xCCCC, 0x3333);
     assert_eq!(thread_process_ptr(vm_ptr), 0x4444);
     assert_eq!(thread_spawn_kind(vm_ptr), SPAWN_KIND_EXECVE);
     assert_eq!(thread_spawn_path(vm_ptr), 0xAAAA);
     assert_eq!(thread_spawn_argv(vm_ptr), 0xBBBB);
     assert_eq!(thread_spawn_envp(vm_ptr), 0xCCCC);
+    assert_eq!(thread_spawn_ram_size(vm_ptr), 0x3333);
 
     thread_clear_spawn_handoff(vm_ptr);
     assert_eq!(thread_spawn_kind(vm_ptr), SPAWN_KIND_NONE);
@@ -832,6 +836,72 @@ fn process_create_populates_initial_stack_contract() {
     assert!(found_execfn, "AT_EXECFN must be present in auxv");
     assert!(found_hwcap, "AT_HWCAP must be present in auxv");
     assert!(found_clktck, "AT_CLKTCK must be present in auxv");
+}
+
+#[test]
+fn process_guest_base_reserves_exec_scratch_headroom() {
+    let _t = TestVm::new();
+    let ram_size = 64 * 1024 * 1024;
+    let guest_base = process_guest_base(ram_size);
+    assert_ne!(guest_base, 0);
+
+    let expected_floor = (((kernel_heap_ptr() as u64)
+        + 4 * 1024 * 1024
+        + 256 * 1024 * 1024
+        + 0xF_FFFF)
+        & !0xF_FFFF) as u32;
+    assert_eq!(guest_base, expected_floor);
+}
+
+#[test]
+fn process_create_rebases_user_brk_after_hidden_process_state() {
+    let _t = TestVm::new();
+    let ram_size = 64 * 1024 * 1024;
+    let stack_size = 1024 * 1024;
+    let guest_base = process_guest_base(ram_size);
+    assert_ne!(guest_base, 0);
+
+    let mut elf = vec![0u8; 0x104];
+    elf[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
+    elf[4] = 2;
+    elf[5] = 1;
+    elf[6] = 1;
+    elf[16..18].copy_from_slice(&2u16.to_le_bytes());
+    elf[18..20].copy_from_slice(&243u16.to_le_bytes());
+    elf[20..24].copy_from_slice(&1u32.to_le_bytes());
+    elf[24..32].copy_from_slice(&0x1000u64.to_le_bytes());
+    elf[32..40].copy_from_slice(&64u64.to_le_bytes());
+    elf[52..54].copy_from_slice(&64u16.to_le_bytes());
+    elf[54..56].copy_from_slice(&56u16.to_le_bytes());
+    elf[56..58].copy_from_slice(&1u16.to_le_bytes());
+    elf[64..68].copy_from_slice(&1u32.to_le_bytes());
+    elf[68..72].copy_from_slice(&5u32.to_le_bytes());
+    elf[72..80].copy_from_slice(&0x100u64.to_le_bytes());
+    elf[80..88].copy_from_slice(&0x1000u64.to_le_bytes());
+    elf[96..104].copy_from_slice(&4u64.to_le_bytes());
+    elf[104..112].copy_from_slice(&4u64.to_le_bytes());
+    elf[112..120].copy_from_slice(&0x1000u64.to_le_bytes());
+    elf[0x100..0x104].copy_from_slice(&[0x13, 0x05, 0x70, 0x00]);
+
+    let elf_ptr = unsafe { tidemark_kernel::alloc::alloc_zeroed(0x1000, 16) };
+    assert_ne!(elf_ptr, 0);
+    unsafe {
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64, &elf);
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64 + 0x400, b"/bin/test\0");
+    }
+
+    process_clear_args();
+    process_push_arg(elf_ptr + 0x400);
+    let vm_ptr = process_create(elf_ptr, elf.len() as u32, ram_size, stack_size);
+    assert_ne!(vm_ptr, 0);
+
+    let process_ptr = thread_process_ptr(vm_ptr) as u64;
+    let ps_size = core::mem::size_of::<tidemark_kernel::types::ProcessState>() as u64;
+    let hidden_end = process_ptr + ps_size;
+    let public_brk = (hidden_end + tidemark_kernel::abi::PAGE_SIZE - 1)
+        & !(tidemark_kernel::abi::PAGE_SIZE - 1);
+    assert_eq!(tidemark_kernel::syscall::memory::current_brk(), public_brk);
+    assert_eq!(tidemark_kernel::syscall::memory::debug_brk_base(), public_brk);
 }
 
 #[test]

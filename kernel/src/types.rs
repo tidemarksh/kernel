@@ -78,6 +78,8 @@ pub struct ThreadState {
     // --- Guest/process pointers ---
     /// Base offset of the guest address space inside the shared WASM memory.
     pub guest_base: u32,
+    /// Maximum guest-visible RAM window available to this process image.
+    pub guest_ram_limit: u32,
     /// Guest-relative pointer to ProcessState in guest Memory.
     pub process_ptr: u32,
 
@@ -96,8 +98,8 @@ pub struct ThreadState {
     pub clone_pending: i32,
     /// Pending process-spawn handoff kind. Zero = inactive.
     pub spawn_kind: u32,
-    /// Reserved for future process-spawn flags.
-    pub spawn_flags: u32,
+    /// Guest RAM size requested for an execve handoff child image.
+    pub spawn_ram_size: u32,
     /// Child PID allocated for execve/fork handoff.
     pub spawn_child_pid: i32,
     _pad1: u32,
@@ -186,6 +188,8 @@ pub struct ProcessState {
     pub stdout_pipe_slot: u32,
     /// Hidden stderr pipe slot (runtime owns the read side).
     pub stderr_pipe_slot: u32,
+    /// Controlling tty PTY slot. 0 means no controlling terminal.
+    pub tty_pty_slot: u32,
     /// Per-process FS request/completion ring in shared WebAssembly.Memory.
     pub fs_ring_base: u32,
     /// Thread registry
@@ -212,7 +216,10 @@ pub struct ThreadRecord {
     pub thread_ptr: u32, // absolute pointer to ThreadState in WASM linear memory
     pub clear_child_tid: u32,
     pub blocked_addr: u32,
-    _pad: [u8; 12],
+    /// Thread-directed pending signals queued from another worker.
+    pub pending_sigset: u64,
+    /// `siginfo.si_code` paired with `pending_sigset` delivery.
+    pub pending_siginfo_code: i32,
 }
 
 impl ThreadRecord {
@@ -223,7 +230,8 @@ impl ThreadRecord {
             thread_ptr: 0,
             clear_child_tid: 0,
             blocked_addr: 0,
-            _pad: [0; 12],
+            pending_sigset: 0,
+            pending_siginfo_code: 0,
         }
     }
 
@@ -240,7 +248,8 @@ impl ThreadRecord {
             thread_ptr,
             clear_child_tid,
             blocked_addr,
-            _pad: [0; 12],
+            pending_sigset: 0,
+            pending_siginfo_code: 0,
         }
     }
 }

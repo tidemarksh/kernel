@@ -105,6 +105,7 @@ pub unsafe fn exec_at_base(
                     pc = vm.pc;
                     fcsr = vm.fcsr;
                     crate::harness_hooks::record_special_reg_transitions(
+                        vm as *const ThreadState as u32,
                         vm.tid,
                         pc,
                         0,
@@ -139,6 +140,7 @@ pub unsafe fn exec_at_base(
                 pc = vm.pc;
                 fcsr = vm.fcsr;
                 crate::harness_hooks::record_special_reg_transitions(
+                    vm as *const ThreadState as u32,
                     vm.tid,
                     instr_pc,
                     0,
@@ -150,6 +152,7 @@ pub unsafe fn exec_at_base(
                 );
                 x[0] = 0;
                 crate::harness_hooks::record_zero_reg_transition(
+                    vm as *const ThreadState as u32,
                     vm.tid, instr_pc, 0, prev_sp, prev_s11, &x,
                 );
                 continue;
@@ -181,6 +184,7 @@ pub unsafe fn exec_at_base(
                     pc = vm.pc;
                     fcsr = vm.fcsr;
                     crate::harness_hooks::record_special_reg_transitions(
+                        vm as *const ThreadState as u32,
                         vm.tid,
                         instr_pc,
                         raw16 as u32,
@@ -225,7 +229,30 @@ pub unsafe fn exec_at_base(
                 return remaining;
             }
 
-            crate::harness_hooks::record_exec_trace(instr_pc, raw, step, &x);
+            crate::harness_hooks::record_exec_trace(
+                vm as *const ThreadState as u32,
+                vm.tid,
+                instr_pc,
+                raw,
+                step,
+                &x,
+            );
+            if x[17] == crate::abi::SYS_EXECVE {
+                crate::harness_debug::record_execve_approach(
+                    vm as *const ThreadState as u32,
+                    instr_pc,
+                    raw,
+                );
+            }
+            if raw == 0x0000_0073 && x[17] == crate::abi::SYS_EXECVE {
+                crate::harness_debug::record_execve_pre_dispatch(
+                    instr_pc,
+                    raw,
+                    vm.process_ptr as u64
+                        + core::mem::offset_of!(crate::types::ProcessState, pid) as u64,
+                    x[11],
+                );
+            }
             match exec_decoded(
                 vm,
                 raw,
@@ -253,6 +280,7 @@ pub unsafe fn exec_at_base(
             // Enforce x0 = 0
             x[0] = 0;
             crate::harness_hooks::record_special_reg_transitions(
+                vm as *const ThreadState as u32,
                 vm.tid,
                 instr_pc,
                 raw,
@@ -263,6 +291,7 @@ pub unsafe fn exec_at_base(
                 &x,
             );
             crate::harness_hooks::record_zero_reg_transition(
+                vm as *const ThreadState as u32,
                 vm.tid, instr_pc, raw, prev_sp, prev_s11, &x,
             );
         }

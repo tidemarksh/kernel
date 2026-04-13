@@ -31,6 +31,10 @@ struct CloneSpawnTrace {
     gp: u64,
     sp: u64,
     s11: u64,
+    stack_m32: u64,
+    stack_m24: u64,
+    stack_m16: u64,
+    stack_m8: u64,
 }
 
 static mut LAST_CLONE_SPAWN: CloneSpawnTrace = CloneSpawnTrace {
@@ -40,6 +44,10 @@ static mut LAST_CLONE_SPAWN: CloneSpawnTrace = CloneSpawnTrace {
     gp: 0,
     sp: 0,
     s11: 0,
+    stack_m32: 0,
+    stack_m24: 0,
+    stack_m16: 0,
+    stack_m8: 0,
 };
 
 static mut NEXT_TID_HINTS: [i32; MAX_PROCESSES] = [0; MAX_PROCESSES];
@@ -54,10 +62,21 @@ pub const TERMINATE_REASON_UNKNOWN: u32 = 0;
 pub const TERMINATE_REASON_EXIT_GROUP: u32 = 1;
 pub const TERMINATE_REASON_DEFAULT_SIGNAL: u32 = 2;
 
-pub fn last_clone_spawn() -> (i32, u64, u64, u64, u64, u64) {
+pub fn last_clone_spawn() -> (i32, u64, u64, u64, u64, u64, u64, u64, u64, u64) {
     unsafe {
         let t = LAST_CLONE_SPAWN;
-        (t.tid, t.pc, t.ra, t.gp, t.sp, t.s11)
+        (
+            t.tid,
+            t.pc,
+            t.ra,
+            t.gp,
+            t.sp,
+            t.s11,
+            t.stack_m32,
+            t.stack_m24,
+            t.stack_m16,
+            t.stack_m8,
+        )
     }
 }
 
@@ -736,6 +755,7 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
         child.fault_pc = 0;
         child.fault_addr = 0;
         child.guest_base = parent.guest_base;
+        child.guest_ram_limit = parent.guest_ram_limit;
         child.process_ptr = parent.process_ptr;
         child.status = STATUS_OK;
         child.exit_code = 0;
@@ -780,6 +800,26 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
             gp: child.x[3],
             sp: child.x[2],
             s11: child.x[27],
+            stack_m32: if child.x[2] >= 32 {
+                guest_mem::read_u64(base, child.x[2] - 32)
+            } else {
+                0
+            },
+            stack_m24: if child.x[2] >= 24 {
+                guest_mem::read_u64(base, child.x[2] - 24)
+            } else {
+                0
+            },
+            stack_m16: if child.x[2] >= 16 {
+                guest_mem::read_u64(base, child.x[2] - 16)
+            } else {
+                0
+            },
+            stack_m8: if child.x[2] >= 8 {
+                guest_mem::read_u64(base, child.x[2] - 8)
+            } else {
+                0
+            },
         };
 
         parent.clone_flags = 0;
@@ -986,5 +1026,7 @@ pub fn resume_futex_wait_result(vm: &mut ThreadState, base: u32, result: i64) {
     vm.futex_wait_flags = 0;
     vm.status = STATUS_OK;
     vm.x[10] = result as u64;
+    crate::harness_debug::record_futex_resume_trace(vm, 1);
     crate::syscall::signal::check_pending(vm, base);
+    crate::harness_debug::record_futex_resume_trace(vm, 2);
 }

@@ -153,7 +153,7 @@ pub(super) unsafe fn exec_decoded(
                 let rd = decode::rd(raw);
                 let rs1v = decode::rs1(raw);
                 let target = ((x[rs1v] as i64 + decode::imm_i(raw)) as u64) & !1;
-                crate::harness_hooks::record_jalr(*pc, rd, rs1v, x[rs1v], target);
+                crate::harness_hooks::record_jalr(vm as *const ThreadState as u32, *pc, rd, rs1v, x[rs1v], target);
                 if rd != 0 {
                     x[rd] = *pc + step;
                 }
@@ -165,7 +165,7 @@ pub(super) unsafe fn exec_decoded(
                 {
                     let cost = blk.total_budget as i32;
                     if *remaining >= cost {
-                        let executed = exec_block(blk, x, pc, base, vm.tid);
+                        let executed = exec_block(blk, x, pc, base, vm as *const ThreadState as u32, vm.tid);
                         if executed > 0 {
                             *remaining -= executed;
                             x[0] = 0;

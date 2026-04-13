@@ -304,6 +304,27 @@ pub fn current_brk() -> u64 {
     ms().brk_current
 }
 
+/// Hide a kernel-owned prefix that was carved out of the guest brk arena.
+///
+/// ProcessState lives in shared guest memory for cross-worker visibility, but
+/// it must not remain part of the user-visible heap interval. After reserving
+/// that prefix, move the public brk floor behind it so guest brk/malloc users
+/// cannot overwrite kernel-owned process metadata.
+pub fn user_brk_start_after_hidden_prefix(hidden_end: u64) -> u64 {
+    page_align_up(hidden_end)
+}
+
+pub fn rebase_brk_after_hidden_prefix(hidden_end: u64) {
+    let public_brk = user_brk_start_after_hidden_prefix(hidden_end);
+    let s = ms();
+    if s.brk_base < public_brk {
+        s.brk_base = public_brk;
+    }
+    if s.brk_current < public_brk {
+        s.brk_current = public_brk;
+    }
+}
+
 #[cfg(any(test, feature = "harness"))]
 pub fn debug_brk_base() -> u64 {
     ms().brk_base

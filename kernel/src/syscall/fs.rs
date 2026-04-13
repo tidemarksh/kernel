@@ -54,6 +54,7 @@ const TMPFS_MAGIC: u64 = 0x0102_1994;
 const EVENTFD_COUNTER_MAX: u64 = u64::MAX - 1;
 const S_IFIFO: u32 = 0o010000;
 const S_IFSOCK: u32 = 0o140000;
+const MAX_PATH_SYMLINK_FOLLOWS: u32 = 40;
 pub const FS_EFFECT_MEMFS_MUTATION: u32 = 1 << 0;
 pub const FS_EFFECT_SHARED_OFD_STATE: u32 = 1 << 1;
 pub const FS_EFFECT_MEMFS_FILE_DATA: u32 = 1 << 2;
@@ -387,6 +388,9 @@ pub fn dispatch_write(
     if ofd.fd_type == FD_TYPE_EVENTFD {
         return sys_write(vm, base, fd, buf, count, nr);
     }
+    if ofd.fd_type == FD_TYPE_PTY_MASTER || ofd.fd_type == FD_TYPE_PTY_SLAVE {
+        return sys_write(vm, base, fd, buf, count, nr);
+    }
 
     submit_fs_request(
         vm,
@@ -404,6 +408,20 @@ pub fn dispatch_write(
 
 pub fn dispatch_fstat(vm: &mut ThreadState, base: u32, fd: u64, stat_buf: u64) -> i64 {
     if fd <= 2 {
+        return sys_fstat(vm, base, fd, stat_buf);
+    }
+    if let Some(ofd) = fd_table::get_ofd(base, vm, fd)
+        && matches!(
+            ofd.fd_type,
+            FD_TYPE_DEVNULL
+                | FD_TYPE_PIPE
+                | FD_TYPE_SOCKET
+                | FD_TYPE_EVENTFD
+                | FD_TYPE_EPOLL
+                | FD_TYPE_PTY_MASTER
+                | FD_TYPE_PTY_SLAVE
+        )
+    {
         return sys_fstat(vm, base, fd, stat_buf);
     }
     submit_fs_request(
@@ -555,15 +573,50 @@ fn path_has_trailing_slash(path: &[u8]) -> bool {
     path.len() > 1 && path[path.len() - 1] == b'/'
 }
 
-fn resolve_path_with_errno(start_ino: u32, path: &[u8]) -> Result<u32, i64> {
-    let mut ino = start_ino;
-    let components = if path.first() == Some(&b'/') {
-        &path[1..]
-    } else {
-        path
-    };
+fn concat_symlink_target_and_rest<'a>(
+    target: &[u8],
+    rest: &[u8],
+    buf: &'a mut [u8; 512],
+) -> Result<&'a [u8], i64> {
+    let total = target.len().checked_add(rest.len()).ok_or(ENAMETOOLONG)?;
+    if total > buf.len() {
+        return Err(ENAMETOOLONG);
+    }
+    buf[..target.len()].copy_from_slice(target);
+    buf[target.len()..total].copy_from_slice(rest);
+    Ok(&buf[..total])
+}
 
-    for component in components.split(|&b| b == b'/') {
+fn resolve_path_with_symlink_policy(
+    start_ino: u32,
+    path: &[u8],
+    follow_trailing_symlink: bool,
+    depth_left: u32,
+) -> Result<u32, i64> {
+    if depth_left == 0 {
+        return Err(ELOOP);
+    }
+
+    let mut ino = start_ino;
+    let mut cursor = 0usize;
+    if path.first() == Some(&b'/') {
+        ino = 1;
+        cursor = 1;
+    }
+
+    while cursor < path.len() {
+        while cursor < path.len() && path[cursor] == b'/' {
+            cursor += 1;
+        }
+        if cursor >= path.len() {
+            break;
+        }
+
+        let component_start = cursor;
+        while cursor < path.len() && path[cursor] != b'/' {
+            cursor += 1;
+        }
+        let component = &path[component_start..cursor];
         if component.is_empty() || component == b"." {
             continue;
         }
@@ -577,13 +630,42 @@ fn resolve_path_with_errno(start_ino: u32, path: &[u8]) -> Result<u32, i64> {
             return Err(ENOTDIR);
         }
 
-        ino = memfs::lookup(ino, component);
-        if ino == 0 {
+        let next_ino = memfs::lookup(ino, component);
+        if next_ino == 0 {
             return Err(ENOENT);
         }
+
+        let rest = &path[cursor..];
+        let has_more_components = rest.iter().any(|byte| *byte != b'/');
+        let next_st = memfs::stat(next_ino).ok_or(ENOENT)?;
+        if next_st.mode & memfs::S_IFMT == memfs::S_IFLNK
+            && (has_more_components || follow_trailing_symlink)
+        {
+            let mut link_target = [0u8; 512];
+            let target_len = memfs::read_link(next_ino, &mut link_target);
+            if target_len == 0 {
+                return Err(ENOENT);
+            }
+            let target = &link_target[..target_len];
+            let mut combined = [0u8; 512];
+            let combined_path = concat_symlink_target_and_rest(target, rest, &mut combined)?;
+            let restart_ino = if target.first() == Some(&b'/') { 1 } else { ino };
+            return resolve_path_with_symlink_policy(
+                restart_ino,
+                combined_path,
+                follow_trailing_symlink,
+                depth_left - 1,
+            );
+        }
+
+        ino = next_ino;
     }
 
     Ok(ino)
+}
+
+fn resolve_path_with_errno(start_ino: u32, path: &[u8]) -> Result<u32, i64> {
+    resolve_path_with_symlink_policy(start_ino, path, false, MAX_PATH_SYMLINK_FOLLOWS)
 }
 
 fn resolve_at(vm: &ThreadState, dirfd: u64, path_addr: u64, base: u32) -> Result<u32, i64> {
@@ -686,6 +768,12 @@ pub fn sys_openat(
     let path = trim_trailing_slashes(raw_path);
     let result = if path.is_empty() {
         ENOENT
+    } else if path == b"/dev/tty" {
+        if require_directory || oflags & O_DIRECTORY != 0 {
+            ENOTDIR
+        } else {
+            crate::syscall::pty::open_controlling_tty(vm, base, oflags)
+        }
     } else if path == b"/dev/null" {
         if require_directory || oflags & O_DIRECTORY != 0 {
             ENOTDIR
@@ -693,8 +781,14 @@ pub fn sys_openat(
             fd_table::open_devnull(vm, base, oflags)
         }
     } else if oflags & O_CREAT == 0 {
+        let follow_trailing_symlink = oflags & O_NOFOLLOW == 0;
         let ino_result = if path[0] == b'/' {
-            resolve_path_with_errno(1, path)
+            resolve_path_with_symlink_policy(
+                1,
+                path,
+                follow_trailing_symlink,
+                MAX_PATH_SYMLINK_FOLLOWS,
+            )
         } else {
             let base_ino = match dirfd_base_ino(vm, dirfd, base) {
                 Ok(ino) => ino,
@@ -710,7 +804,12 @@ pub fn sys_openat(
                     return errno;
                 }
             };
-            resolve_path_with_errno(base_ino, path)
+            resolve_path_with_symlink_policy(
+                base_ino,
+                path,
+                follow_trailing_symlink,
+                MAX_PATH_SYMLINK_FOLLOWS,
+            )
         };
         match ino_result {
             Ok(ino) => open_existing_inode(vm, base, ino, oflags, require_directory),
@@ -746,7 +845,13 @@ pub fn sys_openat(
                 let ino = if parent_rel.is_empty() {
                     base_ino
                 } else {
-                    memfs::resolve_path_from(base_ino, parent_rel)
+                    resolve_path_with_symlink_policy(
+                        base_ino,
+                        parent_rel,
+                        true,
+                        MAX_PATH_SYMLINK_FOLLOWS,
+                    )
+                    .unwrap_or(0)
                 };
                 if ino == 0 {
                     ENOENT
@@ -757,7 +862,13 @@ pub fn sys_openat(
                 let parent_ino = if parent_rel.is_empty() {
                     base_ino
                 } else {
-                    memfs::resolve_path_from(base_ino, parent_rel)
+                    resolve_path_with_symlink_policy(
+                        base_ino,
+                        parent_rel,
+                        true,
+                        MAX_PATH_SYMLINK_FOLLOWS,
+                    )
+                    .unwrap_or(0)
                 };
                 if parent_ino == 0 {
                     ENOENT
@@ -785,11 +896,14 @@ fn open_existing_inode(
     oflags: i32,
     require_directory: bool,
 ) -> i64 {
+    let st = match memfs::stat(ino) {
+        Some(st) => st,
+        None => return ENOENT,
+    };
+    if st.mode & memfs::S_IFMT == memfs::S_IFLNK && oflags & O_NOFOLLOW != 0 {
+        return ELOOP;
+    }
     if require_directory || oflags & O_DIRECTORY != 0 {
-        let st = match memfs::stat(ino) {
-            Some(st) => st,
-            None => return ENOENT,
-        };
         if st.mode & memfs::S_IFMT != memfs::S_IFDIR {
             return ENOTDIR;
         }
@@ -822,6 +936,33 @@ fn openat_with_parent(
         } else {
             return ENOENT;
         }
+    } else if oflags & O_CREAT != 0 && oflags & O_EXCL != 0 {
+        return EEXIST;
+    } else if let Some(st) = memfs::stat(ino)
+        && st.mode & memfs::S_IFMT == memfs::S_IFLNK
+    {
+        if oflags & O_NOFOLLOW != 0 {
+            return ELOOP;
+        }
+        let mut link_target = [0u8; 512];
+        let target_len = memfs::read_link(ino, &mut link_target);
+        if target_len == 0 {
+            return ENOENT;
+        }
+        let target = &link_target[..target_len];
+        ino = match resolve_path_with_symlink_policy(
+            if target.first() == Some(&b'/') {
+                1
+            } else {
+                parent_ino
+            },
+            target,
+            true,
+            MAX_PATH_SYMLINK_FOLLOWS,
+        ) {
+            Ok(resolved) => resolved,
+            Err(errno) => return errno,
+        };
     }
 
     open_existing_inode(vm, base, ino, oflags, require_directory)
@@ -883,6 +1024,34 @@ pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) 
 
     if ofd.fd_type == FD_TYPE_DEVNULL {
         return 0;
+    }
+
+    if ofd.fd_type == FD_TYPE_PTY_SLAVE || ofd.fd_type == FD_TYPE_PTY_MASTER {
+        let access_mode = ofd.status_flags & fd_table::OPEN_ACCESS_MODE_MASK;
+        if access_mode == O_WRONLY {
+            return EBADF;
+        }
+        let mut tmp = [0u8; 4096];
+        let to_read = (count as usize).min(tmp.len());
+        let n = if ofd.fd_type == FD_TYPE_PTY_SLAVE {
+            crate::syscall::pty::slave_read(ofd.ino, &mut tmp[..to_read])
+        } else {
+            crate::syscall::pty::master_read(ofd.ino, &mut tmp[..to_read])
+        };
+        if n == EAGAIN && ofd.status_flags & O_NONBLOCK == 0 {
+            fd_table::pin_blocked_fd(base, vm, fd);
+            vm.status = STATUS_PIPE_WAIT;
+            return 0;
+        }
+        if n > 0 {
+            if !crate::syscall::memory::guest_range_accessible(base, buf, n as u64) {
+                return EFAULT;
+            }
+            unsafe {
+                guest_mem::write_bytes(base, buf, &tmp[..n as usize]);
+            }
+        }
+        return n;
     }
 
     if ofd.fd_type == FD_TYPE_PIPE {
@@ -1167,6 +1336,71 @@ pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64,
                 Some(&tmp[..to_write]),
             );
         }
+    }
+
+    if ofd.fd_type == FD_TYPE_PTY_SLAVE || ofd.fd_type == FD_TYPE_PTY_MASTER {
+        let access_mode = ofd.status_flags & fd_table::OPEN_ACCESS_MODE_MASK;
+        if access_mode == O_RDONLY {
+            return trace_write_attempt(
+                fd,
+                nr,
+                buf,
+                count,
+                EBADF,
+                ofd_id,
+                ofd.fd_type,
+                ofd.ino,
+                ofd.status_flags,
+                0,
+                0,
+                None,
+            );
+        }
+        let mut tmp = [0u8; 4096];
+        let to_write = (count as usize).min(tmp.len());
+        unsafe {
+            guest_mem::read_bytes(base, buf, &mut tmp[..to_write]);
+        }
+        let n = if ofd.fd_type == FD_TYPE_PTY_SLAVE {
+            crate::syscall::pty::slave_write(ofd.ino, &tmp[..to_write])
+        } else {
+            crate::syscall::pty::master_write_from_thread(ofd.ino, &tmp[..to_write], vm, base)
+        };
+        if n == EPIPE {
+            signal::send_signal(vm, SIGPIPE);
+        }
+        if n == EAGAIN && ofd.status_flags & O_NONBLOCK == 0 {
+            fd_table::pin_blocked_fd(base, vm, fd);
+            vm.status = STATUS_PIPE_WAIT;
+            return trace_write_attempt(
+                fd,
+                nr,
+                buf,
+                count,
+                0,
+                ofd_id,
+                ofd.fd_type,
+                ofd.ino,
+                ofd.status_flags,
+                0,
+                0,
+                Some(&tmp[..to_write]),
+            );
+        }
+        return trace_write_attempt(
+            fd,
+            nr,
+            buf,
+            count,
+            n,
+            ofd_id,
+            ofd.fd_type,
+            ofd.ino,
+            ofd.status_flags,
+            0,
+            0,
+            Some(&tmp[..to_write]),
+        );
     }
 
     if ofd.fd_type == FD_TYPE_PIPE {
@@ -1496,7 +1730,124 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
             continue;
         }
 
-        if ofd.fd_type == FD_TYPE_PIPE {
+        if ofd.fd_type == FD_TYPE_PTY_SLAVE || ofd.fd_type == FD_TYPE_PTY_MASTER {
+            let access_mode = ofd.status_flags & fd_table::OPEN_ACCESS_MODE_MASK;
+            if access_mode == O_RDONLY {
+                return trace_write_attempt(
+                    fd,
+                    SYS_WRITEV,
+                    iov_addr,
+                    iovcnt,
+                    EBADF,
+                    ofd_id,
+                    ofd.fd_type,
+                    ofd.ino,
+                    ofd.status_flags,
+                    0,
+                    0,
+                    None,
+                );
+            }
+            let mut tmp = [0u8; 4096];
+            let to_write = (iov_len as usize).min(tmp.len());
+            unsafe {
+                guest_mem::read_bytes(base, iov_base, &mut tmp[..to_write]);
+            }
+            let n = if ofd.fd_type == FD_TYPE_PTY_SLAVE {
+                crate::syscall::pty::slave_write(ofd.ino, &tmp[..to_write])
+            } else {
+                crate::syscall::pty::master_write_from_thread(
+                    ofd.ino,
+                    &tmp[..to_write],
+                    vm,
+                    base,
+                )
+            };
+            if n == EPIPE {
+                signal::send_signal(vm, SIGPIPE);
+                if total == 0 {
+                    return trace_write_attempt(
+                        fd,
+                        SYS_WRITEV,
+                        iov_addr,
+                        iovcnt,
+                        EPIPE,
+                        ofd_id,
+                        ofd.fd_type,
+                        ofd.ino,
+                        ofd.status_flags,
+                        0,
+                        0,
+                        None,
+                    );
+                }
+                return trace_write_attempt(
+                    fd,
+                    SYS_WRITEV,
+                    iov_addr,
+                    iovcnt,
+                    total,
+                    ofd_id,
+                    ofd.fd_type,
+                    ofd.ino,
+                    ofd.status_flags,
+                    0,
+                    0,
+                    None,
+                );
+            }
+            if n == EAGAIN && ofd.status_flags & O_NONBLOCK == 0 {
+                fd_table::pin_blocked_fd(base, vm, fd);
+                vm.status = STATUS_PIPE_WAIT;
+                return trace_write_attempt(
+                    fd,
+                    SYS_WRITEV,
+                    iov_addr,
+                    iovcnt,
+                    if total > 0 { total } else { 0 },
+                    ofd_id,
+                    ofd.fd_type,
+                    ofd.ino,
+                    ofd.status_flags,
+                    0,
+                    0,
+                    None,
+                );
+            }
+            if n < 0 {
+                if total > 0 {
+                    return trace_write_attempt(
+                        fd,
+                        SYS_WRITEV,
+                        iov_addr,
+                        iovcnt,
+                        total,
+                        ofd_id,
+                        ofd.fd_type,
+                        ofd.ino,
+                        ofd.status_flags,
+                        0,
+                        0,
+                        None,
+                    );
+                }
+                return trace_write_attempt(
+                    fd,
+                    SYS_WRITEV,
+                    iov_addr,
+                    iovcnt,
+                    n,
+                    ofd_id,
+                    ofd.fd_type,
+                    ofd.ino,
+                    ofd.status_flags,
+                    0,
+                    0,
+                    None,
+                );
+            }
+            total += n;
+        } else if ofd.fd_type == FD_TYPE_PIPE {
             if !fd_table::is_pipe_write(&ofd) {
                 return trace_write_attempt(
                     fd,
@@ -1741,6 +2092,18 @@ pub fn sys_fstat(vm: &mut ThreadState, base: u32, fd: u64, stat_buf: u64) -> i64
             );
             return 0;
         }
+        FD_TYPE_PTY_MASTER | FD_TYPE_PTY_SLAVE => {
+            write_synthetic_stat(
+                base,
+                stat_buf,
+                ofd.ino as u64,
+                memfs::S_IFCHR | 0o620,
+                vm.uid,
+                vm.gid,
+                0,
+            );
+            return 0;
+        }
         FD_TYPE_SOCKET => {
             write_synthetic_stat(
                 base,
@@ -1790,6 +2153,13 @@ pub fn sys_newfstatat(
     } else if path == b"/dev/null" {
         write_devnull_stat(base, stat_buf, vm.uid, vm.gid);
         0
+    } else if path == b"/dev/tty" {
+        if crate::syscall::pty::has_controlling_tty(vm, base) {
+            write_synthetic_stat(base, stat_buf, 1, memfs::S_IFCHR | 0o620, vm.uid, vm.gid, 0);
+            0
+        } else {
+            ENXIO
+        }
     } else {
         match resolve_at(vm, dirfd, path_addr, base) {
             Ok(ino) => write_stat(base, stat_buf, ino),

@@ -105,6 +105,9 @@ struct MemFsHeader {
 }
 
 static mut MEMFS_PTR: *mut MemFsHeader = core::ptr::null_mut();
+static mut LAST_CREATE_SYMLINK_STAGE: u32 = 0;
+static mut LAST_CREATE_SYMLINK_ARG0: u64 = 0;
+static mut LAST_CREATE_SYMLINK_ARG1: u64 = 0;
 
 fn fs() -> &'static mut MemFsHeader {
     unsafe {
@@ -151,6 +154,42 @@ pub fn memfs_data_ptr() -> u32 {
 
 pub fn memfs_data_bytes() -> u32 {
     fs().data_cap
+}
+
+pub fn memfs_inode_count() -> u32 {
+    fs().inode_count
+}
+
+pub fn memfs_dir_entry_count() -> u32 {
+    fs().dir_entry_count
+}
+
+pub fn memfs_data_used() -> u32 {
+    fs().data_used
+}
+
+pub fn memfs_data_cap() -> u32 {
+    fs().data_cap
+}
+
+pub fn last_create_symlink_stage() -> u32 {
+    unsafe { core::ptr::read(core::ptr::addr_of!(LAST_CREATE_SYMLINK_STAGE)) }
+}
+
+pub fn last_create_symlink_arg0() -> u64 {
+    unsafe { core::ptr::read(core::ptr::addr_of!(LAST_CREATE_SYMLINK_ARG0)) }
+}
+
+pub fn last_create_symlink_arg1() -> u64 {
+    unsafe { core::ptr::read(core::ptr::addr_of!(LAST_CREATE_SYMLINK_ARG1)) }
+}
+
+fn record_create_symlink(stage: u32, arg0: u64, arg1: u64) {
+    unsafe {
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_CREATE_SYMLINK_STAGE), stage);
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_CREATE_SYMLINK_ARG0), arg0);
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_CREATE_SYMLINK_ARG1), arg1);
+    }
 }
 
 pub fn attach_memfs_ptr(ptr: u32) {
@@ -562,19 +601,23 @@ pub fn write_path(ino: u32, buf: &mut [u8]) -> usize {
 /// Returns the new inode number, or 0 on failure.
 /// https://man7.org/linux/man-pages/man2/symlinkat.2.html
 pub fn create_symlink(parent_ino: u32, name: &[u8], target: &[u8]) -> u32 {
+    record_create_symlink(801, parent_ino as u64, target.len() as u64);
     crate::harness_hooks::record_execve_stage(801, parent_ino as u64, target.len() as u64);
     let existing = lookup(parent_ino, name);
+    record_create_symlink(802, existing as u64, name.len() as u64);
     crate::harness_hooks::record_execve_stage(802, existing as u64, name.len() as u64);
     if existing != 0 {
         return 0;
     } // already exists
     let ino = alloc_inode(S_IFLNK | 0o777);
+    record_create_symlink(803, ino as u64, 0);
     crate::harness_hooks::record_execve_stage(803, ino as u64, 0);
     if ino == 0 {
         return 0;
     }
     // Store target as the inode's data
     let off = alloc_data(target.len() as u32);
+    record_create_symlink(804, off as u64, fs().data_cap as u64);
     crate::harness_hooks::record_execve_stage(804, off as u64, fs().data_cap as u64);
     if off == u32::MAX {
         return 0;
@@ -582,15 +625,18 @@ pub fn create_symlink(parent_ino: u32, name: &[u8], target: &[u8]) -> u32 {
     unsafe {
         core::ptr::copy_nonoverlapping(target.as_ptr(), fs().data.add(off as usize), target.len());
     }
+    record_create_symlink(805, off as u64, target.len() as u64);
     crate::harness_hooks::record_execve_stage(805, off as u64, target.len() as u64);
     inodes()[ino as usize].data_offset = off;
     inodes()[ino as usize].data_cap = target.len() as u32;
     inodes()[ino as usize].size = target.len() as u64;
     let added = add_dir_entry(parent_ino, name, ino);
+    record_create_symlink(806, added as u64, ino as u64);
     crate::harness_hooks::record_execve_stage(806, added as u64, ino as u64);
     if !added {
         return 0;
     }
+    record_create_symlink(807, ino as u64, 0);
     crate::harness_hooks::record_execve_stage(807, ino as u64, 0);
     ino
 }

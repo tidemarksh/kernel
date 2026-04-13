@@ -68,6 +68,7 @@ pub unsafe fn reset_state(heap_base: u32, brk_start: u64) {
     syscall::resource::init();
     syscall::epoll::init();
     syscall::pipe::init();
+    syscall::pty::init();
     syscall::socket::init();
     net::ring_buffer::init();
     fs::fd_table::init();

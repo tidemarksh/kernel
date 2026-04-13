@@ -211,11 +211,13 @@ pub const O_RDONLY: i32 = 0;
 pub const O_WRONLY: i32 = 1;
 pub const O_RDWR: i32 = 2;
 pub const O_CREAT: i32 = 0x40;
+pub const O_EXCL: i32 = 0x80;
 pub const O_TRUNC: i32 = 0x200;
 pub const O_APPEND: i32 = 0x400;
 pub const O_NONBLOCK: i32 = 0x800;
 pub const O_CLOEXEC: i32 = 0x80000;
 pub const O_DIRECTORY: i32 = 0x10000;
+pub const O_NOFOLLOW: i32 = 0x20000;
 pub const SHUT_RD: i32 = 0;
 pub const SHUT_WR: i32 = 1;
 pub const SHUT_RDWR: i32 = 2;
@@ -286,6 +288,7 @@ pub const EEXIST: i64 = -17;
 pub const ENOTDIR: i64 = -20;
 pub const EISDIR: i64 = -21;
 pub const EINVAL: i64 = -22;
+pub const ENOTTY: i64 = -25;
 pub const ETXTBSY: i64 = -26;
 pub const ERANGE: i64 = -34;
 pub const ENAMETOOLONG: i64 = -36;
@@ -295,6 +298,7 @@ pub const ENOSPC: i64 = -28;
 pub const EPIPE: i64 = -32;
 pub const ENOSYS: i64 = -38;
 pub const ENOTEMPTY: i64 = -39;
+pub const ELOOP: i64 = -40;
 pub const ENOTSOCK: i64 = -88;
 pub const EDESTADDRREQ: i64 = -89;
 pub const EPROTOTYPE: i64 = -91;
@@ -376,6 +380,16 @@ export_const!(abi_fd_type_timerfd, FD_TYPE_TIMERFD);
 export_const!(abi_fd_type_pty_master, FD_TYPE_PTY_MASTER);
 export_const!(abi_fd_type_pty_slave, FD_TYPE_PTY_SLAVE);
 export_const!(abi_fd_type_inotify, FD_TYPE_INOTIFY);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_pty_input_pipe(pty_idx: u32) -> u32 {
+    crate::syscall::pty::input_pipe_slot(pty_idx)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_pty_output_pipe(pty_idx: u32) -> u32 {
+    crate::syscall::pty::output_pipe_slot(pty_idx)
+}
 
 // Syscall numbers
 macro_rules! export_const_u64 {
@@ -546,18 +560,22 @@ export_const!(abi_o_rdonly, O_RDONLY);
 export_const!(abi_o_wronly, O_WRONLY);
 export_const!(abi_o_rdwr, O_RDWR);
 export_const!(abi_o_creat, O_CREAT);
+export_const!(abi_o_excl, O_EXCL);
 export_const!(abi_o_trunc, O_TRUNC);
 export_const!(abi_o_append, O_APPEND);
 export_const!(abi_o_cloexec, O_CLOEXEC);
 export_const!(abi_o_nonblock, O_NONBLOCK);
 export_const!(abi_o_directory, O_DIRECTORY);
+export_const!(abi_o_nofollow, O_NOFOLLOW);
 
 // Error codes
 export_const!(abi_enoent, ENOENT as i32);
 export_const!(abi_ebadf, EBADF as i32);
 export_const!(abi_einval, EINVAL as i32);
+export_const!(abi_enotty, ENOTTY as i32);
 export_const!(abi_enomem, ENOMEM as i32);
 export_const!(abi_enosys, ENOSYS as i32);
+export_const!(abi_eloop, ELOOP as i32);
 export_const!(abi_eagain, EAGAIN as i32);
 export_const!(abi_epipe, EPIPE as i32);
 export_const!(abi_eperm, EPERM as i32);
@@ -626,6 +644,7 @@ pub extern "C" fn kernel_init(heap_base: u32) {
     crate::syscall::resource::init();
     crate::syscall::epoll::init();
     crate::syscall::pipe::init();
+    crate::syscall::pty::init();
     crate::syscall::socket::init();
     crate::net::ring_buffer::init();
     crate::fs::fd_table::init();
@@ -855,6 +874,7 @@ pub extern "C" fn kernel_attach_runtime_state(
 
 const MAX_ARGS: usize = 64;
 const GUEST_GUARD_BYTES: u64 = 4 * 1024 * 1024;
+const GUEST_EXEC_SCRATCH_HEADROOM_BYTES: u64 = 256 * 1024 * 1024;
 const GUEST_ADDR_LIMIT: u64 = 0x8000_0000;
 const LINEAR_MEMORY_LIMIT: u64 = 0x1_0000_0000;
 
@@ -891,8 +911,15 @@ fn staged_args() -> &'static mut StagedArgs {
 
 fn process_guest_base_for_ram(ram_size: u32) -> u32 {
     let _ = ram_size;
-    let aligned =
-        ((crate::alloc::heap_ptr() as u64 + GUEST_GUARD_BYTES + 0xF_FFFF) & !0xF_FFFF) as u32;
+    // Keep a guard plus exec scratch headroom between kernel-owned linear
+    // memory and the live guest window. execve() stages large ELF bytes in
+    // kernel memory before rebuilding the guest image, so a single guard page
+    // is not enough once workloads include browser-shell child exec.
+    let aligned = ((crate::alloc::heap_ptr() as u64
+        + GUEST_GUARD_BYTES
+        + GUEST_EXEC_SCRATCH_HEADROOM_BYTES
+        + 0xF_FFFF)
+        & !0xF_FFFF) as u32;
     if aligned as u64 + GUEST_ADDR_LIMIT > LINEAR_MEMORY_LIMIT {
         0
     } else {
@@ -1180,12 +1207,14 @@ pub extern "C" fn process_create(
         let brk = crate::syscall::memory::current_brk();
         let ps_addr = (brk + ps_align - 1) & !(ps_align - 1);
         let new_brk = ps_addr + ps_size;
-        let brk_ret = crate::syscall::memory::grow_brk(base, new_brk);
-        if brk_ret < new_brk as i64 {
+        let public_brk = crate::syscall::memory::user_brk_start_after_hidden_prefix(new_brk);
+        let brk_ret = crate::syscall::memory::grow_brk(base, public_brk);
+        if brk_ret < public_brk as i64 {
             set_process_create_last_error(15);
             return 0;
         }
         crate::guest_mem::zero_mem(base, ps_addr, ps_size as usize);
+        crate::syscall::memory::rebase_brk_after_hidden_prefix(new_brk);
         let ps_ptr = (base as u64 + ps_addr) as u32;
         let ps = &mut *(ps_ptr as *mut crate::types::ProcessState);
         ps.pid = 2;
@@ -1302,6 +1331,7 @@ pub extern "C" fn process_create(
         ts.tid = 1;
         ts.tls_base = elf_result.tls_base;
         ts.guest_base = base;
+        ts.guest_ram_limit = guest_ram_size as u32;
         ts.process_ptr = ps_addr as u32;
         crate::fs::fd_table::init_stdio(base, ts);
         crate::syscall::thread::init_main_thread(ts_ptr, base);
@@ -1315,6 +1345,8 @@ pub extern "C" fn thread_step(vm_ptr: u32, budget: i32) -> i32 {
     unsafe {
         let vm = &mut *(vm_ptr as *mut crate::types::ThreadState);
         let base = vm.guest_base;
+        crate::harness_debug::record_thread_step_entry_trace(vm, budget);
+        crate::harness_debug::record_thread_step_phase(vm, 1, budget, 0);
         if vm.process_ptr != 0 {
             let ps = &*((base as u64 + vm.process_ptr as u64) as *const crate::types::ProcessState);
             let gen_ptr =
@@ -1324,8 +1356,14 @@ pub extern "C" fn thread_step(vm_ptr: u32, budget: i32) -> i32 {
             let tc_ptr = core::ptr::addr_of!(ps.thread_count);
             crate::guest_mem::init(gen_ptr, lock_ptr, tc_ptr);
         }
+        crate::harness_debug::record_thread_step_phase(vm, 2, budget, 0);
         vm.status = STATUS_OK;
-        crate::cpu::exec(vm, budget, None, None, None, None)
+        crate::harness_debug::record_thread_step_phase(vm, 3, budget, 0);
+        let remaining = crate::cpu::exec(vm, budget, None, None, None, None);
+        crate::harness_debug::record_thread_step_phase(vm, 4, budget, remaining);
+        crate::harness_debug::record_thread_step_trace(vm, budget, remaining);
+        crate::harness_debug::record_thread_step_phase(vm, 5, budget, remaining);
+        remaining
     }
 }
 
@@ -1426,6 +1464,11 @@ pub extern "C" fn thread_process_thread_count(vm_ptr: u32) -> u32 {
         let vm = &*(vm_ptr as *const crate::types::ThreadState);
         crate::syscall::thread::process_thread_count(vm_ptr, vm.guest_base)
     }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_guest_base(vm_ptr: u32) -> u32 {
+    unsafe { (*(vm_ptr as *const crate::types::ThreadState)).guest_base }
 }
 
 #[unsafe(no_mangle)]
@@ -1608,6 +1651,19 @@ pub extern "C" fn thread_spawn_kind(vm_ptr: u32) -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn thread_guest_ram_limit(vm_ptr: u32) -> u32 {
+    unsafe { (*(vm_ptr as *const crate::types::ThreadState)).guest_ram_limit }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_set_guest_ram_limit(vm_ptr: u32, ram_size: u32) {
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut crate::types::ThreadState);
+        vm.guest_ram_limit = ram_size;
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn thread_clone_flags(vm_ptr: u32) -> u64 {
     unsafe { (*(vm_ptr as *const crate::types::ThreadState)).clone_flags }
 }
@@ -1648,17 +1704,24 @@ pub extern "C" fn thread_spawn_envp(vm_ptr: u32) -> u64 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn thread_spawn_ram_size(vm_ptr: u32) -> u32 {
+    unsafe { (*(vm_ptr as *const crate::types::ThreadState)).spawn_ram_size }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn thread_set_execve_handoff(
     vm_ptr: u32,
     process_ptr: u32,
     path_addr: u64,
     argv_addr: u64,
     envp_addr: u64,
+    ram_size: u32,
 ) {
     unsafe {
         let vm = &mut *(vm_ptr as *mut crate::types::ThreadState);
         vm.process_ptr = process_ptr;
         vm.spawn_kind = SPAWN_KIND_EXECVE;
+        vm.spawn_ram_size = ram_size;
         vm.spawn_path = path_addr;
         vm.spawn_argv = argv_addr;
         vm.spawn_envp = envp_addr;
@@ -1670,7 +1733,7 @@ pub extern "C" fn thread_clear_spawn_handoff(vm_ptr: u32) {
     unsafe {
         let vm = &mut *(vm_ptr as *mut crate::types::ThreadState);
         vm.spawn_kind = SPAWN_KIND_NONE;
-        vm.spawn_flags = 0;
+        vm.spawn_ram_size = 0;
         vm.spawn_child_pid = 0;
         vm.spawn_path = 0;
         vm.spawn_argv = 0;
@@ -1702,7 +1765,11 @@ pub extern "C" fn thread_complete_execve_handoff(vm_ptr: u32) -> i64 {
         crate::syscall::process::complete_execve_in_place_from_handoff(
             vm,
             vm.guest_base,
-            crate::syscall::process::EXECVE_RAM_LIMIT,
+            if vm.spawn_ram_size != 0 {
+                vm.spawn_ram_size as u64
+            } else {
+                crate::syscall::process::EXECVE_RAM_LIMIT
+            },
         )
     }
 }
@@ -1710,6 +1777,11 @@ pub extern "C" fn thread_complete_execve_handoff(vm_ptr: u32) -> i64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn process_record_child_exit(pid: i32, wait_status: i32) {
     crate::syscall::process::record_child_exit(pid, wait_status);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn process_record_child_exit_for_parent(parent_pid: i32, pid: i32, wait_status: i32) {
+    crate::syscall::process::record_child_exit_for_parent(parent_pid, pid, wait_status);
 }
 
 #[unsafe(no_mangle)]
@@ -1794,6 +1866,14 @@ pub extern "C" fn process_reset_lifecycle(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn thread_prepare_fork_child(vm_ptr: u32, pid: i32) {
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut crate::types::ThreadState);
+        crate::syscall::process::prepare_fork_child_after_handoff(vm, vm.guest_base, pid);
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn process_upsert_process_entry(
     pid: i32,
     ppid: i32,
@@ -1836,6 +1916,18 @@ pub extern "C" fn process_stdout_pipe(vm_ptr: u32) -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn process_stderr_pipe(vm_ptr: u32) -> u32 {
     process_state_from_vm(vm_ptr).map_or(0, |ps| ps.stderr_pipe_slot)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn process_tty_pty_slot(vm_ptr: u32) -> u32 {
+    process_state_from_vm(vm_ptr).map_or(0, |ps| ps.tty_pty_slot)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn process_host_write_stdin(vm_ptr: u32, src_ptr: u32, src_len: u32) -> i32 {
+    let vm = unsafe { &mut *(vm_ptr as *mut crate::types::ThreadState) };
+    let data = unsafe { core::slice::from_raw_parts(src_ptr as *const u8, src_len as usize) };
+    crate::syscall::pty::host_write_from_process(vm, vm.guest_base, data) as i32
 }
 
 #[unsafe(no_mangle)]
@@ -1938,6 +2030,8 @@ pub extern "C" fn kernel_ofd_offset(ofd_id: u32) -> i64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn process_release_host_stdio(vm_ptr: u32) {
     if let Some(ps) = process_state_from_vm(vm_ptr) {
+        let vm = unsafe { &*(vm_ptr as *const crate::types::ThreadState) };
+        crate::syscall::pty::release_host_attachment(vm, vm.guest_base);
         // stdin/stdout/stderr_pipe_slot are the runtime-side handles for the
         // same pipe slots that fd 0/1/2 already close through close(2) /
         // exit(2). Clearing these slots here must not close the pipe a second
@@ -2052,11 +2146,52 @@ pub extern "C" fn memfs_resolve_path(path_ptr: u32, path_len: u32) -> u32 {
     crate::fs::memfs::resolve_path(path)
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn memfs_lookup(parent_ino: u32, name_ptr: u32, name_len: u32) -> u32 {
+    let name = unsafe { core::slice::from_raw_parts(name_ptr as *const u8, name_len as usize) };
+    crate::fs::memfs::lookup(parent_ino, name)
+}
+
 /// Create a file under `parent_ino`. Returns the new inode number, or 0 on failure.
 #[unsafe(no_mangle)]
 pub extern "C" fn memfs_create_file(parent_ino: u32, name_ptr: u32, name_len: u32) -> u32 {
     let name = unsafe { core::slice::from_raw_parts(name_ptr as *const u8, name_len as usize) };
     crate::fs::memfs::create_file(parent_ino, name, 0o644)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn memfs_inode_count() -> u32 {
+    crate::fs::memfs::memfs_inode_count()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn memfs_dir_entry_count() -> u32 {
+    crate::fs::memfs::memfs_dir_entry_count()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn memfs_data_used() -> u32 {
+    crate::fs::memfs::memfs_data_used()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn memfs_data_cap() -> u32 {
+    crate::fs::memfs::memfs_data_cap()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn memfs_last_create_symlink_stage() -> u32 {
+    crate::fs::memfs::last_create_symlink_stage()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn memfs_last_create_symlink_arg0() -> u64 {
+    crate::fs::memfs::last_create_symlink_arg0()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn memfs_last_create_symlink_arg1() -> u64 {
+    crate::fs::memfs::last_create_symlink_arg1()
 }
 
 #[unsafe(no_mangle)]

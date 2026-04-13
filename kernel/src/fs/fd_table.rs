@@ -68,6 +68,10 @@ pub enum BackendCleanup {
     Socket {
         socket_idx: u32,
     },
+    Pty {
+        pty_idx: u32,
+        is_master: bool,
+    },
 }
 
 /// Pointer to OFD table in kernel Worker linear memory.
@@ -234,6 +238,16 @@ fn backend_cleanup_for_ofd(ofd_id: u32, ofd: &OpenFileDesc) -> Option<BackendCle
         Some(BackendCleanup::Socket {
             socket_idx: ofd.ino,
         })
+    } else if ofd.fd_type == FD_TYPE_PTY_MASTER {
+        Some(BackendCleanup::Pty {
+            pty_idx: ofd.ino,
+            is_master: true,
+        })
+    } else if ofd.fd_type == FD_TYPE_PTY_SLAVE {
+        Some(BackendCleanup::Pty {
+            pty_idx: ofd.ino,
+            is_master: false,
+        })
     } else {
         None
     }
@@ -270,6 +284,9 @@ pub fn run_backend_cleanup(cleanup: BackendCleanup) {
         }
         BackendCleanup::Socket { socket_idx } => {
             crate::syscall::socket::socket_close(socket_idx);
+        }
+        BackendCleanup::Pty { pty_idx, is_master } => {
+            crate::syscall::pty::pty_close(pty_idx, is_master);
         }
     }
 }
@@ -587,6 +604,88 @@ pub fn open_devnull(vm: &mut ThreadState, base: u32, flags: i32) -> i64 {
         let newfd = match find_free_fd(base, vm, 0) {
             Some(fd) => fd,
             None => return EMFILE,
+        };
+        let ps = get_process_state(base, vm);
+        store_fd_entry_ptr(
+            core::ptr::addr_of_mut!((*ps).fd_table[newfd]),
+            FdEntry {
+                ofd_id,
+                fd_flags: cloexec,
+            },
+        );
+        newfd as i64
+    }
+}
+
+pub fn open_pty_slave(vm: &mut ThreadState, base: u32, pty_idx: u32, flags: i32) -> i64 {
+    unsafe {
+        let access_mode = flags & OPEN_ACCESS_MODE_MASK;
+        if access_mode != O_RDONLY && access_mode != O_WRONLY && access_mode != O_RDWR {
+            return EINVAL;
+        }
+        let ofd_id = alloc_ofd(
+            FD_TYPE_PTY_SLAVE,
+            flags & (OPEN_ACCESS_MODE_MASK | O_APPEND | O_NONBLOCK),
+        );
+        if ofd_id == 0 {
+            return EMFILE;
+        }
+        ofd_table()[ofd_id as usize].host_fd = 0;
+        ofd_table()[ofd_id as usize].ino = pty_idx;
+        crate::syscall::pty::retain_slave(pty_idx);
+
+        let cloexec = if flags & O_CLOEXEC != 0 {
+            FD_CLOEXEC
+        } else {
+            0
+        };
+        let newfd = match find_free_fd(base, vm, 0) {
+            Some(fd) => fd,
+            None => {
+                release_ofd_id(ofd_id);
+                return EMFILE;
+            }
+        };
+        let ps = get_process_state(base, vm);
+        store_fd_entry_ptr(
+            core::ptr::addr_of_mut!((*ps).fd_table[newfd]),
+            FdEntry {
+                ofd_id,
+                fd_flags: cloexec,
+            },
+        );
+        newfd as i64
+    }
+}
+
+pub fn open_pty_master(vm: &mut ThreadState, base: u32, pty_idx: u32, flags: i32) -> i64 {
+    unsafe {
+        let access_mode = flags & OPEN_ACCESS_MODE_MASK;
+        if access_mode != O_RDONLY && access_mode != O_WRONLY && access_mode != O_RDWR {
+            return EINVAL;
+        }
+        let ofd_id = alloc_ofd(
+            FD_TYPE_PTY_MASTER,
+            flags & (OPEN_ACCESS_MODE_MASK | O_APPEND | O_NONBLOCK),
+        );
+        if ofd_id == 0 {
+            return EMFILE;
+        }
+        ofd_table()[ofd_id as usize].host_fd = 1;
+        ofd_table()[ofd_id as usize].ino = pty_idx;
+        crate::syscall::pty::retain_master(pty_idx);
+
+        let cloexec = if flags & O_CLOEXEC != 0 {
+            FD_CLOEXEC
+        } else {
+            0
+        };
+        let newfd = match find_free_fd(base, vm, 0) {
+            Some(fd) => fd,
+            None => {
+                release_ofd_id(ofd_id);
+                return EMFILE;
+            }
         };
         let ps = get_process_state(base, vm);
         store_fd_entry_ptr(
@@ -1047,32 +1146,30 @@ pub unsafe fn init_stdio(base: u32, vm: &mut ThreadState) {
         return;
     }
 
-    let Some(stdin_slot) = crate::syscall::pipe::alloc_pipe_slot() else {
-        return;
-    };
-    let Some(stdout_slot) = crate::syscall::pipe::alloc_pipe_slot() else {
-        crate::syscall::pipe::pipe_close(stdin_slot, true);
-        crate::syscall::pipe::pipe_close(stdin_slot, false);
-        return;
-    };
-    let Some(stderr_slot) = crate::syscall::pipe::alloc_pipe_slot() else {
-        crate::syscall::pipe::pipe_close(stdin_slot, true);
-        crate::syscall::pipe::pipe_close(stdin_slot, false);
-        crate::syscall::pipe::pipe_close(stdout_slot, true);
-        crate::syscall::pipe::pipe_close(stdout_slot, false);
+    let Some(stdio_pty) = crate::syscall::pty::alloc_stdio_pty(vm, base) else {
         return;
     };
 
-    let fd0 = open_pipe(vm, base, stdin_slot, true, 0);
-    let fd1 = open_pipe(vm, base, stdout_slot, false, 0);
-    let fd2 = open_pipe(vm, base, stderr_slot, false, 0);
+    let fd0 = open_pty_slave(vm, base, stdio_pty.pty_idx, O_RDONLY);
+    let fd1 = open_pty_slave(vm, base, stdio_pty.pty_idx, O_WRONLY);
+    let fd2 = open_pty_slave(vm, base, stdio_pty.pty_idx, O_WRONLY);
     if fd0 != 0 || fd1 != 1 || fd2 != 2 {
+        if fd0 >= 0 {
+            let _ = sys_close(vm, base, fd0 as u64);
+        }
+        if fd1 >= 0 {
+            let _ = sys_close(vm, base, fd1 as u64);
+        }
+        if fd2 >= 0 {
+            let _ = sys_close(vm, base, fd2 as u64);
+        }
+        crate::syscall::pty::release_host_attachment(vm, base);
         return;
     }
 
     unsafe {
-        (*ps).stdin_pipe_slot = stdin_slot;
-        (*ps).stdout_pipe_slot = stdout_slot;
-        (*ps).stderr_pipe_slot = stderr_slot;
+        (*ps).stdin_pipe_slot = stdio_pty.stdin_pipe;
+        (*ps).stdout_pipe_slot = stdio_pty.stdout_pipe;
+        (*ps).stderr_pipe_slot = stdio_pty.stdout_pipe;
     }
 }

@@ -45,6 +45,8 @@ pub struct SyscallTraceSummary {
     pub nr: u64,
     pub result: i64,
     pub status: i32,
+    pub pid_sample0: u64,
+    pub pid_sample1: u64,
 }
 
 static mut SYSCALL_TRACE: SyscallTraceSummary = SyscallTraceSummary {
@@ -52,6 +54,8 @@ static mut SYSCALL_TRACE: SyscallTraceSummary = SyscallTraceSummary {
     nr: 0,
     result: 0,
     status: 0,
+    pid_sample0: 0,
+    pid_sample1: 0,
 };
 const SYSCALL_TRACE_CAP: usize = 256;
 static mut SYSCALL_TRACE_RING: [SyscallTraceSummary; SYSCALL_TRACE_CAP] = [SyscallTraceSummary {
@@ -59,6 +63,8 @@ static mut SYSCALL_TRACE_RING: [SyscallTraceSummary; SYSCALL_TRACE_CAP] = [Sysca
     nr: 0,
     result: 0,
     status: 0,
+    pid_sample0: 0,
+    pid_sample1: 0,
 }; SYSCALL_TRACE_CAP];
 static mut SYSCALL_TRACE_RING_LEN: u32 = 0;
 static mut SYSCALL_TRACE_RING_NEXT: u32 = 0;
@@ -185,6 +191,68 @@ static mut EPOLL_WAIT_TRACE: EpollWaitTraceSummary = EpollWaitTraceSummary {
 static mut LAST_EXECVE_STAGE: u32 = 0;
 static mut LAST_EXECVE_VALUE0: u64 = 0;
 static mut LAST_EXECVE_VALUE1: u64 = 0;
+static mut LAST_EXECVE_PRE_PC: u64 = 0;
+static mut LAST_EXECVE_PRE_RAW: u32 = 0;
+static mut LAST_EXECVE_PRE_VALUE0: u64 = 0;
+static mut LAST_EXECVE_PRE_VALUE1: u64 = 0;
+static mut LAST_EXECVE_ECALL_VALUE0: u64 = 0;
+static mut LAST_EXECVE_ECALL_VALUE1: u64 = 0;
+const EXECVE_APPROACH_TRACE_CAP: usize = 8;
+const EXECVE_DISPATCH_TRACE_CAP: usize = 40;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ExecveApproachTraceEntry {
+    pub pc: u64,
+    pub raw: u32,
+    pub pid_sample0: u64,
+    pub pid_sample1: u64,
+}
+
+static mut EXECVE_APPROACH_TRACE: [ExecveApproachTraceEntry; EXECVE_APPROACH_TRACE_CAP] =
+    [ExecveApproachTraceEntry {
+        pc: 0,
+        raw: 0,
+        pid_sample0: 0,
+        pid_sample1: 0,
+    }; EXECVE_APPROACH_TRACE_CAP];
+static mut EXECVE_APPROACH_TRACE_LEN: u32 = 0;
+static mut EXECVE_APPROACH_TRACE_NEXT: u32 = 0;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ExecveDispatchTraceEntry {
+    pub stage: u32,
+    pub pid_sample0: u64,
+    pub pid_sample1: u64,
+}
+
+static mut EXECVE_DISPATCH_TRACE: [ExecveDispatchTraceEntry; EXECVE_DISPATCH_TRACE_CAP] =
+    [ExecveDispatchTraceEntry {
+        stage: 0,
+        pid_sample0: 0,
+        pid_sample1: 0,
+    }; EXECVE_DISPATCH_TRACE_CAP];
+static mut EXECVE_DISPATCH_TRACE_LEN: u32 = 0;
+static mut EXECVE_DISPATCH_TRACE_NEXT: u32 = 0;
+const EXECVE_STAGE_TRACE_CAP: usize = 16;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ExecveStageTraceEntry {
+    pub stage: u32,
+    pub value0: u64,
+    pub value1: u64,
+}
+
+static mut EXECVE_STAGE_TRACE: [ExecveStageTraceEntry; EXECVE_STAGE_TRACE_CAP] =
+    [ExecveStageTraceEntry {
+        stage: 0,
+        value0: 0,
+        value1: 0,
+    }; EXECVE_STAGE_TRACE_CAP];
+static mut EXECVE_STAGE_TRACE_LEN: u32 = 0;
+static mut EXECVE_STAGE_TRACE_NEXT: u32 = 0;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -205,6 +273,42 @@ static mut PIPE_CLOSE_TRACE: PipeCloseTraceSummary = PipeCloseTraceSummary {
 };
 
 const THREAD_COUNT_TRACE_CAP: usize = 32;
+const GUEST_WRITE_WATCH_CAP: usize = 2;
+const GUEST_WRITE_OVERLAP_TRACE_CAP: usize = 32;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GuestWriteWatchRegion {
+    pub start: u64,
+    pub end: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GuestWriteOverlapTraceEntry {
+    pub slot: u32,
+    pub op: u32,
+    pub addr: u64,
+    pub len: u32,
+    pub sample_len: u32,
+    pub sample: u64,
+    pub execve_stage: u32,
+}
+
+static mut GUEST_WRITE_WATCH: [GuestWriteWatchRegion; GUEST_WRITE_WATCH_CAP] =
+    [GuestWriteWatchRegion { start: 0, end: 0 }; GUEST_WRITE_WATCH_CAP];
+static mut GUEST_WRITE_OVERLAP_TRACE:
+    [GuestWriteOverlapTraceEntry; GUEST_WRITE_OVERLAP_TRACE_CAP] = [GuestWriteOverlapTraceEntry {
+    slot: 0,
+    op: 0,
+    addr: 0,
+    len: 0,
+    sample_len: 0,
+    sample: 0,
+    execve_stage: 0,
+}; GUEST_WRITE_OVERLAP_TRACE_CAP];
+static mut GUEST_WRITE_OVERLAP_TRACE_LEN: u32 = 0;
+static mut GUEST_WRITE_OVERLAP_TRACE_NEXT: u32 = 0;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -274,6 +378,8 @@ pub fn clear_syscall_trace() {
                 nr: 0,
                 result: 0,
                 status: 0,
+                pid_sample0: 0,
+                pid_sample1: 0,
             },
         );
         core::ptr::write(
@@ -283,6 +389,8 @@ pub fn clear_syscall_trace() {
                 nr: 0,
                 result: 0,
                 status: 0,
+                pid_sample0: 0,
+                pid_sample1: 0,
             }; SYSCALL_TRACE_CAP],
         );
         core::ptr::write(core::ptr::addr_of_mut!(SYSCALL_TRACE_RING_LEN), 0);
@@ -444,6 +552,125 @@ pub fn clear_memory_trace() {
     }
 }
 
+#[cfg(any(test, feature = "harness"))]
+pub fn clear_guest_write_watch_trace() {
+    if !RUNTIME_DEBUG_ENABLED {
+        return;
+    }
+    unsafe {
+        core::ptr::write(
+            core::ptr::addr_of_mut!(GUEST_WRITE_WATCH),
+            [GuestWriteWatchRegion { start: 0, end: 0 }; GUEST_WRITE_WATCH_CAP],
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!(GUEST_WRITE_OVERLAP_TRACE),
+            [GuestWriteOverlapTraceEntry {
+                slot: 0,
+                op: 0,
+                addr: 0,
+                len: 0,
+                sample_len: 0,
+                sample: 0,
+                execve_stage: 0,
+            }; GUEST_WRITE_OVERLAP_TRACE_CAP],
+        );
+        core::ptr::write(core::ptr::addr_of_mut!(GUEST_WRITE_OVERLAP_TRACE_LEN), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(GUEST_WRITE_OVERLAP_TRACE_NEXT), 0);
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn configure_guest_write_watch(slot: u32, start: u64, end: u64) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (slot, start, end);
+        return;
+    }
+    if slot as usize >= GUEST_WRITE_WATCH_CAP {
+        return;
+    }
+    unsafe {
+        GUEST_WRITE_WATCH[slot as usize] = GuestWriteWatchRegion { start, end };
+    }
+}
+
+pub fn record_guest_write_overlap(addr: u64, len: u32, op: u32, sample: u64, sample_len: u32) {
+    if !RUNTIME_DEBUG_ENABLED || len == 0 {
+        let _ = (addr, len, op, sample, sample_len);
+        return;
+    }
+    let end = addr.saturating_add(len as u64);
+    unsafe {
+        for slot in 0..GUEST_WRITE_WATCH_CAP {
+            let region = GUEST_WRITE_WATCH[slot];
+            if region.start >= region.end {
+                continue;
+            }
+            if end <= region.start || addr >= region.end {
+                continue;
+            }
+            let next = GUEST_WRITE_OVERLAP_TRACE_NEXT as usize % GUEST_WRITE_OVERLAP_TRACE_CAP;
+            GUEST_WRITE_OVERLAP_TRACE[next] = GuestWriteOverlapTraceEntry {
+                slot: slot as u32,
+                op,
+                addr,
+                len,
+                sample_len,
+                sample,
+                execve_stage: LAST_EXECVE_STAGE,
+            };
+            GUEST_WRITE_OVERLAP_TRACE_NEXT =
+                GUEST_WRITE_OVERLAP_TRACE_NEXT.wrapping_add(1);
+            GUEST_WRITE_OVERLAP_TRACE_LEN =
+                (GUEST_WRITE_OVERLAP_TRACE_LEN + 1).min(GUEST_WRITE_OVERLAP_TRACE_CAP as u32);
+        }
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn guest_write_overlap_trace_len() -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(GUEST_WRITE_OVERLAP_TRACE_LEN)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn guest_write_overlap_trace_entry(index: u32) -> GuestWriteOverlapTraceEntry {
+    if !RUNTIME_DEBUG_ENABLED {
+        return GuestWriteOverlapTraceEntry {
+            slot: 0,
+            op: 0,
+            addr: 0,
+            len: 0,
+            sample_len: 0,
+            sample: 0,
+            execve_stage: 0,
+        };
+    }
+    unsafe {
+        let len = core::ptr::read(core::ptr::addr_of!(GUEST_WRITE_OVERLAP_TRACE_LEN));
+        if index >= len {
+            return GuestWriteOverlapTraceEntry {
+                slot: 0,
+                op: 0,
+                addr: 0,
+                len: 0,
+                sample_len: 0,
+                sample: 0,
+                execve_stage: 0,
+            };
+        }
+        let next = core::ptr::read(core::ptr::addr_of!(GUEST_WRITE_OVERLAP_TRACE_NEXT)) as usize;
+        let len_usize = len as usize;
+        let slot = if len_usize < GUEST_WRITE_OVERLAP_TRACE_CAP {
+            index as usize
+        } else {
+            (next + index as usize) % GUEST_WRITE_OVERLAP_TRACE_CAP
+        };
+        core::ptr::read(core::ptr::addr_of!(GUEST_WRITE_OVERLAP_TRACE[slot]))
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn record_write_attempt(
     fd: u64,
@@ -550,6 +777,7 @@ pub fn record_syscall(vm_ptr: u32, nr: u64, result: i64, status: i32) {
         let _ = (vm_ptr, nr, result, status);
         return;
     }
+    let (pid_sample0, pid_sample1) = sample_process_pid_bytes(vm_ptr);
     unsafe {
         core::ptr::write(
             core::ptr::addr_of_mut!(SYSCALL_TRACE),
@@ -558,6 +786,8 @@ pub fn record_syscall(vm_ptr: u32, nr: u64, result: i64, status: i32) {
                 nr,
                 result,
                 status,
+                pid_sample0,
+                pid_sample1,
             },
         );
         let next = core::ptr::read(core::ptr::addr_of!(SYSCALL_TRACE_RING_NEXT)) as usize;
@@ -568,6 +798,8 @@ pub fn record_syscall(vm_ptr: u32, nr: u64, result: i64, status: i32) {
                 nr,
                 result,
                 status,
+                pid_sample0,
+                pid_sample1,
             },
         );
         core::ptr::write(
@@ -629,6 +861,22 @@ pub fn record_syscall(vm_ptr: u32, nr: u64, result: i64, status: i32) {
             );
         }
     }
+}
+
+fn sample_process_pid_bytes(vm_ptr: u32) -> (u64, u64) {
+    if vm_ptr == 0 {
+        return (0, 0);
+    }
+    let vm = unsafe { &*(vm_ptr as *const crate::types::ThreadState) };
+    if vm.process_ptr == 0 {
+        return (0, 0);
+    }
+    let pid_addr = vm.guest_base as usize
+        + vm.process_ptr as usize
+        + core::mem::offset_of!(crate::types::ProcessState, pid);
+    let sample0 = unsafe { core::ptr::read_unaligned(pid_addr as *const u64) };
+    let sample1 = unsafe { core::ptr::read_unaligned((pid_addr + 8) as *const u64) };
+    (sample0, sample1)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -774,6 +1022,7 @@ pub fn record_path_syscall(
             | crate::abi::SYS_NEWFSTATAT
             | crate::abi::SYS_FACCESSAT
             | crate::abi::SYS_READLINKAT
+            | crate::abi::SYS_EXECVE
     );
     if !should_record {
         return;
@@ -900,9 +1149,127 @@ pub fn record_execve_stage(stage: u32, value0: u64, value1: u64) {
         return;
     }
     unsafe {
+        if stage == 0 {
+            core::ptr::write(core::ptr::addr_of_mut!(EXECVE_STAGE_TRACE_LEN), 0);
+            core::ptr::write(core::ptr::addr_of_mut!(EXECVE_STAGE_TRACE_NEXT), 0);
+        }
         core::ptr::write(core::ptr::addr_of_mut!(LAST_EXECVE_STAGE), stage);
         core::ptr::write(core::ptr::addr_of_mut!(LAST_EXECVE_VALUE0), value0);
         core::ptr::write(core::ptr::addr_of_mut!(LAST_EXECVE_VALUE1), value1);
+        let len = core::ptr::read(core::ptr::addr_of!(EXECVE_STAGE_TRACE_LEN)) as usize;
+        let next = core::ptr::read(core::ptr::addr_of!(EXECVE_STAGE_TRACE_NEXT)) as usize;
+        let slot = if len < EXECVE_STAGE_TRACE_CAP { len } else { next };
+        core::ptr::write(
+            core::ptr::addr_of_mut!(EXECVE_STAGE_TRACE[slot]),
+            ExecveStageTraceEntry {
+                stage,
+                value0,
+                value1,
+            },
+        );
+        if len < EXECVE_STAGE_TRACE_CAP {
+            core::ptr::write(core::ptr::addr_of_mut!(EXECVE_STAGE_TRACE_LEN), (len + 1) as u32);
+        } else {
+            core::ptr::write(
+                core::ptr::addr_of_mut!(EXECVE_STAGE_TRACE_NEXT),
+                ((next + 1) % EXECVE_STAGE_TRACE_CAP) as u32,
+            );
+        }
+    }
+}
+
+pub fn record_execve_approach(vm_ptr: u32, pc: u64, raw: u32) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (vm_ptr, pc, raw);
+        return;
+    }
+    let (pid_sample0, pid_sample1) = sample_process_pid_bytes(vm_ptr);
+    unsafe {
+        let len = core::ptr::read(core::ptr::addr_of!(EXECVE_APPROACH_TRACE_LEN)) as usize;
+        let next = core::ptr::read(core::ptr::addr_of!(EXECVE_APPROACH_TRACE_NEXT)) as usize;
+        let slot = if len < EXECVE_APPROACH_TRACE_CAP {
+            len
+        } else {
+            next
+        };
+        core::ptr::write(
+            core::ptr::addr_of_mut!(EXECVE_APPROACH_TRACE[slot]),
+            ExecveApproachTraceEntry {
+                pc,
+                raw,
+                pid_sample0,
+                pid_sample1,
+            },
+        );
+        if len < EXECVE_APPROACH_TRACE_CAP {
+            core::ptr::write(core::ptr::addr_of_mut!(EXECVE_APPROACH_TRACE_LEN), (len + 1) as u32);
+        } else {
+            core::ptr::write(
+                core::ptr::addr_of_mut!(EXECVE_APPROACH_TRACE_NEXT),
+                ((next + 1) % EXECVE_APPROACH_TRACE_CAP) as u32,
+            );
+        }
+    }
+}
+
+pub fn record_execve_dispatch(vm_ptr: u32, stage: u32) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (vm_ptr, stage);
+        return;
+    }
+    let (pid_sample0, pid_sample1) = sample_process_pid_bytes(vm_ptr);
+    unsafe {
+        if stage == 1 {
+            core::ptr::write(core::ptr::addr_of_mut!(EXECVE_DISPATCH_TRACE_LEN), 0);
+            core::ptr::write(core::ptr::addr_of_mut!(EXECVE_DISPATCH_TRACE_NEXT), 0);
+        }
+        let len = core::ptr::read(core::ptr::addr_of!(EXECVE_DISPATCH_TRACE_LEN)) as usize;
+        let next = core::ptr::read(core::ptr::addr_of!(EXECVE_DISPATCH_TRACE_NEXT)) as usize;
+        let slot = if len < EXECVE_DISPATCH_TRACE_CAP {
+            len
+        } else {
+            next
+        };
+        core::ptr::write(
+            core::ptr::addr_of_mut!(EXECVE_DISPATCH_TRACE[slot]),
+            ExecveDispatchTraceEntry {
+                stage,
+                pid_sample0,
+                pid_sample1,
+            },
+        );
+        if len < EXECVE_DISPATCH_TRACE_CAP {
+            core::ptr::write(core::ptr::addr_of_mut!(EXECVE_DISPATCH_TRACE_LEN), (len + 1) as u32);
+        } else {
+            core::ptr::write(
+                core::ptr::addr_of_mut!(EXECVE_DISPATCH_TRACE_NEXT),
+                ((next + 1) % EXECVE_DISPATCH_TRACE_CAP) as u32,
+            );
+        }
+    }
+}
+
+pub fn record_execve_ecall(value0: u64, value1: u64) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (value0, value1);
+        return;
+    }
+    unsafe {
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_EXECVE_ECALL_VALUE0), value0);
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_EXECVE_ECALL_VALUE1), value1);
+    }
+}
+
+pub fn record_execve_pre_dispatch(pc: u64, raw: u32, value0: u64, value1: u64) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (pc, raw, value0, value1);
+        return;
+    }
+    unsafe {
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_EXECVE_PRE_PC), pc);
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_EXECVE_PRE_RAW), raw);
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_EXECVE_PRE_VALUE0), value0);
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_EXECVE_PRE_VALUE1), value1);
     }
 }
 
@@ -952,6 +1319,8 @@ pub fn syscall_trace_summary() -> SyscallTraceSummary {
             nr: 0,
             result: 0,
             status: 0,
+            pid_sample0: 0,
+            pid_sample1: 0,
         };
     }
     unsafe { *core::ptr::addr_of!(SYSCALL_TRACE) }
@@ -973,6 +1342,8 @@ pub fn syscall_trace_entry(index: u32) -> SyscallTraceSummary {
             nr: 0,
             result: 0,
             status: 0,
+            pid_sample0: 0,
+            pid_sample1: 0,
         };
     }
     unsafe {
@@ -983,6 +1354,8 @@ pub fn syscall_trace_entry(index: u32) -> SyscallTraceSummary {
                 nr: 0,
                 result: 0,
                 status: 0,
+                pid_sample0: 0,
+                pid_sample1: 0,
             };
         }
         let next = core::ptr::read(core::ptr::addr_of!(SYSCALL_TRACE_RING_NEXT)) as usize;
@@ -1035,11 +1408,173 @@ pub fn execve_value1() -> u64 {
     unsafe { core::ptr::read(core::ptr::addr_of!(LAST_EXECVE_VALUE1)) }
 }
 
-const CPU_EXEC_TRACE_CAP: usize = 64;
+#[cfg(any(test, feature = "harness"))]
+pub fn execve_ecall_value0() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(LAST_EXECVE_ECALL_VALUE0)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn execve_ecall_value1() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(LAST_EXECVE_ECALL_VALUE1)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn execve_pre_pc() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(LAST_EXECVE_PRE_PC)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn execve_pre_raw() -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(LAST_EXECVE_PRE_RAW)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn execve_pre_value0() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(LAST_EXECVE_PRE_VALUE0)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn execve_pre_value1() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(LAST_EXECVE_PRE_VALUE1)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn execve_stage_trace_len() -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(EXECVE_STAGE_TRACE_LEN)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn execve_approach_trace_len() -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(EXECVE_APPROACH_TRACE_LEN)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn execve_approach_trace_entry(index: u32) -> ExecveApproachTraceEntry {
+    if !RUNTIME_DEBUG_ENABLED {
+        return ExecveApproachTraceEntry {
+            pc: 0,
+            raw: 0,
+            pid_sample0: 0,
+            pid_sample1: 0,
+        };
+    }
+    unsafe {
+        let len = core::ptr::read(core::ptr::addr_of!(EXECVE_APPROACH_TRACE_LEN));
+        if index >= len {
+            return ExecveApproachTraceEntry {
+                pc: 0,
+                raw: 0,
+                pid_sample0: 0,
+                pid_sample1: 0,
+            };
+        }
+        let next = core::ptr::read(core::ptr::addr_of!(EXECVE_APPROACH_TRACE_NEXT)) as usize;
+        let len_usize = len as usize;
+        let slot = if len_usize < EXECVE_APPROACH_TRACE_CAP {
+            index as usize
+        } else {
+            (next + index as usize) % EXECVE_APPROACH_TRACE_CAP
+        };
+        core::ptr::read(core::ptr::addr_of!(EXECVE_APPROACH_TRACE[slot]))
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn execve_dispatch_trace_len() -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(EXECVE_DISPATCH_TRACE_LEN)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn execve_dispatch_trace_entry(index: u32) -> ExecveDispatchTraceEntry {
+    if !RUNTIME_DEBUG_ENABLED {
+        return ExecveDispatchTraceEntry {
+            stage: 0,
+            pid_sample0: 0,
+            pid_sample1: 0,
+        };
+    }
+    unsafe {
+        let len = core::ptr::read(core::ptr::addr_of!(EXECVE_DISPATCH_TRACE_LEN));
+        if index >= len {
+            return ExecveDispatchTraceEntry {
+                stage: 0,
+                pid_sample0: 0,
+                pid_sample1: 0,
+            };
+        }
+        let next = core::ptr::read(core::ptr::addr_of!(EXECVE_DISPATCH_TRACE_NEXT)) as usize;
+        let len_usize = len as usize;
+        let slot = if len_usize < EXECVE_DISPATCH_TRACE_CAP {
+            index as usize
+        } else {
+            (next + index as usize) % EXECVE_DISPATCH_TRACE_CAP
+        };
+        core::ptr::read(core::ptr::addr_of!(EXECVE_DISPATCH_TRACE[slot]))
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn execve_stage_trace_entry(index: u32) -> ExecveStageTraceEntry {
+    if !RUNTIME_DEBUG_ENABLED {
+        return ExecveStageTraceEntry {
+            stage: 0,
+            value0: 0,
+            value1: 0,
+        };
+    }
+    unsafe {
+        let len = core::ptr::read(core::ptr::addr_of!(EXECVE_STAGE_TRACE_LEN));
+        if index >= len {
+            return ExecveStageTraceEntry {
+                stage: 0,
+                value0: 0,
+                value1: 0,
+            };
+        }
+        let next = core::ptr::read(core::ptr::addr_of!(EXECVE_STAGE_TRACE_NEXT)) as usize;
+        let len_usize = len as usize;
+        let slot = if len_usize < EXECVE_STAGE_TRACE_CAP {
+            index as usize
+        } else {
+            (next + index as usize) % EXECVE_STAGE_TRACE_CAP
+        };
+        core::ptr::read(core::ptr::addr_of!(EXECVE_STAGE_TRACE[slot]))
+    }
+}
+
+const CPU_EXEC_TRACE_CAP: usize = 1024;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct JalrTraceSummary {
+    pub vm_ptr: u32,
     pub pc: u64,
     pub rs1_value: u64,
     pub target: u64,
@@ -1049,7 +1584,22 @@ pub struct JalrTraceSummary {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+pub struct CloneStartupTraceEntry {
+    pub vm_ptr: u32,
+    pub tid: i32,
+    pub pc: u64,
+    pub raw: u32,
+    pub a0: u64,
+    pub t1: u64,
+    pub t2: u64,
+    pub sp: u64,
+    pub s11: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
 pub struct ZeroRegTraceSummary {
+    pub vm_ptr: u32,
     pub tid: i32,
     pub pc: u64,
     pub raw: u32,
@@ -1062,6 +1612,7 @@ pub struct ZeroRegTraceSummary {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct RegWriteTraceSummary {
+    pub vm_ptr: u32,
     pub tid: i32,
     pub pc: u64,
     pub raw: u32,
@@ -1075,6 +1626,9 @@ pub struct RegWriteTraceSummary {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ExecTraceEntry {
+    pub vm_ptr: u32,
+    pub epoch: u32,
+    pub tid: i32,
     pub pc: u64,
     pub raw: u32,
     pub step: u32,
@@ -1084,7 +1638,100 @@ pub struct ExecTraceEntry {
     pub s11: u64,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ThreadStepTraceSummary {
+    pub vm_ptr: u32,
+    pub tid: i32,
+    pub status: i32,
+    pub budget: i32,
+    pub remaining: i32,
+    pub pc: u64,
+    pub ra: u64,
+    pub sp: u64,
+    pub s11: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ThreadStepEntryTraceSummary {
+    pub vm_ptr: u32,
+    pub tid: i32,
+    pub status: i32,
+    pub budget: i32,
+    pub pc: u64,
+    pub ra: u64,
+    pub sp: u64,
+    pub s11: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ThreadStepPhaseSummary {
+    pub vm_ptr: u32,
+    pub tid: i32,
+    pub phase: u32,
+    pub status: i32,
+    pub budget: i32,
+    pub remaining: i32,
+    pub pc: u64,
+    pub ra: u64,
+    pub sp: u64,
+    pub s11: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FaultDispatchTraceSummary {
+    pub vm_ptr: u32,
+    pub tid: i32,
+    pub phase: u32,
+    pub pc: u64,
+    pub ra: u64,
+    pub sp: u64,
+    pub s11: u64,
+    pub fault_addr: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct SyncSignalTraceSummary {
+    pub vm_ptr: u32,
+    pub tid: i32,
+    pub local_pc: u64,
+    pub local_ra: u64,
+    pub local_sp: u64,
+    pub local_s11: u64,
+    pub local_a0: u64,
+    pub vm_pc: u64,
+    pub vm_ra: u64,
+    pub vm_sp: u64,
+    pub vm_s11: u64,
+    pub vm_a0: u64,
+    pub fault_addr: u64,
+    pub sig_pending: u64,
+    pub sig_mask: u64,
+    pub sig_info_code: i32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FutexResumeTraceSummary {
+    pub vm_ptr: u32,
+    pub tid: i32,
+    pub phase: u32,
+    pub status: i32,
+    pub pc: u64,
+    pub ra: u64,
+    pub sp: u64,
+    pub s11: u64,
+    pub a0: u64,
+    pub sig_pending: u64,
+    pub sig_mask: u64,
+}
+
 static mut LAST_JALR_TRACE: JalrTraceSummary = JalrTraceSummary {
+    vm_ptr: 0,
     pc: 0,
     rs1_value: 0,
     target: 0,
@@ -1092,7 +1739,32 @@ static mut LAST_JALR_TRACE: JalrTraceSummary = JalrTraceSummary {
     rs1: 0,
 };
 
+static mut LAST_CLONE_JALR_TRACE: JalrTraceSummary = JalrTraceSummary {
+    vm_ptr: 0,
+    pc: 0,
+    rs1_value: 0,
+    target: 0,
+    rd: 0,
+    rs1: 0,
+};
+const CLONE_STARTUP_TRACE_CAP: usize = 8;
+static mut CLONE_STARTUP_TRACE_RING: [CloneStartupTraceEntry; CLONE_STARTUP_TRACE_CAP] =
+    [CloneStartupTraceEntry {
+        vm_ptr: 0,
+        tid: 0,
+        pc: 0,
+        raw: 0,
+        a0: 0,
+        t1: 0,
+        t2: 0,
+        sp: 0,
+        s11: 0,
+    }; CLONE_STARTUP_TRACE_CAP];
+static mut CLONE_STARTUP_TRACE_LEN: u32 = 0;
+static mut CLONE_STARTUP_TRACE_NEXT: u32 = 0;
+
 static mut LAST_ZERO_REG_TRACE: ZeroRegTraceSummary = ZeroRegTraceSummary {
+    vm_ptr: 0,
     tid: 0,
     pc: 0,
     raw: 0,
@@ -1103,6 +1775,7 @@ static mut LAST_ZERO_REG_TRACE: ZeroRegTraceSummary = ZeroRegTraceSummary {
 };
 
 static mut LAST_S11_WRITE_TRACE: RegWriteTraceSummary = RegWriteTraceSummary {
+    vm_ptr: 0,
     tid: 0,
     pc: 0,
     raw: 0,
@@ -1114,6 +1787,7 @@ static mut LAST_S11_WRITE_TRACE: RegWriteTraceSummary = RegWriteTraceSummary {
 };
 
 static mut LAST_SP_WRITE_TRACE: RegWriteTraceSummary = RegWriteTraceSummary {
+    vm_ptr: 0,
     tid: 0,
     pc: 0,
     raw: 0,
@@ -1125,6 +1799,7 @@ static mut LAST_SP_WRITE_TRACE: RegWriteTraceSummary = RegWriteTraceSummary {
 };
 
 static mut LAST_TP_WRITE_TRACE: RegWriteTraceSummary = RegWriteTraceSummary {
+    vm_ptr: 0,
     tid: 0,
     pc: 0,
     raw: 0,
@@ -1135,7 +1810,64 @@ static mut LAST_TP_WRITE_TRACE: RegWriteTraceSummary = RegWriteTraceSummary {
     rs1_value: 0,
 };
 
+const CPU_REG_TRACE_CAP: usize = 64;
+
+static mut JALR_TRACE_RING: [JalrTraceSummary; CPU_REG_TRACE_CAP] = [JalrTraceSummary {
+    vm_ptr: 0,
+    pc: 0,
+    rs1_value: 0,
+    target: 0,
+    rd: 0,
+    rs1: 0,
+}; CPU_REG_TRACE_CAP];
+static mut JALR_TRACE_LEN: u32 = 0;
+static mut JALR_TRACE_NEXT: u32 = 0;
+
+static mut ZERO_REG_TRACE_RING: [ZeroRegTraceSummary; CPU_REG_TRACE_CAP] = [ZeroRegTraceSummary {
+    vm_ptr: 0,
+    tid: 0,
+    pc: 0,
+    raw: 0,
+    reg: 0,
+    prev_value: 0,
+    sp: 0,
+    s11: 0,
+}; CPU_REG_TRACE_CAP];
+static mut ZERO_REG_TRACE_LEN: u32 = 0;
+static mut ZERO_REG_TRACE_NEXT: u32 = 0;
+
+static mut S11_WRITE_TRACE_RING: [RegWriteTraceSummary; CPU_REG_TRACE_CAP] = [RegWriteTraceSummary {
+    vm_ptr: 0,
+    tid: 0,
+    pc: 0,
+    raw: 0,
+    source: 0,
+    prev_value: 0,
+    value: 0,
+    rs1: 0,
+    rs1_value: 0,
+}; CPU_REG_TRACE_CAP];
+static mut S11_WRITE_TRACE_LEN: u32 = 0;
+static mut S11_WRITE_TRACE_NEXT: u32 = 0;
+
+static mut SP_WRITE_TRACE_RING: [RegWriteTraceSummary; CPU_REG_TRACE_CAP] = [RegWriteTraceSummary {
+    vm_ptr: 0,
+    tid: 0,
+    pc: 0,
+    raw: 0,
+    source: 0,
+    prev_value: 0,
+    value: 0,
+    rs1: 0,
+    rs1_value: 0,
+}; CPU_REG_TRACE_CAP];
+static mut SP_WRITE_TRACE_LEN: u32 = 0;
+static mut SP_WRITE_TRACE_NEXT: u32 = 0;
+
 static mut EXEC_TRACE_RING: [ExecTraceEntry; CPU_EXEC_TRACE_CAP] = [ExecTraceEntry {
+    vm_ptr: 0,
+    epoch: 0,
+    tid: 0,
     pc: 0,
     raw: 0,
     step: 0,
@@ -1146,10 +1878,404 @@ static mut EXEC_TRACE_RING: [ExecTraceEntry; CPU_EXEC_TRACE_CAP] = [ExecTraceEnt
 }; CPU_EXEC_TRACE_CAP];
 static mut EXEC_TRACE_RING_LEN: u32 = 0;
 static mut EXEC_TRACE_RING_NEXT: u32 = 0;
+static mut EXEC_TRACE_EPOCH_BY_VM: [(u32, u32); THREAD_STEP_VM_TRACE_CAP] =
+    [(0, 0); THREAD_STEP_VM_TRACE_CAP];
+static mut EXEC_TRACE_EPOCH_BY_VM_NEXT: u32 = 0;
+const FAULT_EXEC_TRACE_CAP: usize = 64;
+static mut LAST_FAULT_EXEC_TRACE_VM_PTR: u32 = 0;
+static mut LAST_FAULT_EXEC_TRACE_EPOCH: u32 = 0;
+static mut LAST_FAULT_EXEC_TRACE: [ExecTraceEntry; FAULT_EXEC_TRACE_CAP] = [ExecTraceEntry {
+    vm_ptr: 0,
+    epoch: 0,
+    tid: 0,
+    pc: 0,
+    raw: 0,
+    step: 0,
+    sp: 0,
+    ra: 0,
+    a0: 0,
+    s11: 0,
+}; FAULT_EXEC_TRACE_CAP];
+static mut LAST_FAULT_EXEC_TRACE_LEN: u32 = 0;
+static mut LAST_SYNC_FAULT_EXEC_TRACE_VM_PTR: u32 = 0;
+static mut LAST_SYNC_FAULT_EXEC_TRACE_EPOCH: u32 = 0;
+static mut LAST_SYNC_FAULT_EXEC_TRACE: [ExecTraceEntry; FAULT_EXEC_TRACE_CAP] = [ExecTraceEntry {
+    vm_ptr: 0,
+    epoch: 0,
+    tid: 0,
+    pc: 0,
+    raw: 0,
+    step: 0,
+    sp: 0,
+    ra: 0,
+    a0: 0,
+    s11: 0,
+}; FAULT_EXEC_TRACE_CAP];
+static mut LAST_SYNC_FAULT_EXEC_TRACE_LEN: u32 = 0;
+static mut LAST_THREAD_STEP_EXEC_TRACE_VM_PTR: u32 = 0;
+static mut LAST_THREAD_STEP_EXEC_TRACE_EPOCH: u32 = 0;
+static mut LAST_THREAD_STEP_EXEC_TRACE: [ExecTraceEntry; FAULT_EXEC_TRACE_CAP] = [ExecTraceEntry {
+    vm_ptr: 0,
+    epoch: 0,
+    tid: 0,
+    pc: 0,
+    raw: 0,
+    step: 0,
+    sp: 0,
+    ra: 0,
+    a0: 0,
+    s11: 0,
+}; FAULT_EXEC_TRACE_CAP];
+static mut LAST_THREAD_STEP_EXEC_TRACE_LEN: u32 = 0;
+static mut LAST_BREAK_EXEC_TRACE_VM_PTR: u32 = 0;
+static mut LAST_BREAK_EXEC_TRACE_EPOCH: u32 = 0;
+static mut LAST_BREAK_EXEC_TRACE: [ExecTraceEntry; FAULT_EXEC_TRACE_CAP] = [ExecTraceEntry {
+    vm_ptr: 0,
+    epoch: 0,
+    tid: 0,
+    pc: 0,
+    raw: 0,
+    step: 0,
+    sp: 0,
+    ra: 0,
+    a0: 0,
+    s11: 0,
+}; FAULT_EXEC_TRACE_CAP];
+static mut LAST_BREAK_EXEC_TRACE_LEN: u32 = 0;
 
-pub fn record_exec_trace(pc: u64, raw: u32, step: u64, x: &[u64; 32]) {
+static mut LAST_THREAD_STEP_TRACE: ThreadStepTraceSummary = ThreadStepTraceSummary {
+    vm_ptr: 0,
+    tid: 0,
+    status: 0,
+    budget: 0,
+    remaining: 0,
+    pc: 0,
+    ra: 0,
+    sp: 0,
+    s11: 0,
+};
+static mut LAST_THREAD_STEP_ENTRY_TRACE: ThreadStepEntryTraceSummary = ThreadStepEntryTraceSummary {
+    vm_ptr: 0,
+    tid: 0,
+    status: 0,
+    budget: 0,
+    pc: 0,
+    ra: 0,
+    sp: 0,
+    s11: 0,
+};
+static mut LAST_THREAD_STEP_PHASE: ThreadStepPhaseSummary = ThreadStepPhaseSummary {
+    vm_ptr: 0,
+    tid: 0,
+    phase: 0,
+    status: 0,
+    budget: 0,
+    remaining: 0,
+    pc: 0,
+    ra: 0,
+    sp: 0,
+    s11: 0,
+};
+const THREAD_STEP_VM_TRACE_CAP: usize = 16;
+const THREAD_STEP_TRACE_CAP: usize = 64;
+static mut THREAD_STEP_TRACE_BY_VM: [ThreadStepTraceSummary; THREAD_STEP_VM_TRACE_CAP] =
+    [ThreadStepTraceSummary {
+        vm_ptr: 0,
+        tid: 0,
+        status: 0,
+        budget: 0,
+        remaining: 0,
+        pc: 0,
+        ra: 0,
+        sp: 0,
+        s11: 0,
+    }; THREAD_STEP_VM_TRACE_CAP];
+static mut THREAD_STEP_TRACE_BY_VM_NEXT: u32 = 0;
+static mut THREAD_STEP_TRACE_RING: [ThreadStepTraceSummary; THREAD_STEP_TRACE_CAP] =
+    [ThreadStepTraceSummary {
+        vm_ptr: 0,
+        tid: 0,
+        status: 0,
+        budget: 0,
+        remaining: 0,
+        pc: 0,
+        ra: 0,
+        sp: 0,
+        s11: 0,
+    }; THREAD_STEP_TRACE_CAP];
+static mut THREAD_STEP_TRACE_LEN: u32 = 0;
+static mut THREAD_STEP_TRACE_NEXT: u32 = 0;
+static mut THREAD_STEP_ENTRY_TRACE_BY_VM: [ThreadStepEntryTraceSummary; THREAD_STEP_VM_TRACE_CAP] =
+    [ThreadStepEntryTraceSummary {
+        vm_ptr: 0,
+        tid: 0,
+        status: 0,
+        budget: 0,
+        pc: 0,
+        ra: 0,
+        sp: 0,
+        s11: 0,
+    }; THREAD_STEP_VM_TRACE_CAP];
+static mut THREAD_STEP_ENTRY_TRACE_BY_VM_NEXT: u32 = 0;
+static mut THREAD_STEP_ENTRY_TRACE_RING: [ThreadStepEntryTraceSummary; THREAD_STEP_TRACE_CAP] =
+    [ThreadStepEntryTraceSummary {
+        vm_ptr: 0,
+        tid: 0,
+        status: 0,
+        budget: 0,
+        pc: 0,
+        ra: 0,
+        sp: 0,
+        s11: 0,
+    }; THREAD_STEP_TRACE_CAP];
+static mut THREAD_STEP_ENTRY_TRACE_LEN: u32 = 0;
+static mut THREAD_STEP_ENTRY_TRACE_NEXT: u32 = 0;
+static mut THREAD_STEP_PHASE_BY_VM: [ThreadStepPhaseSummary; THREAD_STEP_VM_TRACE_CAP] =
+    [ThreadStepPhaseSummary {
+        vm_ptr: 0,
+        tid: 0,
+        phase: 0,
+        status: 0,
+        budget: 0,
+        remaining: 0,
+        pc: 0,
+        ra: 0,
+        sp: 0,
+        s11: 0,
+    }; THREAD_STEP_VM_TRACE_CAP];
+static mut THREAD_STEP_PHASE_BY_VM_NEXT: u32 = 0;
+
+static mut LAST_FAULT_DISPATCH_TRACE: FaultDispatchTraceSummary = FaultDispatchTraceSummary {
+    vm_ptr: 0,
+    tid: 0,
+    phase: 0,
+    pc: 0,
+    ra: 0,
+    sp: 0,
+    s11: 0,
+    fault_addr: 0,
+};
+
+static mut LAST_SYNC_SIGNAL_TRACE: SyncSignalTraceSummary = SyncSignalTraceSummary {
+    vm_ptr: 0,
+    tid: 0,
+    local_pc: 0,
+    local_ra: 0,
+    local_sp: 0,
+    local_s11: 0,
+    local_a0: 0,
+    vm_pc: 0,
+    vm_ra: 0,
+    vm_sp: 0,
+    vm_s11: 0,
+    vm_a0: 0,
+    fault_addr: 0,
+    sig_pending: 0,
+    sig_mask: 0,
+    sig_info_code: 0,
+};
+
+static mut LAST_FUTEX_RESUME_TRACE: FutexResumeTraceSummary = FutexResumeTraceSummary {
+    vm_ptr: 0,
+    tid: 0,
+    phase: 0,
+    status: 0,
+    pc: 0,
+    ra: 0,
+    sp: 0,
+    s11: 0,
+    a0: 0,
+    sig_pending: 0,
+    sig_mask: 0,
+};
+static mut FUTEX_RESUME_TRACE_BY_VM: [FutexResumeTraceSummary; THREAD_STEP_VM_TRACE_CAP] =
+    [FutexResumeTraceSummary {
+        vm_ptr: 0,
+        tid: 0,
+        phase: 0,
+        status: 0,
+        pc: 0,
+        ra: 0,
+        sp: 0,
+        s11: 0,
+        a0: 0,
+        sig_pending: 0,
+        sig_mask: 0,
+    }; THREAD_STEP_VM_TRACE_CAP];
+static mut FUTEX_RESUME_TRACE_BY_VM_NEXT: u32 = 0;
+
+fn current_exec_trace_epoch_for_vm(vm_ptr: u32) -> u32 {
+    if vm_ptr == 0 {
+        return 0;
+    }
+    unsafe {
+        for offset in 0..THREAD_STEP_VM_TRACE_CAP {
+            let index = THREAD_STEP_VM_TRACE_CAP - 1 - offset;
+            let entry = EXEC_TRACE_EPOCH_BY_VM[index];
+            if entry.0 == vm_ptr {
+                return entry.1;
+            }
+        }
+    }
+    0
+}
+
+fn bump_exec_trace_epoch_for_vm(vm_ptr: u32) -> u32 {
+    if vm_ptr == 0 {
+        return 0;
+    }
+    unsafe {
+        let next_epoch = current_exec_trace_epoch_for_vm(vm_ptr).wrapping_add(1).max(1);
+        let slot = (EXEC_TRACE_EPOCH_BY_VM_NEXT as usize) % THREAD_STEP_VM_TRACE_CAP;
+        EXEC_TRACE_EPOCH_BY_VM[slot] = (vm_ptr, next_epoch);
+        EXEC_TRACE_EPOCH_BY_VM_NEXT = EXEC_TRACE_EPOCH_BY_VM_NEXT.wrapping_add(1);
+        next_epoch
+    }
+}
+
+fn snapshot_fault_exec_trace_for_vm(vm_ptr: u32, epoch: u32) {
+    unsafe {
+        LAST_FAULT_EXEC_TRACE_VM_PTR = vm_ptr;
+        LAST_FAULT_EXEC_TRACE_EPOCH = epoch;
+        LAST_FAULT_EXEC_TRACE_LEN = 0;
+        if vm_ptr == 0 || epoch == 0 {
+            return;
+        }
+        let len = core::ptr::read(core::ptr::addr_of!(EXEC_TRACE_RING_LEN)) as usize;
+        if len == 0 {
+            return;
+        }
+        let next = core::ptr::read(core::ptr::addr_of!(EXEC_TRACE_RING_NEXT)) as usize;
+        let start = len.saturating_sub(FAULT_EXEC_TRACE_CAP);
+        let mut out = 0usize;
+        for logical in start..len {
+            let slot = if len < CPU_EXEC_TRACE_CAP {
+                logical
+            } else {
+                (next + logical) % CPU_EXEC_TRACE_CAP
+            };
+            let entry = core::ptr::read(core::ptr::addr_of!(EXEC_TRACE_RING[slot]));
+            if entry.vm_ptr != vm_ptr || entry.epoch != epoch {
+                continue;
+            }
+            LAST_FAULT_EXEC_TRACE[out] = entry;
+            out += 1;
+            if out >= FAULT_EXEC_TRACE_CAP {
+                break;
+            }
+        }
+        LAST_FAULT_EXEC_TRACE_LEN = out as u32;
+    }
+}
+
+fn snapshot_sync_fault_exec_trace_for_vm(vm_ptr: u32, epoch: u32) {
+    unsafe {
+        LAST_SYNC_FAULT_EXEC_TRACE_VM_PTR = vm_ptr;
+        LAST_SYNC_FAULT_EXEC_TRACE_EPOCH = epoch;
+        LAST_SYNC_FAULT_EXEC_TRACE_LEN = 0;
+        if vm_ptr == 0 {
+            return;
+        }
+        let len = EXEC_TRACE_RING_LEN as usize;
+        if len == 0 {
+            return;
+        }
+        let next = EXEC_TRACE_RING_NEXT as usize;
+        let mut out = 0usize;
+        let start = len.saturating_sub(FAULT_EXEC_TRACE_CAP);
+        for index in start..len {
+            let slot = if len < CPU_EXEC_TRACE_CAP {
+                index
+            } else {
+                (next + index) % CPU_EXEC_TRACE_CAP
+            };
+            let entry = EXEC_TRACE_RING[slot];
+            if entry.vm_ptr != vm_ptr || entry.epoch != epoch {
+                continue;
+            }
+            LAST_SYNC_FAULT_EXEC_TRACE[out] = entry;
+            out += 1;
+            if out >= FAULT_EXEC_TRACE_CAP {
+                break;
+            }
+        }
+        LAST_SYNC_FAULT_EXEC_TRACE_LEN = out as u32;
+    }
+}
+
+fn snapshot_thread_step_exec_trace_for_vm(vm_ptr: u32, epoch: u32) {
+    unsafe {
+        LAST_THREAD_STEP_EXEC_TRACE_VM_PTR = vm_ptr;
+        LAST_THREAD_STEP_EXEC_TRACE_EPOCH = epoch;
+        LAST_THREAD_STEP_EXEC_TRACE_LEN = 0;
+        if vm_ptr == 0 || epoch == 0 {
+            return;
+        }
+        let len = core::ptr::read(core::ptr::addr_of!(EXEC_TRACE_RING_LEN)) as usize;
+        if len == 0 {
+            return;
+        }
+        let next = core::ptr::read(core::ptr::addr_of!(EXEC_TRACE_RING_NEXT)) as usize;
+        let start = len.saturating_sub(FAULT_EXEC_TRACE_CAP);
+        let mut out = 0usize;
+        for logical in start..len {
+            let slot = if len < CPU_EXEC_TRACE_CAP {
+                logical
+            } else {
+                (next + logical) % CPU_EXEC_TRACE_CAP
+            };
+            let entry = core::ptr::read(core::ptr::addr_of!(EXEC_TRACE_RING[slot]));
+            if entry.vm_ptr != vm_ptr || entry.epoch != epoch {
+                continue;
+            }
+            LAST_THREAD_STEP_EXEC_TRACE[out] = entry;
+            out += 1;
+            if out >= FAULT_EXEC_TRACE_CAP {
+                break;
+            }
+        }
+        LAST_THREAD_STEP_EXEC_TRACE_LEN = out as u32;
+    }
+}
+
+fn snapshot_break_exec_trace_for_vm(vm_ptr: u32, epoch: u32) {
+    unsafe {
+        LAST_BREAK_EXEC_TRACE_VM_PTR = vm_ptr;
+        LAST_BREAK_EXEC_TRACE_EPOCH = epoch;
+        LAST_BREAK_EXEC_TRACE_LEN = 0;
+        if vm_ptr == 0 || epoch == 0 {
+            return;
+        }
+        let len = core::ptr::read(core::ptr::addr_of!(EXEC_TRACE_RING_LEN)) as usize;
+        if len == 0 {
+            return;
+        }
+        let next = core::ptr::read(core::ptr::addr_of!(EXEC_TRACE_RING_NEXT)) as usize;
+        let start = len.saturating_sub(FAULT_EXEC_TRACE_CAP);
+        let mut out = 0usize;
+        for logical in start..len {
+            let slot = if len < CPU_EXEC_TRACE_CAP {
+                logical
+            } else {
+                (next + logical) % CPU_EXEC_TRACE_CAP
+            };
+            let entry = core::ptr::read(core::ptr::addr_of!(EXEC_TRACE_RING[slot]));
+            if entry.vm_ptr != vm_ptr || entry.epoch != epoch {
+                continue;
+            }
+            LAST_BREAK_EXEC_TRACE[out] = entry;
+            out += 1;
+            if out >= FAULT_EXEC_TRACE_CAP {
+                break;
+            }
+        }
+        LAST_BREAK_EXEC_TRACE_LEN = out as u32;
+    }
+}
+
+pub fn record_exec_trace(vm_ptr: u32, tid: i32, pc: u64, raw: u32, step: u64, x: &[u64; 32]) {
     if !RUNTIME_DEBUG_ENABLED {
-        let _ = (pc, raw, step, x);
+        let _ = (vm_ptr, tid, pc, raw, step, x);
         return;
     }
     unsafe {
@@ -1158,6 +2284,9 @@ pub fn record_exec_trace(pc: u64, raw: u32, step: u64, x: &[u64; 32]) {
         core::ptr::write(
             core::ptr::addr_of_mut!(EXEC_TRACE_RING[slot]),
             ExecTraceEntry {
+                vm_ptr,
+                epoch: current_exec_trace_epoch_for_vm(vm_ptr),
+                tid,
                 pc,
                 raw,
                 step: step as u32,
@@ -1177,31 +2306,841 @@ pub fn record_exec_trace(pc: u64, raw: u32, step: u64, x: &[u64; 32]) {
             core::ptr::addr_of_mut!(EXEC_TRACE_RING_NEXT),
             next.wrapping_add(1),
         );
-    }
-}
-
-pub fn record_jalr(pc: u64, rd: usize, rs1: usize, rs1_value: u64, target: u64) {
-    if !RUNTIME_DEBUG_ENABLED {
-        let _ = (pc, rd, rs1, rs1_value, target);
-        return;
-    }
-    if rs1 == 1 || target < 0x1000 {
-        unsafe {
+        let clone_pc = crate::syscall::thread::last_clone_spawn().1;
+        if clone_pc != 0 && pc >= clone_pc && pc <= clone_pc.saturating_add(0x40) {
+            let clone_index = (CLONE_STARTUP_TRACE_NEXT as usize) % CLONE_STARTUP_TRACE_CAP;
             core::ptr::write(
-                core::ptr::addr_of_mut!(LAST_JALR_TRACE),
-                JalrTraceSummary {
+                core::ptr::addr_of_mut!(CLONE_STARTUP_TRACE_RING[clone_index]),
+                CloneStartupTraceEntry {
+                    vm_ptr,
+                    tid,
                     pc,
-                    rs1_value,
-                    target,
-                    rd: rd as u32,
-                    rs1: rs1 as u32,
+                    raw,
+                    a0: x[10],
+                    t1: x[6],
+                    t2: x[7],
+                    sp: x[2],
+                    s11: x[27],
                 },
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!(CLONE_STARTUP_TRACE_NEXT),
+                ((clone_index + 1) % CLONE_STARTUP_TRACE_CAP) as u32,
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!(CLONE_STARTUP_TRACE_LEN),
+                core::ptr::read(core::ptr::addr_of!(CLONE_STARTUP_TRACE_LEN))
+                    .saturating_add(1)
+                    .min(CLONE_STARTUP_TRACE_CAP as u32),
             );
         }
     }
 }
 
+pub fn record_thread_step_trace(vm: &crate::types::ThreadState, budget: i32, remaining: i32) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (vm, budget, remaining);
+        return;
+    }
+    let summary = ThreadStepTraceSummary {
+        vm_ptr: vm as *const crate::types::ThreadState as u32,
+        tid: vm.tid,
+        status: vm.status,
+        budget,
+        remaining,
+        pc: vm.pc,
+        ra: vm.x[1],
+        sp: vm.x[2],
+        s11: vm.x[27],
+    };
+    unsafe {
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_THREAD_STEP_TRACE), summary);
+        record_thread_step_trace_by_vm(summary);
+        let next = core::ptr::read(core::ptr::addr_of!(THREAD_STEP_TRACE_NEXT)) as usize;
+        core::ptr::write(core::ptr::addr_of_mut!(THREAD_STEP_TRACE_RING[next]), summary);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(THREAD_STEP_TRACE_NEXT),
+            ((next + 1) % THREAD_STEP_TRACE_CAP) as u32,
+        );
+        let len = core::ptr::read(core::ptr::addr_of!(THREAD_STEP_TRACE_LEN));
+        if len < THREAD_STEP_TRACE_CAP as u32 {
+            core::ptr::write(core::ptr::addr_of_mut!(THREAD_STEP_TRACE_LEN), len + 1);
+        }
+        let epoch = current_exec_trace_epoch_for_vm(summary.vm_ptr);
+        snapshot_thread_step_exec_trace_for_vm(summary.vm_ptr, epoch);
+        if summary.pc < 0x1000 || summary.sp == 0 || summary.s11 == 0 {
+            snapshot_break_exec_trace_for_vm(summary.vm_ptr, epoch);
+        }
+    }
+}
+
+pub fn record_thread_step_entry_trace(vm: &crate::types::ThreadState, budget: i32) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (vm, budget);
+        return;
+    }
+    let summary = ThreadStepEntryTraceSummary {
+        vm_ptr: vm as *const crate::types::ThreadState as u32,
+        tid: vm.tid,
+        status: vm.status,
+        budget,
+        pc: vm.pc,
+        ra: vm.x[1],
+        sp: vm.x[2],
+        s11: vm.x[27],
+    };
+    unsafe {
+        bump_exec_trace_epoch_for_vm(summary.vm_ptr);
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_THREAD_STEP_ENTRY_TRACE), summary);
+        record_thread_step_entry_trace_by_vm(summary);
+        let next = core::ptr::read(core::ptr::addr_of!(THREAD_STEP_ENTRY_TRACE_NEXT)) as usize;
+        core::ptr::write(core::ptr::addr_of_mut!(THREAD_STEP_ENTRY_TRACE_RING[next]), summary);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(THREAD_STEP_ENTRY_TRACE_NEXT),
+            ((next + 1) % THREAD_STEP_TRACE_CAP) as u32,
+        );
+        let len = core::ptr::read(core::ptr::addr_of!(THREAD_STEP_ENTRY_TRACE_LEN));
+        if len < THREAD_STEP_TRACE_CAP as u32 {
+            core::ptr::write(core::ptr::addr_of_mut!(THREAD_STEP_ENTRY_TRACE_LEN), len + 1);
+        }
+    }
+}
+
+pub fn record_thread_step_phase(
+    vm: &crate::types::ThreadState,
+    phase: u32,
+    budget: i32,
+    remaining: i32,
+) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (vm, phase, budget, remaining);
+        return;
+    }
+    let summary = ThreadStepPhaseSummary {
+        vm_ptr: vm as *const crate::types::ThreadState as u32,
+        tid: vm.tid,
+        phase,
+        status: vm.status,
+        budget,
+        remaining,
+        pc: vm.pc,
+        ra: vm.x[1],
+        sp: vm.x[2],
+        s11: vm.x[27],
+    };
+    unsafe {
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_THREAD_STEP_PHASE), summary);
+        record_thread_step_phase_by_vm(summary);
+    }
+}
+
+unsafe fn record_thread_step_trace_by_vm(summary: ThreadStepTraceSummary) {
+    if summary.vm_ptr == 0 {
+        return;
+    }
+    for index in 0..THREAD_STEP_VM_TRACE_CAP {
+        if unsafe { THREAD_STEP_TRACE_BY_VM[index].vm_ptr } == summary.vm_ptr {
+            unsafe {
+                THREAD_STEP_TRACE_BY_VM[index] = summary;
+            }
+            return;
+        }
+    }
+    let next = unsafe { THREAD_STEP_TRACE_BY_VM_NEXT as usize % THREAD_STEP_VM_TRACE_CAP };
+    unsafe {
+        THREAD_STEP_TRACE_BY_VM[next] = summary;
+        THREAD_STEP_TRACE_BY_VM_NEXT = ((next + 1) % THREAD_STEP_VM_TRACE_CAP) as u32;
+    }
+}
+
+unsafe fn record_thread_step_phase_by_vm(summary: ThreadStepPhaseSummary) {
+    if summary.vm_ptr == 0 {
+        return;
+    }
+    for index in 0..THREAD_STEP_VM_TRACE_CAP {
+        if unsafe { THREAD_STEP_PHASE_BY_VM[index].vm_ptr } == summary.vm_ptr {
+            unsafe {
+                THREAD_STEP_PHASE_BY_VM[index] = summary;
+            }
+            return;
+        }
+    }
+    let next = unsafe { THREAD_STEP_PHASE_BY_VM_NEXT as usize % THREAD_STEP_VM_TRACE_CAP };
+    unsafe {
+        THREAD_STEP_PHASE_BY_VM[next] = summary;
+        THREAD_STEP_PHASE_BY_VM_NEXT = ((next + 1) % THREAD_STEP_VM_TRACE_CAP) as u32;
+    }
+}
+
+unsafe fn record_thread_step_entry_trace_by_vm(summary: ThreadStepEntryTraceSummary) {
+    if summary.vm_ptr == 0 {
+        return;
+    }
+    for index in 0..THREAD_STEP_VM_TRACE_CAP {
+        if unsafe { THREAD_STEP_ENTRY_TRACE_BY_VM[index].vm_ptr } == summary.vm_ptr {
+            unsafe {
+                THREAD_STEP_ENTRY_TRACE_BY_VM[index] = summary;
+            }
+            return;
+        }
+    }
+    let next = unsafe { THREAD_STEP_ENTRY_TRACE_BY_VM_NEXT as usize % THREAD_STEP_VM_TRACE_CAP };
+    unsafe {
+        THREAD_STEP_ENTRY_TRACE_BY_VM[next] = summary;
+        THREAD_STEP_ENTRY_TRACE_BY_VM_NEXT = ((next + 1) % THREAD_STEP_VM_TRACE_CAP) as u32;
+    }
+}
+
+pub fn record_fault_dispatch_trace(
+    vm: &crate::types::ThreadState,
+    phase: u32,
+    pc: u64,
+    ra: u64,
+    sp: u64,
+    s11: u64,
+    fault_addr: u64,
+) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (vm, phase, pc, ra, sp, s11, fault_addr);
+        return;
+    }
+    unsafe {
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_FAULT_DISPATCH_TRACE),
+            FaultDispatchTraceSummary {
+                vm_ptr: vm as *const crate::types::ThreadState as u32,
+                tid: vm.tid,
+                phase,
+                pc,
+                ra,
+                sp,
+                s11,
+                fault_addr,
+            },
+        );
+        if phase == 1 {
+            snapshot_fault_exec_trace_for_vm(
+                vm as *const crate::types::ThreadState as u32,
+                current_exec_trace_epoch_for_vm(vm as *const crate::types::ThreadState as u32),
+            );
+            snapshot_sync_fault_exec_trace_for_vm(
+                vm as *const crate::types::ThreadState as u32,
+                current_exec_trace_epoch_for_vm(vm as *const crate::types::ThreadState as u32),
+            );
+        }
+    }
+}
+
+pub fn record_sync_signal_trace(
+    vm: &crate::types::ThreadState,
+    local_pc: u64,
+    local_ra: u64,
+    local_sp: u64,
+    local_s11: u64,
+    local_a0: u64,
+    fault_addr: u64,
+) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (vm, local_pc, local_ra, local_sp, local_s11, local_a0, fault_addr);
+        return;
+    }
+    unsafe {
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_SYNC_SIGNAL_TRACE),
+            SyncSignalTraceSummary {
+                vm_ptr: vm as *const crate::types::ThreadState as u32,
+                tid: vm.tid,
+                local_pc,
+                local_ra,
+                local_sp,
+                local_s11,
+                local_a0,
+                vm_pc: vm.pc,
+                vm_ra: vm.x[1],
+                vm_sp: vm.x[2],
+                vm_s11: vm.x[27],
+                vm_a0: vm.x[10],
+                fault_addr,
+                sig_pending: vm.sig_pending,
+                sig_mask: vm.sig_mask,
+                sig_info_code: vm.sig_info_code,
+            },
+        );
+    }
+}
+
+pub fn record_futex_resume_trace(vm: &crate::types::ThreadState, phase: u32) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (vm, phase);
+        return;
+    }
+    unsafe {
+        let summary = FutexResumeTraceSummary {
+            vm_ptr: vm as *const crate::types::ThreadState as u32,
+            tid: vm.tid,
+            phase,
+            status: vm.status,
+            pc: vm.pc,
+            ra: vm.x[1],
+            sp: vm.x[2],
+            s11: vm.x[27],
+            a0: vm.x[10],
+            sig_pending: vm.sig_pending,
+            sig_mask: vm.sig_mask,
+        };
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_FUTEX_RESUME_TRACE), summary);
+        let next = FUTEX_RESUME_TRACE_BY_VM_NEXT as usize % THREAD_STEP_VM_TRACE_CAP;
+        FUTEX_RESUME_TRACE_BY_VM[next] = summary;
+        FUTEX_RESUME_TRACE_BY_VM_NEXT = ((next + 1) % THREAD_STEP_VM_TRACE_CAP) as u32;
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn exec_trace_len() -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(EXEC_TRACE_RING_LEN)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn exec_trace_entry(index: u32) -> ExecTraceEntry {
+    if !RUNTIME_DEBUG_ENABLED {
+        return ExecTraceEntry {
+            vm_ptr: 0,
+            epoch: 0,
+            tid: 0,
+            pc: 0,
+            raw: 0,
+            step: 0,
+            sp: 0,
+            ra: 0,
+            a0: 0,
+            s11: 0,
+        };
+    }
+    unsafe {
+        let len = core::ptr::read(core::ptr::addr_of!(EXEC_TRACE_RING_LEN));
+        if index >= len {
+            return ExecTraceEntry {
+                vm_ptr: 0,
+                epoch: 0,
+                tid: 0,
+                pc: 0,
+                raw: 0,
+                step: 0,
+                sp: 0,
+                ra: 0,
+                a0: 0,
+                s11: 0,
+            };
+        }
+        let next = core::ptr::read(core::ptr::addr_of!(EXEC_TRACE_RING_NEXT)) as usize;
+        let len_usize = len as usize;
+        let slot = if len_usize < CPU_EXEC_TRACE_CAP {
+            index as usize
+        } else {
+            (next + index as usize) % CPU_EXEC_TRACE_CAP
+        };
+        core::ptr::read(core::ptr::addr_of!(EXEC_TRACE_RING[slot]))
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn exec_trace_epoch_for_vm(vm_ptr: u32) -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    current_exec_trace_epoch_for_vm(vm_ptr)
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn fault_exec_trace_len_for_vm(vm_ptr: u32) -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe {
+        if LAST_FAULT_EXEC_TRACE_VM_PTR == vm_ptr {
+            LAST_FAULT_EXEC_TRACE_LEN
+        } else {
+            0
+        }
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn fault_exec_trace_entry_for_vm(vm_ptr: u32, index: u32) -> ExecTraceEntry {
+    if !RUNTIME_DEBUG_ENABLED {
+        return ExecTraceEntry {
+            vm_ptr: 0,
+            epoch: 0,
+            tid: 0,
+            pc: 0,
+            raw: 0,
+            step: 0,
+            sp: 0,
+            ra: 0,
+            a0: 0,
+            s11: 0,
+        };
+    }
+    unsafe {
+        if LAST_FAULT_EXEC_TRACE_VM_PTR != vm_ptr || index >= LAST_FAULT_EXEC_TRACE_LEN {
+            return ExecTraceEntry {
+                vm_ptr: 0,
+                epoch: 0,
+                tid: 0,
+                pc: 0,
+                raw: 0,
+                step: 0,
+                sp: 0,
+                ra: 0,
+                a0: 0,
+                s11: 0,
+            };
+        }
+        LAST_FAULT_EXEC_TRACE[index as usize]
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn thread_step_exec_trace_len_for_vm(vm_ptr: u32) -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe {
+        if LAST_THREAD_STEP_EXEC_TRACE_VM_PTR == vm_ptr {
+            LAST_THREAD_STEP_EXEC_TRACE_LEN
+        } else {
+            0
+        }
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn thread_step_exec_trace_entry_for_vm(vm_ptr: u32, index: u32) -> ExecTraceEntry {
+    if !RUNTIME_DEBUG_ENABLED {
+        return ExecTraceEntry {
+            vm_ptr: 0,
+            epoch: 0,
+            tid: 0,
+            pc: 0,
+            raw: 0,
+            step: 0,
+            sp: 0,
+            ra: 0,
+            a0: 0,
+            s11: 0,
+        };
+    }
+    unsafe {
+        if LAST_THREAD_STEP_EXEC_TRACE_VM_PTR != vm_ptr || index >= LAST_THREAD_STEP_EXEC_TRACE_LEN {
+            return ExecTraceEntry {
+                vm_ptr: 0,
+                epoch: 0,
+                tid: 0,
+                pc: 0,
+                raw: 0,
+                step: 0,
+                sp: 0,
+                ra: 0,
+                a0: 0,
+                s11: 0,
+            };
+        }
+        LAST_THREAD_STEP_EXEC_TRACE[index as usize]
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn break_exec_trace_len_for_vm(vm_ptr: u32) -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe {
+        if LAST_BREAK_EXEC_TRACE_VM_PTR == vm_ptr {
+            LAST_BREAK_EXEC_TRACE_LEN
+        } else {
+            0
+        }
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn break_exec_trace_entry_for_vm(vm_ptr: u32, index: u32) -> ExecTraceEntry {
+    if !RUNTIME_DEBUG_ENABLED {
+        return ExecTraceEntry {
+            vm_ptr: 0,
+            epoch: 0,
+            tid: 0,
+            pc: 0,
+            raw: 0,
+            step: 0,
+            sp: 0,
+            ra: 0,
+            a0: 0,
+            s11: 0,
+        };
+    }
+    unsafe {
+        if LAST_BREAK_EXEC_TRACE_VM_PTR != vm_ptr || index >= LAST_BREAK_EXEC_TRACE_LEN {
+            return ExecTraceEntry {
+                vm_ptr: 0,
+                epoch: 0,
+                tid: 0,
+                pc: 0,
+                raw: 0,
+                step: 0,
+                sp: 0,
+                ra: 0,
+                a0: 0,
+                s11: 0,
+            };
+        }
+        LAST_BREAK_EXEC_TRACE[index as usize]
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn sync_fault_exec_trace_len_for_vm(vm_ptr: u32) -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe {
+        if LAST_SYNC_FAULT_EXEC_TRACE_VM_PTR == vm_ptr {
+            LAST_SYNC_FAULT_EXEC_TRACE_LEN
+        } else {
+            0
+        }
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn sync_fault_exec_trace_entry_for_vm(vm_ptr: u32, index: u32) -> ExecTraceEntry {
+    if !RUNTIME_DEBUG_ENABLED {
+        return ExecTraceEntry {
+            vm_ptr: 0,
+            epoch: 0,
+            tid: 0,
+            pc: 0,
+            raw: 0,
+            step: 0,
+            sp: 0,
+            ra: 0,
+            a0: 0,
+            s11: 0,
+        };
+    }
+    unsafe {
+        if LAST_SYNC_FAULT_EXEC_TRACE_VM_PTR != vm_ptr || index >= LAST_SYNC_FAULT_EXEC_TRACE_LEN {
+            return ExecTraceEntry {
+                vm_ptr: 0,
+                epoch: 0,
+                tid: 0,
+                pc: 0,
+                raw: 0,
+                step: 0,
+                sp: 0,
+                ra: 0,
+                a0: 0,
+                s11: 0,
+            };
+        }
+        LAST_SYNC_FAULT_EXEC_TRACE[index as usize]
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn thread_step_trace_len() -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(THREAD_STEP_TRACE_LEN)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn clone_startup_trace_len() -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(CLONE_STARTUP_TRACE_LEN)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn clone_startup_trace_entry(index: u32) -> CloneStartupTraceEntry {
+    if !RUNTIME_DEBUG_ENABLED {
+        return CloneStartupTraceEntry {
+            vm_ptr: 0,
+            tid: 0,
+            pc: 0,
+            raw: 0,
+            a0: 0,
+            t1: 0,
+            t2: 0,
+            sp: 0,
+            s11: 0,
+        };
+    }
+    unsafe {
+        let len = core::ptr::read(core::ptr::addr_of!(CLONE_STARTUP_TRACE_LEN));
+        if index >= len {
+            return CloneStartupTraceEntry {
+                vm_ptr: 0,
+                tid: 0,
+                pc: 0,
+                raw: 0,
+                a0: 0,
+                t1: 0,
+                t2: 0,
+                sp: 0,
+                s11: 0,
+            };
+        }
+        let next = core::ptr::read(core::ptr::addr_of!(CLONE_STARTUP_TRACE_NEXT)) as usize;
+        let slot = if len < CLONE_STARTUP_TRACE_CAP as u32 {
+            index as usize
+        } else {
+            (next + index as usize) % CLONE_STARTUP_TRACE_CAP
+        };
+        core::ptr::read(core::ptr::addr_of!(CLONE_STARTUP_TRACE_RING[slot]))
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn thread_step_entry_trace_len() -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(THREAD_STEP_ENTRY_TRACE_LEN)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn thread_step_trace_entry(index: u32) -> ThreadStepTraceSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        return ThreadStepTraceSummary {
+            vm_ptr: 0,
+            tid: 0,
+            status: 0,
+            budget: 0,
+            remaining: 0,
+            pc: 0,
+            ra: 0,
+            sp: 0,
+            s11: 0,
+        };
+    }
+    unsafe {
+        let len = core::ptr::read(core::ptr::addr_of!(THREAD_STEP_TRACE_LEN));
+        if index >= len {
+            return ThreadStepTraceSummary {
+                vm_ptr: 0,
+                tid: 0,
+                status: 0,
+                budget: 0,
+                remaining: 0,
+                pc: 0,
+                ra: 0,
+                sp: 0,
+                s11: 0,
+            };
+        }
+        let next = core::ptr::read(core::ptr::addr_of!(THREAD_STEP_TRACE_NEXT)) as usize;
+        let slot = if len < THREAD_STEP_TRACE_CAP as u32 {
+            index as usize
+        } else {
+            (next + index as usize) % THREAD_STEP_TRACE_CAP
+        };
+        core::ptr::read(core::ptr::addr_of!(THREAD_STEP_TRACE_RING[slot]))
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn thread_step_entry_trace_entry(index: u32) -> ThreadStepEntryTraceSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        return ThreadStepEntryTraceSummary {
+            vm_ptr: 0,
+            tid: 0,
+            status: 0,
+            budget: 0,
+            pc: 0,
+            ra: 0,
+            sp: 0,
+            s11: 0,
+        };
+    }
+    unsafe {
+        let len = core::ptr::read(core::ptr::addr_of!(THREAD_STEP_ENTRY_TRACE_LEN));
+        if index >= len {
+            return ThreadStepEntryTraceSummary {
+                vm_ptr: 0,
+                tid: 0,
+                status: 0,
+                budget: 0,
+                pc: 0,
+                ra: 0,
+                sp: 0,
+                s11: 0,
+            };
+        }
+        let next = core::ptr::read(core::ptr::addr_of!(THREAD_STEP_ENTRY_TRACE_NEXT)) as usize;
+        let slot = if len < THREAD_STEP_TRACE_CAP as u32 {
+            index as usize
+        } else {
+            (next + index as usize) % THREAD_STEP_TRACE_CAP
+        };
+        core::ptr::read(core::ptr::addr_of!(THREAD_STEP_ENTRY_TRACE_RING[slot]))
+    }
+}
+
+pub fn record_jalr(vm_ptr: u32, pc: u64, rd: usize, rs1: usize, rs1_value: u64, target: u64) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (vm_ptr, pc, rd, rs1, rs1_value, target);
+        return;
+    }
+    let entry = JalrTraceSummary {
+        vm_ptr,
+        pc,
+        rs1_value,
+        target,
+        rd: rd as u32,
+        rs1: rs1 as u32,
+    };
+    let clone_pc = crate::syscall::thread::last_clone_spawn().1;
+    let capture_clone_startup = clone_pc != 0
+        && pc >= clone_pc.saturating_add(0x40)
+        && pc < clone_pc.saturating_add(0x48);
+    if capture_clone_startup {
+        unsafe {
+            core::ptr::write(core::ptr::addr_of_mut!(LAST_CLONE_JALR_TRACE), entry);
+        }
+    }
+    if rs1 == 1 || target < 0x1000 {
+        unsafe {
+            core::ptr::write(core::ptr::addr_of_mut!(LAST_JALR_TRACE), entry);
+            let idx = (JALR_TRACE_NEXT as usize) % CPU_REG_TRACE_CAP;
+            JALR_TRACE_RING[idx] = entry;
+            JALR_TRACE_NEXT = ((idx + 1) % CPU_REG_TRACE_CAP) as u32;
+            if JALR_TRACE_LEN < CPU_REG_TRACE_CAP as u32 {
+                JALR_TRACE_LEN += 1;
+            }
+        }
+    }
+}
+
+fn push_zero_reg_trace(entry: ZeroRegTraceSummary) {
+    unsafe {
+        let idx = (ZERO_REG_TRACE_NEXT as usize) % CPU_REG_TRACE_CAP;
+        ZERO_REG_TRACE_RING[idx] = entry;
+        ZERO_REG_TRACE_NEXT = ((idx + 1) % CPU_REG_TRACE_CAP) as u32;
+        if ZERO_REG_TRACE_LEN < CPU_REG_TRACE_CAP as u32 {
+            ZERO_REG_TRACE_LEN += 1;
+        }
+    }
+}
+
+fn push_reg_write_trace(
+    ring: *mut [RegWriteTraceSummary; CPU_REG_TRACE_CAP],
+    next_ptr: *mut u32,
+    len_ptr: *mut u32,
+    entry: RegWriteTraceSummary,
+) {
+    unsafe {
+        let idx = (*next_ptr as usize) % CPU_REG_TRACE_CAP;
+        (*ring)[idx] = entry;
+        *next_ptr = ((idx + 1) % CPU_REG_TRACE_CAP) as u32;
+        if *len_ptr < CPU_REG_TRACE_CAP as u32 {
+            *len_ptr += 1;
+        }
+    }
+}
+
+fn latest_zero_reg_trace_for_vm(vm_ptr: u32) -> ZeroRegTraceSummary {
+    if vm_ptr == 0 {
+        return ZeroRegTraceSummary {
+            vm_ptr: 0,
+            tid: 0,
+            pc: 0,
+            raw: 0,
+            reg: 0,
+            prev_value: 0,
+            sp: 0,
+            s11: 0,
+        };
+    }
+    unsafe {
+        let len = ZERO_REG_TRACE_LEN.min(CPU_REG_TRACE_CAP as u32) as usize;
+        let next = ZERO_REG_TRACE_NEXT as usize % CPU_REG_TRACE_CAP;
+        for offset in 0..len {
+            let idx = if len < CPU_REG_TRACE_CAP {
+                len - 1 - offset
+            } else {
+                (next + CPU_REG_TRACE_CAP - 1 - offset) % CPU_REG_TRACE_CAP
+            };
+            let entry = ZERO_REG_TRACE_RING[idx];
+            if entry.vm_ptr == vm_ptr {
+                return entry;
+            }
+        }
+    }
+    ZeroRegTraceSummary {
+        vm_ptr: 0,
+        tid: 0,
+        pc: 0,
+        raw: 0,
+        reg: 0,
+        prev_value: 0,
+        sp: 0,
+        s11: 0,
+    }
+}
+
+fn latest_reg_write_trace_for_vm(
+    ring: *const [RegWriteTraceSummary; CPU_REG_TRACE_CAP],
+    len: u32,
+    next: u32,
+    vm_ptr: u32,
+) -> RegWriteTraceSummary {
+    if vm_ptr == 0 {
+        return RegWriteTraceSummary {
+            vm_ptr: 0,
+            tid: 0,
+            pc: 0,
+            raw: 0,
+            source: 0,
+            prev_value: 0,
+            value: 0,
+            rs1: 0,
+            rs1_value: 0,
+        };
+    }
+    let len = len.min(CPU_REG_TRACE_CAP as u32) as usize;
+    let next = next as usize % CPU_REG_TRACE_CAP;
+    for offset in 0..len {
+        let idx = if len < CPU_REG_TRACE_CAP {
+            len - 1 - offset
+        } else {
+            (next + CPU_REG_TRACE_CAP - 1 - offset) % CPU_REG_TRACE_CAP
+        };
+        let entry = unsafe { (*ring)[idx] };
+        if entry.vm_ptr == vm_ptr {
+            return entry;
+        }
+    }
+    RegWriteTraceSummary {
+        vm_ptr: 0,
+        tid: 0,
+        pc: 0,
+        raw: 0,
+        source: 0,
+        prev_value: 0,
+        value: 0,
+        rs1: 0,
+        rs1_value: 0,
+    }
+}
+
 pub fn record_zero_reg_transition(
+    vm_ptr: u32,
     tid: i32,
     pc: u64,
     raw: u32,
@@ -1210,44 +3149,53 @@ pub fn record_zero_reg_transition(
     x: &[u64; 32],
 ) {
     if !RUNTIME_DEBUG_ENABLED {
-        let _ = (tid, pc, raw, prev_sp, prev_s11, x);
+        let _ = (vm_ptr, tid, pc, raw, prev_sp, prev_s11, x);
         return;
     }
     unsafe {
         if prev_s11 != 0 && x[27] == 0 {
+            let entry = ZeroRegTraceSummary {
+                vm_ptr,
+                tid,
+                pc,
+                raw,
+                reg: 27,
+                prev_value: prev_s11,
+                sp: x[2],
+                s11: x[27],
+            };
             core::ptr::write(
                 core::ptr::addr_of_mut!(LAST_ZERO_REG_TRACE),
-                ZeroRegTraceSummary {
-                    tid,
-                    pc,
-                    raw,
-                    reg: 27,
-                    prev_value: prev_s11,
-                    sp: x[2],
-                    s11: x[27],
-                },
+                entry,
             );
+            push_zero_reg_trace(entry);
+            snapshot_break_exec_trace_for_vm(vm_ptr, current_exec_trace_epoch_for_vm(vm_ptr));
             return;
         }
         if prev_sp != 0 && x[2] == 0 {
+            let entry = ZeroRegTraceSummary {
+                vm_ptr,
+                tid,
+                pc,
+                raw,
+                reg: 2,
+                prev_value: prev_sp,
+                sp: x[2],
+                s11: x[27],
+            };
             core::ptr::write(
                 core::ptr::addr_of_mut!(LAST_ZERO_REG_TRACE),
-                ZeroRegTraceSummary {
-                    tid,
-                    pc,
-                    raw,
-                    reg: 2,
-                    prev_value: prev_sp,
-                    sp: x[2],
-                    s11: x[27],
-                },
+                entry,
             );
+            push_zero_reg_trace(entry);
+            snapshot_break_exec_trace_for_vm(vm_ptr, current_exec_trace_epoch_for_vm(vm_ptr));
         }
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 pub fn record_special_reg_transitions(
+    vm_ptr: u32,
     tid: i32,
     pc: u64,
     raw: u32,
@@ -1258,7 +3206,7 @@ pub fn record_special_reg_transitions(
     x: &[u64; 32],
 ) {
     if !RUNTIME_DEBUG_ENABLED {
-        let _ = (tid, pc, raw, source, prev_sp, prev_tp, prev_s11, x);
+        let _ = (vm_ptr, tid, pc, raw, source, prev_sp, prev_tp, prev_s11, x);
         return;
     }
     unsafe {
@@ -1269,39 +3217,56 @@ pub fn record_special_reg_transitions(
         };
         let rs1_value = if raw == 0 { 0 } else { x[rs1 as usize] };
         if prev_s11 != x[27] {
+            let entry = RegWriteTraceSummary {
+                vm_ptr,
+                tid,
+                pc,
+                raw,
+                source,
+                prev_value: prev_s11,
+                value: x[27],
+                rs1,
+                rs1_value,
+            };
             core::ptr::write(
                 core::ptr::addr_of_mut!(LAST_S11_WRITE_TRACE),
-                RegWriteTraceSummary {
-                    tid,
-                    pc,
-                    raw,
-                    source,
-                    prev_value: prev_s11,
-                    value: x[27],
-                    rs1,
-                    rs1_value,
-                },
+                entry,
+            );
+            push_reg_write_trace(
+                core::ptr::addr_of_mut!(S11_WRITE_TRACE_RING),
+                core::ptr::addr_of_mut!(S11_WRITE_TRACE_NEXT),
+                core::ptr::addr_of_mut!(S11_WRITE_TRACE_LEN),
+                entry,
             );
         }
         if prev_sp != x[2] {
+            let entry = RegWriteTraceSummary {
+                vm_ptr,
+                tid,
+                pc,
+                raw,
+                source,
+                prev_value: prev_sp,
+                value: x[2],
+                rs1,
+                rs1_value,
+            };
             core::ptr::write(
                 core::ptr::addr_of_mut!(LAST_SP_WRITE_TRACE),
-                RegWriteTraceSummary {
-                    tid,
-                    pc,
-                    raw,
-                    source,
-                    prev_value: prev_sp,
-                    value: x[2],
-                    rs1,
-                    rs1_value,
-                },
+                entry,
+            );
+            push_reg_write_trace(
+                core::ptr::addr_of_mut!(SP_WRITE_TRACE_RING),
+                core::ptr::addr_of_mut!(SP_WRITE_TRACE_NEXT),
+                core::ptr::addr_of_mut!(SP_WRITE_TRACE_LEN),
+                entry,
             );
         }
         if prev_tp != x[4] {
             core::ptr::write(
                 core::ptr::addr_of_mut!(LAST_TP_WRITE_TRACE),
                 RegWriteTraceSummary {
+                    vm_ptr,
                     tid,
                     pc,
                     raw,
@@ -1320,6 +3285,7 @@ pub fn record_special_reg_transitions(
 pub fn last_jalr_trace() -> JalrTraceSummary {
     if !RUNTIME_DEBUG_ENABLED {
         return JalrTraceSummary {
+            vm_ptr: 0,
             pc: 0,
             rs1_value: 0,
             target: 0,
@@ -1331,9 +3297,73 @@ pub fn last_jalr_trace() -> JalrTraceSummary {
 }
 
 #[cfg(any(test, feature = "harness"))]
+pub fn last_clone_jalr_trace() -> JalrTraceSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        return JalrTraceSummary {
+            vm_ptr: 0,
+            pc: 0,
+            rs1_value: 0,
+            target: 0,
+            rd: 0,
+            rs1: 0,
+        };
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(LAST_CLONE_JALR_TRACE)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn last_jalr_trace_for_vm(vm_ptr: u32) -> JalrTraceSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = vm_ptr;
+        return JalrTraceSummary {
+            vm_ptr: 0,
+            pc: 0,
+            rs1_value: 0,
+            target: 0,
+            rd: 0,
+            rs1: 0,
+        };
+    }
+    if vm_ptr == 0 {
+        return JalrTraceSummary {
+            vm_ptr: 0,
+            pc: 0,
+            rs1_value: 0,
+            target: 0,
+            rd: 0,
+            rs1: 0,
+        };
+    }
+    unsafe {
+        let len = JALR_TRACE_LEN.min(CPU_REG_TRACE_CAP as u32) as usize;
+        let next = JALR_TRACE_NEXT as usize % CPU_REG_TRACE_CAP;
+        for offset in 0..len {
+            let idx = if len < CPU_REG_TRACE_CAP {
+                len - 1 - offset
+            } else {
+                (next + CPU_REG_TRACE_CAP - 1 - offset) % CPU_REG_TRACE_CAP
+            };
+            let entry = JALR_TRACE_RING[idx];
+            if entry.vm_ptr == vm_ptr {
+                return entry;
+            }
+        }
+    }
+    JalrTraceSummary {
+        vm_ptr: 0,
+        pc: 0,
+        rs1_value: 0,
+        target: 0,
+        rd: 0,
+        rs1: 0,
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
 pub fn last_zero_reg_trace() -> ZeroRegTraceSummary {
     if !RUNTIME_DEBUG_ENABLED {
         return ZeroRegTraceSummary {
+            vm_ptr: 0,
             tid: 0,
             pc: 0,
             raw: 0,
@@ -1347,9 +3377,28 @@ pub fn last_zero_reg_trace() -> ZeroRegTraceSummary {
 }
 
 #[cfg(any(test, feature = "harness"))]
+pub fn last_zero_reg_trace_for_vm(vm_ptr: u32) -> ZeroRegTraceSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = vm_ptr;
+        return ZeroRegTraceSummary {
+            vm_ptr: 0,
+            tid: 0,
+            pc: 0,
+            raw: 0,
+            reg: 0,
+            prev_value: 0,
+            sp: 0,
+            s11: 0,
+        };
+    }
+    latest_zero_reg_trace_for_vm(vm_ptr)
+}
+
+#[cfg(any(test, feature = "harness"))]
 pub fn last_s11_write_trace() -> RegWriteTraceSummary {
     if !RUNTIME_DEBUG_ENABLED {
         return RegWriteTraceSummary {
+            vm_ptr: 0,
             tid: 0,
             pc: 0,
             raw: 0,
@@ -1364,9 +3413,36 @@ pub fn last_s11_write_trace() -> RegWriteTraceSummary {
 }
 
 #[cfg(any(test, feature = "harness"))]
+pub fn last_s11_write_trace_for_vm(vm_ptr: u32) -> RegWriteTraceSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = vm_ptr;
+        return RegWriteTraceSummary {
+            vm_ptr: 0,
+            tid: 0,
+            pc: 0,
+            raw: 0,
+            source: 0,
+            prev_value: 0,
+            value: 0,
+            rs1: 0,
+            rs1_value: 0,
+        };
+    }
+    unsafe {
+        latest_reg_write_trace_for_vm(
+            core::ptr::addr_of!(S11_WRITE_TRACE_RING),
+            S11_WRITE_TRACE_LEN,
+            S11_WRITE_TRACE_NEXT,
+            vm_ptr,
+        )
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
 pub fn last_sp_write_trace() -> RegWriteTraceSummary {
     if !RUNTIME_DEBUG_ENABLED {
         return RegWriteTraceSummary {
+            vm_ptr: 0,
             tid: 0,
             pc: 0,
             raw: 0,
@@ -1381,9 +3457,36 @@ pub fn last_sp_write_trace() -> RegWriteTraceSummary {
 }
 
 #[cfg(any(test, feature = "harness"))]
+pub fn last_sp_write_trace_for_vm(vm_ptr: u32) -> RegWriteTraceSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = vm_ptr;
+        return RegWriteTraceSummary {
+            vm_ptr: 0,
+            tid: 0,
+            pc: 0,
+            raw: 0,
+            source: 0,
+            prev_value: 0,
+            value: 0,
+            rs1: 0,
+            rs1_value: 0,
+        };
+    }
+    unsafe {
+        latest_reg_write_trace_for_vm(
+            core::ptr::addr_of!(SP_WRITE_TRACE_RING),
+            SP_WRITE_TRACE_LEN,
+            SP_WRITE_TRACE_NEXT,
+            vm_ptr,
+        )
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
 pub fn last_tp_write_trace() -> RegWriteTraceSummary {
     if !RUNTIME_DEBUG_ENABLED {
         return RegWriteTraceSummary {
+            vm_ptr: 0,
             tid: 0,
             pc: 0,
             raw: 0,
@@ -1395,4 +3498,861 @@ pub fn last_tp_write_trace() -> RegWriteTraceSummary {
         };
     }
     unsafe { core::ptr::read(core::ptr::addr_of!(LAST_TP_WRITE_TRACE)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn last_thread_step_trace() -> ThreadStepTraceSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        return ThreadStepTraceSummary {
+            vm_ptr: 0,
+            tid: 0,
+            status: 0,
+            budget: 0,
+            remaining: 0,
+            pc: 0,
+            ra: 0,
+            sp: 0,
+            s11: 0,
+        };
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(LAST_THREAD_STEP_TRACE)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn last_thread_step_trace_for_vm(vm_ptr: u32) -> ThreadStepTraceSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = vm_ptr;
+        return ThreadStepTraceSummary {
+            vm_ptr: 0,
+            tid: 0,
+            status: 0,
+            budget: 0,
+            remaining: 0,
+            pc: 0,
+            ra: 0,
+            sp: 0,
+            s11: 0,
+        };
+    }
+    unsafe {
+        for index in 0..THREAD_STEP_VM_TRACE_CAP {
+            let entry = core::ptr::read(core::ptr::addr_of!(THREAD_STEP_TRACE_BY_VM[index]));
+            if entry.vm_ptr == vm_ptr {
+                return entry;
+            }
+        }
+        let len =
+            core::ptr::read(core::ptr::addr_of!(THREAD_STEP_TRACE_LEN)).min(THREAD_STEP_TRACE_CAP as u32);
+        let next = core::ptr::read(core::ptr::addr_of!(THREAD_STEP_TRACE_NEXT)) as usize;
+        for offset in 0..len as usize {
+            let idx = (next + THREAD_STEP_TRACE_CAP - 1 - offset) % THREAD_STEP_TRACE_CAP;
+            let entry = core::ptr::read(core::ptr::addr_of!(THREAD_STEP_TRACE_RING[idx]));
+            if entry.vm_ptr == vm_ptr {
+                return entry;
+            }
+        }
+        ThreadStepTraceSummary {
+            vm_ptr: 0,
+            tid: 0,
+            status: 0,
+            budget: 0,
+            remaining: 0,
+            pc: 0,
+            ra: 0,
+            sp: 0,
+            s11: 0,
+        }
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn last_thread_step_phase() -> ThreadStepPhaseSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        return ThreadStepPhaseSummary {
+            vm_ptr: 0,
+            tid: 0,
+            phase: 0,
+            status: 0,
+            budget: 0,
+            remaining: 0,
+            pc: 0,
+            ra: 0,
+            sp: 0,
+            s11: 0,
+        };
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(LAST_THREAD_STEP_PHASE)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn last_thread_step_phase_for_vm(vm_ptr: u32) -> ThreadStepPhaseSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = vm_ptr;
+        return ThreadStepPhaseSummary {
+            vm_ptr: 0,
+            tid: 0,
+            phase: 0,
+            status: 0,
+            budget: 0,
+            remaining: 0,
+            pc: 0,
+            ra: 0,
+            sp: 0,
+            s11: 0,
+        };
+    }
+    unsafe {
+        for index in 0..THREAD_STEP_VM_TRACE_CAP {
+            let entry = core::ptr::read(core::ptr::addr_of!(THREAD_STEP_PHASE_BY_VM[index]));
+            if entry.vm_ptr == vm_ptr {
+                return entry;
+            }
+        }
+    }
+    ThreadStepPhaseSummary {
+        vm_ptr: 0,
+        tid: 0,
+        phase: 0,
+        status: 0,
+        budget: 0,
+        remaining: 0,
+        pc: 0,
+        ra: 0,
+        sp: 0,
+        s11: 0,
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn last_thread_step_entry_trace_for_vm(vm_ptr: u32) -> ThreadStepEntryTraceSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = vm_ptr;
+        return ThreadStepEntryTraceSummary {
+            vm_ptr: 0,
+            tid: 0,
+            status: 0,
+            budget: 0,
+            pc: 0,
+            ra: 0,
+            sp: 0,
+            s11: 0,
+        };
+    }
+    unsafe {
+        for index in 0..THREAD_STEP_VM_TRACE_CAP {
+            let entry = core::ptr::read(core::ptr::addr_of!(THREAD_STEP_ENTRY_TRACE_BY_VM[index]));
+            if entry.vm_ptr == vm_ptr {
+                return entry;
+            }
+        }
+        let len = core::ptr::read(core::ptr::addr_of!(THREAD_STEP_ENTRY_TRACE_LEN))
+            .min(THREAD_STEP_TRACE_CAP as u32);
+        let next = core::ptr::read(core::ptr::addr_of!(THREAD_STEP_ENTRY_TRACE_NEXT)) as usize;
+        for offset in 0..len as usize {
+            let idx = (next + THREAD_STEP_TRACE_CAP - 1 - offset) % THREAD_STEP_TRACE_CAP;
+            let entry = core::ptr::read(core::ptr::addr_of!(THREAD_STEP_ENTRY_TRACE_RING[idx]));
+            if entry.vm_ptr == vm_ptr {
+                return entry;
+            }
+        }
+        ThreadStepEntryTraceSummary {
+            vm_ptr: 0,
+            tid: 0,
+            status: 0,
+            budget: 0,
+            pc: 0,
+            ra: 0,
+            sp: 0,
+            s11: 0,
+        }
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn last_fault_dispatch_trace_for_vm(vm_ptr: u32) -> FaultDispatchTraceSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = vm_ptr;
+        return FaultDispatchTraceSummary {
+            vm_ptr: 0,
+            tid: 0,
+            phase: 0,
+            pc: 0,
+            ra: 0,
+            sp: 0,
+            s11: 0,
+            fault_addr: 0,
+        };
+    }
+    unsafe {
+        let entry = core::ptr::read(core::ptr::addr_of!(LAST_FAULT_DISPATCH_TRACE));
+        if entry.vm_ptr == vm_ptr {
+            entry
+        } else {
+            FaultDispatchTraceSummary {
+                vm_ptr: 0,
+                tid: 0,
+                phase: 0,
+                pc: 0,
+                ra: 0,
+                sp: 0,
+                s11: 0,
+                fault_addr: 0,
+            }
+        }
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn last_sync_signal_trace_for_vm(vm_ptr: u32) -> SyncSignalTraceSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = vm_ptr;
+        return SyncSignalTraceSummary {
+            vm_ptr: 0,
+            tid: 0,
+            local_pc: 0,
+            local_ra: 0,
+            local_sp: 0,
+            local_s11: 0,
+            local_a0: 0,
+            vm_pc: 0,
+            vm_ra: 0,
+            vm_sp: 0,
+            vm_s11: 0,
+            vm_a0: 0,
+            fault_addr: 0,
+            sig_pending: 0,
+            sig_mask: 0,
+            sig_info_code: 0,
+        };
+    }
+    unsafe {
+        let entry = core::ptr::read(core::ptr::addr_of!(LAST_SYNC_SIGNAL_TRACE));
+        if entry.vm_ptr == vm_ptr {
+            entry
+        } else {
+            SyncSignalTraceSummary {
+                vm_ptr: 0,
+                tid: 0,
+                local_pc: 0,
+                local_ra: 0,
+                local_sp: 0,
+                local_s11: 0,
+                local_a0: 0,
+                vm_pc: 0,
+                vm_ra: 0,
+                vm_sp: 0,
+                vm_s11: 0,
+                vm_a0: 0,
+                fault_addr: 0,
+                sig_pending: 0,
+                sig_mask: 0,
+                sig_info_code: 0,
+            }
+        }
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn last_futex_resume_trace_for_vm(vm_ptr: u32) -> FutexResumeTraceSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = vm_ptr;
+        return FutexResumeTraceSummary {
+            vm_ptr: 0,
+            tid: 0,
+            phase: 0,
+            status: 0,
+            pc: 0,
+            ra: 0,
+            sp: 0,
+            s11: 0,
+            a0: 0,
+            sig_pending: 0,
+            sig_mask: 0,
+        };
+    }
+    unsafe {
+        for index in 0..THREAD_STEP_VM_TRACE_CAP {
+            let entry = core::ptr::read(core::ptr::addr_of!(FUTEX_RESUME_TRACE_BY_VM[index]));
+            if entry.vm_ptr == vm_ptr {
+                return entry;
+            }
+        }
+        let entry = core::ptr::read(core::ptr::addr_of!(LAST_FUTEX_RESUME_TRACE));
+        if entry.vm_ptr == vm_ptr {
+            entry
+        } else {
+            FutexResumeTraceSummary {
+                vm_ptr: 0,
+                tid: 0,
+                phase: 0,
+                status: 0,
+                pc: 0,
+                ra: 0,
+                sp: 0,
+                s11: 0,
+                a0: 0,
+                sig_pending: 0,
+                sig_mask: 0,
+            }
+        }
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn clear_cpu_trace() {
+    if !RUNTIME_DEBUG_ENABLED {
+        return;
+    }
+    unsafe {
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_JALR_TRACE),
+            JalrTraceSummary {
+                vm_ptr: 0,
+                pc: 0,
+                rs1_value: 0,
+                target: 0,
+                rd: 0,
+                rs1: 0,
+            },
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_CLONE_JALR_TRACE),
+            JalrTraceSummary {
+                vm_ptr: 0,
+                pc: 0,
+                rs1_value: 0,
+                target: 0,
+                rd: 0,
+                rs1: 0,
+            },
+        );
+        core::ptr::write(core::ptr::addr_of_mut!(CLONE_STARTUP_TRACE_LEN), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(CLONE_STARTUP_TRACE_NEXT), 0);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_ZERO_REG_TRACE),
+            ZeroRegTraceSummary {
+                vm_ptr: 0,
+                tid: 0,
+                pc: 0,
+                raw: 0,
+                reg: 0,
+                prev_value: 0,
+                sp: 0,
+                s11: 0,
+            },
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_S11_WRITE_TRACE),
+            RegWriteTraceSummary {
+                vm_ptr: 0,
+                tid: 0,
+                pc: 0,
+                raw: 0,
+                source: 0,
+                prev_value: 0,
+                value: 0,
+                rs1: 0,
+                rs1_value: 0,
+            },
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_SP_WRITE_TRACE),
+            RegWriteTraceSummary {
+                vm_ptr: 0,
+                tid: 0,
+                pc: 0,
+                raw: 0,
+                source: 0,
+                prev_value: 0,
+                value: 0,
+                rs1: 0,
+                rs1_value: 0,
+            },
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_TP_WRITE_TRACE),
+            RegWriteTraceSummary {
+                vm_ptr: 0,
+                tid: 0,
+                pc: 0,
+                raw: 0,
+                source: 0,
+                prev_value: 0,
+                value: 0,
+                rs1: 0,
+                rs1_value: 0,
+            },
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_THREAD_STEP_TRACE),
+            ThreadStepTraceSummary {
+                vm_ptr: 0,
+                tid: 0,
+                status: 0,
+                budget: 0,
+                remaining: 0,
+                pc: 0,
+                ra: 0,
+                sp: 0,
+                s11: 0,
+            },
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!(THREAD_STEP_TRACE_RING),
+            [ThreadStepTraceSummary {
+                vm_ptr: 0,
+                tid: 0,
+                status: 0,
+                budget: 0,
+                remaining: 0,
+                pc: 0,
+                ra: 0,
+                sp: 0,
+                s11: 0,
+            }; THREAD_STEP_TRACE_CAP],
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!(THREAD_STEP_TRACE_BY_VM),
+            [ThreadStepTraceSummary {
+                vm_ptr: 0,
+                tid: 0,
+                status: 0,
+                budget: 0,
+                remaining: 0,
+                pc: 0,
+                ra: 0,
+                sp: 0,
+                s11: 0,
+            }; THREAD_STEP_VM_TRACE_CAP],
+        );
+        core::ptr::write(core::ptr::addr_of_mut!(THREAD_STEP_TRACE_LEN), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(THREAD_STEP_TRACE_NEXT), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(THREAD_STEP_TRACE_BY_VM_NEXT), 0);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_THREAD_STEP_ENTRY_TRACE),
+            ThreadStepEntryTraceSummary {
+                vm_ptr: 0,
+                tid: 0,
+                status: 0,
+                budget: 0,
+                pc: 0,
+                ra: 0,
+                sp: 0,
+                s11: 0,
+            },
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_THREAD_STEP_PHASE),
+            ThreadStepPhaseSummary {
+                vm_ptr: 0,
+                tid: 0,
+                phase: 0,
+                status: 0,
+                budget: 0,
+                remaining: 0,
+                pc: 0,
+                ra: 0,
+                sp: 0,
+                s11: 0,
+            },
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!(THREAD_STEP_ENTRY_TRACE_RING),
+            [ThreadStepEntryTraceSummary {
+                vm_ptr: 0,
+                tid: 0,
+                status: 0,
+                budget: 0,
+                pc: 0,
+                ra: 0,
+                sp: 0,
+                s11: 0,
+            }; THREAD_STEP_TRACE_CAP],
+        );
+        core::ptr::write(core::ptr::addr_of_mut!(THREAD_STEP_ENTRY_TRACE_LEN), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(THREAD_STEP_ENTRY_TRACE_NEXT), 0);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(THREAD_STEP_ENTRY_TRACE_BY_VM),
+            [ThreadStepEntryTraceSummary {
+                vm_ptr: 0,
+                tid: 0,
+                status: 0,
+                budget: 0,
+                pc: 0,
+                ra: 0,
+                sp: 0,
+                s11: 0,
+            }; THREAD_STEP_VM_TRACE_CAP],
+        );
+        core::ptr::write(core::ptr::addr_of_mut!(THREAD_STEP_ENTRY_TRACE_BY_VM_NEXT), 0);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(THREAD_STEP_PHASE_BY_VM),
+            [ThreadStepPhaseSummary {
+                vm_ptr: 0,
+                tid: 0,
+                phase: 0,
+                status: 0,
+                budget: 0,
+                remaining: 0,
+                pc: 0,
+                ra: 0,
+                sp: 0,
+                s11: 0,
+            }; THREAD_STEP_VM_TRACE_CAP],
+        );
+        core::ptr::write(core::ptr::addr_of_mut!(THREAD_STEP_PHASE_BY_VM_NEXT), 0);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_FAULT_DISPATCH_TRACE),
+            FaultDispatchTraceSummary {
+                vm_ptr: 0,
+                tid: 0,
+                phase: 0,
+                pc: 0,
+                ra: 0,
+                sp: 0,
+                s11: 0,
+                fault_addr: 0,
+            },
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_SYNC_SIGNAL_TRACE),
+            SyncSignalTraceSummary {
+                vm_ptr: 0,
+                tid: 0,
+                local_pc: 0,
+                local_ra: 0,
+                local_sp: 0,
+                local_s11: 0,
+                local_a0: 0,
+                vm_pc: 0,
+                vm_ra: 0,
+                vm_sp: 0,
+                vm_s11: 0,
+                vm_a0: 0,
+                fault_addr: 0,
+                sig_pending: 0,
+                sig_mask: 0,
+                sig_info_code: 0,
+            },
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_FUTEX_RESUME_TRACE),
+            FutexResumeTraceSummary {
+                vm_ptr: 0,
+                tid: 0,
+                phase: 0,
+                status: 0,
+                pc: 0,
+                ra: 0,
+                sp: 0,
+                s11: 0,
+                a0: 0,
+                sig_pending: 0,
+                sig_mask: 0,
+            },
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!(FUTEX_RESUME_TRACE_BY_VM),
+            [FutexResumeTraceSummary {
+                vm_ptr: 0,
+                tid: 0,
+                phase: 0,
+                status: 0,
+                pc: 0,
+                ra: 0,
+                sp: 0,
+                s11: 0,
+                a0: 0,
+                sig_pending: 0,
+                sig_mask: 0,
+            }; THREAD_STEP_VM_TRACE_CAP],
+        );
+        core::ptr::write(core::ptr::addr_of_mut!(FUTEX_RESUME_TRACE_BY_VM_NEXT), 0);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(JALR_TRACE_RING),
+            [JalrTraceSummary {
+                vm_ptr: 0,
+                pc: 0,
+                rs1_value: 0,
+                target: 0,
+                rd: 0,
+                rs1: 0,
+            }; CPU_REG_TRACE_CAP],
+        );
+        core::ptr::write(core::ptr::addr_of_mut!(JALR_TRACE_LEN), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(JALR_TRACE_NEXT), 0);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(ZERO_REG_TRACE_RING),
+            [ZeroRegTraceSummary {
+                vm_ptr: 0,
+                tid: 0,
+                pc: 0,
+                raw: 0,
+                reg: 0,
+                prev_value: 0,
+                sp: 0,
+                s11: 0,
+            }; CPU_REG_TRACE_CAP],
+        );
+        core::ptr::write(core::ptr::addr_of_mut!(ZERO_REG_TRACE_LEN), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(ZERO_REG_TRACE_NEXT), 0);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(S11_WRITE_TRACE_RING),
+            [RegWriteTraceSummary {
+                vm_ptr: 0,
+                tid: 0,
+                pc: 0,
+                raw: 0,
+                source: 0,
+                prev_value: 0,
+                value: 0,
+                rs1: 0,
+                rs1_value: 0,
+            }; CPU_REG_TRACE_CAP],
+        );
+        core::ptr::write(core::ptr::addr_of_mut!(S11_WRITE_TRACE_LEN), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(S11_WRITE_TRACE_NEXT), 0);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(SP_WRITE_TRACE_RING),
+            [RegWriteTraceSummary {
+                vm_ptr: 0,
+                tid: 0,
+                pc: 0,
+                raw: 0,
+                source: 0,
+                prev_value: 0,
+                value: 0,
+                rs1: 0,
+                rs1_value: 0,
+            }; CPU_REG_TRACE_CAP],
+        );
+        core::ptr::write(core::ptr::addr_of_mut!(SP_WRITE_TRACE_LEN), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(SP_WRITE_TRACE_NEXT), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(EXEC_TRACE_RING_LEN), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(EXEC_TRACE_RING_NEXT), 0);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(EXEC_TRACE_EPOCH_BY_VM),
+            [(0, 0); THREAD_STEP_VM_TRACE_CAP],
+        );
+        core::ptr::write(core::ptr::addr_of_mut!(EXEC_TRACE_EPOCH_BY_VM_NEXT), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_FAULT_EXEC_TRACE_VM_PTR), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_FAULT_EXEC_TRACE_EPOCH), 0);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_FAULT_EXEC_TRACE),
+            [ExecTraceEntry {
+                vm_ptr: 0,
+                epoch: 0,
+                tid: 0,
+                pc: 0,
+                raw: 0,
+                step: 0,
+                sp: 0,
+                ra: 0,
+                a0: 0,
+                s11: 0,
+            }; FAULT_EXEC_TRACE_CAP],
+        );
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_FAULT_EXEC_TRACE_LEN), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_SYNC_FAULT_EXEC_TRACE_VM_PTR), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_SYNC_FAULT_EXEC_TRACE_EPOCH), 0);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_SYNC_FAULT_EXEC_TRACE),
+            [ExecTraceEntry {
+                vm_ptr: 0,
+                epoch: 0,
+                tid: 0,
+                pc: 0,
+                raw: 0,
+                step: 0,
+                sp: 0,
+                ra: 0,
+                a0: 0,
+                s11: 0,
+            }; FAULT_EXEC_TRACE_CAP],
+        );
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_SYNC_FAULT_EXEC_TRACE_LEN), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_THREAD_STEP_EXEC_TRACE_VM_PTR), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_THREAD_STEP_EXEC_TRACE_EPOCH), 0);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_THREAD_STEP_EXEC_TRACE),
+            [ExecTraceEntry {
+                vm_ptr: 0,
+                epoch: 0,
+                tid: 0,
+                pc: 0,
+                raw: 0,
+                step: 0,
+                sp: 0,
+                ra: 0,
+                a0: 0,
+                s11: 0,
+            }; FAULT_EXEC_TRACE_CAP],
+        );
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_THREAD_STEP_EXEC_TRACE_LEN), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_BREAK_EXEC_TRACE_VM_PTR), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_BREAK_EXEC_TRACE_EPOCH), 0);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_BREAK_EXEC_TRACE),
+            [ExecTraceEntry {
+                vm_ptr: 0,
+                epoch: 0,
+                tid: 0,
+                pc: 0,
+                raw: 0,
+                step: 0,
+                sp: 0,
+                ra: 0,
+                a0: 0,
+                s11: 0,
+            }; FAULT_EXEC_TRACE_CAP],
+        );
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_BREAK_EXEC_TRACE_LEN), 0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_thread_state(
+        tid: i32,
+        status: i32,
+        pc: u64,
+        ra: u64,
+        sp: u64,
+        s11: u64,
+    ) -> crate::types::ThreadState {
+        let mut vm: crate::types::ThreadState = unsafe { core::mem::zeroed() };
+        vm.tid = tid;
+        vm.status = status;
+        vm.pc = pc;
+        vm.x[1] = ra;
+        vm.x[2] = sp;
+        vm.x[27] = s11;
+        vm
+    }
+
+    #[test]
+    fn last_thread_step_trace_for_vm_scans_recent_ring() {
+        clear_cpu_trace();
+
+        let vm1 = make_thread_state(1, 0, 0x111, 0x211, 0x311, 0x411);
+        let vm2 = make_thread_state(2, 3, 0x122, 0x222, 0x322, 0x422);
+        let vm1_ptr = &vm1 as *const crate::types::ThreadState as u32;
+        let vm2_ptr = &vm2 as *const crate::types::ThreadState as u32;
+
+        record_thread_step_trace(&vm1, 20000, 19999);
+        record_thread_step_trace(&vm2, 20000, 19998);
+
+        let vm1_entry = last_thread_step_trace_for_vm(vm1_ptr);
+        assert_eq!(vm1_entry.vm_ptr, vm1_ptr);
+        assert_eq!(vm1_entry.tid, 1);
+        assert_eq!(vm1_entry.pc, 0x111);
+        assert_eq!(vm1_entry.ra, 0x211);
+        assert_eq!(vm1_entry.sp, 0x311);
+        assert_eq!(vm1_entry.s11, 0x411);
+
+        let vm2_entry = last_thread_step_trace_for_vm(vm2_ptr);
+        assert_eq!(vm2_entry.vm_ptr, vm2_ptr);
+        assert_eq!(vm2_entry.tid, 2);
+        assert_eq!(vm2_entry.pc, 0x122);
+        assert_eq!(vm2_entry.ra, 0x222);
+        assert_eq!(vm2_entry.sp, 0x322);
+        assert_eq!(vm2_entry.s11, 0x422);
+    }
+
+    #[test]
+    fn clear_cpu_trace_resets_thread_step_ring() {
+        clear_cpu_trace();
+
+        let vm = make_thread_state(3, 0, 0x144, 0x244, 0x344, 0x444);
+        let vm_ptr = &vm as *const crate::types::ThreadState as u32;
+        record_thread_step_trace(&vm, 20000, 19997);
+        assert_eq!(last_thread_step_trace_for_vm(vm_ptr).tid, 3);
+
+        clear_cpu_trace();
+        let cleared = last_thread_step_trace_for_vm(vm_ptr);
+        assert_eq!(cleared.vm_ptr, 0);
+        assert_eq!(cleared.tid, 0);
+        assert_eq!(cleared.pc, 0);
+    }
+
+    #[test]
+    fn last_thread_step_trace_for_vm_survives_recent_ring_churn() {
+        clear_cpu_trace();
+
+        let target = make_thread_state(3, 0, 0x144, 0x244, 0x344, 0x444);
+        let target_ptr = &target as *const crate::types::ThreadState as u32;
+        record_thread_step_trace(&target, 20000, 19997);
+
+        for index in 0..(THREAD_STEP_TRACE_CAP + 8) {
+            let vm = make_thread_state(
+                10 + index as i32,
+                0,
+                0x1000 + index as u64,
+                0x2000 + index as u64,
+                0x3000 + index as u64,
+                0x4000 + index as u64,
+            );
+            record_thread_step_trace(&vm, 20000, 19996 - index as i32);
+        }
+
+        let entry = last_thread_step_trace_for_vm(target_ptr);
+        assert_eq!(entry.vm_ptr, target_ptr);
+        assert_eq!(entry.tid, 3);
+        assert_eq!(entry.pc, 0x144);
+        assert_eq!(entry.ra, 0x244);
+        assert_eq!(entry.sp, 0x344);
+        assert_eq!(entry.s11, 0x444);
+    }
+
+    #[test]
+    fn last_thread_step_entry_trace_for_vm_survives_recent_ring_churn() {
+        clear_cpu_trace();
+
+        let target = make_thread_state(4, 20, 0x83336, 0x4d9b4, 0x37d6c000, 0xbfdc80);
+        let target_ptr = &target as *const crate::types::ThreadState as u32;
+        record_thread_step_entry_trace(&target, 20000);
+
+        for index in 0..(THREAD_STEP_TRACE_CAP + 8) {
+            let vm = make_thread_state(
+                20 + index as i32,
+                0,
+                0x5000 + index as u64,
+                0x6000 + index as u64,
+                0x7000 + index as u64,
+                0x8000 + index as u64,
+            );
+            record_thread_step_entry_trace(&vm, 20000 - index as i32);
+        }
+
+        let entry = last_thread_step_entry_trace_for_vm(target_ptr);
+        assert_eq!(entry.vm_ptr, target_ptr);
+        assert_eq!(entry.tid, 4);
+        assert_eq!(entry.status, 20);
+        assert_eq!(entry.pc, 0x83336);
+        assert_eq!(entry.ra, 0x4d9b4);
+        assert_eq!(entry.sp, 0x37d6c000);
+        assert_eq!(entry.s11, 0xbfdc80);
+    }
+
+    #[test]
+    fn last_thread_step_phase_for_vm_uses_direct_slot() {
+        clear_cpu_trace();
+
+        let vm = make_thread_state(5, 20, 0x83336, 0x4d9b4, 0x37d6c000, 0xbfdc80);
+        let vm_ptr = &vm as *const crate::types::ThreadState as u32;
+        record_thread_step_phase(&vm, 3, 20000, 0);
+
+        let entry = last_thread_step_phase_for_vm(vm_ptr);
+        assert_eq!(entry.vm_ptr, vm_ptr);
+        assert_eq!(entry.tid, 5);
+        assert_eq!(entry.phase, 3);
+        assert_eq!(entry.status, 20);
+        assert_eq!(entry.budget, 20000);
+        assert_eq!(entry.pc, 0x83336);
+        assert_eq!(entry.ra, 0x4d9b4);
+        assert_eq!(entry.sp, 0x37d6c000);
+        assert_eq!(entry.s11, 0xbfdc80);
+    }
 }

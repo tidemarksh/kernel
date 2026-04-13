@@ -418,6 +418,7 @@ pub unsafe fn load_elf_at(
     load_bias: u64,
 ) -> Result<ElfLoadResult, i32> {
     unsafe {
+        crate::harness_hooks::record_execve_stage(340, elf_ptr as u64, elf_len as u64);
         let inspected = inspect_elf(elf_ptr, elf_len, ram_size)?;
         let e = elf_ptr as *const u8;
         let ph_off = read_u64(e, E_PHOFF) as usize;
@@ -436,6 +437,10 @@ pub unsafe fn load_elf_at(
             let p_vaddr = read_u64(ph, P_VADDR).saturating_add(load_bias);
             let p_filesz = read_u64(ph, P_FILESZ);
             let p_memsz = read_u64(ph, P_MEMSZ);
+            crate::harness_hooks::record_execve_stage(341, i as u64, p_vaddr);
+            crate::harness_hooks::record_execve_stage(342, p_offset, p_filesz);
+            crate::harness_hooks::record_execve_stage(343, p_memsz, load_bias);
+            crate::harness_hooks::record_execve_stage(347, i as u64, p_offset);
 
             // Copy file data to guest memory
             if p_filesz > 0 {
@@ -443,6 +448,8 @@ pub unsafe fn load_elf_at(
                 let dst = (ram_base as u64 + p_vaddr) as *mut u8;
                 core::ptr::copy_nonoverlapping(src, dst, p_filesz as usize);
             }
+            crate::harness_hooks::record_execve_stage(344, i as u64, p_filesz);
+            crate::harness_hooks::record_execve_stage(348, i as u64, p_vaddr + p_filesz);
 
             // Zero BSS (memsz > filesz)
             if p_memsz > p_filesz {
@@ -450,8 +457,11 @@ pub unsafe fn load_elf_at(
                 let bss_len = (p_memsz - p_filesz) as usize;
                 guest_mem::zero_mem(ram_base, bss_start, bss_len);
             }
+            crate::harness_hooks::record_execve_stage(345, i as u64, p_memsz);
+            crate::harness_hooks::record_execve_stage(349, i as u64, p_vaddr + p_memsz);
         }
 
+        crate::harness_hooks::record_execve_stage(346, inspected.entry, inspected.brk_start);
         Ok(apply_load_bias(inspected, load_bias))
     }
 }

@@ -63,34 +63,57 @@ static mut PROCESS_PENDING_PTR: *mut [u64; MAX_PROCESSES] = core::ptr::null_mut(
 
 #[derive(Clone, Copy)]
 struct SignalTrace {
+    vm_ptr: u32,
     sig: u32,
     frame_base: u64,
     pc: u64,
     ra: u64,
     sp: u64,
+    gp: u64,
+    tp: u64,
     s11: u64,
 }
 
 static mut LAST_SIGNAL_DELIVERY: SignalTrace = SignalTrace {
+    vm_ptr: 0,
     sig: 0,
     frame_base: 0,
     pc: 0,
     ra: 0,
     sp: 0,
+    gp: 0,
+    tp: 0,
     s11: 0,
 };
 static mut LAST_SIGRETURN: SignalTrace = SignalTrace {
+    vm_ptr: 0,
     sig: 0,
     frame_base: 0,
     pc: 0,
     ra: 0,
     sp: 0,
+    gp: 0,
+    tp: 0,
     s11: 0,
 };
 static mut LAST_TRAMPOLINE_PC: u64 = 0;
 static mut LAST_TRAMPOLINE_HIT_TID: i32 = 0;
 static mut LAST_TRAMPOLINE_HIT_PC: u64 = 0;
 static mut SIGRETURN_COUNT: u32 = 0;
+const SIGNAL_TRACE_RING_CAP: usize = 32;
+static mut SIGNAL_DELIVERY_RING: [SignalTrace; SIGNAL_TRACE_RING_CAP] = [SignalTrace {
+    vm_ptr: 0,
+    sig: 0,
+    frame_base: 0,
+    pc: 0,
+    ra: 0,
+    sp: 0,
+    gp: 0,
+    tp: 0,
+    s11: 0,
+}; SIGNAL_TRACE_RING_CAP];
+static mut SIGNAL_DELIVERY_RING_LEN: u32 = 0;
+static mut SIGNAL_DELIVERY_RING_NEXT: u32 = 0;
 
 const SYNC_FAULT_SIGNAL_MASK: u64 = (1u64 << (SIGILL - 1))
     | (1u64 << (SIGBUS - 1))
@@ -129,17 +152,42 @@ pub fn process_pending_bytes() -> u32 {
     core::mem::size_of::<[u64; MAX_PROCESSES]>() as u32
 }
 
-pub fn last_signal_delivery() -> (u32, u64, u64, u64, u64, u64) {
+pub fn last_signal_delivery() -> (u32, u64, u64, u64, u64, u64, u64, u64) {
     unsafe {
         let t = LAST_SIGNAL_DELIVERY;
-        (t.sig, t.frame_base, t.pc, t.ra, t.sp, t.s11)
+        (t.sig, t.frame_base, t.pc, t.ra, t.sp, t.gp, t.tp, t.s11)
     }
 }
 
-pub fn last_sigreturn() -> (u32, u64, u64, u64, u64, u64) {
+pub fn last_signal_delivery_for_vm(vm_ptr: u32) -> (u32, u64, u64, u64, u64, u64, u64, u64) {
+    unsafe {
+        let len = SIGNAL_DELIVERY_RING_LEN.min(SIGNAL_TRACE_RING_CAP as u32);
+        for offset in 0..len {
+            let index =
+                ((SIGNAL_DELIVERY_RING_NEXT + SIGNAL_TRACE_RING_CAP as u32 - 1 - offset)
+                    % SIGNAL_TRACE_RING_CAP as u32) as usize;
+            let trace = SIGNAL_DELIVERY_RING[index];
+            if trace.vm_ptr == vm_ptr {
+                return (
+                    trace.sig,
+                    trace.frame_base,
+                    trace.pc,
+                    trace.ra,
+                    trace.sp,
+                    trace.gp,
+                    trace.tp,
+                    trace.s11,
+                );
+            }
+        }
+        (0, 0, 0, 0, 0, 0, 0, 0)
+    }
+}
+
+pub fn last_sigreturn() -> (u32, u64, u64, u64, u64, u64, u64, u64) {
     unsafe {
         let t = LAST_SIGRETURN;
-        (t.sig, t.frame_base, t.pc, t.ra, t.sp, t.s11)
+        (t.sig, t.frame_base, t.pc, t.ra, t.sp, t.gp, t.tp, t.s11)
     }
 }
 
@@ -150,6 +198,39 @@ pub fn last_trampoline_hit() -> (i32, u64, u32) {
             LAST_TRAMPOLINE_HIT_PC,
             SIGRETURN_COUNT,
         )
+    }
+}
+
+pub fn clear_debug_trace() {
+    unsafe {
+        LAST_SIGNAL_DELIVERY = SignalTrace {
+            vm_ptr: 0,
+            sig: 0,
+            frame_base: 0,
+            pc: 0,
+            ra: 0,
+            sp: 0,
+            gp: 0,
+            tp: 0,
+            s11: 0,
+        };
+        LAST_SIGRETURN = SignalTrace {
+            vm_ptr: 0,
+            sig: 0,
+            frame_base: 0,
+            pc: 0,
+            ra: 0,
+            sp: 0,
+            gp: 0,
+            tp: 0,
+            s11: 0,
+        };
+        LAST_TRAMPOLINE_PC = 0;
+        LAST_TRAMPOLINE_HIT_TID = 0;
+        LAST_TRAMPOLINE_HIT_PC = 0;
+        SIGRETURN_COUNT = 0;
+        SIGNAL_DELIVERY_RING_LEN = 0;
+        SIGNAL_DELIVERY_RING_NEXT = 0;
     }
 }
 
@@ -213,6 +294,25 @@ fn process_state_from_vm(vm: &ThreadState, base: u32) -> Option<&'static mut Pro
         return None;
     }
     unsafe { Some(&mut *absolute) }
+}
+
+fn take_thread_pending_signals(vm: &mut ThreadState, base: u32) {
+    let Some(ps) = process_state_from_vm(vm, base) else {
+        return;
+    };
+    let tid = vm.tid;
+    if tid <= 0 {
+        return;
+    }
+    let Some(record) = ps.threads.iter_mut().find(|record| record.tid == tid) else {
+        return;
+    };
+    vm.sig_pending |= record.pending_sigset;
+    if record.pending_siginfo_code != 0 {
+        vm.sig_info_code = record.pending_siginfo_code;
+    }
+    record.pending_sigset = 0;
+    record.pending_siginfo_code = 0;
 }
 
 /// Initialize signal subsystem. Must be called once at kernel init.
@@ -302,6 +402,9 @@ pub fn reassign_process_pid(old_pid: i32, new_pid: i32) {
     }
 
     let old_slot = sig_slots()[old_idx];
+    if !sig_slots()[new_idx].is_null() {
+        return;
+    }
     if !old_slot.is_null() {
         sig_slots()[new_idx] = old_slot;
         sig_slots()[old_idx] = core::ptr::null_mut();
@@ -644,14 +747,23 @@ fn push_signal_frame(vm: &mut ThreadState, base: u32, sig: usize, action: &SigAc
     }
 
     unsafe {
-        LAST_SIGNAL_DELIVERY = SignalTrace {
+        let trace = SignalTrace {
+            vm_ptr: vm as *const ThreadState as u32,
             sig: sig as u32,
             frame_base,
             pc: vm.pc,
             ra: vm.x[1],
             sp: vm.x[2],
+            gp: vm.x[3],
+            tp: vm.x[4],
             s11: vm.x[27],
         };
+        LAST_SIGNAL_DELIVERY = trace;
+        SIGNAL_DELIVERY_RING[SIGNAL_DELIVERY_RING_NEXT as usize] = trace;
+        SIGNAL_DELIVERY_RING_NEXT = (SIGNAL_DELIVERY_RING_NEXT + 1) % SIGNAL_TRACE_RING_CAP as u32;
+        if SIGNAL_DELIVERY_RING_LEN < SIGNAL_TRACE_RING_CAP as u32 {
+            SIGNAL_DELIVERY_RING_LEN += 1;
+        }
         LAST_TRAMPOLINE_PC = frame_base + SIGFRAME_OFF_TRAMPOLINE;
     }
 
@@ -686,11 +798,14 @@ pub fn sys_rt_sigreturn(vm: &mut ThreadState, base: u32) {
         vm.sigaltstack_flags =
             guest_mem::read_u64(base, frame_base + SIGFRAME_OFF_ALTSTACK_FLAGS) as i32;
         LAST_SIGRETURN = SignalTrace {
+            vm_ptr: vm as *const ThreadState as u32,
             sig: 0,
             frame_base,
             pc: vm.pc,
             ra: vm.x[1],
             sp: vm.x[2],
+            gp: vm.x[3],
+            tp: vm.x[4],
             s11: vm.x[27],
         };
         LAST_TRAMPOLINE_PC = 0;
@@ -724,6 +839,7 @@ pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
             process_pending()[idx] = 0;
         }
     }
+    take_thread_pending_signals(vm, base);
 
     let synchronous = if vm.sig_info_code != 0 {
         vm.sig_pending & SYNC_FAULT_SIGNAL_MASK
@@ -783,15 +899,6 @@ pub fn send_signal(vm: &mut ThreadState, sig: i32) {
     vm.sig_pending |= 1u64 << (sig - 1);
 }
 
-fn deliverable_pending_mask(vm: &ThreadState) -> u64 {
-    let synchronous = if vm.sig_info_code != 0 {
-        vm.sig_pending & SYNC_FAULT_SIGNAL_MASK
-    } else {
-        0
-    };
-    (vm.sig_pending & !vm.sig_mask) | synchronous
-}
-
 pub fn send_signal_with_code(vm: &mut ThreadState, sig: i32, code: i32) {
     send_signal(vm, sig);
     vm.sig_info_code = code;
@@ -815,16 +922,8 @@ pub fn send_signal_to_pid(vm: &mut ThreadState, base: u32, pid: i32, sig: i32) -
                 if record.state != THREAD_BLOCKED_FUTEX || record.blocked_addr == 0 {
                     continue;
                 }
-                if record.tid == vm.tid {
-                    if deliverable_pending_mask(vm) == 0 {
-                        continue;
-                    }
-                } else if record.thread_ptr != 0 {
-                    let target = unsafe { &*(record.thread_ptr as *const ThreadState) };
-                    if (target.sig_pending | (1u64 << (sig - 1))) & !target.sig_mask == 0 {
-                        continue;
-                    }
-                }
+                // FUTEX_WAIT may wake spuriously. Prefer waking blocked threads
+                // over directly reading another worker's ThreadState.
                 crate::syscall::thread::notify_futex_addr(base, record.blocked_addr, 1);
             }
         }
@@ -847,19 +946,17 @@ pub fn send_signal_to_tid(vm: &mut ThreadState, base: u32, tid: i32, sig: i32) -
         return ESRCH;
     };
 
-    for record in ps.threads.iter() {
+    for record in ps.threads.iter_mut() {
         if record.tid != tid || record.thread_ptr == 0 {
             continue;
         }
         if record.state == THREAD_NONE || record.state == THREAD_DEAD {
             continue;
         }
-        let target = unsafe { &mut *(record.thread_ptr as *mut ThreadState) };
-        target.sig_pending |= 1u64 << (sig - 1);
-        target.sig_info_code = SI_TKILL;
+        record.pending_sigset |= 1u64 << (sig - 1);
+        record.pending_siginfo_code = SI_TKILL;
         if record.state == THREAD_BLOCKED_FUTEX
             && record.blocked_addr != 0
-            && deliverable_pending_mask(target) != 0
         {
             crate::syscall::thread::notify_futex_addr(base, record.blocked_addr, 1);
         }

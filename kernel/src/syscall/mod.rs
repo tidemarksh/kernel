@@ -8,6 +8,7 @@ pub mod fs;
 pub mod identity;
 pub mod memory;
 pub mod pipe;
+pub mod pty;
 pub mod process;
 pub mod resource;
 pub mod signal;
@@ -52,6 +53,9 @@ fn trace_fd_snapshot(base: u32, vm: &ThreadState, fd: u64) -> (u32, i32) {
 /// or a blocking STATUS (STATUS_FS, STATUS_SLEEP, etc.) if JS must wait.
 pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
     let nr = vm.x[17]; // a7 = syscall number
+    if nr == SYS_EXECVE {
+        crate::harness_debug::record_execve_dispatch(vm as *const ThreadState as u32, 1);
+    }
     let a0 = vm.x[10];
     let a1 = vm.x[11];
     let a2 = vm.x[12];
@@ -220,7 +224,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             }
             r
         }
-        SYS_IOCTL => 0,
+        SYS_IOCTL => pty::sys_ioctl(vm, base, a0, a1, a2),
         SYS_GETCWD => fs::sys_getcwd(vm, base, a0, a1),
 
         // fd table
@@ -354,6 +358,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         }
         SYS_EXECVE => {
             let ret = process::sys_execve(vm, base, a0, a1, a2);
+            crate::harness_debug::record_execve_dispatch(vm as *const ThreadState as u32, 2);
             if vm.status == abi::STATUS_EXECVE_SPAWN {
                 return debug_return(vm, nr, ret, abi::STATUS_EXECVE_SPAWN);
             }
@@ -408,6 +413,9 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
 
     // Check and deliver pending signals at syscall return boundary
     signal::check_pending(vm, base);
+    if nr == SYS_EXECVE {
+        crate::harness_debug::record_execve_dispatch(vm as *const ThreadState as u32, 3);
+    }
     let status = vm.status;
     crate::harness_hooks::record_fd_syscall(
         vm as *const ThreadState as u32,
