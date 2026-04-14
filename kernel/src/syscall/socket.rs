@@ -43,9 +43,15 @@ const SO_BROADCAST: u32 = 6;
 const SO_SNDBUF: u32 = 7;
 const SO_RCVBUF: u32 = 8;
 const SO_KEEPALIVE: u32 = 9;
+const SO_OOBINLINE: u32 = 10;
 const SO_REUSEPORT: u32 = 15;
+const SO_RCVLOWAT: u32 = 18;
+const SO_SNDLOWAT: u32 = 19;
 const SO_ACCEPTCONN: u32 = 30;
+const SO_PROTOCOL: u32 = 38;
+const SO_DOMAIN: u32 = 39;
 const IPPROTO_TCP: u32 = 6;
+const IPPROTO_UDP: u32 = 17;
 const TCP_NODELAY: u32 = 1;
 const DEFAULT_SOCKET_BUFFER: u32 = 8192;
 
@@ -66,9 +72,11 @@ struct SocketSlot {
     so_reuseaddr: u32,
     so_reuseport: u32,
     so_keepalive: u32,
+    so_oobinline: u32,
     so_broadcast: u32,
     so_sndbuf: u32,
     so_rcvbuf: u32,
+    so_rcvlowat: u32,
     tcp_nodelay: u32,
     shutdown_mask: u32,
     accept_head: u32,
@@ -154,9 +162,11 @@ fn alloc_socket_slot() -> Option<u32> {
                     so_reuseaddr: 0,
                     so_reuseport: 0,
                     so_keepalive: 0,
+                    so_oobinline: 0,
                     so_broadcast: 0,
                     so_sndbuf: DEFAULT_SOCKET_BUFFER,
                     so_rcvbuf: DEFAULT_SOCKET_BUFFER,
+                    so_rcvlowat: 1,
                     tcp_nodelay: 0,
                     shutdown_mask: 0,
                     accept_head: 0,
@@ -400,6 +410,16 @@ pub fn sys_socket(vm: &mut ThreadState, base: u32, domain: u64, stype: u64, prot
         return EINVAL;
     }
 
+    let protocol_val = if protocol == 0 {
+        match (domain_val, type_val) {
+            (AF_INET | AF_INET6, SOCK_STREAM) => IPPROTO_TCP,
+            (AF_INET | AF_INET6, SOCK_DGRAM) => IPPROTO_UDP,
+            _ => 0,
+        }
+    } else {
+        protocol as u32
+    };
+
     let idx = match alloc_socket_slot() {
         Some(i) => i,
         None => return ENOMEM,
@@ -409,7 +429,7 @@ pub fn sys_socket(vm: &mut ThreadState, base: u32, domain: u64, stype: u64, prot
         let slot = &mut socket_table()[idx as usize];
         slot.domain = domain_val;
         slot.sock_type = type_val;
-        slot.protocol = protocol as u32;
+        slot.protocol = protocol_val;
         slot.state = SOCK_STATE_IDLE;
     }
 
@@ -919,9 +939,11 @@ pub fn inject_http_connection(vm_ptr: u32, port: u16, request: &[u8]) -> i32 {
         so_reuseaddr: 0,
         so_reuseport: 0,
         so_keepalive: 0,
+        so_oobinline: 0,
         so_broadcast: 0,
         so_sndbuf: DEFAULT_SOCKET_BUFFER,
         so_rcvbuf: DEFAULT_SOCKET_BUFFER,
+        so_rcvlowat: 1,
         tcp_nodelay: 0,
         shutdown_mask: 0,
         accept_head: 0,
@@ -943,9 +965,11 @@ pub fn inject_http_connection(vm_ptr: u32, port: u16, request: &[u8]) -> i32 {
         so_reuseaddr: 0,
         so_reuseport: 0,
         so_keepalive: 0,
+        so_oobinline: 0,
         so_broadcast: 0,
         so_sndbuf: DEFAULT_SOCKET_BUFFER,
         so_rcvbuf: DEFAULT_SOCKET_BUFFER,
+        so_rcvlowat: 1,
         tcp_nodelay: 0,
         shutdown_mask: 0,
         accept_head: 0,
@@ -1055,6 +1079,13 @@ pub fn sys_setsockopt(
             }
             Err(err) => err,
         },
+        (SOL_SOCKET, SO_OOBINLINE) => match read_opt_i32(base, optval, optlen) {
+            Ok(value) => {
+                slot.so_oobinline = u32::from(value != 0);
+                0
+            }
+            Err(err) => err,
+        },
         (SOL_SOCKET, SO_BROADCAST) => match read_opt_i32(base, optval, optlen) {
             Ok(value) => {
                 slot.so_broadcast = u32::from(value != 0);
@@ -1062,6 +1093,15 @@ pub fn sys_setsockopt(
             }
             Err(err) => err,
         },
+        (SOL_SOCKET, SO_RCVLOWAT) => match read_opt_i32(base, optval, optlen) {
+            Ok(value) if value > 0 => {
+                slot.so_rcvlowat = value as u32;
+                0
+            }
+            Ok(_) => EINVAL,
+            Err(err) => err,
+        },
+        (SOL_SOCKET, SO_SNDLOWAT) => ENOPROTOOPT,
         (SOL_SOCKET, SO_SNDBUF) => match read_opt_i32(base, optval, optlen) {
             Ok(value) if value > 0 => {
                 slot.so_sndbuf = value.max(256) as u32;
@@ -1090,7 +1130,7 @@ pub fn sys_setsockopt(
                 Err(err) => err,
             }
         }
-        (SOL_SOCKET, SO_TYPE | SO_ERROR | SO_ACCEPTCONN) => ENOPROTOOPT,
+        (SOL_SOCKET, SO_TYPE | SO_ERROR | SO_ACCEPTCONN | SO_PROTOCOL | SO_DOMAIN) => ENOPROTOOPT,
         _ => ENOPROTOOPT,
     }
 }
@@ -1121,15 +1161,20 @@ pub fn sys_getsockopt(
         (SOL_SOCKET, SO_REUSEADDR) => write_opt_u32(base, optval, optlen, slot.so_reuseaddr),
         (SOL_SOCKET, SO_REUSEPORT) => write_opt_u32(base, optval, optlen, slot.so_reuseport),
         (SOL_SOCKET, SO_KEEPALIVE) => write_opt_u32(base, optval, optlen, slot.so_keepalive),
+        (SOL_SOCKET, SO_OOBINLINE) => write_opt_u32(base, optval, optlen, slot.so_oobinline),
         (SOL_SOCKET, SO_BROADCAST) => write_opt_u32(base, optval, optlen, slot.so_broadcast),
         (SOL_SOCKET, SO_SNDBUF) => write_opt_u32(base, optval, optlen, slot.so_sndbuf),
         (SOL_SOCKET, SO_RCVBUF) => write_opt_u32(base, optval, optlen, slot.so_rcvbuf),
+        (SOL_SOCKET, SO_RCVLOWAT) => write_opt_u32(base, optval, optlen, slot.so_rcvlowat),
+        (SOL_SOCKET, SO_SNDLOWAT) => write_opt_u32(base, optval, optlen, 1),
         (SOL_SOCKET, SO_ACCEPTCONN) => write_opt_u32(
             base,
             optval,
             optlen,
             u32::from(slot.state == SOCK_STATE_LISTENING),
         ),
+        (SOL_SOCKET, SO_PROTOCOL) => write_opt_u32(base, optval, optlen, slot.protocol),
+        (SOL_SOCKET, SO_DOMAIN) => write_opt_u32(base, optval, optlen, slot.domain),
         (IPPROTO_TCP, TCP_NODELAY) => {
             if slot.sock_type != SOCK_STREAM {
                 return ENOPROTOOPT;
