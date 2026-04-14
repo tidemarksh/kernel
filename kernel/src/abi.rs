@@ -2230,6 +2230,11 @@ pub extern "C" fn memfs_set_file_size_shallow(ino: u32, size: u64) -> i64 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn memfs_set_file_external(ino: u32, size: u64) -> i64 {
+    crate::fs::memfs::set_file_external(ino, size)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn memfs_inode_mode(ino: u32) -> u32 {
     crate::fs::memfs::stat(ino).map_or(0, |s| s.mode)
 }

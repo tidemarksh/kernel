@@ -149,3 +149,19 @@ fn file_and_symlink_do_not_change_parent_nlink() {
     assert_eq!(memfs::unlink(1, b"tmp.link"), 0);
     assert_eq!(memfs::stat(1).unwrap().nlink, root_before);
 }
+
+#[test]
+fn set_file_external_clears_inline_storage_and_keeps_size() {
+    let _t = TestVm::new();
+    let ino = memfs::create_file(1, b"external.bin", 0o644);
+    assert!(ino > 0);
+    assert_eq!(memfs::write_file(ino, 0, b"payload"), 7);
+    assert!(memfs::file_data_ptr(ino).is_some());
+
+    assert_eq!(memfs::set_file_external(ino, 3), 0);
+
+    let st = memfs::stat(ino).unwrap();
+    assert_eq!(st.size, 3);
+    assert_eq!(st.mode & memfs::S_IFMT, memfs::S_IFREG);
+    assert!(memfs::file_data_ptr(ino).is_none());
+}

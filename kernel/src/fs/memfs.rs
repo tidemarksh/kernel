@@ -806,7 +806,11 @@ pub fn read_file(ino: u32, offset: u64, buf: &mut [u8]) -> i64 {
 pub fn file_data_ptr(ino: u32) -> Option<u32> {
     let idx = ino as usize;
     let ins = inodes();
-    if idx >= ins.len() || ins[idx].mode & S_IFMT != S_IFREG || ins[idx].size == 0 {
+    if idx >= ins.len()
+        || ins[idx].mode & S_IFMT != S_IFREG
+        || ins[idx].size == 0
+        || ins[idx].data_cap == 0
+    {
         return None;
     }
     Some(fs().data as u32 + ins[idx].data_offset)
@@ -893,6 +897,19 @@ pub fn set_file_size_shallow(ino: u32, size: u64) -> i64 {
     }
 
     inodes()[idx].size = size;
+    0
+}
+
+pub fn set_file_external(ino: u32, size: u64) -> i64 {
+    let idx = ino as usize;
+    if inodes()[idx].mode & S_IFMT != S_IFREG {
+        return EINVAL;
+    }
+
+    let inode = &mut inodes()[idx];
+    inode.size = size;
+    inode.data_offset = 0;
+    inode.data_cap = 0;
     0
 }
 
