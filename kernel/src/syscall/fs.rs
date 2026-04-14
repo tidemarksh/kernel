@@ -133,13 +133,14 @@ pub fn process_pending_requests(vm_ptr: u32, base: u32) {
 fn classify_pending_request_effects(request: &ring_buffer::FsRequestInfo) -> u32 {
     match request.opcode {
         ring_buffer::FS_OP_OPENAT => {
+            let mut effects = 0;
             if request.flags & (O_CREAT as u32) != 0 {
-                FS_EFFECT_MEMFS_MUTATION
-            } else if request.flags & (O_TRUNC as u32) != 0 {
-                FS_EFFECT_MEMFS_FILE_DATA
-            } else {
-                0
+                effects |= FS_EFFECT_MEMFS_MUTATION;
             }
+            if request.flags & (O_TRUNC as u32) != 0 {
+                effects |= FS_EFFECT_MEMFS_FILE_DATA;
+            }
+            effects
         }
         ring_buffer::FS_OP_WRITE => {
             let mut effects = FS_EFFECT_MEMFS_FILE_DATA;
