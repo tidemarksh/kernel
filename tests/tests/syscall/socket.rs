@@ -261,6 +261,33 @@ fn unix_dgram_connect_routes_to_bound_peer() {
 }
 
 #[test]
+fn unix_passcred_autobinds_unbound_socket() {
+    let mut t = TestVm::new();
+    let fd = socket::sys_socket(&mut t.vm, t.base, AF_UNIX as u64, SOCK_DGRAM as u64, 0);
+    assert!(fd >= 0);
+
+    let val_addr = t.scratch + 0x600;
+    let out_addr = t.scratch + 0x620;
+    let out_len = t.scratch + 0x6a0;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, val_addr, 1);
+        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 110);
+    }
+    assert_eq!(
+        socket::sys_setsockopt(&mut t.vm, t.base, fd as u64, SOL_SOCKET, SO_PASSCRED, val_addr, 4),
+        0
+    );
+    assert_eq!(
+        socket::sys_getsockname(&mut t.vm, t.base, fd as u64, out_addr, out_len),
+        0
+    );
+    let actual_len = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_len) } as usize;
+    assert_eq!(actual_len, 8);
+    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u16(t.base, out_addr) }, AF_UNIX as u16);
+    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u8(t.base, out_addr + 2) }, 0);
+}
+
+#[test]
 fn socket_bind_and_getsockname() {
     let mut t = TestVm::new();
     let fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);

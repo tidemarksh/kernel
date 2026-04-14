@@ -139,6 +139,7 @@ static mut SOCKET_TABLE_PTR: *mut [SocketSlot; MAX_SOCKETS] = core::ptr::null_mu
 /// Socket slot allocation bitmap (1 = in use).
 static mut SOCKET_USED: u32 = 0;
 static mut NEXT_SOCKET_COOKIE: u64 = 1;
+static mut NEXT_UNIX_AUTOBIND_ID: u32 = 0;
 
 fn socket_table() -> &'static mut [SocketSlot; MAX_SOCKETS] {
     unsafe {
@@ -186,6 +187,7 @@ pub fn init() {
             core::ptr::null_mut(),
         );
         core::ptr::write(core::ptr::addr_of_mut!(SOCKET_USED), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(NEXT_UNIX_AUTOBIND_ID), 0);
 
         let size = core::mem::size_of::<[SocketSlot; MAX_SOCKETS]>() as u32;
         let align = core::mem::align_of::<SocketSlot>() as u32;
@@ -768,6 +770,37 @@ fn find_unix_socket_by_addr(addr: &[u8], len: usize) -> Option<usize> {
         .enumerate()
         .find(|(idx, slot)| is_slot_used(*idx as u32) && unix_addr_eq(slot, addr, len))
         .map(|(idx, _)| idx)
+}
+
+fn assign_unix_autobind(slot: &mut SocketSlot) {
+    if slot.domain != AF_UNIX || slot.local_len != 0 {
+        return;
+    }
+    unsafe {
+        for _ in 0..(1 << 20) {
+            let id = core::ptr::read(core::ptr::addr_of!(NEXT_UNIX_AUTOBIND_ID)) & 0x000f_ffff;
+            core::ptr::write(core::ptr::addr_of_mut!(NEXT_UNIX_AUTOBIND_ID), id.wrapping_add(1));
+
+            let mut addr = [0u8; SOCKADDR_STORAGE_LEN];
+            addr[0..2].copy_from_slice(&(AF_UNIX as u16).to_le_bytes());
+            addr[2] = 0;
+            for offset in 0..5 {
+                let shift = (4 - offset) * 4;
+                let nibble = ((id >> shift) & 0x0f) as u8;
+                addr[3 + offset] = if nibble < 10 {
+                    b'0' + nibble
+                } else {
+                    b'a' + (nibble - 10)
+                };
+            }
+            if find_unix_socket_by_addr(&addr, 8).is_none() {
+                slot.local_addr = addr;
+                slot.local_len = 8;
+                slot.state = SOCK_STATE_BOUND;
+                return;
+            }
+        }
+    }
 }
 
 fn ensure_socket_recv_buffer(idx: usize) -> Result<(), i64> {
@@ -1725,6 +1758,9 @@ pub fn sys_setsockopt(
             match read_opt_i32(base, optval, optlen) {
                 Ok(value) => {
                     slot.so_passcred = u32::from(value != 0);
+                    if slot.so_passcred != 0 {
+                        assign_unix_autobind(slot);
+                    }
                     0
                 }
                 Err(err) => err,
