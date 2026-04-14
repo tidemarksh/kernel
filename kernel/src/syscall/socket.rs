@@ -44,6 +44,8 @@ const SO_DONTROUTE: u32 = 5;
 const SO_BROADCAST: u32 = 6;
 const SO_SNDBUF: u32 = 7;
 const SO_RCVBUF: u32 = 8;
+const SO_SNDBUFFORCE: u32 = 32;
+const SO_RCVBUFFORCE: u32 = 33;
 const SO_KEEPALIVE: u32 = 9;
 const SO_OOBINLINE: u32 = 10;
 const SO_PRIORITY: u32 = 12;
@@ -57,6 +59,8 @@ const SO_ACCEPTCONN: u32 = 30;
 const SO_MARK: u32 = 36;
 const SO_PROTOCOL: u32 = 38;
 const SO_DOMAIN: u32 = 39;
+const SO_INCOMING_CPU: u32 = 49;
+const SO_COOKIE: u32 = 57;
 const SO_RCVTIMEO_NEW: u32 = 66;
 const SO_SNDTIMEO_NEW: u32 = 67;
 const IPPROTO_TCP: u32 = 6;
@@ -88,6 +92,7 @@ struct SocketSlot {
     peer_idx: i32,
     recv_buf_idx: i32,
     last_error: i32,
+    so_cookie: u64,
     so_debug: u32,
     so_reuseaddr: u32,
     so_reuseport: u32,
@@ -118,11 +123,21 @@ static mut SOCKET_TABLE_PTR: *mut [SocketSlot; MAX_SOCKETS] = core::ptr::null_mu
 
 /// Socket slot allocation bitmap (1 = in use).
 static mut SOCKET_USED: u32 = 0;
+static mut NEXT_SOCKET_COOKIE: u64 = 1;
 
 fn socket_table() -> &'static mut [SocketSlot; MAX_SOCKETS] {
     unsafe {
         let p = core::ptr::read(core::ptr::addr_of!(SOCKET_TABLE_PTR));
         &mut *p
+    }
+}
+
+fn alloc_socket_cookie() -> u64 {
+    unsafe {
+        let cookie = core::ptr::read(core::ptr::addr_of!(NEXT_SOCKET_COOKIE));
+        let next = cookie.saturating_add(1).max(1);
+        core::ptr::write(core::ptr::addr_of_mut!(NEXT_SOCKET_COOKIE), next);
+        cookie
     }
 }
 
@@ -188,6 +203,7 @@ fn alloc_socket_slot() -> Option<u32> {
                     peer_idx: INVALID_PEER_IDX,
                     recv_buf_idx: INVALID_BUF_IDX,
                     last_error: 0,
+                    so_cookie: alloc_socket_cookie(),
                     so_debug: 0,
                     so_reuseaddr: 0,
                     so_reuseport: 0,
@@ -1029,6 +1045,7 @@ pub fn inject_http_connection(vm_ptr: u32, port: u16, request: &[u8]) -> i32 {
         peer_idx: client_idx as i32,
         recv_buf_idx: server_recv,
         last_error: 0,
+        so_cookie: alloc_socket_cookie(),
         so_debug: 0,
         so_reuseaddr: 0,
         so_reuseport: 0,
@@ -1065,6 +1082,7 @@ pub fn inject_http_connection(vm_ptr: u32, port: u16, request: &[u8]) -> i32 {
         peer_idx: server_idx as i32,
         recv_buf_idx: client_recv,
         last_error: 0,
+        so_cookie: alloc_socket_cookie(),
         so_debug: 0,
         so_reuseaddr: 0,
         so_reuseport: 0,
@@ -1325,7 +1343,7 @@ pub fn sys_setsockopt(
                 Err(err) => err,
             }
         }
-        (SOL_SOCKET, SO_SNDBUF) => match read_opt_i32(base, optval, optlen) {
+        (SOL_SOCKET, SO_SNDBUF | SO_SNDBUFFORCE) => match read_opt_i32(base, optval, optlen) {
             Ok(value) if value > 0 => {
                 slot.so_sndbuf = value.max(256) as u32;
                 0
@@ -1333,7 +1351,7 @@ pub fn sys_setsockopt(
             Ok(_) => EINVAL,
             Err(err) => err,
         },
-        (SOL_SOCKET, SO_RCVBUF) => match read_opt_i32(base, optval, optlen) {
+        (SOL_SOCKET, SO_RCVBUF | SO_RCVBUFFORCE) => match read_opt_i32(base, optval, optlen) {
             Ok(value) if value > 0 => {
                 slot.so_rcvbuf = value.max(256) as u32;
                 0
@@ -1399,6 +1417,13 @@ pub fn sys_getsockopt(
         (SOL_SOCKET, SO_MARK) => write_opt_u32(base, optval, optlen, slot.so_mark),
         (SOL_SOCKET, SO_SNDBUF) => write_opt_u32(base, optval, optlen, slot.so_sndbuf),
         (SOL_SOCKET, SO_RCVBUF) => write_opt_u32(base, optval, optlen, slot.so_rcvbuf),
+        (SOL_SOCKET, SO_INCOMING_CPU) => write_opt_u32(base, optval, optlen, 0),
+        (SOL_SOCKET, SO_COOKIE) => write_opt_bytes(
+            base,
+            optval,
+            optlen,
+            &slot.so_cookie.to_le_bytes(),
+        ),
         (SOL_SOCKET, SO_RCVLOWAT) => write_opt_u32(base, optval, optlen, slot.so_rcvlowat),
         (SOL_SOCKET, SO_SNDLOWAT) => write_opt_u32(base, optval, optlen, 1),
         (SOL_SOCKET, SO_RCVTIMEO_OLD | SO_RCVTIMEO_NEW) => write_opt_timeval(

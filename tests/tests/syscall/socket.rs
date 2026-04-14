@@ -11,6 +11,7 @@ const SO_DONTROUTE: u64 = 5;
 const SO_PROTOCOL: u64 = 38;
 const SO_DOMAIN: u64 = 39;
 const SO_SNDBUF: u64 = 7;
+const SO_RCVBUF: u64 = 8;
 const SO_KEEPALIVE: u64 = 9;
 const SO_OOBINLINE: u64 = 10;
 const SO_PRIORITY: u64 = 12;
@@ -20,7 +21,11 @@ const SO_SNDLOWAT: u64 = 19;
 const SO_RCVTIMEO_OLD: u64 = 20;
 const SO_SNDTIMEO_OLD: u64 = 21;
 const SO_ACCEPTCONN: u64 = 30;
+const SO_SNDBUFFORCE: u64 = 32;
+const SO_RCVBUFFORCE: u64 = 33;
 const SO_MARK: u64 = 36;
+const SO_INCOMING_CPU: u64 = 49;
+const SO_COOKIE: u64 = 57;
 const IPPROTO_TCP: u64 = 6;
 const IPPROTO_UDP: u64 = 17;
 const TCP_NODELAY: u64 = 1;
@@ -170,6 +175,36 @@ fn socket_sockopt_roundtrip_and_enotsock() {
         ),
         0
     );
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, val_addr, 4096);
+    }
+    assert_eq!(
+        socket::sys_setsockopt(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            SOL_SOCKET as u64,
+            SO_SNDBUFFORCE as u64,
+            val_addr,
+            4,
+        ),
+        0
+    );
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, val_addr, 6144);
+    }
+    assert_eq!(
+        socket::sys_setsockopt(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            SOL_SOCKET as u64,
+            SO_RCVBUFFORCE as u64,
+            val_addr,
+            4,
+        ),
+        0
+    );
 
     let out_addr = t.scratch + 0x240;
     let out_len = t.scratch + 0x248;
@@ -272,6 +307,84 @@ fn socket_sockopt_roundtrip_and_enotsock() {
         unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
         1
     );
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 4);
+    }
+    assert_eq!(
+        socket::sys_getsockopt(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            SOL_SOCKET as u64,
+            SO_SNDBUF as u64,
+            out_addr,
+            out_len,
+        ),
+        0
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
+        4096
+    );
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 4);
+    }
+    assert_eq!(
+        socket::sys_getsockopt(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            SOL_SOCKET as u64,
+            SO_RCVBUF as u64,
+            out_addr,
+            out_len,
+        ),
+        0
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
+        6144
+    );
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 4);
+    }
+    assert_eq!(
+        socket::sys_getsockopt(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            SOL_SOCKET as u64,
+            SO_INCOMING_CPU as u64,
+            out_addr,
+            out_len,
+        ),
+        0
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
+        0
+    );
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 8);
+    }
+    assert_eq!(
+        socket::sys_getsockopt(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            SOL_SOCKET as u64,
+            SO_COOKIE as u64,
+            out_addr,
+            out_len,
+        ),
+        0
+    );
+    let cookie = unsafe { tidemark_kernel::guest_mem::read_u64(t.base, out_addr) };
+    assert_ne!(cookie, 0);
 
     unsafe {
         tidemark_kernel::guest_mem::write_u32(t.base, out_len, 4);
