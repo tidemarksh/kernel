@@ -36,9 +36,11 @@ const ACCEPT_QUEUE_SIZE: usize = 16;
 const INVALID_BUF_IDX: i32 = -1;
 const INVALID_PEER_IDX: i32 = -1;
 const SOL_SOCKET: u32 = 1;
+const SO_DEBUG: u32 = 1;
 const SO_REUSEADDR: u32 = 2;
 const SO_TYPE: u32 = 3;
 const SO_ERROR: u32 = 4;
+const SO_DONTROUTE: u32 = 5;
 const SO_BROADCAST: u32 = 6;
 const SO_SNDBUF: u32 = 7;
 const SO_RCVBUF: u32 = 8;
@@ -84,12 +86,14 @@ struct SocketSlot {
     peer_idx: i32,
     recv_buf_idx: i32,
     last_error: i32,
+    so_debug: u32,
     so_reuseaddr: u32,
     so_reuseport: u32,
     so_keepalive: u32,
     so_oobinline: u32,
     so_linger_onoff: u32,
     so_linger_secs: u32,
+    so_dontroute: u32,
     so_broadcast: u32,
     so_sndbuf: u32,
     so_rcvbuf: u32,
@@ -180,12 +184,14 @@ fn alloc_socket_slot() -> Option<u32> {
                     peer_idx: INVALID_PEER_IDX,
                     recv_buf_idx: INVALID_BUF_IDX,
                     last_error: 0,
+                    so_debug: 0,
                     so_reuseaddr: 0,
                     so_reuseport: 0,
                     so_keepalive: 0,
                     so_oobinline: 0,
                     so_linger_onoff: 0,
                     so_linger_secs: 0,
+                    so_dontroute: 0,
                     so_broadcast: 0,
                     so_sndbuf: DEFAULT_SOCKET_BUFFER,
                     so_rcvbuf: DEFAULT_SOCKET_BUFFER,
@@ -1017,12 +1023,14 @@ pub fn inject_http_connection(vm_ptr: u32, port: u16, request: &[u8]) -> i32 {
         peer_idx: client_idx as i32,
         recv_buf_idx: server_recv,
         last_error: 0,
+        so_debug: 0,
         so_reuseaddr: 0,
         so_reuseport: 0,
         so_keepalive: 0,
         so_oobinline: 0,
         so_linger_onoff: 0,
         so_linger_secs: 0,
+        so_dontroute: 0,
         so_broadcast: 0,
         so_sndbuf: DEFAULT_SOCKET_BUFFER,
         so_rcvbuf: DEFAULT_SOCKET_BUFFER,
@@ -1049,12 +1057,14 @@ pub fn inject_http_connection(vm_ptr: u32, port: u16, request: &[u8]) -> i32 {
         peer_idx: server_idx as i32,
         recv_buf_idx: client_recv,
         last_error: 0,
+        so_debug: 0,
         so_reuseaddr: 0,
         so_reuseport: 0,
         so_keepalive: 0,
         so_oobinline: 0,
         so_linger_onoff: 0,
         so_linger_secs: 0,
+        so_dontroute: 0,
         so_broadcast: 0,
         so_sndbuf: DEFAULT_SOCKET_BUFFER,
         so_rcvbuf: DEFAULT_SOCKET_BUFFER,
@@ -1203,9 +1213,23 @@ pub fn sys_setsockopt(
     let slot = &mut socket_table()[idx];
 
     match (level as u32, optname as u32) {
+        (SOL_SOCKET, SO_DEBUG) => match read_opt_i32(base, optval, optlen) {
+            Ok(value) => {
+                slot.so_debug = u32::from(value != 0);
+                0
+            }
+            Err(err) => err,
+        },
         (SOL_SOCKET, SO_REUSEADDR) => match read_opt_i32(base, optval, optlen) {
             Ok(value) => {
                 slot.so_reuseaddr = u32::from(value != 0);
+                0
+            }
+            Err(err) => err,
+        },
+        (SOL_SOCKET, SO_DONTROUTE) => match read_opt_i32(base, optval, optlen) {
+            Ok(value) => {
+                slot.so_dontroute = u32::from(value != 0);
                 0
             }
             Err(err) => err,
@@ -1331,7 +1355,9 @@ pub fn sys_getsockopt(
             slot.last_error = 0;
             write_opt_u32(base, optval, optlen, error)
         }
+        (SOL_SOCKET, SO_DEBUG) => write_opt_u32(base, optval, optlen, slot.so_debug),
         (SOL_SOCKET, SO_REUSEADDR) => write_opt_u32(base, optval, optlen, slot.so_reuseaddr),
+        (SOL_SOCKET, SO_DONTROUTE) => write_opt_u32(base, optval, optlen, slot.so_dontroute),
         (SOL_SOCKET, SO_REUSEPORT) => write_opt_u32(base, optval, optlen, slot.so_reuseport),
         (SOL_SOCKET, SO_KEEPALIVE) => write_opt_u32(base, optval, optlen, slot.so_keepalive),
         (SOL_SOCKET, SO_OOBINLINE) => write_opt_u32(base, optval, optlen, slot.so_oobinline),

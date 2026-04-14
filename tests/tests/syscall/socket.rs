@@ -4,8 +4,10 @@ use tidemark_kernel::harness::TestVm;
 use tidemark_kernel::syscall::socket;
 
 const SOL_SOCKET: u64 = 1;
+const SO_DEBUG: u64 = 1;
 const SO_REUSEADDR: u64 = 2;
 const SO_TYPE: u64 = 3;
+const SO_DONTROUTE: u64 = 5;
 const SO_PROTOCOL: u64 = 38;
 const SO_DOMAIN: u64 = 39;
 const SO_SNDBUF: u64 = 7;
@@ -105,6 +107,30 @@ fn socket_sockopt_roundtrip_and_enotsock() {
             &mut t.vm,
             t.base,
             fd as u64,
+            SOL_SOCKET as u64,
+            SO_DEBUG as u64,
+            val_addr,
+            4,
+        ),
+        0
+    );
+    assert_eq!(
+        socket::sys_setsockopt(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            SOL_SOCKET as u64,
+            SO_DONTROUTE as u64,
+            val_addr,
+            4,
+        ),
+        0
+    );
+    assert_eq!(
+        socket::sys_setsockopt(
+            &mut t.vm,
+            t.base,
+            fd as u64,
             IPPROTO_TCP as u64,
             TCP_NODELAY as u64,
             val_addr,
@@ -125,6 +151,46 @@ fn socket_sockopt_roundtrip_and_enotsock() {
             fd as u64,
             SOL_SOCKET as u64,
             SO_REUSEADDR as u64,
+            out_addr,
+            out_len,
+        ),
+        0
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
+        1
+    );
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 4);
+    }
+    assert_eq!(
+        socket::sys_getsockopt(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            SOL_SOCKET as u64,
+            SO_DEBUG as u64,
+            out_addr,
+            out_len,
+        ),
+        0
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
+        1
+    );
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 4);
+    }
+    assert_eq!(
+        socket::sys_getsockopt(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            SOL_SOCKET as u64,
+            SO_DONTROUTE as u64,
             out_addr,
             out_len,
         ),
