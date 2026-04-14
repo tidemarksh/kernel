@@ -565,7 +565,7 @@ pub fn resume_connect_result(vm: &mut ThreadState, base: u32, result: i64) {
 // accept4(2)
 // =========================================================================
 
-/// accept4(fd, addr, addrlen, flags) -> ENOSYS (stub)
+/// accept4(fd, addr, addrlen, flags) -> new fd or STATUS_SOCKET_RECV
 pub fn sys_accept4(
     vm: &mut ThreadState,
     base: u32,

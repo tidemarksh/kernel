@@ -397,8 +397,8 @@ testcases/kernel/syscalls/getrusage/getrusage04.c not yet enabled in current sys
 testcases/kernel/syscalls/getsid/getsid01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getsid/getsid02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getsockname/getsockname01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getsockopt/getsockopt01.c getsockopt currently returns stub success without option payload semantics
-testcases/kernel/syscalls/getsockopt/getsockopt02.c getsockopt currently returns stub success without option payload semantics
+testcases/kernel/syscalls/getsockopt/getsockopt01.c getsockopt implements a narrow socket option subset only
+testcases/kernel/syscalls/getsockopt/getsockopt02.c getsockopt implements a narrow socket option subset only
 testcases/kernel/syscalls/gettid/gettid01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/gettid/gettid02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/gettimeofday/gettimeofday01.c not yet enabled in current syscall-conformance profile
@@ -1073,16 +1073,16 @@ testcases/kernel/syscalls/setrlimit/setrlimit03.c not yet enabled in current sys
 testcases/kernel/syscalls/setrlimit/setrlimit04.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setrlimit/setrlimit05.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setrlimit/setrlimit06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setsockopt/setsockopt01.c setsockopt currently returns stub success without option semantics
-testcases/kernel/syscalls/setsockopt/setsockopt02.c setsockopt currently returns stub success without option semantics
-testcases/kernel/syscalls/setsockopt/setsockopt03.c setsockopt currently returns stub success without option semantics
-testcases/kernel/syscalls/setsockopt/setsockopt04.c setsockopt currently returns stub success without option semantics
-testcases/kernel/syscalls/setsockopt/setsockopt05.c setsockopt currently returns stub success without option semantics
-testcases/kernel/syscalls/setsockopt/setsockopt06.c setsockopt currently returns stub success without option semantics
-testcases/kernel/syscalls/setsockopt/setsockopt07.c setsockopt currently returns stub success without option semantics
-testcases/kernel/syscalls/setsockopt/setsockopt08.c setsockopt currently returns stub success without option semantics
-testcases/kernel/syscalls/setsockopt/setsockopt09.c setsockopt currently returns stub success without option semantics
-testcases/kernel/syscalls/setsockopt/setsockopt10.c setsockopt currently returns stub success without option semantics
+testcases/kernel/syscalls/setsockopt/setsockopt01.c setsockopt implements a narrow socket option subset only
+testcases/kernel/syscalls/setsockopt/setsockopt02.c setsockopt implements a narrow socket option subset only
+testcases/kernel/syscalls/setsockopt/setsockopt03.c setsockopt implements a narrow socket option subset only
+testcases/kernel/syscalls/setsockopt/setsockopt04.c setsockopt implements a narrow socket option subset only
+testcases/kernel/syscalls/setsockopt/setsockopt05.c setsockopt implements a narrow socket option subset only
+testcases/kernel/syscalls/setsockopt/setsockopt06.c setsockopt implements a narrow socket option subset only
+testcases/kernel/syscalls/setsockopt/setsockopt07.c setsockopt implements a narrow socket option subset only
+testcases/kernel/syscalls/setsockopt/setsockopt08.c setsockopt implements a narrow socket option subset only
+testcases/kernel/syscalls/setsockopt/setsockopt09.c setsockopt implements a narrow socket option subset only
+testcases/kernel/syscalls/setsockopt/setsockopt10.c setsockopt implements a narrow socket option subset only
 testcases/kernel/syscalls/settimeofday/settimeofday01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/settimeofday/settimeofday02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setuid/setuid01.c not yet enabled in current syscall-conformance profile
