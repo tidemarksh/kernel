@@ -577,6 +577,7 @@ export_const!(abi_enomem, ENOMEM as i32);
 export_const!(abi_enosys, ENOSYS as i32);
 export_const!(abi_eloop, ELOOP as i32);
 export_const!(abi_eagain, EAGAIN as i32);
+export_const!(abi_etimedout, ETIMEDOUT as i32);
 export_const!(abi_epipe, EPIPE as i32);
 export_const!(abi_eperm, EPERM as i32);
 export_const!(abi_eexist, EEXIST as i32);
@@ -1646,6 +1647,8 @@ pub extern "C" fn thread_resume_socket_wait_timeout(vm_ptr: u32) {
             if !crate::fs::fd_table::blocked_status_uses_ofd_pin(status) {
                 crate::fs::fd_table::clear_blocked_ofd_pin(vm);
             }
+        } else if vm.x[17] == SYS_CONNECT {
+            crate::syscall::socket::resume_connect_result(vm, vm.guest_base, ETIMEDOUT);
         } else {
             crate::fs::fd_table::clear_blocked_ofd_pin(vm);
             vm.socket_timeout_ms = -1;

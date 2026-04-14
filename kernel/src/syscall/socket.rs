@@ -654,6 +654,7 @@ pub fn sys_connect(vm: &mut ThreadState, base: u32, fd: u64, addr: u64, addrlen:
     slot.peer_addr[..len].copy_from_slice(&buf[..len]);
     slot.peer_len = len as u32;
     slot.state = SOCK_STATE_CONNECTING;
+    vm.socket_timeout_ms = socket_send_timeout_ms_for_slot(slot);
 
     // Signal TS runtime to perform the actual connect
     vm.status = STATUS_CONNECT;
@@ -688,6 +689,7 @@ pub fn resume_connect_result(vm: &mut ThreadState, base: u32, result: i64) {
         }
     }
 
+    vm.socket_timeout_ms = -1;
     vm.x[10] = result as u64;
     vm.status = STATUS_OK;
     crate::syscall::signal::check_pending(vm, base);
