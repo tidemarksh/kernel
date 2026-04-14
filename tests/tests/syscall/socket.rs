@@ -11,12 +11,17 @@ const SO_DOMAIN: u64 = 39;
 const SO_SNDBUF: u64 = 7;
 const SO_KEEPALIVE: u64 = 9;
 const SO_OOBINLINE: u64 = 10;
+const SO_LINGER: u64 = 13;
 const SO_RCVLOWAT: u64 = 18;
 const SO_SNDLOWAT: u64 = 19;
+const SO_RCVTIMEO_OLD: u64 = 20;
+const SO_SNDTIMEO_OLD: u64 = 21;
 const SO_ACCEPTCONN: u64 = 30;
 const IPPROTO_TCP: u64 = 6;
 const IPPROTO_UDP: u64 = 17;
 const TCP_NODELAY: u64 = 1;
+const SO_RCVTIMEO_NEW: u64 = 66;
+const SO_SNDTIMEO_NEW: u64 = 67;
 
 #[test]
 fn socket_create_close_and_errors() {
@@ -402,6 +407,178 @@ fn socket_sockopt_validation_and_acceptconn() {
     assert_eq!(
         unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
         1
+    );
+}
+
+#[test]
+fn socket_linger_and_timeouts_roundtrip() {
+    let mut t = TestVm::new();
+    let fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
+    assert!(fd >= 0);
+
+    let linger_addr = t.scratch + 0x700;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, linger_addr, 1);
+        tidemark_kernel::guest_mem::write_u32(t.base, linger_addr + 4, 7);
+    }
+    assert_eq!(
+        socket::sys_setsockopt(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            SOL_SOCKET,
+            SO_LINGER,
+            linger_addr,
+            8,
+        ),
+        0
+    );
+
+    let tv_addr = t.scratch + 0x720;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, tv_addr, 1);
+        tidemark_kernel::guest_mem::write_u64(t.base, tv_addr + 8, 250_000);
+    }
+    assert_eq!(
+        socket::sys_setsockopt(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            SOL_SOCKET,
+            SO_RCVTIMEO_OLD,
+            tv_addr,
+            16,
+        ),
+        0
+    );
+    assert_eq!(
+        socket::sys_setsockopt(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            SOL_SOCKET,
+            SO_SNDTIMEO_NEW,
+            tv_addr,
+            16,
+        ),
+        0
+    );
+
+    let out_addr = t.scratch + 0x760;
+    let out_len = t.scratch + 0x770;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 8);
+    }
+    assert_eq!(
+        socket::sys_getsockopt(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            SOL_SOCKET,
+            SO_LINGER,
+            out_addr,
+            out_len,
+        ),
+        0
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
+        1
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr + 4) },
+        7
+    );
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 16);
+    }
+    assert_eq!(
+        socket::sys_getsockopt(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            SOL_SOCKET,
+            SO_RCVTIMEO_NEW,
+            out_addr,
+            out_len,
+        ),
+        0
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, out_addr) },
+        1
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, out_addr + 8) },
+        250_000
+    );
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 16);
+    }
+    assert_eq!(
+        socket::sys_getsockopt(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            SOL_SOCKET,
+            SO_SNDTIMEO_OLD,
+            out_addr,
+            out_len,
+        ),
+        0
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, out_addr) },
+        1
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, out_addr + 8) },
+        250_000
+    );
+}
+
+#[test]
+fn socket_timeout_and_linger_validation() {
+    let mut t = TestVm::new();
+    let fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
+    assert!(fd >= 0);
+
+    let linger_addr = t.scratch + 0x780;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, linger_addr, 1);
+        tidemark_kernel::guest_mem::write_u32(t.base, linger_addr + 4, (-1i32) as u32);
+    }
+    assert_eq!(
+        socket::sys_setsockopt(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            SOL_SOCKET,
+            SO_LINGER,
+            linger_addr,
+            8,
+        ),
+        EINVAL
+    );
+
+    let tv_addr = t.scratch + 0x7a0;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, tv_addr, 0);
+        tidemark_kernel::guest_mem::write_u64(t.base, tv_addr + 8, 1_000_000);
+    }
+    assert_eq!(
+        socket::sys_setsockopt(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            SOL_SOCKET,
+            SO_RCVTIMEO_OLD,
+            tv_addr,
+            16,
+        ),
+        EINVAL
     );
 }
 

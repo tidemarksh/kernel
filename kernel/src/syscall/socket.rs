@@ -44,12 +44,17 @@ const SO_SNDBUF: u32 = 7;
 const SO_RCVBUF: u32 = 8;
 const SO_KEEPALIVE: u32 = 9;
 const SO_OOBINLINE: u32 = 10;
+const SO_LINGER: u32 = 13;
 const SO_REUSEPORT: u32 = 15;
 const SO_RCVLOWAT: u32 = 18;
 const SO_SNDLOWAT: u32 = 19;
+const SO_RCVTIMEO_OLD: u32 = 20;
+const SO_SNDTIMEO_OLD: u32 = 21;
 const SO_ACCEPTCONN: u32 = 30;
 const SO_PROTOCOL: u32 = 38;
 const SO_DOMAIN: u32 = 39;
+const SO_RCVTIMEO_NEW: u32 = 66;
+const SO_SNDTIMEO_NEW: u32 = 67;
 const IPPROTO_TCP: u32 = 6;
 const IPPROTO_UDP: u32 = 17;
 const TCP_NODELAY: u32 = 1;
@@ -73,10 +78,16 @@ struct SocketSlot {
     so_reuseport: u32,
     so_keepalive: u32,
     so_oobinline: u32,
+    so_linger_onoff: u32,
+    so_linger_secs: u32,
     so_broadcast: u32,
     so_sndbuf: u32,
     so_rcvbuf: u32,
     so_rcvlowat: u32,
+    so_rcvtimeo_sec: u64,
+    so_rcvtimeo_usec: u64,
+    so_sndtimeo_sec: u64,
+    so_sndtimeo_usec: u64,
     tcp_nodelay: u32,
     shutdown_mask: u32,
     accept_head: u32,
@@ -163,10 +174,16 @@ fn alloc_socket_slot() -> Option<u32> {
                     so_reuseport: 0,
                     so_keepalive: 0,
                     so_oobinline: 0,
+                    so_linger_onoff: 0,
+                    so_linger_secs: 0,
                     so_broadcast: 0,
                     so_sndbuf: DEFAULT_SOCKET_BUFFER,
                     so_rcvbuf: DEFAULT_SOCKET_BUFFER,
                     so_rcvlowat: 1,
+                    so_rcvtimeo_sec: 0,
+                    so_rcvtimeo_usec: 0,
+                    so_sndtimeo_sec: 0,
+                    so_sndtimeo_usec: 0,
                     tcp_nodelay: 0,
                     shutdown_mask: 0,
                     accept_head: 0,
@@ -940,10 +957,16 @@ pub fn inject_http_connection(vm_ptr: u32, port: u16, request: &[u8]) -> i32 {
         so_reuseport: 0,
         so_keepalive: 0,
         so_oobinline: 0,
+        so_linger_onoff: 0,
+        so_linger_secs: 0,
         so_broadcast: 0,
         so_sndbuf: DEFAULT_SOCKET_BUFFER,
         so_rcvbuf: DEFAULT_SOCKET_BUFFER,
         so_rcvlowat: 1,
+        so_rcvtimeo_sec: 0,
+        so_rcvtimeo_usec: 0,
+        so_sndtimeo_sec: 0,
+        so_sndtimeo_usec: 0,
         tcp_nodelay: 0,
         shutdown_mask: 0,
         accept_head: 0,
@@ -966,10 +989,16 @@ pub fn inject_http_connection(vm_ptr: u32, port: u16, request: &[u8]) -> i32 {
         so_reuseport: 0,
         so_keepalive: 0,
         so_oobinline: 0,
+        so_linger_onoff: 0,
+        so_linger_secs: 0,
         so_broadcast: 0,
         so_sndbuf: DEFAULT_SOCKET_BUFFER,
         so_rcvbuf: DEFAULT_SOCKET_BUFFER,
         so_rcvlowat: 1,
+        so_rcvtimeo_sec: 0,
+        so_rcvtimeo_usec: 0,
+        so_sndtimeo_sec: 0,
+        so_sndtimeo_usec: 0,
         tcp_nodelay: 0,
         shutdown_mask: 0,
         accept_head: 0,
@@ -1026,6 +1055,30 @@ fn read_opt_i32(base: u32, optval: u64, optlen: u64) -> Result<i32, i64> {
     Ok(unsafe { guest_mem::read_i32(base, optval) })
 }
 
+fn read_opt_linger(base: u32, optval: u64, optlen: u64) -> Result<(u32, u32), i64> {
+    if optval == 0 || optlen < 8 {
+        return Err(EINVAL);
+    }
+    let onoff = unsafe { guest_mem::read_i32(base, optval) };
+    let linger = unsafe { guest_mem::read_i32(base, optval + 4) };
+    if linger < 0 {
+        return Err(EINVAL);
+    }
+    Ok((u32::from(onoff != 0), linger as u32))
+}
+
+fn read_opt_timeval(base: u32, optval: u64, optlen: u64) -> Result<(u64, u64), i64> {
+    if optval == 0 || optlen < 16 {
+        return Err(EINVAL);
+    }
+    let sec = unsafe { guest_mem::read_i64(base, optval) };
+    let usec = unsafe { guest_mem::read_i64(base, optval + 8) };
+    if sec < 0 || !(0..1_000_000).contains(&usec) {
+        return Err(EINVAL);
+    }
+    Ok((sec as u64, usec as u64))
+}
+
 fn write_opt_u32(base: u32, optval: u64, optlen_ptr: u64, value: u32) -> i64 {
     if optval == 0 || optlen_ptr == 0 {
         return EFAULT;
@@ -1039,6 +1092,34 @@ fn write_opt_u32(base: u32, optval: u64, optlen_ptr: u64, value: u32) -> i64 {
         guest_mem::write_u32(base, optlen_ptr, bytes.len() as u32);
     }
     0
+}
+
+fn write_opt_bytes(base: u32, optval: u64, optlen_ptr: u64, bytes: &[u8]) -> i64 {
+    if optval == 0 || optlen_ptr == 0 {
+        return EFAULT;
+    }
+
+    let user_len = unsafe { guest_mem::read_u32(base, optlen_ptr) } as usize;
+    let copy_len = user_len.min(bytes.len());
+    unsafe {
+        guest_mem::write_bytes(base, optval, &bytes[..copy_len]);
+        guest_mem::write_u32(base, optlen_ptr, bytes.len() as u32);
+    }
+    0
+}
+
+fn write_opt_linger(base: u32, optval: u64, optlen_ptr: u64, onoff: u32, linger: u32) -> i64 {
+    let mut bytes = [0u8; 8];
+    bytes[..4].copy_from_slice(&(onoff as i32).to_le_bytes());
+    bytes[4..].copy_from_slice(&(linger as i32).to_le_bytes());
+    write_opt_bytes(base, optval, optlen_ptr, &bytes)
+}
+
+fn write_opt_timeval(base: u32, optval: u64, optlen_ptr: u64, sec: u64, usec: u64) -> i64 {
+    let mut bytes = [0u8; 16];
+    bytes[..8].copy_from_slice(&(sec as i64).to_le_bytes());
+    bytes[8..].copy_from_slice(&(usec as i64).to_le_bytes());
+    write_opt_bytes(base, optval, optlen_ptr, &bytes)
 }
 
 /// setsockopt(fd, level, optname, optval, optlen)
@@ -1086,6 +1167,14 @@ pub fn sys_setsockopt(
             }
             Err(err) => err,
         },
+        (SOL_SOCKET, SO_LINGER) => match read_opt_linger(base, optval, optlen) {
+            Ok((onoff, linger)) => {
+                slot.so_linger_onoff = onoff;
+                slot.so_linger_secs = linger;
+                0
+            }
+            Err(err) => err,
+        },
         (SOL_SOCKET, SO_BROADCAST) => match read_opt_i32(base, optval, optlen) {
             Ok(value) => {
                 slot.so_broadcast = u32::from(value != 0);
@@ -1102,6 +1191,26 @@ pub fn sys_setsockopt(
             Err(err) => err,
         },
         (SOL_SOCKET, SO_SNDLOWAT) => ENOPROTOOPT,
+        (SOL_SOCKET, SO_RCVTIMEO_OLD | SO_RCVTIMEO_NEW) => {
+            match read_opt_timeval(base, optval, optlen) {
+                Ok((sec, usec)) => {
+                    slot.so_rcvtimeo_sec = sec;
+                    slot.so_rcvtimeo_usec = usec;
+                    0
+                }
+                Err(err) => err,
+            }
+        }
+        (SOL_SOCKET, SO_SNDTIMEO_OLD | SO_SNDTIMEO_NEW) => {
+            match read_opt_timeval(base, optval, optlen) {
+                Ok((sec, usec)) => {
+                    slot.so_sndtimeo_sec = sec;
+                    slot.so_sndtimeo_usec = usec;
+                    0
+                }
+                Err(err) => err,
+            }
+        }
         (SOL_SOCKET, SO_SNDBUF) => match read_opt_i32(base, optval, optlen) {
             Ok(value) if value > 0 => {
                 slot.so_sndbuf = value.max(256) as u32;
@@ -1162,11 +1271,32 @@ pub fn sys_getsockopt(
         (SOL_SOCKET, SO_REUSEPORT) => write_opt_u32(base, optval, optlen, slot.so_reuseport),
         (SOL_SOCKET, SO_KEEPALIVE) => write_opt_u32(base, optval, optlen, slot.so_keepalive),
         (SOL_SOCKET, SO_OOBINLINE) => write_opt_u32(base, optval, optlen, slot.so_oobinline),
+        (SOL_SOCKET, SO_LINGER) => write_opt_linger(
+            base,
+            optval,
+            optlen,
+            slot.so_linger_onoff,
+            slot.so_linger_secs,
+        ),
         (SOL_SOCKET, SO_BROADCAST) => write_opt_u32(base, optval, optlen, slot.so_broadcast),
         (SOL_SOCKET, SO_SNDBUF) => write_opt_u32(base, optval, optlen, slot.so_sndbuf),
         (SOL_SOCKET, SO_RCVBUF) => write_opt_u32(base, optval, optlen, slot.so_rcvbuf),
         (SOL_SOCKET, SO_RCVLOWAT) => write_opt_u32(base, optval, optlen, slot.so_rcvlowat),
         (SOL_SOCKET, SO_SNDLOWAT) => write_opt_u32(base, optval, optlen, 1),
+        (SOL_SOCKET, SO_RCVTIMEO_OLD | SO_RCVTIMEO_NEW) => write_opt_timeval(
+            base,
+            optval,
+            optlen,
+            slot.so_rcvtimeo_sec,
+            slot.so_rcvtimeo_usec,
+        ),
+        (SOL_SOCKET, SO_SNDTIMEO_OLD | SO_SNDTIMEO_NEW) => write_opt_timeval(
+            base,
+            optval,
+            optlen,
+            slot.so_sndtimeo_sec,
+            slot.so_sndtimeo_usec,
+        ),
         (SOL_SOCKET, SO_ACCEPTCONN) => write_opt_u32(
             base,
             optval,
