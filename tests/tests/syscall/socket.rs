@@ -14,8 +14,10 @@ const SO_SNDBUF: u64 = 7;
 const SO_RCVBUF: u64 = 8;
 const SO_KEEPALIVE: u64 = 9;
 const SO_OOBINLINE: u64 = 10;
+const SO_NO_CHECK: u64 = 11;
 const SO_PRIORITY: u64 = 12;
 const SO_LINGER: u64 = 13;
+const SO_BSDCOMPAT: u64 = 14;
 const SO_RCVLOWAT: u64 = 18;
 const SO_SNDLOWAT: u64 = 19;
 const SO_RCVTIMEO_OLD: u64 = 20;
@@ -115,7 +117,31 @@ fn socket_sockopt_roundtrip_and_enotsock() {
             t.base,
             fd as u64,
             SOL_SOCKET as u64,
+            SO_NO_CHECK as u64,
+            val_addr,
+            4,
+        ),
+        0
+    );
+    assert_eq!(
+        socket::sys_setsockopt(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            SOL_SOCKET as u64,
             SO_DEBUG as u64,
+            val_addr,
+            4,
+        ),
+        0
+    );
+    assert_eq!(
+        socket::sys_setsockopt(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            SOL_SOCKET as u64,
+            SO_BSDCOMPAT as u64,
             val_addr,
             4,
         ),
@@ -237,6 +263,26 @@ fn socket_sockopt_roundtrip_and_enotsock() {
             t.base,
             fd as u64,
             SOL_SOCKET as u64,
+            SO_NO_CHECK as u64,
+            out_addr,
+            out_len,
+        ),
+        0
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
+        1
+    );
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 4);
+    }
+    assert_eq!(
+        socket::sys_getsockopt(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            SOL_SOCKET as u64,
             SO_DEBUG as u64,
             out_addr,
             out_len,
@@ -286,6 +332,26 @@ fn socket_sockopt_roundtrip_and_enotsock() {
     assert_eq!(
         unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
         42
+    );
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 4);
+    }
+    assert_eq!(
+        socket::sys_getsockopt(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            SOL_SOCKET as u64,
+            SO_BSDCOMPAT as u64,
+            out_addr,
+            out_len,
+        ),
+        0
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
+        1
     );
 
     unsafe {
