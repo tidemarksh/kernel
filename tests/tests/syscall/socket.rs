@@ -583,6 +583,45 @@ fn socket_timeout_and_linger_validation() {
 }
 
 #[test]
+fn socket_accept_block_captures_rcv_timeout_ms() {
+    let mut t = TestVm::new();
+    let fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
+    assert!(fd >= 0);
+
+    let tv_addr = t.scratch + 0x7c0;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, tv_addr, 0);
+        tidemark_kernel::guest_mem::write_u64(t.base, tv_addr + 8, 1500);
+    }
+    assert_eq!(
+        socket::sys_setsockopt(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            SOL_SOCKET,
+            SO_RCVTIMEO_OLD,
+            tv_addr,
+            16,
+        ),
+        0
+    );
+
+    let sockaddr: [u8; 16] = [2, 0, 0x50, 0x00, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
+    let bind_addr = t.scratch + 0x7e0;
+    t.write_mem(bind_addr, &sockaddr);
+    assert_eq!(
+        socket::sys_bind(&mut t.vm, t.base, fd as u64, bind_addr, 16),
+        0
+    );
+    assert_eq!(socket::sys_listen(&mut t.vm, t.base, fd as u64, 1), 0);
+
+    let ret = socket::sys_accept4(&mut t.vm, t.base, fd as u64, 0, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_SOCKET_RECV);
+    assert_eq!(t.vm.socket_timeout_ms, 2);
+}
+
+#[test]
 fn socket_connect_and_getpeername() {
     let mut t = TestVm::new();
     let fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);

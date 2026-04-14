@@ -135,6 +135,8 @@ pub struct ThreadState {
     pub futex_wait_flags: u32,
     /// epoll_wait timeout in milliseconds (-1 = infinite wait).
     pub epoll_timeout_ms: i64,
+    /// socket wait timeout in milliseconds (-1 = infinite wait).
+    pub socket_timeout_ms: i64,
     /// maxevents captured for STATUS_EPOLL_WAIT retry.
     pub epoll_maxevents: u32,
     /// FD number captured for a blocked OFD-backed syscall resume.

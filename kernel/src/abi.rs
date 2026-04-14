@@ -1615,10 +1615,28 @@ pub extern "C" fn thread_epoll_wait_timeout(vm_ptr: u32) -> i64 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn thread_socket_wait_timeout(vm_ptr: u32) -> i64 {
+    unsafe { (*(vm_ptr as *const crate::types::ThreadState)).socket_timeout_ms }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn thread_resume_epoll_wait_timeout(vm_ptr: u32) {
     unsafe {
         let vm = &mut *(vm_ptr as *mut crate::types::ThreadState);
         crate::syscall::epoll::resume_timeout(vm);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_resume_socket_wait_timeout(vm_ptr: u32) {
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut crate::types::ThreadState);
+        crate::fs::fd_table::clear_blocked_ofd_pin(vm);
+        vm.socket_timeout_ms = -1;
+        vm.fault_pc = 0;
+        vm.fault_addr = 0;
+        vm.x[10] = EAGAIN as u64;
+        vm.status = STATUS_OK;
     }
 }
 

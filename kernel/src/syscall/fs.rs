@@ -1327,6 +1327,7 @@ pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) 
         let n = super::socket::socket_read(vm, base, fd, buf, count);
         if n == EAGAIN && ofd.status_flags & O_NONBLOCK == 0 {
             fd_table::pin_blocked_fd(base, vm, fd);
+            vm.socket_timeout_ms = super::socket::socket_recv_timeout_ms_for_fd(base, vm, fd);
             vm.status = STATUS_SOCKET_RECV;
             return 0;
         }
@@ -1801,6 +1802,7 @@ pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64,
         }
         if n == EAGAIN && ofd.status_flags & O_NONBLOCK == 0 {
             fd_table::pin_blocked_fd(base, vm, fd);
+            vm.socket_timeout_ms = super::socket::socket_send_timeout_ms_for_fd(base, vm, fd);
             vm.status = STATUS_SOCKET_SEND;
             return trace_write_attempt(
                 fd,
@@ -2195,6 +2197,7 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
             }
             if n == EAGAIN && ofd.status_flags & O_NONBLOCK == 0 {
                 fd_table::pin_blocked_fd(base, vm, fd);
+                vm.socket_timeout_ms = super::socket::socket_send_timeout_ms_for_fd(base, vm, fd);
                 vm.status = STATUS_SOCKET_SEND;
                 return trace_write_attempt(
                     fd,

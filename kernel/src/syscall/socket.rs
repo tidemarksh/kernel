@@ -60,6 +60,16 @@ const IPPROTO_UDP: u32 = 17;
 const TCP_NODELAY: u32 = 1;
 const DEFAULT_SOCKET_BUFFER: u32 = 8192;
 
+fn timeout_to_millis(sec: u64, usec: u64) -> i64 {
+    if sec == 0 && usec == 0 {
+        return -1;
+    }
+    let millis = sec
+        .saturating_mul(1000)
+        .saturating_add(usec.saturating_add(999) / 1000);
+    millis.min(i64::MAX as u64) as i64
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct SocketSlot {
@@ -220,6 +230,28 @@ pub fn socket_close(socket_idx: u32) {
     if socket_idx < MAX_SOCKETS as u32 {
         shutdown_slot(socket_idx as usize);
     }
+}
+
+fn socket_recv_timeout_ms_for_slot(slot: &SocketSlot) -> i64 {
+    timeout_to_millis(slot.so_rcvtimeo_sec, slot.so_rcvtimeo_usec)
+}
+
+fn socket_send_timeout_ms_for_slot(slot: &SocketSlot) -> i64 {
+    timeout_to_millis(slot.so_sndtimeo_sec, slot.so_sndtimeo_usec)
+}
+
+pub fn socket_recv_timeout_ms_for_fd(base: u32, vm: &ThreadState, fd: u64) -> i64 {
+    let Some(idx) = get_socket_idx(base, vm, fd).map(|value| value as usize) else {
+        return -1;
+    };
+    socket_recv_timeout_ms_for_slot(&socket_table()[idx])
+}
+
+pub fn socket_send_timeout_ms_for_fd(base: u32, vm: &ThreadState, fd: u64) -> i64 {
+    let Some(idx) = get_socket_idx(base, vm, fd).map(|value| value as usize) else {
+        return -1;
+    };
+    socket_send_timeout_ms_for_slot(&socket_table()[idx])
 }
 
 /// Look up the socket index for an FD. Returns None if the FD is not a socket.
@@ -635,6 +667,7 @@ pub fn sys_accept4(
                 return EAGAIN;
             }
             fd_table::pin_blocked_fd(base, vm, fd);
+            vm.socket_timeout_ms = socket_recv_timeout_ms_for_slot(listener);
             vm.status = STATUS_SOCKET_RECV;
             return 0;
         }
@@ -714,6 +747,7 @@ pub fn sys_sendto(
     let n = socket_write(vm, base, fd, buf, len);
     if n == EAGAIN {
         fd_table::pin_blocked_fd(base, vm, fd);
+        vm.socket_timeout_ms = socket_send_timeout_ms_for_slot(slot);
         vm.status = STATUS_SOCKET_SEND;
         return 0;
     }
@@ -760,6 +794,7 @@ pub fn sys_recvfrom(
             return EAGAIN;
         }
         fd_table::pin_blocked_fd(base, vm, fd);
+        vm.socket_timeout_ms = socket_recv_timeout_ms_for_slot(slot);
         vm.status = STATUS_SOCKET_RECV;
         return 0;
     }
