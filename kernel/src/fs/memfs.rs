@@ -724,6 +724,86 @@ pub fn rmdir(parent_ino: u32, name: &[u8]) -> i64 {
     0
 }
 
+pub fn rename(old_parent_ino: u32, old_name: &[u8], new_parent_ino: u32, new_name: &[u8]) -> i64 {
+    if old_name.is_empty() || new_name.is_empty() {
+        return ENOENT;
+    }
+
+    let ino = lookup(old_parent_ino, old_name);
+    if ino == 0 {
+        return ENOENT;
+    }
+
+    if old_parent_ino == new_parent_ino && old_name == new_name {
+        return 0;
+    }
+
+    let inode = inodes()[ino as usize];
+    let file_type = inode.mode & S_IFMT;
+    if old_name == b"." || old_name == b".." || new_name == b"." || new_name == b".." {
+        return EINVAL;
+    }
+
+    if file_type == S_IFDIR {
+        let mut ancestor = new_parent_ino;
+        loop {
+            if ancestor == ino {
+                return EINVAL;
+            }
+            if ancestor <= 1 {
+                break;
+            }
+            let next = parent_ino(ancestor);
+            if next == ancestor {
+                break;
+            }
+            ancestor = next;
+        }
+    }
+
+    let existing_target = lookup(new_parent_ino, new_name);
+    if existing_target != 0 && existing_target != ino {
+        let target_mode = inodes()[existing_target as usize].mode & S_IFMT;
+        if file_type == S_IFDIR {
+            if target_mode != S_IFDIR {
+                return ENOTDIR;
+            }
+            if first_child()[existing_target as usize] != 0 {
+                return ENOTEMPTY;
+            }
+        } else if target_mode == S_IFDIR {
+            return EISDIR;
+        }
+    }
+
+    if existing_target != 0 && existing_target != ino {
+        let target_mode = inodes()[existing_target as usize].mode & S_IFMT;
+        remove_dir_entry(new_parent_ino, new_name);
+        if target_mode == S_IFDIR {
+          inodes()[existing_target as usize].nlink = 0;
+          inodes()[new_parent_ino as usize].nlink -= 1;
+        } else {
+          inodes()[existing_target as usize].nlink = inodes()[existing_target as usize].nlink.saturating_sub(1);
+        }
+    }
+
+    let removed = remove_dir_entry(old_parent_ino, old_name);
+    if removed == 0 {
+        return ENOENT;
+    }
+    if !add_dir_entry(new_parent_ino, new_name, ino) {
+        let _ = add_dir_entry(old_parent_ino, old_name, ino);
+        return ENOSPC;
+    }
+
+    if file_type == S_IFDIR && old_parent_ino != new_parent_ino {
+        inodes()[old_parent_ino as usize].nlink = inodes()[old_parent_ino as usize].nlink.saturating_sub(1);
+        inodes()[new_parent_ino as usize].nlink += 1;
+    }
+
+    0
+}
+
 // =========================================================================
 // File I/O
 // =========================================================================

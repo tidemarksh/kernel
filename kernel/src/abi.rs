@@ -1569,6 +1569,23 @@ pub extern "C" fn thread_pending_fs_absolute_path(vm_ptr: u32, buf_ptr: u32, buf
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn thread_pending_fs_secondary_absolute_path(
+    vm_ptr: u32,
+    buf_ptr: u32,
+    buf_len: u32,
+) -> i64 {
+    unsafe {
+        let vm = &*(vm_ptr as *const crate::types::ThreadState);
+        crate::syscall::fs::pending_request_secondary_absolute_path(
+            vm_ptr,
+            vm.guest_base,
+            buf_ptr,
+            buf_len,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn thread_process_fs(vm_ptr: u32) {
     unsafe {
         let vm = &*(vm_ptr as *const crate::types::ThreadState);

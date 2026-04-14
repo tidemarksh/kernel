@@ -152,7 +152,9 @@ fn classify_pending_request_effects(request: &ring_buffer::FsRequestInfo) -> u32
         ring_buffer::FS_OP_CLOSE => FS_EFFECT_SHARED_OFD_STATE,
         ring_buffer::FS_OP_GETDENTS | ring_buffer::FS_OP_LSEEK => FS_EFFECT_SHARED_OFD_STATE,
         ring_buffer::FS_OP_TRUNCATE => FS_EFFECT_MEMFS_FILE_DATA,
-        ring_buffer::FS_OP_MKDIR | ring_buffer::FS_OP_UNLINK => FS_EFFECT_MEMFS_MUTATION,
+        ring_buffer::FS_OP_MKDIR | ring_buffer::FS_OP_UNLINK | ring_buffer::FS_OP_RENAME => {
+            FS_EFFECT_MEMFS_MUTATION
+        }
         _ => 0,
     }
 }
@@ -239,7 +241,15 @@ fn pending_request_path_ptr_inner(request: &ring_buffer::FsRequestInfo) -> u64 {
         ring_buffer::FS_OP_OPENAT
         | ring_buffer::FS_OP_MKDIR
         | ring_buffer::FS_OP_UNLINK
+        | ring_buffer::FS_OP_RENAME
         | ring_buffer::FS_OP_TRUNCATE => request.path_ptr,
+        _ => 0,
+    }
+}
+
+fn pending_request_secondary_path_ptr_inner(request: &ring_buffer::FsRequestInfo) -> u64 {
+    match request.opcode {
+        ring_buffer::FS_OP_RENAME => request.buf_ptr,
         _ => 0,
     }
 }
@@ -299,6 +309,25 @@ pub fn pending_request_path_len(vm_ptr: u32, base: u32) -> u32 {
 }
 
 pub fn pending_request_absolute_path(vm_ptr: u32, base: u32, out_ptr: u32, out_len: u32) -> i64 {
+    pending_request_absolute_path_impl(vm_ptr, base, out_ptr, out_len, false)
+}
+
+pub fn pending_request_secondary_absolute_path(
+    vm_ptr: u32,
+    base: u32,
+    out_ptr: u32,
+    out_len: u32,
+) -> i64 {
+    pending_request_absolute_path_impl(vm_ptr, base, out_ptr, out_len, true)
+}
+
+fn pending_request_absolute_path_impl(
+    vm_ptr: u32,
+    base: u32,
+    out_ptr: u32,
+    out_len: u32,
+    secondary: bool,
+) -> i64 {
     unsafe {
         let vm = &*(vm_ptr as *const ThreadState);
         let ring_base = process_fs_ring_base(base, vm);
@@ -308,7 +337,11 @@ pub fn pending_request_absolute_path(vm_ptr: u32, base: u32, out_ptr: u32, out_l
         let Some(request) = ring_buffer::peek_request_info(ring_base) else {
             return 0;
         };
-        let path_ptr = pending_request_path_ptr_inner(&request);
+        let path_ptr = if secondary {
+            pending_request_secondary_path_ptr_inner(&request)
+        } else {
+            pending_request_path_ptr_inner(&request)
+        };
         if path_ptr == 0 {
             return 0;
         }
@@ -329,7 +362,12 @@ pub fn pending_request_absolute_path(vm_ptr: u32, base: u32, out_ptr: u32, out_l
             absolute[..path.len()].copy_from_slice(path);
             path.len()
         } else {
-            let base_ino = match dirfd_base_ino(vm, request.fd as u64, base) {
+            let dirfd = if secondary {
+                request.offset
+            } else {
+                request.fd as u64
+            };
+            let base_ino = match dirfd_base_ino(vm, dirfd, base) {
                 Ok(ino) => ino,
                 Err(errno) => return errno,
             };
@@ -569,6 +607,29 @@ pub fn dispatch_unlinkat(
         0,
         0,
         path_addr,
+        flags as u32,
+        0,
+    )
+}
+
+pub fn dispatch_renameat2(
+    vm: &mut ThreadState,
+    base: u32,
+    olddirfd: u64,
+    oldpath_addr: u64,
+    newdirfd: u64,
+    newpath_addr: u64,
+    flags: u64,
+) -> i64 {
+    submit_fs_request(
+        vm,
+        base,
+        ring_buffer::FS_OP_RENAME,
+        olddirfd as i32,
+        newdirfd,
+        0,
+        newpath_addr,
+        oldpath_addr,
         flags as u32,
         0,
     )
@@ -1103,6 +1164,71 @@ fn split_relative_parent_name(path: &[u8]) -> (&[u8], &[u8]) {
     }
     // No slash: parent is empty, name is the whole path
     (&[], path)
+}
+
+fn ensure_directory_inode(ino: u32) -> Result<u32, i64> {
+    let st = memfs::stat(ino).ok_or(ENOENT)?;
+    if st.mode & memfs::S_IFMT != memfs::S_IFDIR {
+        return Err(ENOTDIR);
+    }
+    Ok(ino)
+}
+
+fn resolve_parent_and_name(
+    vm: &ThreadState,
+    base: u32,
+    dirfd: u64,
+    path_addr: u64,
+) -> Result<(u32, [u8; 513], usize), i64> {
+    let mut path_buf = [0u8; 513];
+    let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf[1..]) };
+    let path = trim_trailing_slashes(&path_buf[1..1 + len]);
+    if path.is_empty() {
+        return Err(ENOENT);
+    }
+    let mut name_buf = [0u8; 513];
+
+    if path[0] == b'/' {
+        let mut last_slash = 0usize;
+        for i in (0..path.len()).rev() {
+            if path[i] == b'/' {
+                last_slash = i;
+                break;
+            }
+        }
+        let parent_path = if last_slash == 0 {
+            b"/" as &[u8]
+        } else {
+            &path[..last_slash]
+        };
+        let name = &path[last_slash + 1..];
+        if name.is_empty() {
+            return Err(ENOENT);
+        }
+        let parent_ino = resolve_path_with_symlink_policy(
+            1,
+            parent_path,
+            true,
+            MAX_PATH_SYMLINK_FOLLOWS,
+        )?;
+        let parent_ino = ensure_directory_inode(parent_ino)?;
+        name_buf[..name.len()].copy_from_slice(name);
+        return Ok((parent_ino, name_buf, name.len()));
+    }
+
+    let base_ino = dirfd_base_ino(vm, dirfd, base)?;
+    let (parent_rel, name) = split_relative_parent_name(path);
+    if name.is_empty() {
+        return Err(ENOENT);
+    }
+    let parent_ino = if parent_rel.is_empty() {
+        base_ino
+    } else {
+        resolve_path_with_symlink_policy(base_ino, parent_rel, true, MAX_PATH_SYMLINK_FOLLOWS)?
+    };
+    let parent_ino = ensure_directory_inode(parent_ino)?;
+    name_buf[..name.len()].copy_from_slice(name);
+    Ok((parent_ino, name_buf, name.len()))
 }
 
 // =========================================================================
@@ -2427,6 +2553,38 @@ pub fn sys_unlinkat(
             memfs::unlink(parent_ino, name)
         }
     }
+}
+
+pub fn sys_renameat2(
+    vm: &mut ThreadState,
+    base: u32,
+    olddirfd: u64,
+    oldpath_addr: u64,
+    newdirfd: u64,
+    newpath_addr: u64,
+    flags: u64,
+) -> i64 {
+    if flags != 0 {
+        return EINVAL;
+    }
+
+    let (old_parent_ino, old_name_buf, old_name_len) =
+        match resolve_parent_and_name(vm, base, olddirfd, oldpath_addr) {
+            Ok(parts) => parts,
+            Err(errno) => return errno,
+        };
+    let (new_parent_ino, new_name_buf, new_name_len) =
+        match resolve_parent_and_name(vm, base, newdirfd, newpath_addr) {
+            Ok(parts) => parts,
+            Err(errno) => return errno,
+        };
+
+    memfs::rename(
+        old_parent_ino,
+        &old_name_buf[..old_name_len],
+        new_parent_ino,
+        &new_name_buf[..new_name_len],
+    )
 }
 
 // =========================================================================

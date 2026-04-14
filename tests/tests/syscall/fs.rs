@@ -319,6 +319,29 @@ fn unlinkat_rejects_invalid_flags() {
 }
 
 #[test]
+fn renameat2_moves_file_between_paths() {
+    let mut t = TestVm::new();
+    let fd = t.sys_openat(b"/old.txt", O_CREAT | O_RDWR);
+    assert!(fd >= 3);
+    assert_eq!(t.sys_write_data(fd, b"renamed"), 7);
+    t.sys_close(fd);
+
+    let old_addr = t.write_path(0xF000, b"/old.txt");
+    let new_addr = t.write_path(0xF100, b"/new.txt");
+    assert_eq!(
+        fs::sys_renameat2(&mut t.vm, t.base, AT_FDCWD, old_addr, AT_FDCWD, new_addr, 0),
+        0
+    );
+
+    assert_eq!(memfs::resolve_path(b"/old.txt"), 0);
+    let moved_ino = memfs::resolve_path(b"/new.txt");
+    assert!(moved_ino > 0);
+    let mut buf = [0u8; 16];
+    assert_eq!(memfs::read_file(moved_ino, 0, &mut buf), 7);
+    assert_eq!(&buf[..7], b"renamed");
+}
+
+#[test]
 fn truncate_reduces_file_size() {
     let mut t = TestVm::new();
     let fd = t.sys_openat(b"/trunc_test.txt", O_CREAT | O_RDWR);
@@ -704,7 +727,7 @@ fn stdio_pty_slave_writev_reaches_master_output() {
 
 #[test]
 fn stdio_pty_master_canonical_mode_commits_input_only_after_newline() {
-    let mut t = TestVm::new();
+    let t = TestVm::new();
     let pty_idx = fd_table::get_ofd(t.base, &t.vm, 1)
         .map(|ofd| ofd.ino)
         .unwrap_or(0);
@@ -727,7 +750,7 @@ fn stdio_pty_master_canonical_mode_commits_input_only_after_newline() {
 
 #[test]
 fn stdio_pty_master_erase_updates_canonical_line() {
-    let mut t = TestVm::new();
+    let t = TestVm::new();
     let pty_idx = fd_table::get_ofd(t.base, &t.vm, 1)
         .map(|ofd| ofd.ino)
         .unwrap_or(0);

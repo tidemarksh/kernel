@@ -16,10 +16,10 @@
 //! struct FsRequest {                    // 64 bytes total
 //!     opcode:  u32,                     // offset 0
 //!     fd:      i32,                     // offset 4
-//!     offset:  u64,                     // offset 8
+//!     offset:  u64,                     // offset 8    — generic arg (e.g. rename newdirfd)
 //!     len:     u64,                     // offset 16
-//!     buf_ptr: u64,                     // offset 24
-//!     path_ptr:u64,                     // offset 32
+//!     buf_ptr: u64,                     // offset 24   — generic arg (e.g. rename newpath_ptr)
+//!     path_ptr:u64,                     // offset 32   — primary path pointer
 //!     flags:   u32,                     // offset 40
 //!     mode:    u32,                     // offset 44
 //!     _pad:    [u8; 16],               // offset 48
@@ -279,9 +279,19 @@ pub fn process_requests(ring_base: u32, vm_ptr: u32, base: u32) {
                     }
                 }
                 FS_OP_RENAME => {
-                    // ENOSYS: rename requires two path strings (old_path and new_path)
-                    // but the ring buffer FsRequest format only has a single path_ptr field.
-                    ENOSYS
+                    if path_ptr == 0 || buf_ptr == 0 {
+                        EINVAL
+                    } else {
+                        crate::syscall::fs::sys_renameat2(
+                            vm,
+                            base,
+                            fd as u64,
+                            path_ptr,
+                            offset,
+                            buf_ptr,
+                            flags as u64,
+                        )
+                    }
                 }
                 FS_OP_GETDENTS => {
                     if buf_ptr == 0 {

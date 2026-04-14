@@ -204,6 +204,13 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             }
             r
         }
+        SYS_RENAMEAT2 => {
+            let r = fs::dispatch_renameat2(vm, base, a0, a1, a2, a3, a4);
+            if vm.status == abi::STATUS_FS {
+                return debug_return(vm, nr, r, abi::STATUS_FS);
+            }
+            r
+        }
         SYS_STATFS => fs::sys_statfs(vm, base, a0, a1),
         SYS_FACCESSAT => fs::sys_faccessat(vm, base, a0, a1, a2),
         SYS_CHDIR => fs::sys_chdir(vm, base, a0),

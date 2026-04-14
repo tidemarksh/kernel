@@ -1,6 +1,6 @@
 use tidemark_kernel::abi::{O_CREAT, O_RDONLY, O_RDWR};
 use tidemark_kernel::fs::ring_buffer::{
-    FS_OP_MKDIR, FS_OP_WRITE, HEADER_SIZE, REQ_SIZE, RESP_SIZE, RING_BUFFER_SIZE, process_requests,
+    FS_OP_MKDIR, FS_OP_RENAME, FS_OP_WRITE, HEADER_SIZE, REQ_SIZE, RESP_SIZE, RING_BUFFER_SIZE, process_requests,
     read_completion, submit_request,
 };
 use tidemark_kernel::harness::TestVm;
@@ -108,4 +108,39 @@ fn ring_buffer_dispatch_mkdir_respects_dirfd() {
     assert_eq!(result, 0);
     assert!(tidemark_kernel::fs::memfs::resolve_path(b"/parent/child") > 0);
     assert_eq!(tidemark_kernel::fs::memfs::resolve_path(b"/child"), 0);
+}
+
+#[test]
+fn ring_buffer_dispatch_rename() {
+    let mut t = TestVm::new();
+    let ring_base = unsafe { tidemark_kernel::alloc::alloc_zeroed(RING_BUFFER_SIZE as u32, 16) };
+    assert!(ring_base != 0);
+
+    let fd = t.sys_openat(b"/old.txt", O_CREAT | O_RDWR);
+    assert!(fd >= 3);
+    assert_eq!(t.sys_write_data(fd, b"rename"), 6);
+    t.sys_close(fd);
+
+    let old_addr = t.write_path(0xB200, b"/old.txt");
+    let new_addr = t.write_path(0xB300, b"/new.txt");
+    let idx = submit_request(
+        ring_base,
+        FS_OP_RENAME,
+        -100,
+        (-100i64) as u64,
+        0,
+        new_addr,
+        old_addr,
+        0,
+        0,
+    );
+    assert!(idx >= 0);
+
+    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
+    process_requests(ring_base, vm_ptr, t.base);
+
+    let result = read_completion(ring_base);
+    assert_eq!(result, 0);
+    assert_eq!(tidemark_kernel::fs::memfs::resolve_path(b"/old.txt"), 0);
+    assert!(tidemark_kernel::fs::memfs::resolve_path(b"/new.txt") > 0);
 }
