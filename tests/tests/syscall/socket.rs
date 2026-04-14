@@ -4,11 +4,9 @@ use tidemark_kernel::harness::TestVm;
 use tidemark_kernel::syscall::socket;
 
 const SOL_SOCKET: u64 = 1;
-const SO_DEBUG: u64 = 1;
 const SO_REUSEADDR: u64 = 2;
 const SO_TYPE: u64 = 3;
 const SO_ERROR: u64 = 4;
-const SO_DONTROUTE: u64 = 5;
 const SO_PROTOCOL: u64 = 38;
 const SO_DOMAIN: u64 = 39;
 const SO_SNDBUF: u64 = 7;
@@ -16,11 +14,7 @@ const SO_RCVBUF: u64 = 8;
 const SO_KEEPALIVE: u64 = 9;
 const SO_OOBINLINE: u64 = 10;
 const SO_NO_CHECK: u64 = 11;
-const SO_PRIORITY: u64 = 12;
-const SO_LINGER: u64 = 13;
 const SO_BSDCOMPAT: u64 = 14;
-const SO_PASSCRED: u64 = 16;
-const SO_PEERCRED: u64 = 17;
 const SO_RCVLOWAT: u64 = 18;
 const SO_SNDLOWAT: u64 = 19;
 const SO_RCVTIMEO_OLD: u64 = 20;
@@ -28,15 +22,11 @@ const SO_SNDTIMEO_OLD: u64 = 21;
 const SO_ACCEPTCONN: u64 = 30;
 const SO_SNDBUFFORCE: u64 = 32;
 const SO_RCVBUFFORCE: u64 = 33;
-const SO_PASSSEC: u64 = 34;
-const SO_MARK: u64 = 36;
 const SO_INCOMING_CPU: u64 = 49;
 const SO_COOKIE: u64 = 57;
 const IPPROTO_TCP: u64 = 6;
 const IPPROTO_UDP: u64 = 17;
 const TCP_NODELAY: u64 = 1;
-const SO_RCVTIMEO_NEW: u64 = 66;
-const SO_SNDTIMEO_NEW: u64 = 67;
 const F_GETFD: u64 = 1;
 
 #[test]
@@ -57,7 +47,7 @@ fn socket_create_close_and_errors() {
 }
 
 #[test]
-fn socketpair_unix_stream_roundtrip_and_peercred() {
+fn socketpair_unix_stream_roundtrip() {
     let mut t = TestVm::new();
     let sv_addr = t.scratch + 0x80;
     assert_eq!(
@@ -89,26 +79,6 @@ fn socketpair_unix_stream_roundtrip_and_peercred() {
     }
     assert_eq!(&actual, b"ping");
 
-    let cred_addr = t.scratch + 0x180;
-    let cred_len = t.scratch + 0x1a0;
-    unsafe {
-        tidemark_kernel::guest_mem::write_u32(t.base, cred_len, 12);
-    }
-    assert_eq!(
-        socket::sys_getsockopt(
-            &mut t.vm,
-            t.base,
-            left_fd as u64,
-            SOL_SOCKET,
-            SO_PEERCRED,
-            cred_addr,
-            cred_len,
-        ),
-        0
-    );
-    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_i32(t.base, cred_addr) }, 42);
-    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u32(t.base, cred_addr + 4) }, 0);
-    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u32(t.base, cred_addr + 8) }, 0);
 }
 
 #[test]
@@ -198,24 +168,6 @@ fn unix_stream_bind_listen_connect_accept_roundtrip() {
     }
     assert_eq!(&actual_peer[..], &sockaddr[..actual_len]);
 
-    let cred_addr = t.scratch + 0x420;
-    let cred_len = t.scratch + 0x430;
-    unsafe {
-        tidemark_kernel::guest_mem::write_u32(t.base, cred_len, 12);
-    }
-    assert_eq!(
-        socket::sys_getsockopt(
-            &mut t.vm,
-            t.base,
-            client_fd as u64,
-            SOL_SOCKET,
-            SO_PEERCRED,
-            cred_addr,
-            cred_len,
-        ),
-        0
-    );
-    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_i32(t.base, cred_addr) }, 42);
 }
 
 #[test]
@@ -258,33 +210,6 @@ fn unix_dgram_connect_routes_to_bound_peer() {
         tidemark_kernel::guest_mem::read_bytes(t.base, read_addr, &mut actual);
     }
     assert_eq!(&actual, b"dg");
-}
-
-#[test]
-fn unix_passcred_autobinds_unbound_socket() {
-    let mut t = TestVm::new();
-    let fd = socket::sys_socket(&mut t.vm, t.base, AF_UNIX as u64, SOCK_DGRAM as u64, 0);
-    assert!(fd >= 0);
-
-    let val_addr = t.scratch + 0x600;
-    let out_addr = t.scratch + 0x620;
-    let out_len = t.scratch + 0x6a0;
-    unsafe {
-        tidemark_kernel::guest_mem::write_u32(t.base, val_addr, 1);
-        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 110);
-    }
-    assert_eq!(
-        socket::sys_setsockopt(&mut t.vm, t.base, fd as u64, SOL_SOCKET, SO_PASSCRED, val_addr, 4),
-        0
-    );
-    assert_eq!(
-        socket::sys_getsockname(&mut t.vm, t.base, fd as u64, out_addr, out_len),
-        0
-    );
-    let actual_len = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_len) } as usize;
-    assert_eq!(actual_len, 8);
-    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u16(t.base, out_addr) }, AF_UNIX as u16);
-    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u8(t.base, out_addr + 2) }, 0);
 }
 
 #[test]
@@ -365,31 +290,7 @@ fn socket_sockopt_roundtrip_and_enotsock() {
             t.base,
             fd as u64,
             SOL_SOCKET as u64,
-            SO_DEBUG as u64,
-            val_addr,
-            4,
-        ),
-        0
-    );
-    assert_eq!(
-        socket::sys_setsockopt(
-            &mut t.vm,
-            t.base,
-            fd as u64,
-            SOL_SOCKET as u64,
             SO_BSDCOMPAT as u64,
-            val_addr,
-            4,
-        ),
-        0
-    );
-    assert_eq!(
-        socket::sys_setsockopt(
-            &mut t.vm,
-            t.base,
-            fd as u64,
-            SOL_SOCKET as u64,
-            SO_DONTROUTE as u64,
             val_addr,
             4,
         ),
@@ -402,36 +303,6 @@ fn socket_sockopt_roundtrip_and_enotsock() {
             fd as u64,
             IPPROTO_TCP as u64,
             TCP_NODELAY as u64,
-            val_addr,
-            4,
-        ),
-        0
-    );
-    unsafe {
-        tidemark_kernel::guest_mem::write_u32(t.base, val_addr, 7);
-    }
-    assert_eq!(
-        socket::sys_setsockopt(
-            &mut t.vm,
-            t.base,
-            fd as u64,
-            SOL_SOCKET as u64,
-            SO_PRIORITY as u64,
-            val_addr,
-            4,
-        ),
-        0
-    );
-    unsafe {
-        tidemark_kernel::guest_mem::write_u32(t.base, val_addr, 42);
-    }
-    assert_eq!(
-        socket::sys_setsockopt(
-            &mut t.vm,
-            t.base,
-            fd as u64,
-            SOL_SOCKET as u64,
-            SO_MARK as u64,
             val_addr,
             4,
         ),
@@ -500,106 +371,6 @@ fn socket_sockopt_roundtrip_and_enotsock() {
             fd as u64,
             SOL_SOCKET as u64,
             SO_NO_CHECK as u64,
-            out_addr,
-            out_len,
-        ),
-        0
-    );
-    assert_eq!(
-        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
-        1
-    );
-
-    unsafe {
-        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 4);
-    }
-    assert_eq!(
-        socket::sys_getsockopt(
-            &mut t.vm,
-            t.base,
-            fd as u64,
-            SOL_SOCKET as u64,
-            SO_DEBUG as u64,
-            out_addr,
-            out_len,
-        ),
-        0
-    );
-    assert_eq!(
-        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
-        1
-    );
-
-    unsafe {
-        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 4);
-    }
-    assert_eq!(
-        socket::sys_getsockopt(
-            &mut t.vm,
-            t.base,
-            fd as u64,
-            SOL_SOCKET as u64,
-            SO_PRIORITY as u64,
-            out_addr,
-            out_len,
-        ),
-        0
-    );
-    assert_eq!(
-        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
-        7
-    );
-
-    unsafe {
-        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 4);
-    }
-    assert_eq!(
-        socket::sys_getsockopt(
-            &mut t.vm,
-            t.base,
-            fd as u64,
-            SOL_SOCKET as u64,
-            SO_MARK as u64,
-            out_addr,
-            out_len,
-        ),
-        0
-    );
-    assert_eq!(
-        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
-        42
-    );
-
-    unsafe {
-        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 4);
-    }
-    assert_eq!(
-        socket::sys_getsockopt(
-            &mut t.vm,
-            t.base,
-            fd as u64,
-            SOL_SOCKET as u64,
-            SO_BSDCOMPAT as u64,
-            out_addr,
-            out_len,
-        ),
-        0
-    );
-    assert_eq!(
-        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
-        1
-    );
-
-    unsafe {
-        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 4);
-    }
-    assert_eq!(
-        socket::sys_getsockopt(
-            &mut t.vm,
-            t.base,
-            fd as u64,
-            SOL_SOCKET as u64,
-            SO_DONTROUTE as u64,
             out_addr,
             out_len,
         ),
@@ -964,253 +735,10 @@ fn socket_sockopt_validation_and_acceptconn() {
 }
 
 #[test]
-fn unix_sockopts_passcred_and_passsec_are_unix_only() {
-    let mut t = TestVm::new();
-    let unix_fd = socket::sys_socket(&mut t.vm, t.base, AF_UNIX as u64, SOCK_DGRAM as u64, 0);
-    assert!(unix_fd >= 0);
-    let inet_fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_DGRAM as u64, 0);
-    assert!(inet_fd >= 0);
-
-    let val_addr = t.scratch + 0x340;
-    let out_addr = t.scratch + 0x344;
-    let out_len = t.scratch + 0x348;
-    unsafe {
-        tidemark_kernel::guest_mem::write_u32(t.base, val_addr, 1);
-        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 4);
-    }
-
-    assert_eq!(
-        socket::sys_setsockopt(
-            &mut t.vm,
-            t.base,
-            unix_fd as u64,
-            SOL_SOCKET,
-            SO_PASSCRED,
-            val_addr,
-            4,
-        ),
-        0
-    );
-    assert_eq!(
-        socket::sys_setsockopt(
-            &mut t.vm,
-            t.base,
-            unix_fd as u64,
-            SOL_SOCKET,
-            SO_PASSSEC,
-            val_addr,
-            4,
-        ),
-        0
-    );
-    assert_eq!(
-        socket::sys_getsockopt(
-            &mut t.vm,
-            t.base,
-            unix_fd as u64,
-            SOL_SOCKET,
-            SO_PASSCRED,
-            out_addr,
-            out_len,
-        ),
-        0
-    );
-    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) }, 1);
-    unsafe {
-        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 4);
-    }
-    assert_eq!(
-        socket::sys_getsockopt(
-            &mut t.vm,
-            t.base,
-            unix_fd as u64,
-            SOL_SOCKET,
-            SO_PASSSEC,
-            out_addr,
-            out_len,
-        ),
-        0
-    );
-    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) }, 1);
-
-    assert_eq!(
-        socket::sys_setsockopt(
-            &mut t.vm,
-            t.base,
-            inet_fd as u64,
-            SOL_SOCKET,
-            SO_PASSCRED,
-            val_addr,
-            4,
-        ),
-        ENOPROTOOPT
-    );
-    assert_eq!(
-        socket::sys_setsockopt(
-            &mut t.vm,
-            t.base,
-            inet_fd as u64,
-            SOL_SOCKET,
-            SO_PASSSEC,
-            val_addr,
-            4,
-        ),
-        ENOPROTOOPT
-    );
-}
-
-#[test]
-fn socket_linger_and_timeouts_roundtrip() {
+fn socket_timeout_validation() {
     let mut t = TestVm::new();
     let fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
     assert!(fd >= 0);
-
-    let linger_addr = t.scratch + 0x700;
-    unsafe {
-        tidemark_kernel::guest_mem::write_u32(t.base, linger_addr, 1);
-        tidemark_kernel::guest_mem::write_u32(t.base, linger_addr + 4, 7);
-    }
-    assert_eq!(
-        socket::sys_setsockopt(
-            &mut t.vm,
-            t.base,
-            fd as u64,
-            SOL_SOCKET,
-            SO_LINGER,
-            linger_addr,
-            8,
-        ),
-        0
-    );
-
-    let tv_addr = t.scratch + 0x720;
-    unsafe {
-        tidemark_kernel::guest_mem::write_u64(t.base, tv_addr, 1);
-        tidemark_kernel::guest_mem::write_u64(t.base, tv_addr + 8, 250_000);
-    }
-    assert_eq!(
-        socket::sys_setsockopt(
-            &mut t.vm,
-            t.base,
-            fd as u64,
-            SOL_SOCKET,
-            SO_RCVTIMEO_OLD,
-            tv_addr,
-            16,
-        ),
-        0
-    );
-    assert_eq!(
-        socket::sys_setsockopt(
-            &mut t.vm,
-            t.base,
-            fd as u64,
-            SOL_SOCKET,
-            SO_SNDTIMEO_NEW,
-            tv_addr,
-            16,
-        ),
-        0
-    );
-
-    let out_addr = t.scratch + 0x760;
-    let out_len = t.scratch + 0x770;
-    unsafe {
-        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 8);
-    }
-    assert_eq!(
-        socket::sys_getsockopt(
-            &mut t.vm,
-            t.base,
-            fd as u64,
-            SOL_SOCKET,
-            SO_LINGER,
-            out_addr,
-            out_len,
-        ),
-        0
-    );
-    assert_eq!(
-        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
-        1
-    );
-    assert_eq!(
-        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr + 4) },
-        7
-    );
-
-    unsafe {
-        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 16);
-    }
-    assert_eq!(
-        socket::sys_getsockopt(
-            &mut t.vm,
-            t.base,
-            fd as u64,
-            SOL_SOCKET,
-            SO_RCVTIMEO_NEW,
-            out_addr,
-            out_len,
-        ),
-        0
-    );
-    assert_eq!(
-        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, out_addr) },
-        1
-    );
-    assert_eq!(
-        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, out_addr + 8) },
-        250_000
-    );
-
-    unsafe {
-        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 16);
-    }
-    assert_eq!(
-        socket::sys_getsockopt(
-            &mut t.vm,
-            t.base,
-            fd as u64,
-            SOL_SOCKET,
-            SO_SNDTIMEO_OLD,
-            out_addr,
-            out_len,
-        ),
-        0
-    );
-    assert_eq!(
-        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, out_addr) },
-        1
-    );
-    assert_eq!(
-        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, out_addr + 8) },
-        250_000
-    );
-}
-
-#[test]
-fn socket_timeout_and_linger_validation() {
-    let mut t = TestVm::new();
-    let fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
-    assert!(fd >= 0);
-
-    let linger_addr = t.scratch + 0x780;
-    unsafe {
-        tidemark_kernel::guest_mem::write_u32(t.base, linger_addr, 1);
-        tidemark_kernel::guest_mem::write_u32(t.base, linger_addr + 4, (-1i32) as u32);
-    }
-    assert_eq!(
-        socket::sys_setsockopt(
-            &mut t.vm,
-            t.base,
-            fd as u64,
-            SOL_SOCKET,
-            SO_LINGER,
-            linger_addr,
-            8,
-        ),
-        EINVAL
-    );
 
     let tv_addr = t.scratch + 0x7a0;
     unsafe {
@@ -1357,117 +885,6 @@ fn socket_connect_timeout_returns_etimedout() {
         0
     );
     assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u32(t.base, t.scratch + 0x900) } as i64, -ETIMEDOUT);
-}
-
-#[test]
-fn socket_linger_close_blocks_until_peer_buffer_drains() {
-    let mut t = TestVm::new();
-    let fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
-    assert!(fd >= 0);
-
-    let sockaddr: [u8; 16] = [2, 0, 0x50, 0x01, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
-    let bind_addr = t.scratch + 0x820;
-    t.write_mem(bind_addr, &sockaddr);
-    assert_eq!(socket::sys_bind(&mut t.vm, t.base, fd as u64, bind_addr, 16), 0);
-    assert_eq!(socket::sys_listen(&mut t.vm, t.base, fd as u64, 1), 0);
-
-    let client_idx = socket::inject_http_connection(0, 0x5001, &[]);
-    assert!(client_idx >= 0);
-    let accepted_fd = socket::sys_accept4(&mut t.vm, t.base, fd as u64, 0, 0, 0);
-    assert!(accepted_fd >= 0);
-
-    let linger_addr = t.scratch + 0x840;
-    unsafe {
-        tidemark_kernel::guest_mem::write_u32(t.base, linger_addr, 1);
-        tidemark_kernel::guest_mem::write_u32(t.base, linger_addr + 4, 1);
-    }
-    assert_eq!(
-        socket::sys_setsockopt(
-            &mut t.vm,
-            t.base,
-            accepted_fd as u64,
-            SOL_SOCKET,
-            SO_LINGER,
-            linger_addr,
-            8,
-        ),
-        0
-    );
-
-    let send_buf = t.scratch + 0x860;
-    t.write_mem(send_buf, b"hello");
-    assert_eq!(
-        socket::sys_sendto(&mut t.vm, t.base, accepted_fd as u64, send_buf, 5, 0, 0, 0),
-        5
-    );
-
-    t.vm.x[17] = SYS_CLOSE;
-    t.vm.x[10] = accepted_fd as u64;
-    assert_eq!(t.sys_close(accepted_fd), 0);
-    assert_eq!(t.vm.status, STATUS_SOCKET_SEND);
-    assert_eq!(t.vm.socket_timeout_ms, 1000);
-
-    let mut drained = [0u8; 16];
-    assert_eq!(socket::read_http_response(0, client_idx, &mut drained), 5);
-    assert_eq!(&drained[..5], b"hello");
-
-    let vm_ptr = &mut t.vm as *mut _ as u32;
-    assert_eq!(thread_resume_blocked_syscall(vm_ptr), 0);
-    assert_eq!(t.vm.status, STATUS_OK);
-    assert!(fd_table::get_ofd(t.base, &t.vm, accepted_fd as u64).is_none());
-}
-
-#[test]
-fn socket_linger_close_timeout_forces_close() {
-    let mut t = TestVm::new();
-    let fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
-    assert!(fd >= 0);
-
-    let sockaddr: [u8; 16] = [2, 0, 0x50, 0x02, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
-    let bind_addr = t.scratch + 0x880;
-    t.write_mem(bind_addr, &sockaddr);
-    assert_eq!(socket::sys_bind(&mut t.vm, t.base, fd as u64, bind_addr, 16), 0);
-    assert_eq!(socket::sys_listen(&mut t.vm, t.base, fd as u64, 1), 0);
-
-    let _client_idx = socket::inject_http_connection(0, 0x5002, &[]);
-    let accepted_fd = socket::sys_accept4(&mut t.vm, t.base, fd as u64, 0, 0, 0);
-    assert!(accepted_fd >= 0);
-
-    let linger_addr = t.scratch + 0x8a0;
-    unsafe {
-        tidemark_kernel::guest_mem::write_u32(t.base, linger_addr, 1);
-        tidemark_kernel::guest_mem::write_u32(t.base, linger_addr + 4, 1);
-    }
-    assert_eq!(
-        socket::sys_setsockopt(
-            &mut t.vm,
-            t.base,
-            accepted_fd as u64,
-            SOL_SOCKET,
-            SO_LINGER,
-            linger_addr,
-            8,
-        ),
-        0
-    );
-
-    let send_buf = t.scratch + 0x8c0;
-    t.write_mem(send_buf, b"bye");
-    assert_eq!(
-        socket::sys_sendto(&mut t.vm, t.base, accepted_fd as u64, send_buf, 3, 0, 0, 0),
-        3
-    );
-
-    t.vm.x[17] = SYS_CLOSE;
-    t.vm.x[10] = accepted_fd as u64;
-    assert_eq!(t.sys_close(accepted_fd), 0);
-    assert_eq!(t.vm.status, STATUS_SOCKET_SEND);
-
-    let vm_ptr = &mut t.vm as *mut _ as u32;
-    thread_resume_socket_wait_timeout(vm_ptr);
-    assert_eq!(t.vm.status, STATUS_OK);
-    assert_eq!(t.vm.x[10], 0);
-    assert!(fd_table::get_ofd(t.base, &t.vm, accepted_fd as u64).is_none());
 }
 
 #[test]

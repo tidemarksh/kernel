@@ -36,11 +36,9 @@ const ACCEPT_QUEUE_SIZE: usize = 16;
 const INVALID_BUF_IDX: i32 = -1;
 const INVALID_PEER_IDX: i32 = -1;
 const SOL_SOCKET: u32 = 1;
-const SO_DEBUG: u32 = 1;
 const SO_REUSEADDR: u32 = 2;
 const SO_TYPE: u32 = 3;
 const SO_ERROR: u32 = 4;
-const SO_DONTROUTE: u32 = 5;
 const SO_BROADCAST: u32 = 6;
 const SO_SNDBUF: u32 = 7;
 const SO_RCVBUF: u32 = 8;
@@ -49,19 +47,13 @@ const SO_RCVBUFFORCE: u32 = 33;
 const SO_KEEPALIVE: u32 = 9;
 const SO_OOBINLINE: u32 = 10;
 const SO_NO_CHECK: u32 = 11;
-const SO_PRIORITY: u32 = 12;
-const SO_LINGER: u32 = 13;
 const SO_BSDCOMPAT: u32 = 14;
 const SO_REUSEPORT: u32 = 15;
-const SO_PASSCRED: u32 = 16;
-const SO_PEERCRED: u32 = 17;
 const SO_RCVLOWAT: u32 = 18;
 const SO_SNDLOWAT: u32 = 19;
 const SO_RCVTIMEO_OLD: u32 = 20;
 const SO_SNDTIMEO_OLD: u32 = 21;
 const SO_ACCEPTCONN: u32 = 30;
-const SO_PASSSEC: u32 = 34;
-const SO_MARK: u32 = 36;
 const SO_PROTOCOL: u32 = 38;
 const SO_DOMAIN: u32 = 39;
 const SO_INCOMING_CPU: u32 = 49;
@@ -104,21 +96,13 @@ struct SocketSlot {
     recv_buf_idx: i32,
     last_error: i32,
     so_cookie: u64,
-    so_debug: u32,
     so_reuseaddr: u32,
     so_reuseport: u32,
     so_keepalive: u32,
     so_oobinline: u32,
     so_nocheck: u32,
-    so_priority: u32,
-    so_linger_onoff: u32,
-    so_linger_secs: u32,
     so_bsdcompat: u32,
-    so_passcred: u32,
-    so_dontroute: u32,
     so_broadcast: u32,
-    so_mark: u32,
-    so_passsec: u32,
     so_sndbuf: u32,
     so_rcvbuf: u32,
     so_rcvlowat: u32,
@@ -139,7 +123,6 @@ static mut SOCKET_TABLE_PTR: *mut [SocketSlot; MAX_SOCKETS] = core::ptr::null_mu
 /// Socket slot allocation bitmap (1 = in use).
 static mut SOCKET_USED: u32 = 0;
 static mut NEXT_SOCKET_COOKIE: u64 = 1;
-static mut NEXT_UNIX_AUTOBIND_ID: u32 = 0;
 
 fn socket_table() -> &'static mut [SocketSlot; MAX_SOCKETS] {
     unsafe {
@@ -187,7 +170,6 @@ pub fn init() {
             core::ptr::null_mut(),
         );
         core::ptr::write(core::ptr::addr_of_mut!(SOCKET_USED), 0);
-        core::ptr::write(core::ptr::addr_of_mut!(NEXT_UNIX_AUTOBIND_ID), 0);
 
         let size = core::mem::size_of::<[SocketSlot; MAX_SOCKETS]>() as u32;
         let align = core::mem::align_of::<SocketSlot>() as u32;
@@ -227,21 +209,13 @@ fn alloc_socket_slot() -> Option<u32> {
                     recv_buf_idx: INVALID_BUF_IDX,
                     last_error: 0,
                     so_cookie: alloc_socket_cookie(),
-                    so_debug: 0,
                     so_reuseaddr: 0,
                     so_reuseport: 0,
                     so_keepalive: 0,
                     so_oobinline: 0,
                     so_nocheck: 0,
-                    so_priority: 0,
-                    so_linger_onoff: 0,
-                    so_linger_secs: 0,
                     so_bsdcompat: 0,
-                    so_passcred: 0,
-                    so_dontroute: 0,
                     so_broadcast: 0,
-                    so_mark: 0,
-                    so_passsec: 0,
                     so_sndbuf: DEFAULT_SOCKET_BUFFER,
                     so_rcvbuf: DEFAULT_SOCKET_BUFFER,
                     so_rcvlowat: 1,
@@ -293,35 +267,6 @@ fn socket_recv_timeout_ms_for_slot(slot: &SocketSlot) -> i64 {
 
 fn socket_send_timeout_ms_for_slot(slot: &SocketSlot) -> i64 {
     timeout_to_millis(slot.so_sndtimeo_sec, slot.so_sndtimeo_usec)
-}
-
-pub fn socket_close_linger_timeout_ms(socket_idx: u32) -> i64 {
-    let idx = socket_idx as usize;
-    if idx >= MAX_SOCKETS || !is_slot_used(socket_idx) {
-        return -1;
-    }
-    let slot = &socket_table()[idx];
-    if slot.sock_type != SOCK_STREAM || slot.so_linger_onoff == 0 || slot.so_linger_secs == 0 {
-        return -1;
-    }
-    slot.so_linger_secs.min(i32::MAX as u32) as i64 * 1000
-}
-
-pub fn socket_close_has_untransmitted_data(socket_idx: u32) -> bool {
-    let idx = socket_idx as usize;
-    if idx >= MAX_SOCKETS || !is_slot_used(socket_idx) {
-        return false;
-    }
-    let slot = &socket_table()[idx];
-    let peer_idx = slot.peer_idx;
-    if peer_idx < 0 || !is_slot_used(peer_idx as u32) {
-        return false;
-    }
-    let peer = &socket_table()[peer_idx as usize];
-    if peer.recv_buf_idx < 0 {
-        return false;
-    }
-    crate::net::ring_buffer::available(peer.recv_buf_idx as u32) > 0
 }
 
 pub fn socket_recv_timeout_ms_for_fd(base: u32, vm: &ThreadState, fd: u64) -> i64 {
@@ -653,21 +598,13 @@ pub fn sys_socketpair(
         recv_buf_idx: left_recv,
         last_error: 0,
         so_cookie: alloc_socket_cookie(),
-        so_debug: 0,
         so_reuseaddr: 0,
         so_reuseport: 0,
         so_keepalive: 0,
         so_oobinline: 0,
         so_nocheck: 0,
-        so_priority: 0,
-        so_linger_onoff: 0,
-        so_linger_secs: 0,
         so_bsdcompat: 0,
-        so_passcred: 0,
-        so_dontroute: 0,
         so_broadcast: 0,
-        so_mark: 0,
-        so_passsec: 0,
         so_sndbuf: DEFAULT_SOCKET_BUFFER,
         so_rcvbuf: DEFAULT_SOCKET_BUFFER,
         so_rcvlowat: 1,
@@ -700,21 +637,13 @@ pub fn sys_socketpair(
         recv_buf_idx: right_recv,
         last_error: 0,
         so_cookie: alloc_socket_cookie(),
-        so_debug: 0,
         so_reuseaddr: 0,
         so_reuseport: 0,
         so_keepalive: 0,
         so_oobinline: 0,
         so_nocheck: 0,
-        so_priority: 0,
-        so_linger_onoff: 0,
-        so_linger_secs: 0,
         so_bsdcompat: 0,
-        so_passcred: 0,
-        so_dontroute: 0,
         so_broadcast: 0,
-        so_mark: 0,
-        so_passsec: 0,
         so_sndbuf: DEFAULT_SOCKET_BUFFER,
         so_rcvbuf: DEFAULT_SOCKET_BUFFER,
         so_rcvlowat: 1,
@@ -770,37 +699,6 @@ fn find_unix_socket_by_addr(addr: &[u8], len: usize) -> Option<usize> {
         .enumerate()
         .find(|(idx, slot)| is_slot_used(*idx as u32) && unix_addr_eq(slot, addr, len))
         .map(|(idx, _)| idx)
-}
-
-fn assign_unix_autobind(slot: &mut SocketSlot) {
-    if slot.domain != AF_UNIX || slot.local_len != 0 {
-        return;
-    }
-    unsafe {
-        for _ in 0..(1 << 20) {
-            let id = core::ptr::read(core::ptr::addr_of!(NEXT_UNIX_AUTOBIND_ID)) & 0x000f_ffff;
-            core::ptr::write(core::ptr::addr_of_mut!(NEXT_UNIX_AUTOBIND_ID), id.wrapping_add(1));
-
-            let mut addr = [0u8; SOCKADDR_STORAGE_LEN];
-            addr[0..2].copy_from_slice(&(AF_UNIX as u16).to_le_bytes());
-            addr[2] = 0;
-            for offset in 0..5 {
-                let shift = (4 - offset) * 4;
-                let nibble = ((id >> shift) & 0x0f) as u8;
-                addr[3 + offset] = if nibble < 10 {
-                    b'0' + nibble
-                } else {
-                    b'a' + (nibble - 10)
-                };
-            }
-            if find_unix_socket_by_addr(&addr, 8).is_none() {
-                slot.local_addr = addr;
-                slot.local_len = 8;
-                slot.state = SOCK_STATE_BOUND;
-                return;
-            }
-        }
-    }
 }
 
 fn ensure_socket_recv_buffer(idx: usize) -> Result<(), i64> {
@@ -873,21 +771,13 @@ fn unix_connect_stream(idx: usize, addr: &[u8], len: usize) -> i64 {
         recv_buf_idx: accepted_recv,
         last_error: 0,
         so_cookie: alloc_socket_cookie(),
-        so_debug: 0,
         so_reuseaddr: 0,
         so_reuseport: 0,
         so_keepalive: 0,
         so_oobinline: 0,
         so_nocheck: 0,
-        so_priority: 0,
-        so_linger_onoff: 0,
-        so_linger_secs: 0,
         so_bsdcompat: 0,
-        so_passcred: 0,
-        so_dontroute: 0,
         so_broadcast: 0,
-        so_mark: 0,
-        so_passsec: 0,
         so_sndbuf: DEFAULT_SOCKET_BUFFER,
         so_rcvbuf: DEFAULT_SOCKET_BUFFER,
         so_rcvlowat: 1,
@@ -1470,21 +1360,13 @@ pub fn inject_http_connection(vm_ptr: u32, port: u16, request: &[u8]) -> i32 {
         recv_buf_idx: server_recv,
         last_error: 0,
         so_cookie: alloc_socket_cookie(),
-        so_debug: 0,
         so_reuseaddr: 0,
         so_reuseport: 0,
         so_keepalive: 0,
         so_oobinline: 0,
         so_nocheck: 0,
-        so_priority: 0,
-        so_linger_onoff: 0,
-        so_linger_secs: 0,
         so_bsdcompat: 0,
-        so_passcred: 0,
-        so_dontroute: 0,
         so_broadcast: 0,
-        so_mark: 0,
-        so_passsec: 0,
         so_sndbuf: DEFAULT_SOCKET_BUFFER,
         so_rcvbuf: DEFAULT_SOCKET_BUFFER,
         so_rcvlowat: 1,
@@ -1517,21 +1399,13 @@ pub fn inject_http_connection(vm_ptr: u32, port: u16, request: &[u8]) -> i32 {
         recv_buf_idx: client_recv,
         last_error: 0,
         so_cookie: alloc_socket_cookie(),
-        so_debug: 0,
         so_reuseaddr: 0,
         so_reuseport: 0,
         so_keepalive: 0,
         so_oobinline: 0,
         so_nocheck: 0,
-        so_priority: 0,
-        so_linger_onoff: 0,
-        so_linger_secs: 0,
         so_bsdcompat: 0,
-        so_passcred: 0,
-        so_dontroute: 0,
         so_broadcast: 0,
-        so_mark: 0,
-        so_passsec: 0,
         so_sndbuf: DEFAULT_SOCKET_BUFFER,
         so_rcvbuf: DEFAULT_SOCKET_BUFFER,
         so_rcvlowat: 1,
@@ -1595,18 +1469,6 @@ fn read_opt_i32(base: u32, optval: u64, optlen: u64) -> Result<i32, i64> {
     Ok(unsafe { guest_mem::read_i32(base, optval) })
 }
 
-fn read_opt_linger(base: u32, optval: u64, optlen: u64) -> Result<(u32, u32), i64> {
-    if optval == 0 || optlen < 8 {
-        return Err(EINVAL);
-    }
-    let onoff = unsafe { guest_mem::read_i32(base, optval) };
-    let linger = unsafe { guest_mem::read_i32(base, optval + 4) };
-    if linger < 0 {
-        return Err(EINVAL);
-    }
-    Ok((u32::from(onoff != 0), linger as u32))
-}
-
 fn read_opt_timeval(base: u32, optval: u64, optlen: u64) -> Result<(u64, u64), i64> {
     if optval == 0 || optlen < 16 {
         return Err(EINVAL);
@@ -1648,13 +1510,6 @@ fn write_opt_bytes(base: u32, optval: u64, optlen_ptr: u64, bytes: &[u8]) -> i64
     0
 }
 
-fn write_opt_linger(base: u32, optval: u64, optlen_ptr: u64, onoff: u32, linger: u32) -> i64 {
-    let mut bytes = [0u8; 8];
-    bytes[..4].copy_from_slice(&(onoff as i32).to_le_bytes());
-    bytes[4..].copy_from_slice(&(linger as i32).to_le_bytes());
-    write_opt_bytes(base, optval, optlen_ptr, &bytes)
-}
-
 fn write_opt_timeval(base: u32, optval: u64, optlen_ptr: u64, sec: u64, usec: u64) -> i64 {
     let mut bytes = [0u8; 16];
     bytes[..8].copy_from_slice(&(sec as i64).to_le_bytes());
@@ -1679,23 +1534,9 @@ pub fn sys_setsockopt(
     let slot = &mut socket_table()[idx];
 
     match (level as u32, optname as u32) {
-        (SOL_SOCKET, SO_DEBUG) => match read_opt_i32(base, optval, optlen) {
-            Ok(value) => {
-                slot.so_debug = u32::from(value != 0);
-                0
-            }
-            Err(err) => err,
-        },
         (SOL_SOCKET, SO_REUSEADDR) => match read_opt_i32(base, optval, optlen) {
             Ok(value) => {
                 slot.so_reuseaddr = u32::from(value != 0);
-                0
-            }
-            Err(err) => err,
-        },
-        (SOL_SOCKET, SO_DONTROUTE) => match read_opt_i32(base, optval, optlen) {
-            Ok(value) => {
-                slot.so_dontroute = u32::from(value != 0);
                 0
             }
             Err(err) => err,
@@ -1728,22 +1569,6 @@ pub fn sys_setsockopt(
             }
             Err(err) => err,
         },
-        (SOL_SOCKET, SO_PRIORITY) => match read_opt_i32(base, optval, optlen) {
-            Ok(value) if value >= 0 => {
-                slot.so_priority = value as u32;
-                0
-            }
-            Ok(_) => EINVAL,
-            Err(err) => err,
-        },
-        (SOL_SOCKET, SO_LINGER) => match read_opt_linger(base, optval, optlen) {
-            Ok((onoff, linger)) => {
-                slot.so_linger_onoff = onoff;
-                slot.so_linger_secs = linger;
-                0
-            }
-            Err(err) => err,
-        },
         (SOL_SOCKET, SO_BSDCOMPAT) => match read_opt_i32(base, optval, optlen) {
             Ok(value) => {
                 slot.so_bsdcompat = u32::from(value != 0);
@@ -1751,46 +1576,11 @@ pub fn sys_setsockopt(
             }
             Err(err) => err,
         },
-        (SOL_SOCKET, SO_PASSCRED) => {
-            if slot.domain != AF_UNIX {
-                return ENOPROTOOPT;
-            }
-            match read_opt_i32(base, optval, optlen) {
-                Ok(value) => {
-                    slot.so_passcred = u32::from(value != 0);
-                    if slot.so_passcred != 0 {
-                        assign_unix_autobind(slot);
-                    }
-                    0
-                }
-                Err(err) => err,
-            }
-        }
         (SOL_SOCKET, SO_BROADCAST) => match read_opt_i32(base, optval, optlen) {
             Ok(value) => {
                 slot.so_broadcast = u32::from(value != 0);
                 0
             }
-            Err(err) => err,
-        },
-        (SOL_SOCKET, SO_PASSSEC) => {
-            if slot.domain != AF_UNIX {
-                return ENOPROTOOPT;
-            }
-            match read_opt_i32(base, optval, optlen) {
-                Ok(value) => {
-                    slot.so_passsec = u32::from(value != 0);
-                    0
-                }
-                Err(err) => err,
-            }
-        }
-        (SOL_SOCKET, SO_MARK) => match read_opt_i32(base, optval, optlen) {
-            Ok(value) if value >= 0 => {
-                slot.so_mark = value as u32;
-                0
-            }
-            Ok(_) => EINVAL,
             Err(err) => err,
         },
         (SOL_SOCKET, SO_RCVLOWAT) => match read_opt_i32(base, optval, optlen) {
@@ -1850,7 +1640,7 @@ pub fn sys_setsockopt(
                 Err(err) => err,
             }
         }
-        (SOL_SOCKET, SO_TYPE | SO_ERROR | SO_ACCEPTCONN | SO_PROTOCOL | SO_DOMAIN | SO_PEERCRED) => ENOPROTOOPT,
+        (SOL_SOCKET, SO_TYPE | SO_ERROR | SO_ACCEPTCONN | SO_PROTOCOL | SO_DOMAIN) => ENOPROTOOPT,
         _ => ENOPROTOOPT,
     }
 }
@@ -1878,49 +1668,13 @@ pub fn sys_getsockopt(
             slot.last_error = 0;
             write_opt_u32(base, optval, optlen, error)
         }
-        (SOL_SOCKET, SO_DEBUG) => write_opt_u32(base, optval, optlen, slot.so_debug),
         (SOL_SOCKET, SO_REUSEADDR) => write_opt_u32(base, optval, optlen, slot.so_reuseaddr),
-        (SOL_SOCKET, SO_DONTROUTE) => write_opt_u32(base, optval, optlen, slot.so_dontroute),
         (SOL_SOCKET, SO_REUSEPORT) => write_opt_u32(base, optval, optlen, slot.so_reuseport),
         (SOL_SOCKET, SO_KEEPALIVE) => write_opt_u32(base, optval, optlen, slot.so_keepalive),
         (SOL_SOCKET, SO_OOBINLINE) => write_opt_u32(base, optval, optlen, slot.so_oobinline),
         (SOL_SOCKET, SO_NO_CHECK) => write_opt_u32(base, optval, optlen, slot.so_nocheck),
-        (SOL_SOCKET, SO_PRIORITY) => write_opt_u32(base, optval, optlen, slot.so_priority),
-        (SOL_SOCKET, SO_LINGER) => write_opt_linger(
-            base,
-            optval,
-            optlen,
-            slot.so_linger_onoff,
-            slot.so_linger_secs,
-        ),
         (SOL_SOCKET, SO_BSDCOMPAT) => write_opt_u32(base, optval, optlen, slot.so_bsdcompat),
-        (SOL_SOCKET, SO_PASSCRED) => {
-            if slot.domain != AF_UNIX {
-                return ENOPROTOOPT;
-            }
-            write_opt_u32(base, optval, optlen, slot.so_passcred)
-        }
-        (SOL_SOCKET, SO_PEERCRED) => {
-            if slot.domain != AF_UNIX {
-                return ENOPROTOOPT;
-            }
-            if slot.peer_pid <= 0 {
-                return ENOTCONN;
-            }
-            let mut bytes = [0u8; 12];
-            bytes[..4].copy_from_slice(&slot.peer_pid.to_le_bytes());
-            bytes[4..8].copy_from_slice(&slot.peer_uid.to_le_bytes());
-            bytes[8..12].copy_from_slice(&slot.peer_gid.to_le_bytes());
-            write_opt_bytes(base, optval, optlen, &bytes)
-        }
         (SOL_SOCKET, SO_BROADCAST) => write_opt_u32(base, optval, optlen, slot.so_broadcast),
-        (SOL_SOCKET, SO_MARK) => write_opt_u32(base, optval, optlen, slot.so_mark),
-        (SOL_SOCKET, SO_PASSSEC) => {
-            if slot.domain != AF_UNIX {
-                return ENOPROTOOPT;
-            }
-            write_opt_u32(base, optval, optlen, slot.so_passsec)
-        }
         (SOL_SOCKET, SO_SNDBUF) => write_opt_u32(base, optval, optlen, slot.so_sndbuf),
         (SOL_SOCKET, SO_RCVBUF) => write_opt_u32(base, optval, optlen, slot.so_rcvbuf),
         (SOL_SOCKET, SO_INCOMING_CPU) => write_opt_u32(base, optval, optlen, 0),

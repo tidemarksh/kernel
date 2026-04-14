@@ -1636,22 +1636,7 @@ pub extern "C" fn thread_resume_epoll_wait_timeout(vm_ptr: u32) {
 pub extern "C" fn thread_resume_socket_wait_timeout(vm_ptr: u32) {
     unsafe {
         let vm = &mut *(vm_ptr as *mut crate::types::ThreadState);
-        if vm.x[17] == SYS_CLOSE {
-            let saved_fd_entry =
-                crate::fs::fd_table::patch_blocked_fd_entry_for_resume(vm.guest_base, vm);
-            vm.socket_timeout_ms = -1;
-            vm.socket_force_close = 1;
-            vm.status = STATUS_OK;
-            let status = crate::syscall::dispatch(vm, vm.guest_base);
-            vm.socket_force_close = 0;
-            if status != STATUS_OK {
-                crate::fs::fd_table::restore_blocked_fd_entry(vm.guest_base, vm, saved_fd_entry);
-            }
-            vm.status = status;
-            if !crate::fs::fd_table::blocked_status_uses_ofd_pin(status) {
-                crate::fs::fd_table::clear_blocked_ofd_pin(vm);
-            }
-        } else if vm.x[17] == SYS_CONNECT {
+        if vm.x[17] == SYS_CONNECT {
             crate::syscall::socket::resume_connect_result(vm, vm.guest_base, ETIMEDOUT);
         } else {
             crate::fs::fd_table::clear_blocked_ofd_pin(vm);
@@ -1684,7 +1669,6 @@ pub extern "C" fn thread_resume_blocked_syscall(vm_ptr: u32) -> i64 {
         let vm = &mut *(vm_ptr as *mut crate::types::ThreadState);
         let saved_fd_entry =
             crate::fs::fd_table::patch_blocked_fd_entry_for_resume(vm.guest_base, vm);
-        let syscall_nr = vm.x[17];
         let status = if vm.status == STATUS_EPOLL_WAIT {
             crate::syscall::epoll::resume_wait(vm, vm.guest_base);
             vm.status
@@ -1692,9 +1676,7 @@ pub extern "C" fn thread_resume_blocked_syscall(vm_ptr: u32) -> i64 {
             vm.status = STATUS_OK;
             crate::syscall::dispatch(vm, vm.guest_base)
         };
-        if !(syscall_nr == SYS_CLOSE && status == STATUS_OK) {
-          crate::fs::fd_table::restore_blocked_fd_entry(vm.guest_base, vm, saved_fd_entry);
-        }
+        crate::fs::fd_table::restore_blocked_fd_entry(vm.guest_base, vm, saved_fd_entry);
         vm.status = status;
         if !crate::fs::fd_table::blocked_status_uses_ofd_pin(status) {
             crate::fs::fd_table::clear_blocked_ofd_pin(vm);

@@ -106,7 +106,6 @@ struct VforkSnapshot {
     futex_wait_flags: u32,
     epoll_timeout_ms: i64,
     socket_timeout_ms: i64,
-    socket_force_close: u32,
     epoll_maxevents: u32,
     blocked_fd: u32,
     blocked_ofd_id: u32,
@@ -224,7 +223,6 @@ fn empty_vfork_snapshot() -> VforkSnapshot {
         futex_wait_flags: 0,
         epoll_timeout_ms: 0,
         socket_timeout_ms: -1,
-        socket_force_close: 0,
         epoll_maxevents: 0,
         blocked_fd: 0,
         blocked_ofd_id: 0,
@@ -707,7 +705,6 @@ pub fn prepare_fork_child_after_handoff(
     vm.futex_wait_flags = 0;
     vm.epoll_timeout_ms = 0;
     vm.socket_timeout_ms = -1;
-    vm.socket_force_close = 0;
     vm.epoll_maxevents = 0;
     vm.blocked_fd = 0;
     vm.blocked_ofd_id = 0;
@@ -1692,7 +1689,6 @@ fn complete_execve_in_place_inner(
     vm.futex_wait_flags = 0;
     vm.epoll_timeout_ms = 0;
     vm.socket_timeout_ms = -1;
-    vm.socket_force_close = 0;
     vm.epoll_maxevents = 0;
     vm.blocked_fd = 0;
     vm.blocked_ofd_id = 0;
@@ -2073,7 +2069,6 @@ pub fn sys_vfork(vm: &mut ThreadState, base: u32) -> i32 {
         futex_wait_flags: vm.futex_wait_flags,
         epoll_timeout_ms: vm.epoll_timeout_ms,
         socket_timeout_ms: vm.socket_timeout_ms,
-        socket_force_close: vm.socket_force_close,
         epoll_maxevents: vm.epoll_maxevents,
         blocked_fd: vm.blocked_fd,
         blocked_ofd_id: vm.blocked_ofd_id,
@@ -2161,7 +2156,6 @@ fn vfork_parent_resume_inner(vm: &mut ThreadState, child_pid: i32, cleanup_child
     vm.futex_wait_flags = snap.futex_wait_flags;
     vm.epoll_timeout_ms = snap.epoll_timeout_ms;
     vm.socket_timeout_ms = snap.socket_timeout_ms;
-    vm.socket_force_close = snap.socket_force_close;
     vm.epoll_maxevents = snap.epoll_maxevents;
     vm.blocked_fd = snap.blocked_fd;
     vm.blocked_ofd_id = snap.blocked_ofd_id;
