@@ -19,6 +19,7 @@ const SO_NO_CHECK: u64 = 11;
 const SO_PRIORITY: u64 = 12;
 const SO_LINGER: u64 = 13;
 const SO_BSDCOMPAT: u64 = 14;
+const SO_PASSCRED: u64 = 16;
 const SO_RCVLOWAT: u64 = 18;
 const SO_SNDLOWAT: u64 = 19;
 const SO_RCVTIMEO_OLD: u64 = 20;
@@ -26,6 +27,7 @@ const SO_SNDTIMEO_OLD: u64 = 21;
 const SO_ACCEPTCONN: u64 = 30;
 const SO_SNDBUFFORCE: u64 = 32;
 const SO_RCVBUFFORCE: u64 = 33;
+const SO_PASSSEC: u64 = 34;
 const SO_MARK: u64 = 36;
 const SO_INCOMING_CPU: u64 = 49;
 const SO_COOKIE: u64 = 57;
@@ -725,6 +727,102 @@ fn socket_sockopt_validation_and_acceptconn() {
     assert_eq!(
         unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
         1
+    );
+}
+
+#[test]
+fn unix_sockopts_passcred_and_passsec_are_unix_only() {
+    let mut t = TestVm::new();
+    let unix_fd = socket::sys_socket(&mut t.vm, t.base, AF_UNIX as u64, SOCK_DGRAM as u64, 0);
+    assert!(unix_fd >= 0);
+    let inet_fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_DGRAM as u64, 0);
+    assert!(inet_fd >= 0);
+
+    let val_addr = t.scratch + 0x340;
+    let out_addr = t.scratch + 0x344;
+    let out_len = t.scratch + 0x348;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, val_addr, 1);
+        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 4);
+    }
+
+    assert_eq!(
+        socket::sys_setsockopt(
+            &mut t.vm,
+            t.base,
+            unix_fd as u64,
+            SOL_SOCKET,
+            SO_PASSCRED,
+            val_addr,
+            4,
+        ),
+        0
+    );
+    assert_eq!(
+        socket::sys_setsockopt(
+            &mut t.vm,
+            t.base,
+            unix_fd as u64,
+            SOL_SOCKET,
+            SO_PASSSEC,
+            val_addr,
+            4,
+        ),
+        0
+    );
+    assert_eq!(
+        socket::sys_getsockopt(
+            &mut t.vm,
+            t.base,
+            unix_fd as u64,
+            SOL_SOCKET,
+            SO_PASSCRED,
+            out_addr,
+            out_len,
+        ),
+        0
+    );
+    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) }, 1);
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, out_len, 4);
+    }
+    assert_eq!(
+        socket::sys_getsockopt(
+            &mut t.vm,
+            t.base,
+            unix_fd as u64,
+            SOL_SOCKET,
+            SO_PASSSEC,
+            out_addr,
+            out_len,
+        ),
+        0
+    );
+    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) }, 1);
+
+    assert_eq!(
+        socket::sys_setsockopt(
+            &mut t.vm,
+            t.base,
+            inet_fd as u64,
+            SOL_SOCKET,
+            SO_PASSCRED,
+            val_addr,
+            4,
+        ),
+        ENOPROTOOPT
+    );
+    assert_eq!(
+        socket::sys_setsockopt(
+            &mut t.vm,
+            t.base,
+            inet_fd as u64,
+            SOL_SOCKET,
+            SO_PASSSEC,
+            val_addr,
+            4,
+        ),
+        ENOPROTOOPT
     );
 }
 

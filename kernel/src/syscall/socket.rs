@@ -53,11 +53,13 @@ const SO_PRIORITY: u32 = 12;
 const SO_LINGER: u32 = 13;
 const SO_BSDCOMPAT: u32 = 14;
 const SO_REUSEPORT: u32 = 15;
+const SO_PASSCRED: u32 = 16;
 const SO_RCVLOWAT: u32 = 18;
 const SO_SNDLOWAT: u32 = 19;
 const SO_RCVTIMEO_OLD: u32 = 20;
 const SO_SNDTIMEO_OLD: u32 = 21;
 const SO_ACCEPTCONN: u32 = 30;
+const SO_PASSSEC: u32 = 34;
 const SO_MARK: u32 = 36;
 const SO_PROTOCOL: u32 = 38;
 const SO_DOMAIN: u32 = 39;
@@ -105,9 +107,11 @@ struct SocketSlot {
     so_linger_onoff: u32,
     so_linger_secs: u32,
     so_bsdcompat: u32,
+    so_passcred: u32,
     so_dontroute: u32,
     so_broadcast: u32,
     so_mark: u32,
+    so_passsec: u32,
     so_sndbuf: u32,
     so_rcvbuf: u32,
     so_rcvlowat: u32,
@@ -218,9 +222,11 @@ fn alloc_socket_slot() -> Option<u32> {
                     so_linger_onoff: 0,
                     so_linger_secs: 0,
                     so_bsdcompat: 0,
+                    so_passcred: 0,
                     so_dontroute: 0,
                     so_broadcast: 0,
                     so_mark: 0,
+                    so_passsec: 0,
                     so_sndbuf: DEFAULT_SOCKET_BUFFER,
                     so_rcvbuf: DEFAULT_SOCKET_BUFFER,
                     so_rcvlowat: 1,
@@ -1064,9 +1070,11 @@ pub fn inject_http_connection(vm_ptr: u32, port: u16, request: &[u8]) -> i32 {
         so_linger_onoff: 0,
         so_linger_secs: 0,
         so_bsdcompat: 0,
+        so_passcred: 0,
         so_dontroute: 0,
         so_broadcast: 0,
         so_mark: 0,
+        so_passsec: 0,
         so_sndbuf: DEFAULT_SOCKET_BUFFER,
         so_rcvbuf: DEFAULT_SOCKET_BUFFER,
         so_rcvlowat: 1,
@@ -1103,9 +1111,11 @@ pub fn inject_http_connection(vm_ptr: u32, port: u16, request: &[u8]) -> i32 {
         so_linger_onoff: 0,
         so_linger_secs: 0,
         so_bsdcompat: 0,
+        so_passcred: 0,
         so_dontroute: 0,
         so_broadcast: 0,
         so_mark: 0,
+        so_passsec: 0,
         so_sndbuf: DEFAULT_SOCKET_BUFFER,
         so_rcvbuf: DEFAULT_SOCKET_BUFFER,
         so_rcvlowat: 1,
@@ -1325,6 +1335,18 @@ pub fn sys_setsockopt(
             }
             Err(err) => err,
         },
+        (SOL_SOCKET, SO_PASSCRED) => {
+            if slot.domain != AF_UNIX {
+                return ENOPROTOOPT;
+            }
+            match read_opt_i32(base, optval, optlen) {
+                Ok(value) => {
+                    slot.so_passcred = u32::from(value != 0);
+                    0
+                }
+                Err(err) => err,
+            }
+        }
         (SOL_SOCKET, SO_BROADCAST) => match read_opt_i32(base, optval, optlen) {
             Ok(value) => {
                 slot.so_broadcast = u32::from(value != 0);
@@ -1332,6 +1354,18 @@ pub fn sys_setsockopt(
             }
             Err(err) => err,
         },
+        (SOL_SOCKET, SO_PASSSEC) => {
+            if slot.domain != AF_UNIX {
+                return ENOPROTOOPT;
+            }
+            match read_opt_i32(base, optval, optlen) {
+                Ok(value) => {
+                    slot.so_passsec = u32::from(value != 0);
+                    0
+                }
+                Err(err) => err,
+            }
+        }
         (SOL_SOCKET, SO_MARK) => match read_opt_i32(base, optval, optlen) {
             Ok(value) if value >= 0 => {
                 slot.so_mark = value as u32;
@@ -1441,8 +1475,20 @@ pub fn sys_getsockopt(
             slot.so_linger_secs,
         ),
         (SOL_SOCKET, SO_BSDCOMPAT) => write_opt_u32(base, optval, optlen, slot.so_bsdcompat),
+        (SOL_SOCKET, SO_PASSCRED) => {
+            if slot.domain != AF_UNIX {
+                return ENOPROTOOPT;
+            }
+            write_opt_u32(base, optval, optlen, slot.so_passcred)
+        }
         (SOL_SOCKET, SO_BROADCAST) => write_opt_u32(base, optval, optlen, slot.so_broadcast),
         (SOL_SOCKET, SO_MARK) => write_opt_u32(base, optval, optlen, slot.so_mark),
+        (SOL_SOCKET, SO_PASSSEC) => {
+            if slot.domain != AF_UNIX {
+                return ENOPROTOOPT;
+            }
+            write_opt_u32(base, optval, optlen, slot.so_passsec)
+        }
         (SOL_SOCKET, SO_SNDBUF) => write_opt_u32(base, optval, optlen, slot.so_sndbuf),
         (SOL_SOCKET, SO_RCVBUF) => write_opt_u32(base, optval, optlen, slot.so_rcvbuf),
         (SOL_SOCKET, SO_INCOMING_CPU) => write_opt_u32(base, optval, optlen, 0),
