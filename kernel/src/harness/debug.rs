@@ -833,6 +833,7 @@ pub fn record_syscall(vm_ptr: u32, nr: u64, result: i64, status: i32) {
                         | SYNC_EFFECT_FORK_SHARED_OFD_STATE
                 }
                 crate::abi::SYS_SOCKET
+                | crate::abi::SYS_SOCKETPAIR
                 | crate::abi::SYS_BIND
                 | crate::abi::SYS_LISTEN
                 | crate::abi::SYS_ACCEPT4 => {

@@ -258,6 +258,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
 
         // socket
         SYS_SOCKET => socket::sys_socket(vm, base, a0, a1, a2),
+        SYS_SOCKETPAIR => socket::sys_socketpair(vm, base, a0, a1, a2, a3),
         SYS_BIND => socket::sys_bind(vm, base, a0, a1, a2),
         SYS_LISTEN => socket::sys_listen(vm, base, a0, a1),
         SYS_CONNECT => {

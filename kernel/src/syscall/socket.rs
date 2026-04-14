@@ -54,6 +54,7 @@ const SO_LINGER: u32 = 13;
 const SO_BSDCOMPAT: u32 = 14;
 const SO_REUSEPORT: u32 = 15;
 const SO_PASSCRED: u32 = 16;
+const SO_PEERCRED: u32 = 17;
 const SO_RCVLOWAT: u32 = 18;
 const SO_SNDLOWAT: u32 = 19;
 const SO_RCVTIMEO_OLD: u32 = 20;
@@ -94,6 +95,9 @@ struct SocketSlot {
     peer_addr: [u8; SOCKADDR_STORAGE_LEN],
     peer_len: u32,
     peer_idx: i32,
+    peer_pid: i32,
+    peer_uid: u32,
+    peer_gid: u32,
     recv_buf_idx: i32,
     last_error: i32,
     so_cookie: u64,
@@ -209,6 +213,9 @@ fn alloc_socket_slot() -> Option<u32> {
                     peer_addr: [0; SOCKADDR_STORAGE_LEN],
                     peer_len: 0,
                     peer_idx: INVALID_PEER_IDX,
+                    peer_pid: 0,
+                    peer_uid: 0,
+                    peer_gid: 0,
                     recv_buf_idx: INVALID_BUF_IDX,
                     last_error: 0,
                     so_cookie: alloc_socket_cookie(),
@@ -566,6 +573,172 @@ pub fn sys_socket(vm: &mut ThreadState, base: u32, domain: u64, stype: u64, prot
         return fd;
     }
     fd
+}
+
+/// socketpair(domain, type, protocol, sv) -> 0 or error
+pub fn sys_socketpair(
+    vm: &mut ThreadState,
+    base: u32,
+    domain: u64,
+    stype: u64,
+    protocol: u64,
+    sv: u64,
+) -> i64 {
+    if sv == 0 || !crate::syscall::memory::guest_range_accessible(base, sv, 8) {
+        return EFAULT;
+    }
+
+    let domain_val = domain as u32;
+    if domain_val != AF_UNIX {
+        return EAFNOSUPPORT;
+    }
+
+    let raw_type = stype as u32;
+    let type_val = raw_type & 0xFF;
+    let flags = raw_type & !0xFF;
+    if type_val != SOCK_STREAM && type_val != SOCK_DGRAM {
+        return EINVAL;
+    }
+
+    let protocol_val = protocol as u32;
+    let Some(left_idx) = alloc_socket_slot().map(|idx| idx as usize) else {
+        return ENOMEM;
+    };
+    let Some(right_idx) = alloc_socket_slot().map(|idx| idx as usize) else {
+        free_socket_slot(left_idx as u32);
+        return ENOMEM;
+    };
+    let Some(left_recv) = crate::net::ring_buffer::alloc_buffer().map(|idx| idx as i32) else {
+        free_socket_slot(left_idx as u32);
+        free_socket_slot(right_idx as u32);
+        return ENOMEM;
+    };
+    let Some(right_recv) = crate::net::ring_buffer::alloc_buffer().map(|idx| idx as i32) else {
+        crate::net::ring_buffer::free_buffer(left_recv as u32);
+        free_socket_slot(left_idx as u32);
+        free_socket_slot(right_idx as u32);
+        return ENOMEM;
+    };
+
+    let pid = crate::syscall::process::current_process_pid(vm, base);
+    let uid = vm.euid;
+    let gid = vm.egid;
+    socket_table()[left_idx] = SocketSlot {
+        domain: domain_val,
+        sock_type: type_val,
+        protocol: protocol_val,
+        state: SOCK_STATE_CONNECTED,
+        local_addr: [0; SOCKADDR_STORAGE_LEN],
+        local_len: 0,
+        peer_addr: [0; SOCKADDR_STORAGE_LEN],
+        peer_len: 0,
+        peer_idx: right_idx as i32,
+        peer_pid: pid,
+        peer_uid: uid,
+        peer_gid: gid,
+        recv_buf_idx: left_recv,
+        last_error: 0,
+        so_cookie: alloc_socket_cookie(),
+        so_debug: 0,
+        so_reuseaddr: 0,
+        so_reuseport: 0,
+        so_keepalive: 0,
+        so_oobinline: 0,
+        so_nocheck: 0,
+        so_priority: 0,
+        so_linger_onoff: 0,
+        so_linger_secs: 0,
+        so_bsdcompat: 0,
+        so_passcred: 0,
+        so_dontroute: 0,
+        so_broadcast: 0,
+        so_mark: 0,
+        so_passsec: 0,
+        so_sndbuf: DEFAULT_SOCKET_BUFFER,
+        so_rcvbuf: DEFAULT_SOCKET_BUFFER,
+        so_rcvlowat: 1,
+        so_rcvtimeo_sec: 0,
+        so_rcvtimeo_usec: 0,
+        so_sndtimeo_sec: 0,
+        so_sndtimeo_usec: 0,
+        tcp_nodelay: 0,
+        shutdown_mask: 0,
+        accept_head: 0,
+        accept_tail: 0,
+        accept_queue: [-1; ACCEPT_QUEUE_SIZE],
+    };
+    socket_table()[right_idx] = SocketSlot {
+        domain: domain_val,
+        sock_type: type_val,
+        protocol: protocol_val,
+        state: SOCK_STATE_CONNECTED,
+        local_addr: [0; SOCKADDR_STORAGE_LEN],
+        local_len: 0,
+        peer_addr: [0; SOCKADDR_STORAGE_LEN],
+        peer_len: 0,
+        peer_idx: left_idx as i32,
+        peer_pid: pid,
+        peer_uid: uid,
+        peer_gid: gid,
+        recv_buf_idx: right_recv,
+        last_error: 0,
+        so_cookie: alloc_socket_cookie(),
+        so_debug: 0,
+        so_reuseaddr: 0,
+        so_reuseport: 0,
+        so_keepalive: 0,
+        so_oobinline: 0,
+        so_nocheck: 0,
+        so_priority: 0,
+        so_linger_onoff: 0,
+        so_linger_secs: 0,
+        so_bsdcompat: 0,
+        so_passcred: 0,
+        so_dontroute: 0,
+        so_broadcast: 0,
+        so_mark: 0,
+        so_passsec: 0,
+        so_sndbuf: DEFAULT_SOCKET_BUFFER,
+        so_rcvbuf: DEFAULT_SOCKET_BUFFER,
+        so_rcvlowat: 1,
+        so_rcvtimeo_sec: 0,
+        so_rcvtimeo_usec: 0,
+        so_sndtimeo_sec: 0,
+        so_sndtimeo_usec: 0,
+        tcp_nodelay: 0,
+        shutdown_mask: 0,
+        accept_head: 0,
+        accept_tail: 0,
+        accept_queue: [-1; ACCEPT_QUEUE_SIZE],
+    };
+
+    let mut fd_flags: i32 = 0;
+    if flags & SOCK_NONBLOCK != 0 {
+        fd_flags |= O_NONBLOCK;
+    }
+    if flags & SOCK_CLOEXEC != 0 {
+        fd_flags |= O_CLOEXEC;
+    }
+
+    let left_fd = fd_table::open_socket(vm, base, left_idx as u32, fd_flags);
+    if left_fd < 0 {
+        shutdown_slot(left_idx);
+        shutdown_slot(right_idx);
+        return left_fd;
+    }
+    let right_fd = fd_table::open_socket(vm, base, right_idx as u32, fd_flags);
+    if right_fd < 0 {
+        let _ = fd_table::sys_close(vm, base, left_fd as u64);
+        shutdown_slot(left_idx);
+        shutdown_slot(right_idx);
+        return right_fd;
+    }
+
+    unsafe {
+        guest_mem::write_u32(base, sv, left_fd as u32);
+        guest_mem::write_u32(base, sv + 4, right_fd as u32);
+    }
+    0
 }
 
 // =========================================================================
@@ -1057,6 +1230,9 @@ pub fn inject_http_connection(vm_ptr: u32, port: u16, request: &[u8]) -> i32 {
         peer_addr: [0; SOCKADDR_STORAGE_LEN],
         peer_len: 0,
         peer_idx: client_idx as i32,
+        peer_pid: 0,
+        peer_uid: 0,
+        peer_gid: 0,
         recv_buf_idx: server_recv,
         last_error: 0,
         so_cookie: alloc_socket_cookie(),
@@ -1098,6 +1274,9 @@ pub fn inject_http_connection(vm_ptr: u32, port: u16, request: &[u8]) -> i32 {
         peer_addr: listener_local_addr,
         peer_len: listener_local_len,
         peer_idx: server_idx as i32,
+        peer_pid: 0,
+        peer_uid: 0,
+        peer_gid: 0,
         recv_buf_idx: client_recv,
         last_error: 0,
         so_cookie: alloc_socket_cookie(),
@@ -1431,7 +1610,7 @@ pub fn sys_setsockopt(
                 Err(err) => err,
             }
         }
-        (SOL_SOCKET, SO_TYPE | SO_ERROR | SO_ACCEPTCONN | SO_PROTOCOL | SO_DOMAIN) => ENOPROTOOPT,
+        (SOL_SOCKET, SO_TYPE | SO_ERROR | SO_ACCEPTCONN | SO_PROTOCOL | SO_DOMAIN | SO_PEERCRED) => ENOPROTOOPT,
         _ => ENOPROTOOPT,
     }
 }
@@ -1480,6 +1659,19 @@ pub fn sys_getsockopt(
                 return ENOPROTOOPT;
             }
             write_opt_u32(base, optval, optlen, slot.so_passcred)
+        }
+        (SOL_SOCKET, SO_PEERCRED) => {
+            if slot.domain != AF_UNIX {
+                return ENOPROTOOPT;
+            }
+            if slot.peer_pid <= 0 {
+                return ENOTCONN;
+            }
+            let mut bytes = [0u8; 12];
+            bytes[..4].copy_from_slice(&slot.peer_pid.to_le_bytes());
+            bytes[4..8].copy_from_slice(&slot.peer_uid.to_le_bytes());
+            bytes[8..12].copy_from_slice(&slot.peer_gid.to_le_bytes());
+            write_opt_bytes(base, optval, optlen, &bytes)
         }
         (SOL_SOCKET, SO_BROADCAST) => write_opt_u32(base, optval, optlen, slot.so_broadcast),
         (SOL_SOCKET, SO_MARK) => write_opt_u32(base, optval, optlen, slot.so_mark),

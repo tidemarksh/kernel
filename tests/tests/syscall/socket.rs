@@ -20,6 +20,7 @@ const SO_PRIORITY: u64 = 12;
 const SO_LINGER: u64 = 13;
 const SO_BSDCOMPAT: u64 = 14;
 const SO_PASSCRED: u64 = 16;
+const SO_PEERCRED: u64 = 17;
 const SO_RCVLOWAT: u64 = 18;
 const SO_SNDLOWAT: u64 = 19;
 const SO_RCVTIMEO_OLD: u64 = 20;
@@ -36,6 +37,7 @@ const IPPROTO_UDP: u64 = 17;
 const TCP_NODELAY: u64 = 1;
 const SO_RCVTIMEO_NEW: u64 = 66;
 const SO_SNDTIMEO_NEW: u64 = 67;
+const F_GETFD: u64 = 1;
 
 #[test]
 fn socket_create_close_and_errors() {
@@ -52,6 +54,87 @@ fn socket_create_close_and_errors() {
 
     assert_eq!(t.sys_close(fd), 0);
     assert!(fd_table::get_ofd(t.base, &t.vm, fd as u64).is_none());
+}
+
+#[test]
+fn socketpair_unix_stream_roundtrip_and_peercred() {
+    let mut t = TestVm::new();
+    let sv_addr = t.scratch + 0x80;
+    assert_eq!(
+        socket::sys_socketpair(&mut t.vm, t.base, AF_UNIX as u64, SOCK_STREAM as u64, 0, sv_addr),
+        0
+    );
+
+    let left_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, sv_addr) } as i64;
+    let right_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, sv_addr + 4) } as i64;
+    assert!(left_fd >= 3);
+    assert!(right_fd >= 3);
+    assert_ne!(left_fd, right_fd);
+
+    let msg_addr = t.scratch + 0x100;
+    t.write_mem(msg_addr, b"ping");
+    assert_eq!(
+        socket::sys_sendto(&mut t.vm, t.base, left_fd as u64, msg_addr, 4, 0, 0, 0),
+        4
+    );
+
+    let read_addr = t.scratch + 0x140;
+    assert_eq!(
+        socket::sys_recvfrom(&mut t.vm, t.base, right_fd as u64, read_addr, 4, 0, 0, 0),
+        4
+    );
+    let mut actual = [0u8; 4];
+    unsafe {
+        tidemark_kernel::guest_mem::read_bytes(t.base, read_addr, &mut actual);
+    }
+    assert_eq!(&actual, b"ping");
+
+    let cred_addr = t.scratch + 0x180;
+    let cred_len = t.scratch + 0x1a0;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, cred_len, 12);
+    }
+    assert_eq!(
+        socket::sys_getsockopt(
+            &mut t.vm,
+            t.base,
+            left_fd as u64,
+            SOL_SOCKET,
+            SO_PEERCRED,
+            cred_addr,
+            cred_len,
+        ),
+        0
+    );
+    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_i32(t.base, cred_addr) }, 42);
+    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u32(t.base, cred_addr + 4) }, 0);
+    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u32(t.base, cred_addr + 8) }, 0);
+}
+
+#[test]
+fn socketpair_unix_dgram_honors_type_flags() {
+    let mut t = TestVm::new();
+    let sv_addr = t.scratch + 0x200;
+    assert_eq!(
+        socket::sys_socketpair(
+            &mut t.vm,
+            t.base,
+            AF_UNIX as u64,
+            (SOCK_DGRAM | SOCK_NONBLOCK | SOCK_CLOEXEC) as u64,
+            0,
+            sv_addr,
+        ),
+        0
+    );
+
+    let left_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, sv_addr) } as u64;
+    let right_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, sv_addr + 4) } as u64;
+    let left_ofd = fd_table::get_ofd(t.base, &t.vm, left_fd).unwrap();
+    let right_ofd = fd_table::get_ofd(t.base, &t.vm, right_fd).unwrap();
+    assert_ne!(left_ofd.status_flags & O_NONBLOCK, 0);
+    assert_ne!(right_ofd.status_flags & O_NONBLOCK, 0);
+    assert_ne!(fd_table::sys_fcntl(&mut t.vm, t.base, left_fd, F_GETFD, 0), 0);
+    assert_ne!(fd_table::sys_fcntl(&mut t.vm, t.base, right_fd, F_GETFD, 0), 0);
 }
 
 #[test]
