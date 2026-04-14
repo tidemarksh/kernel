@@ -240,6 +240,35 @@ fn socket_send_timeout_ms_for_slot(slot: &SocketSlot) -> i64 {
     timeout_to_millis(slot.so_sndtimeo_sec, slot.so_sndtimeo_usec)
 }
 
+pub fn socket_close_linger_timeout_ms(socket_idx: u32) -> i64 {
+    let idx = socket_idx as usize;
+    if idx >= MAX_SOCKETS || !is_slot_used(socket_idx) {
+        return -1;
+    }
+    let slot = &socket_table()[idx];
+    if slot.sock_type != SOCK_STREAM || slot.so_linger_onoff == 0 || slot.so_linger_secs == 0 {
+        return -1;
+    }
+    slot.so_linger_secs.min(i32::MAX as u32) as i64 * 1000
+}
+
+pub fn socket_close_has_untransmitted_data(socket_idx: u32) -> bool {
+    let idx = socket_idx as usize;
+    if idx >= MAX_SOCKETS || !is_slot_used(socket_idx) {
+        return false;
+    }
+    let slot = &socket_table()[idx];
+    let peer_idx = slot.peer_idx;
+    if peer_idx < 0 || !is_slot_used(peer_idx as u32) {
+        return false;
+    }
+    let peer = &socket_table()[peer_idx as usize];
+    if peer.recv_buf_idx < 0 {
+        return false;
+    }
+    crate::net::ring_buffer::available(peer.recv_buf_idx as u32) > 0
+}
+
 pub fn socket_recv_timeout_ms_for_fd(base: u32, vm: &ThreadState, fd: u64) -> i64 {
     let Some(idx) = get_socket_idx(base, vm, fd).map(|value| value as usize) else {
         return -1;

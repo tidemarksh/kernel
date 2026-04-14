@@ -206,6 +206,24 @@ unsafe fn process_has_ofd(ps: *const ProcessState, ofd_id: u32) -> bool {
     false
 }
 
+unsafe fn process_has_other_ofd(ps: *const ProcessState, ofd_id: u32, skip_fd: usize) -> bool {
+    if ps.is_null() || ofd_id == 0 {
+        return false;
+    }
+    unsafe {
+        for index in 0..MAX_FDS {
+            if index == skip_fd {
+                continue;
+            }
+            let entry = load_fd_entry_ptr(core::ptr::addr_of!((*ps).fd_table[index]));
+            if entry.ofd_id == ofd_id {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Allocate a new OFD slot. Returns ofd_id (1-based), or 0 on failure.
 unsafe fn alloc_ofd(fd_type: i32, status_flags: i32) -> u32 {
     for i in 1..MAX_FDS {
@@ -959,11 +977,28 @@ pub fn sys_close(vm: &mut ThreadState, base: u32, fd: u64) -> i64 {
         }
 
         let ofd_id = entry.ofd_id;
+        let ofd = ofd_table()[ofd_id as usize];
+        if ofd.fd_type == FD_TYPE_SOCKET
+            && ofd.refcount == 1
+            && !process_has_other_ofd(ps, ofd_id, fd as usize)
+            && vm.socket_force_close == 0
+        {
+            let timeout_ms = crate::syscall::socket::socket_close_linger_timeout_ms(ofd.ino);
+            if timeout_ms > 0 && crate::syscall::socket::socket_close_has_untransmitted_data(ofd.ino) {
+                pin_blocked_fd(base, vm, fd);
+                vm.socket_timeout_ms = timeout_ms;
+                vm.status = STATUS_SOCKET_SEND;
+                return 0;
+            }
+        }
+
         clear_fd_entry_ptr(entry_ptr);
         if !process_has_ofd(ps, ofd_id) {
             release_ofd_id(ofd_id);
         }
 
+        vm.socket_timeout_ms = -1;
+        vm.socket_force_close = 0;
         0
     }
 }

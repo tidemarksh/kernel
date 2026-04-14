@@ -622,6 +622,117 @@ fn socket_accept_block_captures_rcv_timeout_ms() {
 }
 
 #[test]
+fn socket_linger_close_blocks_until_peer_buffer_drains() {
+    let mut t = TestVm::new();
+    let fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
+    assert!(fd >= 0);
+
+    let sockaddr: [u8; 16] = [2, 0, 0x50, 0x01, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
+    let bind_addr = t.scratch + 0x820;
+    t.write_mem(bind_addr, &sockaddr);
+    assert_eq!(socket::sys_bind(&mut t.vm, t.base, fd as u64, bind_addr, 16), 0);
+    assert_eq!(socket::sys_listen(&mut t.vm, t.base, fd as u64, 1), 0);
+
+    let client_idx = socket::inject_http_connection(0, 0x5001, &[]);
+    assert!(client_idx >= 0);
+    let accepted_fd = socket::sys_accept4(&mut t.vm, t.base, fd as u64, 0, 0, 0);
+    assert!(accepted_fd >= 0);
+
+    let linger_addr = t.scratch + 0x840;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, linger_addr, 1);
+        tidemark_kernel::guest_mem::write_u32(t.base, linger_addr + 4, 1);
+    }
+    assert_eq!(
+        socket::sys_setsockopt(
+            &mut t.vm,
+            t.base,
+            accepted_fd as u64,
+            SOL_SOCKET,
+            SO_LINGER,
+            linger_addr,
+            8,
+        ),
+        0
+    );
+
+    let send_buf = t.scratch + 0x860;
+    t.write_mem(send_buf, b"hello");
+    assert_eq!(
+        socket::sys_sendto(&mut t.vm, t.base, accepted_fd as u64, send_buf, 5, 0, 0, 0),
+        5
+    );
+
+    t.vm.x[17] = SYS_CLOSE;
+    t.vm.x[10] = accepted_fd as u64;
+    assert_eq!(t.sys_close(accepted_fd), 0);
+    assert_eq!(t.vm.status, STATUS_SOCKET_SEND);
+    assert_eq!(t.vm.socket_timeout_ms, 1000);
+
+    let mut drained = [0u8; 16];
+    assert_eq!(socket::read_http_response(0, client_idx, &mut drained), 5);
+    assert_eq!(&drained[..5], b"hello");
+
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    assert_eq!(thread_resume_blocked_syscall(vm_ptr), 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert!(fd_table::get_ofd(t.base, &t.vm, accepted_fd as u64).is_none());
+}
+
+#[test]
+fn socket_linger_close_timeout_forces_close() {
+    let mut t = TestVm::new();
+    let fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
+    assert!(fd >= 0);
+
+    let sockaddr: [u8; 16] = [2, 0, 0x50, 0x02, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
+    let bind_addr = t.scratch + 0x880;
+    t.write_mem(bind_addr, &sockaddr);
+    assert_eq!(socket::sys_bind(&mut t.vm, t.base, fd as u64, bind_addr, 16), 0);
+    assert_eq!(socket::sys_listen(&mut t.vm, t.base, fd as u64, 1), 0);
+
+    let _client_idx = socket::inject_http_connection(0, 0x5002, &[]);
+    let accepted_fd = socket::sys_accept4(&mut t.vm, t.base, fd as u64, 0, 0, 0);
+    assert!(accepted_fd >= 0);
+
+    let linger_addr = t.scratch + 0x8a0;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, linger_addr, 1);
+        tidemark_kernel::guest_mem::write_u32(t.base, linger_addr + 4, 1);
+    }
+    assert_eq!(
+        socket::sys_setsockopt(
+            &mut t.vm,
+            t.base,
+            accepted_fd as u64,
+            SOL_SOCKET,
+            SO_LINGER,
+            linger_addr,
+            8,
+        ),
+        0
+    );
+
+    let send_buf = t.scratch + 0x8c0;
+    t.write_mem(send_buf, b"bye");
+    assert_eq!(
+        socket::sys_sendto(&mut t.vm, t.base, accepted_fd as u64, send_buf, 3, 0, 0, 0),
+        3
+    );
+
+    t.vm.x[17] = SYS_CLOSE;
+    t.vm.x[10] = accepted_fd as u64;
+    assert_eq!(t.sys_close(accepted_fd), 0);
+    assert_eq!(t.vm.status, STATUS_SOCKET_SEND);
+
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    thread_resume_socket_wait_timeout(vm_ptr);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.x[10], 0);
+    assert!(fd_table::get_ofd(t.base, &t.vm, accepted_fd as u64).is_none());
+}
+
+#[test]
 fn socket_connect_and_getpeername() {
     let mut t = TestVm::new();
     let fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);

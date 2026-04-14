@@ -245,7 +245,13 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             }
             r
         }
-        SYS_CLOSE => fd_table::sys_close(vm, base, a0),
+        SYS_CLOSE => {
+            let r = fd_table::sys_close(vm, base, a0);
+            if vm.status == abi::STATUS_SOCKET_SEND {
+                return debug_return(vm, nr, r, abi::STATUS_SOCKET_SEND);
+            }
+            r
+        }
 
         // pipe
         SYS_PIPE2 => pipe::sys_pipe2(vm, base, a0, a1),

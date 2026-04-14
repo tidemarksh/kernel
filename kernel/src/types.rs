@@ -137,6 +137,8 @@ pub struct ThreadState {
     pub epoll_timeout_ms: i64,
     /// socket wait timeout in milliseconds (-1 = infinite wait).
     pub socket_timeout_ms: i64,
+    /// Non-zero when a timed-out linger close should skip re-blocking.
+    pub socket_force_close: u32,
     /// maxevents captured for STATUS_EPOLL_WAIT retry.
     pub epoll_maxevents: u32,
     /// FD number captured for a blocked OFD-backed syscall resume.
