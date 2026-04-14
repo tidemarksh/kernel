@@ -138,6 +138,129 @@ fn socketpair_unix_dgram_honors_type_flags() {
 }
 
 #[test]
+fn unix_stream_bind_listen_connect_accept_roundtrip() {
+    let mut t = TestVm::new();
+    let listener_fd = socket::sys_socket(&mut t.vm, t.base, AF_UNIX as u64, SOCK_STREAM as u64, 0);
+    assert!(listener_fd >= 0);
+    let client_fd = socket::sys_socket(&mut t.vm, t.base, AF_UNIX as u64, SOCK_STREAM as u64, 0);
+    assert!(client_fd >= 0);
+
+    let path = b"/tmp/tidemark-unix\0";
+    let addr = t.scratch + 0x240;
+    let mut sockaddr = [0u8; 2 + 108];
+    sockaddr[0..2].copy_from_slice(&(AF_UNIX as u16).to_le_bytes());
+    sockaddr[2..2 + path.len()].copy_from_slice(path);
+    t.write_mem(addr, &sockaddr[..2 + path.len()]);
+
+    assert_eq!(
+        socket::sys_bind(&mut t.vm, t.base, listener_fd as u64, addr, (2 + path.len()) as u64),
+        0
+    );
+    assert_eq!(socket::sys_listen(&mut t.vm, t.base, listener_fd as u64, 8), 0);
+    assert_eq!(
+        socket::sys_connect(&mut t.vm, t.base, client_fd as u64, addr, (2 + path.len()) as u64),
+        0
+    );
+
+    let accepted_fd = socket::sys_accept4(&mut t.vm, t.base, listener_fd as u64, 0, 0, 0);
+    assert!(accepted_fd >= 0);
+
+    let msg_addr = t.scratch + 0x340;
+    t.write_mem(msg_addr, b"unix");
+    assert_eq!(
+        socket::sys_sendto(&mut t.vm, t.base, client_fd as u64, msg_addr, 4, 0, 0, 0),
+        4
+    );
+    let read_addr = t.scratch + 0x360;
+    assert_eq!(
+        socket::sys_recvfrom(&mut t.vm, t.base, accepted_fd as u64, read_addr, 4, 0, 0, 0),
+        4
+    );
+    let mut actual = [0u8; 4];
+    unsafe {
+        tidemark_kernel::guest_mem::read_bytes(t.base, read_addr, &mut actual);
+    }
+    assert_eq!(&actual, b"unix");
+
+    let peer_addr = t.scratch + 0x380;
+    let peer_len = t.scratch + 0x3f0;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, peer_len, 2 + path.len() as u32);
+    }
+    assert_eq!(
+        socket::sys_getpeername(&mut t.vm, t.base, client_fd as u64, peer_addr, peer_len),
+        0
+    );
+    let actual_len = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, peer_len) } as usize;
+    let mut actual_peer = vec![0u8; actual_len];
+    unsafe {
+        tidemark_kernel::guest_mem::read_bytes(t.base, peer_addr, &mut actual_peer);
+    }
+    assert_eq!(&actual_peer[..], &sockaddr[..actual_len]);
+
+    let cred_addr = t.scratch + 0x420;
+    let cred_len = t.scratch + 0x430;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, cred_len, 12);
+    }
+    assert_eq!(
+        socket::sys_getsockopt(
+            &mut t.vm,
+            t.base,
+            client_fd as u64,
+            SOL_SOCKET,
+            SO_PEERCRED,
+            cred_addr,
+            cred_len,
+        ),
+        0
+    );
+    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_i32(t.base, cred_addr) }, 42);
+}
+
+#[test]
+fn unix_dgram_connect_routes_to_bound_peer() {
+    let mut t = TestVm::new();
+    let server_fd = socket::sys_socket(&mut t.vm, t.base, AF_UNIX as u64, SOCK_DGRAM as u64, 0);
+    assert!(server_fd >= 0);
+    let client_fd = socket::sys_socket(&mut t.vm, t.base, AF_UNIX as u64, SOCK_DGRAM as u64, 0);
+    assert!(client_fd >= 0);
+
+    let path = b"\0tdm-dgram";
+    let addr = t.scratch + 0x480;
+    let mut sockaddr = [0u8; 2 + 108];
+    sockaddr[0..2].copy_from_slice(&(AF_UNIX as u16).to_le_bytes());
+    sockaddr[2..2 + path.len()].copy_from_slice(path);
+    t.write_mem(addr, &sockaddr[..2 + path.len()]);
+
+    assert_eq!(
+        socket::sys_bind(&mut t.vm, t.base, server_fd as u64, addr, (2 + path.len()) as u64),
+        0
+    );
+    assert_eq!(
+        socket::sys_connect(&mut t.vm, t.base, client_fd as u64, addr, (2 + path.len()) as u64),
+        0
+    );
+
+    let msg_addr = t.scratch + 0x540;
+    t.write_mem(msg_addr, b"dg");
+    assert_eq!(
+        socket::sys_sendto(&mut t.vm, t.base, client_fd as u64, msg_addr, 2, 0, 0, 0),
+        2
+    );
+    let read_addr = t.scratch + 0x560;
+    assert_eq!(
+        socket::sys_recvfrom(&mut t.vm, t.base, server_fd as u64, read_addr, 2, 0, 0, 0),
+        2
+    );
+    let mut actual = [0u8; 2];
+    unsafe {
+        tidemark_kernel::guest_mem::read_bytes(t.base, read_addr, &mut actual);
+    }
+    assert_eq!(&actual, b"dg");
+}
+
+#[test]
 fn socket_bind_and_getsockname() {
     let mut t = TestVm::new();
     let fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
