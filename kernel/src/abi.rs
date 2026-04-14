@@ -1561,6 +1561,14 @@ pub extern "C" fn thread_pending_fs_path_len(vm_ptr: u32) -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn thread_pending_fs_absolute_path(vm_ptr: u32, buf_ptr: u32, buf_len: u32) -> i64 {
+    unsafe {
+        let vm = &*(vm_ptr as *const crate::types::ThreadState);
+        crate::syscall::fs::pending_request_absolute_path(vm_ptr, vm.guest_base, buf_ptr, buf_len)
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn thread_process_fs(vm_ptr: u32) {
     unsafe {
         let vm = &*(vm_ptr as *const crate::types::ThreadState);
@@ -2157,6 +2165,18 @@ pub extern "C" fn memfs_lookup(parent_ino: u32, name_ptr: u32, name_len: u32) ->
 pub extern "C" fn memfs_create_file(parent_ino: u32, name_ptr: u32, name_len: u32) -> u32 {
     let name = unsafe { core::slice::from_raw_parts(name_ptr as *const u8, name_len as usize) };
     crate::fs::memfs::create_file(parent_ino, name, 0o644)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn memfs_unlink(parent_ino: u32, name_ptr: u32, name_len: u32) -> i64 {
+    let name = unsafe { core::slice::from_raw_parts(name_ptr as *const u8, name_len as usize) };
+    crate::fs::memfs::unlink(parent_ino, name)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn memfs_rmdir(parent_ino: u32, name_ptr: u32, name_len: u32) -> i64 {
+    let name = unsafe { core::slice::from_raw_parts(name_ptr as *const u8, name_len as usize) };
+    crate::fs::memfs::rmdir(parent_ino, name)
 }
 
 #[unsafe(no_mangle)]

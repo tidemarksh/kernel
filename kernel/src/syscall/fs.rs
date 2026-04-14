@@ -297,6 +297,99 @@ pub fn pending_request_path_len(vm_ptr: u32, base: u32) -> u32 {
     }
 }
 
+pub fn pending_request_absolute_path(vm_ptr: u32, base: u32, out_ptr: u32, out_len: u32) -> i64 {
+    unsafe {
+        let vm = &*(vm_ptr as *const ThreadState);
+        let ring_base = process_fs_ring_base(base, vm);
+        if ring_base == 0 || out_ptr == 0 || out_len == 0 {
+            return 0;
+        }
+        let Some(request) = ring_buffer::peek_request_info(ring_base) else {
+            return 0;
+        };
+        let path_ptr = pending_request_path_ptr_inner(&request);
+        if path_ptr == 0 {
+            return 0;
+        }
+
+        let mut path_buf = [0u8; 513];
+        let len = guest_mem::read_cstr(base, path_ptr, &mut path_buf[1..]);
+        let raw_path = &path_buf[1..1 + len];
+        let path = trim_trailing_slashes(raw_path);
+        if path.is_empty() {
+            return 0;
+        }
+
+        let mut absolute = [0u8; 512];
+        let absolute_len = if path[0] == b'/' {
+            if path.len() > absolute.len() {
+                return ENAMETOOLONG;
+            }
+            absolute[..path.len()].copy_from_slice(path);
+            path.len()
+        } else {
+            let base_ino = match dirfd_base_ino(vm, request.fd as u64, base) {
+                Ok(ino) => ino,
+                Err(errno) => return errno,
+            };
+            let (parent_rel, name) = split_relative_parent_name(path);
+            let parent_ino = if name.is_empty() {
+                if parent_rel.is_empty() {
+                    base_ino
+                } else {
+                    match resolve_path_with_symlink_policy(
+                        base_ino,
+                        parent_rel,
+                        true,
+                        MAX_PATH_SYMLINK_FOLLOWS,
+                    ) {
+                        Ok(ino) => ino,
+                        Err(errno) => return errno,
+                    }
+                }
+            } else if parent_rel.is_empty() {
+                base_ino
+            } else {
+                match resolve_path_with_symlink_policy(
+                    base_ino,
+                    parent_rel,
+                    true,
+                    MAX_PATH_SYMLINK_FOLLOWS,
+                ) {
+                    Ok(ino) => ino,
+                    Err(errno) => return errno,
+                }
+            };
+
+            let parent_len = memfs::write_path(parent_ino, &mut absolute);
+            if parent_len == 0 {
+                return ENOENT;
+            }
+            if name.is_empty() {
+                parent_len
+            } else {
+                let sep_len = usize::from(parent_len > 1);
+                let total = parent_len + sep_len + name.len();
+                if total > absolute.len() {
+                    return ENAMETOOLONG;
+                }
+                if sep_len != 0 {
+                    absolute[parent_len] = b'/';
+                }
+                absolute[parent_len + sep_len..total].copy_from_slice(name);
+                total
+            }
+        };
+
+        if absolute_len > out_len as usize {
+            return ENOSPC;
+        }
+        let out = core::slice::from_raw_parts_mut(out_ptr as *mut u8, out_len as usize);
+        out[..absolute_len].copy_from_slice(&absolute[..absolute_len]);
+        absolute_len as i64
+    }
+}
+
 pub fn resume_from_fs(vm_ptr: u32, base: u32) -> i64 {
     unsafe {
         let vm = &mut *(vm_ptr as *mut ThreadState);
