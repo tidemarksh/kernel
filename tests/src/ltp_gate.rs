@@ -92,7 +92,8 @@ pub fn resolve_kernel_root(kernel_root: Option<&Path>) -> Result<PathBuf, String
     if cwd.join("tests/fixtures/ltp").is_dir() && cwd.join("vendor/ltp/testcases").is_dir() {
         return Ok(cwd);
     }
-    if cwd.join("kernel/tests/fixtures/ltp").is_dir() && cwd.join("kernel/vendor/ltp/testcases").is_dir()
+    if cwd.join("kernel/tests/fixtures/ltp").is_dir()
+        && cwd.join("kernel/vendor/ltp/testcases").is_dir()
     {
         return Ok(cwd.join("kernel"));
     }

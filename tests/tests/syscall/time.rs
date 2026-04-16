@@ -220,8 +220,14 @@ fn getcpu_reports_single_online_cpu_and_node() {
         tidemark_kernel::syscall::time::sys_getcpu(&t.vm, t.base, cpu_addr, node_addr, 0),
         0
     );
-    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u32(t.base, cpu_addr) }, 0);
-    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u32(t.base, node_addr) }, 0);
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, cpu_addr) },
+        0
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, node_addr) },
+        0
+    );
 }
 
 #[test]
@@ -276,7 +282,11 @@ fn clock_nanosleep_abstime_uses_deadline_delta() {
         tidemark_kernel::syscall::time::current_timespec(CLOCK_MONOTONIC).unwrap();
     let target_nsec_total = now_nsec + 30_000_000;
     unsafe {
-        tidemark_kernel::guest_mem::write_u64(t.base, req, now_sec + target_nsec_total / 1_000_000_000);
+        tidemark_kernel::guest_mem::write_u64(
+            t.base,
+            req,
+            now_sec + target_nsec_total / 1_000_000_000,
+        );
         tidemark_kernel::guest_mem::write_u64(t.base, req + 8, target_nsec_total % 1_000_000_000);
     }
 

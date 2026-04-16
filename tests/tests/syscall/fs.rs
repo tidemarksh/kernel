@@ -96,6 +96,45 @@ fn status_fs_round_trip_for_open_write_and_lseek() {
 }
 
 #[test]
+fn regular_file_read_spans_multiple_chunks() {
+    let mut t = TestVm::new();
+    let data: Vec<u8> = (0..10_000).map(|idx| (idx % 251) as u8).collect();
+    let ino = memfs::create_file(1, b"big-read.bin", 0o644);
+    assert!(ino > 0);
+    assert_eq!(memfs::write_file(ino, 0, &data), data.len() as i64);
+
+    let fd = t.sys_openat(b"/big-read.bin", O_RDONLY);
+    assert!(fd >= 3);
+
+    let mut buf = vec![0u8; data.len()];
+    let nread = t.sys_read(fd, &mut buf);
+    assert_eq!(nread, data.len() as i64);
+    assert_eq!(buf, data);
+}
+
+#[test]
+fn pread64_spans_multiple_chunks_from_nonzero_offset() {
+    let mut t = TestVm::new();
+    let data: Vec<u8> = (0..12_000).map(|idx| ((idx * 7) % 251) as u8).collect();
+    let ino = memfs::create_file(1, b"big-pread.bin", 0o644);
+    assert!(ino > 0);
+    assert_eq!(memfs::write_file(ino, 0, &data), data.len() as i64);
+
+    let fd = t.sys_openat(b"/big-pread.bin", O_RDONLY);
+    assert!(fd >= 3);
+
+    let offset = 4097u64;
+    let len = 5000usize;
+    let buf_addr = t.scratch + 0x7000;
+    let nread = fs::sys_pread64(&mut t.vm, t.base, fd as u64, buf_addr, len as u64, offset);
+    assert_eq!(nread, len as i64);
+    assert_eq!(
+        &t.guest_mem(buf_addr, len),
+        &data[offset as usize..offset as usize + len]
+    );
+}
+
+#[test]
 fn getdents64_advances_directory_offset() {
     let mut t = TestVm::new();
 
@@ -183,7 +222,10 @@ fn ioctl_on_regular_file_reports_enotty() {
     t.vm.x[11] = 0x5413; // TIOCGWINSZ
     t.vm.x[12] = t.scratch + 0x3800;
 
-    assert_eq!(tidemark_kernel::syscall::dispatch(&mut t.vm, t.base), STATUS_OK);
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        STATUS_OK
+    );
     assert_eq!(t.vm.x[10] as i64, ENOTTY);
 }
 
@@ -666,8 +708,14 @@ fn stdio_fds_report_tty_termios_and_winsize() {
     let winsize_addr = t.scratch + 0x3800;
     let stat_addr = t.scratch + 0x3900;
 
-    assert_eq!(tidemark_kernel::syscall::pty::sys_ioctl(&mut t.vm, t.base, 0, TCGETS, termios_addr), 0);
-    assert_eq!(tidemark_kernel::syscall::pty::sys_ioctl(&mut t.vm, t.base, 1, TIOCGWINSZ, winsize_addr), 0);
+    assert_eq!(
+        tidemark_kernel::syscall::pty::sys_ioctl(&mut t.vm, t.base, 0, TCGETS, termios_addr),
+        0
+    );
+    assert_eq!(
+        tidemark_kernel::syscall::pty::sys_ioctl(&mut t.vm, t.base, 1, TIOCGWINSZ, winsize_addr),
+        0
+    );
     assert_eq!(t.sys_fstat(0, stat_addr), 0);
 
     let iflag = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, termios_addr) };
@@ -688,7 +736,13 @@ fn dev_tty_opens_controlling_pty_slave() {
 
     let winsize_addr = t.scratch + 0x3a00;
     assert_eq!(
-        tidemark_kernel::syscall::pty::sys_ioctl(&mut t.vm, t.base, fd as u64, TIOCGWINSZ, winsize_addr),
+        tidemark_kernel::syscall::pty::sys_ioctl(
+            &mut t.vm,
+            t.base,
+            fd as u64,
+            TIOCGWINSZ,
+            winsize_addr
+        ),
         0
     );
     let ws_col = unsafe { tidemark_kernel::guest_mem::read_u16(t.base, winsize_addr + 2) };
@@ -733,11 +787,20 @@ fn stdio_pty_master_canonical_mode_commits_input_only_after_newline() {
         .unwrap_or(0);
     assert!(pty_idx > 0);
 
-    assert_eq!(tidemark_kernel::syscall::pty::master_write(pty_idx, b"l"), 1);
+    assert_eq!(
+        tidemark_kernel::syscall::pty::master_write(pty_idx, b"l"),
+        1
+    );
     let mut cooked = [0u8; 16];
-    assert_eq!(tidemark_kernel::syscall::pty::slave_read(pty_idx, &mut cooked), EAGAIN);
+    assert_eq!(
+        tidemark_kernel::syscall::pty::slave_read(pty_idx, &mut cooked),
+        EAGAIN
+    );
 
-    assert_eq!(tidemark_kernel::syscall::pty::master_write(pty_idx, b"s\r"), 2);
+    assert_eq!(
+        tidemark_kernel::syscall::pty::master_write(pty_idx, b"s\r"),
+        2
+    );
     let n = tidemark_kernel::syscall::pty::slave_read(pty_idx, &mut cooked);
     assert_eq!(n, 3);
     assert_eq!(&cooked[..3], b"ls\n");
@@ -789,7 +852,10 @@ fn stdio_pty_blocked_read_resume_preserves_register_context() {
     t.vm.x[2] = t.scratch + 0x2800;
     t.vm.x[27] = 0x7788_9900;
 
-    assert_eq!(tidemark_kernel::syscall::pty::master_write(pty_idx, b"ls\r"), 3);
+    assert_eq!(
+        tidemark_kernel::syscall::pty::master_write(pty_idx, b"ls\r"),
+        3
+    );
 
     let vm_ptr = &mut t.vm as *mut _ as u32;
     assert_eq!(thread_resume_blocked_syscall(vm_ptr), 3);
@@ -847,7 +913,10 @@ fn stdio_pty_blocked_read_resume_first_thread_step_preserves_s11() {
     assert_eq!(remaining, 0);
     assert_eq!(t.vm.status, STATUS_PIPE_WAIT);
 
-    assert_eq!(tidemark_kernel::syscall::pty::master_write(pty_idx, b"ls\r"), 3);
+    assert_eq!(
+        tidemark_kernel::syscall::pty::master_write(pty_idx, b"ls\r"),
+        3
+    );
     assert_eq!(thread_resume_blocked_syscall(vm_ptr), 3);
     assert_eq!(t.vm.status, STATUS_OK);
     assert_eq!(t.vm.pc, code_addr + 4);

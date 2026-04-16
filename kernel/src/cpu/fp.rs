@@ -465,8 +465,8 @@ pub(super) unsafe fn exec_load_fp(
     let addr = (x[rs1] as i64 + decode::imm_i(raw)) as u64;
     unsafe {
         match decode::funct3(raw) {
-            2 => f[rd] = 0xFFFF_FFFF_0000_0000 | (guest_mem::read_u32(base, addr) as u64),
-            3 => f[rd] = guest_mem::read_u64(base, addr),
+            2 => f[rd] = 0xFFFF_FFFF_0000_0000 | (guest_mem::read_u32_seqlock(base, addr) as u64),
+            3 => f[rd] = guest_mem::read_u64_seqlock(base, addr),
             _ => {}
         }
     }

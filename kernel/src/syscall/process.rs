@@ -651,11 +651,7 @@ pub fn reset_process_lifecycle(
     crate::syscall::resource::reassign_process_pid(old_pid, pid);
 }
 
-pub fn prepare_fork_child_after_handoff(
-    vm: &mut ThreadState,
-    base: u32,
-    pid: i32,
-) {
+pub fn prepare_fork_child_after_handoff(vm: &mut ThreadState, base: u32, pid: i32) {
     let clone_flags = vm.clone_flags;
     let clone_child_stack = vm.clone_child_stack;
     let clone_tls = vm.clone_tls;
@@ -899,7 +895,9 @@ fn read_execve_elf_bytes(vm_ptr: u32, ino: u32, elf_len: u32) -> Result<ExecveFi
     Ok(ExecveFileBytes::from_owned(elf_bytes))
 }
 
-fn parse_interpreter_script_header(file_bytes: &[u8]) -> Result<Option<(Vec<u8>, Option<Vec<u8>>)>, i64> {
+fn parse_interpreter_script_header(
+    file_bytes: &[u8],
+) -> Result<Option<(Vec<u8>, Option<Vec<u8>>)>, i64> {
     if !file_bytes.starts_with(b"#!") {
         return Ok(None);
     }
@@ -951,14 +949,8 @@ fn load_execve_elf_bytes_at(
 ) -> Result<crate::elf::ElfLoadResult, i64> {
     crate::harness_hooks::record_execve_stage(330, elf_bytes.ptr as u64, elf_bytes.len as u64);
     unsafe {
-        crate::elf::load_elf_at(
-            base,
-            ram_size,
-            elf_bytes.ptr,
-            elf_bytes.len,
-            load_bias,
-        )
-        .map_err(|_| ENOEXEC)
+        crate::elf::load_elf_at(base, ram_size, elf_bytes.ptr, elf_bytes.len, load_bias)
+            .map_err(|_| ENOEXEC)
     }
 }
 
@@ -1015,57 +1007,59 @@ fn load_execve_image(
     let envp = read_guest_strvec(base, envp_addr)?;
     crate::harness_debug::record_execve_dispatch(vm_ptr, 127);
     crate::harness_hooks::record_execve_stage(103, envp.len() as u64, envp_addr);
-    let (path_bytes, main_bytes, mut argv) = match parse_interpreter_script_header(file_bytes.as_slice())? {
-        Some((interp_path, optional_arg)) => {
-            let interp_ino = memfs::resolve_path(&interp_path);
-            if interp_ino == 0 {
-                return Err(ENOENT);
+    let (path_bytes, main_bytes, mut argv) =
+        match parse_interpreter_script_header(file_bytes.as_slice())? {
+            Some((interp_path, optional_arg)) => {
+                let interp_ino = memfs::resolve_path(&interp_path);
+                if interp_ino == 0 {
+                    return Err(ENOENT);
+                }
+                let interp_st = memfs::stat(interp_ino).ok_or(ENOENT)?;
+                if interp_st.mode & memfs::S_IFMT != memfs::S_IFREG {
+                    return Err(EACCES);
+                }
+                let interp_exec_mask = if current_effective_uid(vm) == 0 {
+                    interp_st.mode & 0o111
+                } else if current_effective_uid(vm) == interp_st.uid {
+                    interp_st.mode & 0o100
+                } else if current_effective_gid(vm) == interp_st.gid {
+                    interp_st.mode & 0o010
+                } else {
+                    interp_st.mode & 0o001
+                };
+                if interp_exec_mask == 0 {
+                    return Err(EACCES);
+                }
+                if fd_table::inode_has_write_open(interp_ino) {
+                    return Err(ETXTBSY);
+                }
+                let interp_len = u32::try_from(interp_st.size).map_err(|_| ENOEXEC)?;
+                if interp_len == 0 {
+                    return Err(ENOEXEC);
+                }
+                let interp_bytes = read_execve_elf_bytes(vm_ptr, interp_ino, interp_len)?;
+                let mut rewritten_argv = Vec::new();
+                let mut interp_argv0 = interp_path.clone();
+                interp_argv0.push(0);
+                rewritten_argv.push(interp_argv0);
+                if let Some(mut arg) = optional_arg {
+                    arg.push(0);
+                    rewritten_argv.push(arg);
+                }
+                let mut script_argv = path_bytes.clone();
+                script_argv.push(0);
+                rewritten_argv.push(script_argv);
+                for arg in argv.into_iter().skip(1) {
+                    rewritten_argv.push(arg);
+                }
+                (interp_path, interp_bytes, rewritten_argv)
             }
-            let interp_st = memfs::stat(interp_ino).ok_or(ENOENT)?;
-            if interp_st.mode & memfs::S_IFMT != memfs::S_IFREG {
-                return Err(EACCES);
-            }
-            let interp_exec_mask = if current_effective_uid(vm) == 0 {
-                interp_st.mode & 0o111
-            } else if current_effective_uid(vm) == interp_st.uid {
-                interp_st.mode & 0o100
-            } else if current_effective_gid(vm) == interp_st.gid {
-                interp_st.mode & 0o010
-            } else {
-                interp_st.mode & 0o001
-            };
-            if interp_exec_mask == 0 {
-                return Err(EACCES);
-            }
-            if fd_table::inode_has_write_open(interp_ino) {
-                return Err(ETXTBSY);
-            }
-            let interp_len = u32::try_from(interp_st.size).map_err(|_| ENOEXEC)?;
-            if interp_len == 0 {
-                return Err(ENOEXEC);
-            }
-            let interp_bytes = read_execve_elf_bytes(vm_ptr, interp_ino, interp_len)?;
-            let mut rewritten_argv = Vec::new();
-            let mut interp_argv0 = interp_path.clone();
-            interp_argv0.push(0);
-            rewritten_argv.push(interp_argv0);
-            if let Some(mut arg) = optional_arg {
-                arg.push(0);
-                rewritten_argv.push(arg);
-            }
-            let mut script_argv = path_bytes.clone();
-            script_argv.push(0);
-            rewritten_argv.push(script_argv);
-            for arg in argv.into_iter().skip(1) {
-                rewritten_argv.push(arg);
-            }
-            (interp_path, interp_bytes, rewritten_argv)
-        }
-        None => (path_bytes, file_bytes, argv),
-    };
+            None => (path_bytes, file_bytes, argv),
+        };
     crate::harness_debug::record_execve_dispatch(vm_ptr, 128);
     let mut elf = inspect_execve_elf_bytes(main_bytes.as_slice(), ram_size)?;
-    let interp_path = crate::elf::read_interp_path_bytes(main_bytes.as_slice()).map_err(|_| ENOEXEC)?;
+    let interp_path =
+        crate::elf::read_interp_path_bytes(main_bytes.as_slice()).map_err(|_| ENOEXEC)?;
     let main_bias = crate::elf::main_executable_load_bias(&elf, interp_path.is_some());
     if main_bias != 0 {
         elf = crate::elf::bias_load_result(elf, main_bias);
@@ -1170,7 +1164,6 @@ pub fn install_procfs_snapshot(exe_target: &[u8]) {
     if self_ino == 0 {
         return;
     }
-
     replace_proc_file(proc_ino, b"stat", PROC_STAT_BYTES);
     replace_proc_file(proc_ino, b"cpuinfo", PROC_CPUINFO_BYTES);
     replace_proc_file(
@@ -1217,7 +1210,7 @@ fn current_guest_memory_limit(base: u32) -> u64 {
     } else {
         ((core::arch::wasm32::memory_size(0) as u64) * 65536).saturating_sub(base as u64)
     };
-    limit.min(EXECVE_RAM_LIMIT)
+    limit.min(max_execve_ram_limit(base))
 }
 
 fn execve_guest_limit(base: u32, brk_start: u64, stack_size: u64) -> u64 {
@@ -1228,7 +1221,9 @@ fn execve_guest_limit(base: u32, brk_start: u64, stack_size: u64) -> u64 {
         .saturating_add(usable_stack)
         .saturating_add(EXECVE_STACK_HEADROOM);
     let rounded_limit = (required_limit + 0xF_FFFF) & !0xF_FFFF;
-    current_limit.max(rounded_limit).min(EXECVE_RAM_LIMIT)
+    current_limit
+        .max(rounded_limit)
+        .min(max_execve_ram_limit(base))
 }
 
 fn retain_process_ofds(base: u32, process_ptr: u32) {
@@ -1497,13 +1492,8 @@ fn complete_execve_in_place_inner(
         .max(interp_elf.map(|elf| elf.load_end).unwrap_or(0));
     crate::elf::zero_fill_load_padding(base, loaded_end, load_brk_start);
     elf_result.brk_start = load_brk_start;
-    let main_segments = unsafe {
-        crate::elf::collect_load_segments(
-            main_bytes.ptr,
-            main_bytes.len,
-            main_bias,
-        )
-    };
+    let main_segments =
+        unsafe { crate::elf::collect_load_segments(main_bytes.ptr, main_bytes.len, main_bias) };
     let Ok(main_segments) = main_segments else {
         return ENOEXEC;
     };
@@ -1512,11 +1502,7 @@ fn complete_execve_in_place_inner(
     }
     if let Some(interp_bytes) = interp_bytes.as_ref() {
         let interp_segments = unsafe {
-            crate::elf::collect_load_segments(
-                interp_bytes.ptr,
-                interp_bytes.len,
-                interp_bias,
-            )
+            crate::elf::collect_load_segments(interp_bytes.ptr, interp_bytes.len, interp_bias)
         };
         let Ok(interp_segments) = interp_segments else {
             return ENOEXEC;
@@ -1718,7 +1704,7 @@ fn complete_execve_in_place_inner(
 
 fn effective_execve_ram_limit(vm: &ThreadState, base: u32) -> u64 {
     if vm.guest_ram_limit != 0 {
-        return (vm.guest_ram_limit as u64).min(EXECVE_RAM_LIMIT);
+        return (vm.guest_ram_limit as u64).min(max_execve_ram_limit(base));
     }
     current_guest_memory_limit(base)
 }
@@ -2228,7 +2214,9 @@ pub fn sys_execve(
     let execve_ram_limit = effective_execve_ram_limit(vm, base);
 
     if is_vfork_exec {
-        if let Err(errno) = load_execve_image(vm, base, path_addr, argv_addr, envp_addr, execve_ram_limit) {
+        if let Err(errno) =
+            load_execve_image(vm, base, path_addr, argv_addr, envp_addr, execve_ram_limit)
+        {
             crate::harness_hooks::record_path_syscall(
                 vm as *mut ThreadState as u32,
                 SYS_EXECVE,
@@ -2569,3 +2557,6 @@ const SIGINFO_OFF_SI_CODE: u64 = 8;
 const SIGINFO_OFF_SI_PID: u64 = 16;
 const SIGINFO_OFF_SI_UID: u64 = 20;
 const SIGINFO_OFF_SI_STATUS: u64 = 24;
+pub fn max_execve_ram_limit(base: u32) -> u64 {
+    crate::abi::max_guest_window_for_base(base)
+}

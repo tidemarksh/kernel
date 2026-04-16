@@ -737,7 +737,8 @@ fn unix_connect_stream(idx: usize, addr: &[u8], len: usize) -> i64 {
         free_socket_slot(accepted_idx as u32);
         return ENOMEM;
     }
-    let Some(accepted_recv) = crate::net::ring_buffer::alloc_buffer().map(|value| value as i32) else {
+    let Some(accepted_recv) = crate::net::ring_buffer::alloc_buffer().map(|value| value as i32)
+    else {
         free_socket_slot(accepted_idx as u32);
         return ENOMEM;
     };
@@ -810,7 +811,11 @@ fn unix_connect_stream(idx: usize, addr: &[u8], len: usize) -> i64 {
         client.peer_pid = 0;
         client.peer_uid = 0;
         client.peer_gid = 0;
-        client.state = if client.local_len > 0 { SOCK_STATE_BOUND } else { SOCK_STATE_IDLE };
+        client.state = if client.local_len > 0 {
+            SOCK_STATE_BOUND
+        } else {
+            SOCK_STATE_IDLE
+        };
         return EAGAIN;
     }
     0
@@ -1201,7 +1206,8 @@ pub fn socket_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, len: u64)
     };
     let slot = &socket_table()[idx];
     let allow_dgram_bound = slot.sock_type == SOCK_DGRAM && slot.state == SOCK_STATE_BOUND;
-    if !allow_dgram_bound && slot.state != SOCK_STATE_CONNECTED && slot.state != SOCK_STATE_SHUTDOWN {
+    if !allow_dgram_bound && slot.state != SOCK_STATE_CONNECTED && slot.state != SOCK_STATE_SHUTDOWN
+    {
         return ENOTCONN;
     }
     if slot.recv_buf_idx < 0 {
@@ -1678,12 +1684,9 @@ pub fn sys_getsockopt(
         (SOL_SOCKET, SO_SNDBUF) => write_opt_u32(base, optval, optlen, slot.so_sndbuf),
         (SOL_SOCKET, SO_RCVBUF) => write_opt_u32(base, optval, optlen, slot.so_rcvbuf),
         (SOL_SOCKET, SO_INCOMING_CPU) => write_opt_u32(base, optval, optlen, 0),
-        (SOL_SOCKET, SO_COOKIE) => write_opt_bytes(
-            base,
-            optval,
-            optlen,
-            &slot.so_cookie.to_le_bytes(),
-        ),
+        (SOL_SOCKET, SO_COOKIE) => {
+            write_opt_bytes(base, optval, optlen, &slot.so_cookie.to_le_bytes())
+        }
         (SOL_SOCKET, SO_RCVLOWAT) => write_opt_u32(base, optval, optlen, slot.so_rcvlowat),
         (SOL_SOCKET, SO_SNDLOWAT) => write_opt_u32(base, optval, optlen, 1),
         (SOL_SOCKET, SO_RCVTIMEO_OLD | SO_RCVTIMEO_NEW) => write_opt_timeval(

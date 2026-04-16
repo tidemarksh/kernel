@@ -1,7 +1,7 @@
 use tidemark_kernel::abi::{O_CREAT, O_RDONLY, O_RDWR};
 use tidemark_kernel::fs::ring_buffer::{
-    FS_OP_MKDIR, FS_OP_RENAME, FS_OP_WRITE, HEADER_SIZE, REQ_SIZE, RESP_SIZE, RING_BUFFER_SIZE, process_requests,
-    read_completion, submit_request,
+    FS_OP_MKDIR, FS_OP_RENAME, FS_OP_WRITE, HEADER_SIZE, REQ_SIZE, RESP_SIZE, RING_BUFFER_SIZE,
+    process_requests, read_completion, submit_request,
 };
 use tidemark_kernel::harness::TestVm;
 

@@ -89,13 +89,7 @@ pub(super) unsafe fn deliver_sync_sigsegv(
     crate::syscall::signal::queue_sigsegv(vm, *pc, addr, accerr);
     crate::syscall::signal::check_pending(vm, base);
     crate::harness_debug::record_fault_dispatch_trace(
-        vm,
-        2,
-        vm.pc,
-        vm.x[1],
-        vm.x[2],
-        vm.x[27],
-        addr,
+        vm, 2, vm.pc, vm.x[1], vm.x[2], vm.x[27], addr,
     );
     *x = vm.x;
     *f = vm.f;

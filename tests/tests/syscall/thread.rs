@@ -19,6 +19,17 @@ fn write_sigaction(base: u32, addr: u64, handler: u64, flags: u64, mask: u64) {
     }
 }
 
+fn install_current_thread_record(t: &mut TestVm) {
+    let vm_ptr = (&mut t.vm as *mut ThreadState) as u32;
+    let tid = t.vm.tid;
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[(tid - 1) as usize] = ThreadRecord::new(tid, THREAD_RUNNING, vm_ptr, 0, 0);
+        ps.thread_count
+            .store(1, std::sync::atomic::Ordering::Release);
+    }
+}
+
 #[test]
 fn contract_exit_decrements_thread_count() {
     let mut t = TestVm::new();
@@ -159,9 +170,18 @@ fn contract_spawn_from_clone_preserves_go_clone_child_entry_contract() {
     assert_eq!(child.x[2], child_stack);
     assert_eq!(child.x[10], 0);
     assert_eq!(child.x[27], 0x00bf_dc80);
-    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u64(t.base, child_stack - 8) }, mp);
-    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u64(t.base, child_stack - 16) }, gp);
-    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u64(t.base, child_stack - 24) }, fn_ptr);
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, child_stack - 8) },
+        mp
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, child_stack - 16) },
+        gp
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, child_stack - 24) },
+        fn_ptr
+    );
     assert_eq!(
         unsafe { tidemark_kernel::guest_mem::read_u64(t.base, child_stack - 32) },
         sentinel
@@ -243,15 +263,30 @@ fn contract_spawn_from_clone_first_thread_step_preserves_go_child_gettid_path() 
     assert_eq!(child.pc, entry_pc + 0x40);
     assert_eq!(child.x[10], ret as u64);
     assert_eq!(child.x[27], g);
-    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u64(t.base, child_stack - 8) }, mp);
-    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u64(t.base, child_stack - 16) }, g);
-    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u64(t.base, child_stack - 24) }, fn_ptr);
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, child_stack - 8) },
+        mp
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, child_stack - 16) },
+        g
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, child_stack - 24) },
+        fn_ptr
+    );
     assert_eq!(
         unsafe { tidemark_kernel::guest_mem::read_u64(t.base, child_stack - 32) },
         sentinel
     );
-    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u64(t.base, mp + 64) }, ret as u64);
-    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u64(t.base, g + 48) }, mp);
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, mp + 64) },
+        ret as u64
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, g + 48) },
+        mp
+    );
 }
 
 #[test]
@@ -363,14 +398,26 @@ fn contract_runtime_notesleep_futex_return_path_preserves_go_worker_context() {
     t.vm.x[1] = 0x4d654;
     t.vm.x[2] = futexsleep_sp;
     t.vm.x[27] = g;
+    install_current_thread_record(&mut t);
 
     let remaining = tidemark_kernel::abi::thread_step(&mut t.vm as *mut ThreadState as u32, 64);
     assert!(remaining >= 0);
-    assert_eq!(t.vm.status, STATUS_FUTEX_WAIT);
-    assert_eq!(t.vm.pc, 0x83308);
+    assert_eq!(
+        t.vm.status, STATUS_FUTEX_WAIT,
+        "status={} pc=0x{:x} ra=0x{:x} sp=0x{:x} exit={} fault_pc=0x{:x} fault_addr=0x{:x}",
+        t.vm.status, t.vm.pc, t.vm.x[1], t.vm.x[2], t.vm.exit_code, t.vm.fault_pc, t.vm.fault_addr,
+    );
+    assert_eq!(
+        t.vm.pc, 0x83308,
+        "status={} pc=0x{:x} ra=0x{:x} sp=0x{:x} exit={} fault_pc=0x{:x} fault_addr=0x{:x}",
+        t.vm.status, t.vm.pc, t.vm.x[1], t.vm.x[2], t.vm.exit_code, t.vm.fault_pc, t.vm.fault_addr,
+    );
     assert_eq!(t.vm.x[27], g);
     assert_eq!(t.vm.x[2], futexsleep_sp);
-    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u64(t.base, futexsleep_sp) }, 0x2a4b0);
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, futexsleep_sp) },
+        0x2a4b0
+    );
 }
 
 #[test]
@@ -497,15 +544,23 @@ fn contract_runtime_notesleep_futex_wake_return_path_preserves_go_worker_context
     t.vm.x[1] = 0x4d654;
     t.vm.x[2] = futexsleep_sp;
     t.vm.x[27] = g;
+    install_current_thread_record(&mut t);
 
     let remaining = tidemark_kernel::abi::thread_step(&mut t.vm as *mut ThreadState as u32, 64);
     assert!(remaining >= 0);
-    assert_eq!(t.vm.status, STATUS_OK);
-    assert_eq!(t.vm.pc, 0x2b000);
+    assert_eq!(
+        t.vm.status, STATUS_OK,
+        "status={} pc=0x{:x} ra=0x{:x} sp=0x{:x} exit={} fault_pc=0x{:x} fault_addr=0x{:x}",
+        t.vm.status, t.vm.pc, t.vm.x[1], t.vm.x[2], t.vm.exit_code, t.vm.fault_pc, t.vm.fault_addr,
+    );
+    assert_eq!(
+        t.vm.pc, 0x2b000,
+        "status={} pc=0x{:x} ra=0x{:x} sp=0x{:x} exit={} fault_pc=0x{:x} fault_addr=0x{:x}",
+        t.vm.status, t.vm.pc, t.vm.x[1], t.vm.x[2], t.vm.exit_code, t.vm.fault_pc, t.vm.fault_addr,
+    );
     assert_eq!(t.vm.x[2], notesleep_sp + 48);
     assert_eq!(t.vm.x[27], g);
 }
-
 
 #[test]
 fn contract_futex_wake_unblocks_waiting_thread_record() {
@@ -649,16 +704,8 @@ fn contract_resume_timed_futex_wait_without_pending_signal_preserves_context() {
         tidemark_kernel::guest_mem::write_u64(t.base, timeout + 8, 0);
     }
 
-    let wait_ret = thread_impl::sys_futex(
-        &mut t.vm,
-        t.base,
-        addr,
-        FUTEX_WAIT as u64,
-        7,
-        timeout,
-        0,
-        0,
-    );
+    let wait_ret =
+        thread_impl::sys_futex(&mut t.vm, t.base, addr, FUTEX_WAIT as u64, 7, timeout, 0, 0);
     assert_eq!(wait_ret, 0);
     assert_eq!(t.vm.status, STATUS_FUTEX_WAIT);
 
@@ -707,16 +754,8 @@ fn contract_resume_timed_futex_wait_delivers_pending_signal_and_restores_timeout
         tidemark_kernel::guest_mem::write_u64(t.base, timeout + 8, 0);
     }
 
-    let wait_ret = thread_impl::sys_futex(
-        &mut t.vm,
-        t.base,
-        addr,
-        FUTEX_WAIT as u64,
-        9,
-        timeout,
-        0,
-        0,
-    );
+    let wait_ret =
+        thread_impl::sys_futex(&mut t.vm, t.base, addr, FUTEX_WAIT as u64, 9, timeout, 0, 0);
     assert_eq!(wait_ret, 0);
     assert_eq!(t.vm.status, STATUS_FUTEX_WAIT);
 
@@ -934,8 +973,7 @@ fn contract_clone3_thread_subset_maps_clone_args_to_clone_handoff() {
     assert_eq!(t.vm.clone_child_stack, stack_base + stack_size);
     assert_eq!(t.vm.clone_tls, tls);
     assert_eq!(t.vm.clone_child_tidptr, child_tidptr);
-    let written_parent_tid =
-        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, parent_tidptr) };
+    let written_parent_tid = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, parent_tidptr) };
     assert_eq!(written_parent_tid, ret as u32);
 }
 
@@ -1041,6 +1079,42 @@ fn contract_exit_group_marks_process_dead() {
     );
     assert_eq!(ps.threads[0].state, THREAD_NONE);
     assert_eq!(ps.threads[1].state, THREAD_NONE);
+}
+
+#[test]
+fn contract_exit_group_terminates_sibling_thread_state_and_blocks_future_steps() {
+    let mut t = TestVm::new();
+    let child_ptr = unsafe {
+        tidemark_kernel::alloc::alloc_zeroed(
+            core::mem::size_of::<ThreadState>() as u32,
+            core::mem::align_of::<ThreadState>() as u32,
+        )
+    };
+    assert_ne!(child_ptr, 0);
+    let child = unsafe { &mut *(child_ptr as *mut ThreadState) };
+    child.tid = 2;
+    child.guest_base = t.base;
+    child.guest_ram_limit = t.vm.guest_ram_limit;
+    child.process_ptr = t.vm.process_ptr;
+    child.pc = t.vm.pc;
+    child.x[2] = t.vm.x[2];
+
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    ps.thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
+    ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, child_ptr, 0, 0);
+
+    let status = thread_impl::sys_exit_group(&mut t.vm, t.base, 9);
+    assert_eq!(status, STATUS_FAULT);
+    assert_eq!(child.exit_code, 9);
+    assert_eq!(child.term_signal, 0);
+    assert_eq!(child.status, STATUS_FAULT);
+
+    let remaining = tidemark_kernel::abi::thread_step(child_ptr, 1);
+    assert_eq!(remaining, 1);
+    assert_eq!(child.status, STATUS_FAULT);
+    assert_eq!(child.exit_code, 9);
+    assert_eq!(child.term_signal, 0);
 }
 
 #[test]

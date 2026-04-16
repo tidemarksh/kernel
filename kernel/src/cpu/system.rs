@@ -75,7 +75,12 @@ pub(super) unsafe fn exec_system(
                 x[0] = 0;
                 crate::harness_hooks::record_zero_reg_transition(
                     vm as *const ThreadState as u32,
-                    vm.tid, instr_pc, raw, prev_sp, prev_s11, x,
+                    vm.tid,
+                    instr_pc,
+                    raw,
+                    prev_sp,
+                    prev_s11,
+                    x,
                 );
                 StepOutcome::Restart
             }

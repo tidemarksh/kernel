@@ -850,7 +850,16 @@ fn contract_prepare_fork_child_sets_child_return_value_and_main_thread_state() {
     ) as i32;
 
     assert!(child_pid > 0);
-    process_impl::reset_process_lifecycle(&mut t.vm, t.base, child_pid, 1, child_pid + 1, 1, 1, false);
+    process_impl::reset_process_lifecycle(
+        &mut t.vm,
+        t.base,
+        child_pid,
+        1,
+        child_pid + 1,
+        1,
+        1,
+        false,
+    );
     process_impl::prepare_fork_child_after_handoff(&mut t.vm, t.base, child_pid);
 
     assert_eq!(t.vm.tid, 1);
@@ -859,7 +868,10 @@ fn contract_prepare_fork_child_sets_child_return_value_and_main_thread_state() {
     assert_eq!(t.vm.x[4], child_tls);
     assert_eq!(t.vm.tls_base, child_tls);
     assert_eq!(t.vm.clear_child_tid, child_tidptr);
-    assert_eq!(unsafe { guest_mem::read_u32(t.base, child_tidptr) }, child_pid as u32);
+    assert_eq!(
+        unsafe { guest_mem::read_u32(t.base, child_tidptr) },
+        child_pid as u32
+    );
     assert_eq!(t.vm.status, STATUS_OK);
     assert_eq!(t.vm.spawn_kind, SPAWN_KIND_NONE);
     assert_eq!(t.vm.clone_flags, 0);
@@ -888,17 +900,13 @@ fn semantics_fork_inherits_signal_dispositions_and_clears_process_pending() {
         0
     );
     assert_eq!(
-        signal::sys_rt_sigaction(
-            &mut t.vm,
-            t.base,
-            SIGALRM as u64,
-            sigaction_addr,
-            0,
-            8,
-        ),
+        signal::sys_rt_sigaction(&mut t.vm, t.base, SIGALRM as u64, sigaction_addr, 0, 8,),
         0
     );
-    assert_eq!(signal::send_signal_to_pid(&mut t.vm, t.base, 42, SIGALRM), 0);
+    assert_eq!(
+        signal::send_signal_to_pid(&mut t.vm, t.base, 42, SIGALRM),
+        0
+    );
 
     let child_pid = process_impl::sys_fork(&mut t.vm, t.base, 0, 0, 0, 0, 0) as i32;
     assert!(child_pid > 0);
@@ -906,17 +914,13 @@ fn semantics_fork_inherits_signal_dispositions_and_clears_process_pending() {
 
     write_process_ids(&t, child_pid, 42);
     assert_eq!(
-        signal::sys_rt_sigaction(
-            &mut t.vm,
-            t.base,
-            SIGALRM as u64,
-            0,
-            old_sigaction_addr,
-            8,
-        ),
+        signal::sys_rt_sigaction(&mut t.vm, t.base, SIGALRM as u64, 0, old_sigaction_addr, 8,),
         0
     );
-    assert_eq!(unsafe { guest_mem::read_u64(t.base, old_sigaction_addr) }, 0x12345);
+    assert_eq!(
+        unsafe { guest_mem::read_u64(t.base, old_sigaction_addr) },
+        0x12345
+    );
 
     assert_eq!(signal::sys_rt_sigpending(&t.vm, t.base, pending_addr, 8), 0);
     assert_eq!(unsafe { guest_mem::read_u64(t.base, pending_addr) }, 0);
@@ -961,7 +965,10 @@ fn semantics_fork_inherits_resource_limits() {
         ),
         0
     );
-    assert_eq!(unsafe { guest_mem::read_u64(t.base, old_limit_addr) }, 512 * 1024);
+    assert_eq!(
+        unsafe { guest_mem::read_u64(t.base, old_limit_addr) },
+        512 * 1024
+    );
     assert_eq!(
         unsafe { guest_mem::read_u64(t.base, old_limit_addr + 8) },
         1024 * 1024
@@ -1582,7 +1589,7 @@ fn semantics_vfork_execve_preserves_stdio_fds() {
     let ret = process_impl::complete_execve_in_place_from_handoff(
         &mut t.vm,
         t.base,
-        process_impl::EXECVE_RAM_LIMIT,
+        process_impl::max_execve_ram_limit(t.base),
     );
     assert_eq!(ret, 0);
 
@@ -1644,7 +1651,7 @@ fn semantics_vfork_execve_preserves_distinct_capture_pipe_ofds() {
     let ret = process_impl::complete_execve_in_place_from_handoff(
         &mut t.vm,
         t.base,
-        process_impl::EXECVE_RAM_LIMIT,
+        process_impl::max_execve_ram_limit(t.base),
     );
     assert_eq!(ret, 0);
 
@@ -2110,14 +2117,7 @@ fn semantics_wait4_reaps_late_exit_record_seeded_with_explicit_parent_pid() {
     write_process_ids(&t, 2, 1);
     process_impl::record_child_exit_for_parent(2, 7, 5 << 8);
 
-    let ret = process_impl::sys_wait4(
-        &mut t.vm,
-        t.base,
-        7,
-        wstatus_addr,
-        0,
-        0,
-    );
+    let ret = process_impl::sys_wait4(&mut t.vm, t.base, 7, wstatus_addr, 0, 0);
     assert_eq!(ret, 7);
     assert_eq!(unsafe { guest_mem::read_u32(t.base, wstatus_addr) }, 5 << 8);
 }

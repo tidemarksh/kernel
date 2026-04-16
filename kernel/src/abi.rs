@@ -203,6 +203,8 @@ pub const MAP_FIXED: u64 = 0x10;
 pub const MAP_ANONYMOUS: u64 = 0x20;
 pub const MAP_PRIVATE: u64 = 0x02;
 pub const MAP_SHARED: u64 = 0x01;
+pub const MAP_NORESERVE: u64 = 0x4000;
+pub const MAP_FIXED_NOREPLACE: u64 = 0x100000;
 
 // =============================================================================
 // open flags
@@ -880,8 +882,11 @@ pub extern "C" fn kernel_attach_runtime_state(
 const MAX_ARGS: usize = 64;
 const GUEST_GUARD_BYTES: u64 = 4 * 1024 * 1024;
 const GUEST_EXEC_SCRATCH_HEADROOM_BYTES: u64 = 256 * 1024 * 1024;
-const GUEST_ADDR_LIMIT: u64 = 0x8000_0000;
 const LINEAR_MEMORY_LIMIT: u64 = 0x1_0000_0000;
+
+pub const fn max_guest_window_for_base(base: u32) -> u64 {
+    LINEAR_MEMORY_LIMIT.saturating_sub(base as u64)
+}
 
 struct StagedArgs {
     argv: [u32; MAX_ARGS],
@@ -925,7 +930,7 @@ fn process_guest_base_for_ram(ram_size: u32) -> u32 {
         + GUEST_EXEC_SCRATCH_HEADROOM_BYTES
         + 0xF_FFFF)
         & !0xF_FFFF) as u32;
-    if aligned as u64 + GUEST_ADDR_LIMIT > LINEAR_MEMORY_LIMIT {
+    if aligned as u64 >= LINEAR_MEMORY_LIMIT {
         0
     } else {
         aligned
@@ -1126,14 +1131,14 @@ pub extern "C" fn process_create(
             }
             None => main_brk_start,
         };
-        let main_segments = match crate::elf::collect_load_segments(elf_ptr, elf_len, main_load_bias)
-        {
-            Ok(segments) => segments,
-            Err(_) => {
-                set_process_create_last_error(13);
-                return 0;
-            }
-        };
+        let main_segments =
+            match crate::elf::collect_load_segments(elf_ptr, elf_len, main_load_bias) {
+                Ok(segments) => segments,
+                Err(_) => {
+                    set_process_create_last_error(13);
+                    return 0;
+                }
+            };
         let interp_segments = match interp_load {
             Some((interp_ptr, interp_len, interp_bias, _)) => {
                 match crate::elf::collect_load_segments(interp_ptr, interp_len, interp_bias) {
@@ -1362,6 +1367,12 @@ pub extern "C" fn thread_step(vm_ptr: u32, budget: i32) -> i32 {
             crate::guest_mem::init(gen_ptr, lock_ptr, tc_ptr);
         }
         crate::harness_debug::record_thread_step_phase(vm, 2, budget, 0);
+        if !crate::syscall::thread::thread_may_step(vm, base) {
+            crate::harness_debug::record_thread_step_phase(vm, 3, budget, budget);
+            crate::harness_debug::record_thread_step_trace(vm, budget, budget);
+            crate::harness_debug::record_thread_step_phase(vm, 5, budget, budget);
+            return budget;
+        }
         vm.status = STATUS_OK;
         crate::harness_debug::record_thread_step_phase(vm, 3, budget, 0);
         let remaining = crate::cpu::exec(vm, budget, None, None, None, None);
@@ -1820,7 +1831,7 @@ pub extern "C" fn thread_complete_execve_handoff(vm_ptr: u32) -> i64 {
             if vm.spawn_ram_size != 0 {
                 vm.spawn_ram_size as u64
             } else {
-                crate::syscall::process::EXECVE_RAM_LIMIT
+                crate::syscall::process::max_execve_ram_limit(vm.guest_base)
             },
         )
     }
@@ -1832,7 +1843,11 @@ pub extern "C" fn process_record_child_exit(pid: i32, wait_status: i32) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn process_record_child_exit_for_parent(parent_pid: i32, pid: i32, wait_status: i32) {
+pub extern "C" fn process_record_child_exit_for_parent(
+    parent_pid: i32,
+    pid: i32,
+    wait_status: i32,
+) {
     crate::syscall::process::record_child_exit_for_parent(parent_pid, pid, wait_status);
 }
 

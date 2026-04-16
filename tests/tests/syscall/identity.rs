@@ -23,6 +23,11 @@ fn identity_syscalls() {
         tidemark_kernel::guest_mem::read_bytes(t.base, buf, &mut sysname);
     }
     assert_eq!(&sysname, b"Linux\0");
+    let mut release = [0u8; 6];
+    unsafe {
+        tidemark_kernel::guest_mem::read_bytes(t.base, buf + 130, &mut release);
+    }
+    assert_eq!(&release, b"6.1.0\0");
 
     let buf2 = t.scratch + 0x1000;
     assert_eq!(

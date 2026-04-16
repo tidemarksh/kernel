@@ -845,11 +845,9 @@ fn process_guest_base_reserves_exec_scratch_headroom() {
     let guest_base = process_guest_base(ram_size);
     assert_ne!(guest_base, 0);
 
-    let expected_floor = (((kernel_heap_ptr() as u64)
-        + 4 * 1024 * 1024
-        + 256 * 1024 * 1024
-        + 0xF_FFFF)
-        & !0xF_FFFF) as u32;
+    let expected_floor =
+        (((kernel_heap_ptr() as u64) + 4 * 1024 * 1024 + 256 * 1024 * 1024 + 0xF_FFFF) & !0xF_FFFF)
+            as u32;
     assert_eq!(guest_base, expected_floor);
 }
 
@@ -898,10 +896,13 @@ fn process_create_rebases_user_brk_after_hidden_process_state() {
     let process_ptr = thread_process_ptr(vm_ptr) as u64;
     let ps_size = core::mem::size_of::<tidemark_kernel::types::ProcessState>() as u64;
     let hidden_end = process_ptr + ps_size;
-    let public_brk = (hidden_end + tidemark_kernel::abi::PAGE_SIZE - 1)
-        & !(tidemark_kernel::abi::PAGE_SIZE - 1);
+    let public_brk =
+        (hidden_end + tidemark_kernel::abi::PAGE_SIZE - 1) & !(tidemark_kernel::abi::PAGE_SIZE - 1);
     assert_eq!(tidemark_kernel::syscall::memory::current_brk(), public_brk);
-    assert_eq!(tidemark_kernel::syscall::memory::debug_brk_base(), public_brk);
+    assert_eq!(
+        tidemark_kernel::syscall::memory::debug_brk_base(),
+        public_brk
+    );
 }
 
 #[test]

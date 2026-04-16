@@ -1,6 +1,32 @@
 use tidemark_kernel::abi::*;
+use tidemark_kernel::fs::memfs;
 use tidemark_kernel::harness::TestVm;
 use tidemark_kernel::syscall::memory;
+use tidemark_kernel::types::ProcessState;
+
+fn encode_i(opcode: u32, rd: u32, funct3: u32, rs1: u32, imm: i32) -> u32 {
+    (((imm as u32) & 0x0fff) << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode
+}
+
+fn encode_s(opcode: u32, funct3: u32, rs1: u32, rs2: u32, imm: i32) -> u32 {
+    let imm = imm as u32;
+    ((imm & 0x0fe0) << 20)
+        | (rs2 << 20)
+        | (rs1 << 15)
+        | (funct3 << 12)
+        | ((imm & 0x001f) << 7)
+        | opcode
+}
+
+fn encode_u(opcode: u32, rd: u32, imm20: u32) -> u32 {
+    (imm20 << 12) | (rd << 7) | opcode
+}
+
+fn encode_li(rd: u32, value: u32) -> [u32; 2] {
+    let upper = (value.wrapping_add(0x800)) >> 12;
+    let lower = value.wrapping_sub(upper << 12) as i32;
+    [encode_u(0x37, rd, upper), encode_i(0x13, rd, 0, rd, lower)]
+}
 
 #[test]
 fn memory_syscalls() {
@@ -91,6 +117,155 @@ fn map_fixed_replaces_existing_vma() {
 }
 
 #[test]
+fn map_fixed_noreplace_maps_exact_addr_without_clobbering_existing_vma() {
+    let mut t = TestVm::new();
+    let addr = 0x40_0000u64;
+    let first = t.sys_mmap(
+        addr,
+        PAGE_SIZE,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED_NOREPLACE,
+        -1,
+        0,
+    );
+    assert_eq!(first as u64, addr);
+
+    let second = t.sys_mmap(
+        addr,
+        PAGE_SIZE,
+        PROT_READ,
+        MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED_NOREPLACE,
+        -1,
+        0,
+    );
+    assert_eq!(second, EEXIST as i64);
+
+    let elsewhere = t.sys_mmap(0, PAGE_SIZE, PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    assert!(elsewhere > 0);
+    assert_ne!(elsewhere as u64, addr);
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, addr, 0x1122_3344);
+        assert_eq!(
+            tidemark_kernel::guest_mem::read_u32(t.base, addr),
+            0x1122_3344
+        );
+    }
+}
+
+#[test]
+fn fixed_high_commit_within_sparse_prot_none_reservation_can_skip_linear_materialization() {
+    let mut t = TestVm::new();
+    let fake_base = 0x23e0_0000u32;
+    t.vm.guest_ram_limit = 0xd820_0000u32;
+
+    let reserve_addr = 0xf820_0000u64;
+    let reserve_len = 0x07e0_0000u64;
+    let reserve = memory::sys_mmap(
+        &mut t.vm,
+        fake_base,
+        reserve_addr,
+        reserve_len,
+        PROT_NONE as u64,
+        (MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED_NOREPLACE | MAP_NORESERVE) as u64,
+        -1,
+        0,
+    );
+    assert_eq!(reserve as u64, reserve_addr);
+
+    let before = core::arch::wasm32::memory_size(0);
+    let commit_len = 0x002a_0000u64;
+    let commit = memory::sys_mmap(
+        &mut t.vm,
+        fake_base,
+        reserve_addr,
+        commit_len,
+        (PROT_READ | PROT_WRITE) as u64,
+        (MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED) as u64,
+        -1,
+        0,
+    );
+    let after = core::arch::wasm32::memory_size(0);
+
+    assert_eq!(commit as u64, reserve_addr);
+    assert_eq!(before, after);
+
+    let maps = String::from_utf8(memory::proc_self_maps_snapshot()).expect("utf8 maps");
+    assert!(maps.contains("f8200000-f84a0000 rw-p"));
+    assert!(maps.contains("f84a0000-100000000 ---p"));
+}
+
+#[test]
+fn map_fixed_noreplace_above_guest_limit_fails_instead_of_falling_back() {
+    let mut t = TestVm::new();
+    t.vm.guest_ram_limit = 0x7fff_ffff;
+
+    let ret = t.sys_mmap(
+        0x1_0000_0000,
+        0x7e0_0000,
+        PROT_NONE,
+        MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE | MAP_FIXED_NOREPLACE,
+        -1,
+        0,
+    );
+
+    assert_eq!(ret, ENOMEM as i64);
+
+    let fallback = t.sys_mmap(0, PAGE_SIZE, PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+    assert!(fallback > 0);
+    assert!((fallback as u64) < 0x1000_0000);
+}
+
+#[test]
+fn map_fixed_noreplace_above_2gb_succeeds_when_guest_window_allows_it() {
+    let mut t = TestVm::new();
+    t.vm.guest_ram_limit = tidemark_kernel::abi::max_guest_window_for_base(t.base) as u32;
+    let addr = 0x8900_0000u64;
+    let len = 0x1000u64;
+
+    let mapped = t.sys_mmap(
+        addr,
+        len,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED_NOREPLACE,
+        -1,
+        0,
+    );
+
+    assert_eq!(mapped as u64, addr);
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, addr, 0x5566_7788);
+        assert_eq!(
+            tidemark_kernel::guest_mem::read_u32(t.base, addr),
+            0x5566_7788
+        );
+    }
+}
+
+#[test]
+fn map_fixed_noreplace_prot_none_noreserve_can_reserve_up_to_u32_ceiling() {
+    let mut t = TestVm::new();
+    t.vm.guest_ram_limit = 0xd820_0000;
+    let addr = 0xf820_0000u64;
+    let len = 0x07e0_0000u64;
+    let before_pages = core::arch::wasm32::memory_size(0);
+
+    let mapped = t.sys_mmap(
+        addr,
+        len,
+        PROT_NONE,
+        MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE | MAP_FIXED_NOREPLACE,
+        -1,
+        0,
+    );
+
+    assert_eq!(mapped as u64, addr);
+    assert_eq!(core::arch::wasm32::memory_size(0), before_pages);
+    assert!(memory::is_prot_none(addr));
+    assert!(memory::is_prot_none(addr + len - PAGE_SIZE));
+}
+
+#[test]
 fn munmap_partial_splits_vma() {
     let mut t = TestVm::new();
     let a = t.sys_mmap(
@@ -154,11 +329,15 @@ fn mprotect_split_on_boundary_mismatch() {
 }
 
 #[test]
-fn brk_refuses_above_2gb() {
+fn brk_refuses_above_current_guest_window() {
     let mut t = TestVm::new();
     let cur = t.sys_brk(0);
-    let ret = t.sys_brk(0x8000_0001);
-    assert_eq!(ret, cur, "brk should refuse addresses above 2GB");
+    let guest_limit = tidemark_kernel::abi::max_guest_window_for_base(t.base);
+    let ret = t.sys_brk(guest_limit + 1);
+    assert_eq!(
+        ret, cur,
+        "brk should refuse addresses above the guest window"
+    );
 }
 
 #[test]
@@ -209,10 +388,122 @@ fn instruction_fetch_from_brk_heap_requires_prot_exec() {
 }
 
 #[test]
+fn anonymous_exec_mapping_supports_write_protect_execute_and_repatch() {
+    let mut t = TestVm::new();
+    let code = t.sys_mmap(
+        0,
+        PAGE_SIZE,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    );
+    assert!(code > 0, "code={code}");
+    let code = code as u64;
+
+    unsafe {
+        // addi a0, zero, 1
+        tidemark_kernel::guest_mem::write_u32(t.base, code, 0x0010_0513);
+        // jalr zero, ra, 0
+        tidemark_kernel::guest_mem::write_u32(t.base, code + 4, 0x0000_8067);
+        // c.nop
+        tidemark_kernel::guest_mem::write_u16(t.base, code + 8, 0x0001);
+    }
+
+    assert_eq!(t.sys_mprotect(code, PAGE_SIZE, PROT_READ | PROT_EXEC), 0);
+
+    t.vm.pc = code;
+    t.vm.x[1] = code + 8;
+    t.vm.x[10] = 0;
+    t.vm.status = STATUS_OK;
+    t.vm.sig_mask = 0;
+    t.vm.sig_pending = 0;
+
+    let remaining = tidemark_kernel::abi::thread_step(&mut t.vm as *mut _ as u32, 2);
+    assert_eq!(remaining, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, code + 8);
+    assert_eq!(t.vm.x[10], 1);
+
+    assert_eq!(t.sys_mprotect(code, PAGE_SIZE, PROT_READ | PROT_WRITE), 0);
+    unsafe {
+        // addi a0, zero, 42
+        tidemark_kernel::guest_mem::write_u32(t.base, code, 0x02a0_0513);
+    }
+    assert_eq!(
+        tidemark_kernel::syscall::identity::sys_riscv_flush_icache(
+            &t.vm,
+            t.base,
+            code,
+            code + 8,
+            0
+        ),
+        0
+    );
+    assert_eq!(t.sys_mprotect(code, PAGE_SIZE, PROT_READ | PROT_EXEC), 0);
+
+    t.vm.pc = code;
+    t.vm.x[1] = code + 8;
+    t.vm.x[10] = 0;
+    t.vm.status = STATUS_OK;
+    t.vm.sig_mask = 0;
+    t.vm.sig_pending = 0;
+
+    let remaining = tidemark_kernel::abi::thread_step(&mut t.vm as *mut _ as u32, 2);
+    assert_eq!(remaining, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, code + 8);
+    assert_eq!(t.vm.x[10], 42);
+}
+
+#[test]
 fn mmap_rejects_invalid_fd_for_file_backed() {
     let mut t = TestVm::new();
     let ret = t.sys_mmap(0, 4096, PROT_READ, MAP_PRIVATE, -1, 0);
     assert_eq!(ret, EBADF as i64);
+}
+
+#[test]
+fn file_backed_mmap_preserves_bytes_for_offset_executable_mapping() {
+    let mut t = TestVm::new();
+    let data: Vec<u8> = (0..0x5000).map(|idx| ((idx * 17) % 251) as u8).collect();
+    let ino = memfs::create_file(1, b"mapped-exec.bin", 0o755);
+    assert!(ino > 0);
+    assert_eq!(memfs::write_file(ino, 0, &data), data.len() as i64);
+
+    let fd = t.sys_openat(b"/mapped-exec.bin", O_RDONLY);
+    assert!(fd >= 3);
+
+    let offset = 0x1000u64;
+    let len = 0x2000u64;
+    let mapped = t.sys_mmap(0, len, PROT_READ | PROT_EXEC, MAP_PRIVATE, fd, offset);
+    assert!(mapped > 0, "mapped={mapped}");
+    assert_eq!(
+        &t.guest_mem(mapped as u64, len as usize),
+        &data[offset as usize..(offset + len) as usize],
+    );
+}
+
+#[test]
+fn file_backed_mmap_zero_fills_tail_after_eof_with_offset() {
+    let mut t = TestVm::new();
+    let data: Vec<u8> = (0..5000).map(|idx| ((idx * 29) % 251) as u8).collect();
+    let ino = memfs::create_file(1, b"mapped-tail.bin", 0o644);
+    assert!(ino > 0);
+    assert_eq!(memfs::write_file(ino, 0, &data), data.len() as i64);
+
+    let fd = t.sys_openat(b"/mapped-tail.bin", O_RDONLY);
+    assert!(fd >= 3);
+
+    let offset = 4096u64;
+    let len = 4096u64;
+    let mapped = t.sys_mmap(0, len, PROT_READ, MAP_PRIVATE, fd, offset);
+    assert!(mapped > 0, "mapped={mapped}");
+
+    const FILE_REMAINDER: usize = 5000 - 4096;
+    let mapped_bytes = t.guest_mem(mapped as u64, len as usize);
+    assert_eq!(&mapped_bytes[..FILE_REMAINDER], &data[4096..]);
+    assert!(mapped_bytes[FILE_REMAINDER..].iter().all(|byte| *byte == 0));
 }
 
 #[test]
@@ -232,6 +523,53 @@ fn prot_none_reservation_does_not_grow_linear_memory() {
     assert!(addr > 0);
     assert_eq!(before, after);
     assert!(memory::has_prot_none());
+}
+
+#[test]
+fn guest_ram_limit_caps_high_prot_none_reservations() {
+    let mut t = TestVm::new();
+    let guest_limit = 0x6000_0000u64;
+    t.vm.guest_ram_limit = guest_limit as u32;
+    let len = 128 * 1024 * 1024;
+
+    let addr = t.sys_mmap(0, len, PROT_NONE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+
+    assert!(addr > 0, "addr={addr}");
+    assert!(
+        (addr as u64) + len <= guest_limit,
+        "addr=0x{:x} len=0x{:x} guest_limit=0x{:x}",
+        addr,
+        len,
+        guest_limit,
+    );
+}
+
+#[test]
+fn prot_none_reservations_stay_within_linux_shaped_topdown_window() {
+    let mut t = TestVm::new();
+    t.vm.guest_ram_limit = 0xd820_0000u32;
+    let len = 128 * 1024 * 1024;
+
+    let addr = t.sys_mmap(0, len, PROT_NONE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+
+    assert!(addr > 0, "addr={addr}");
+    assert!(
+        (addr as u64) + len <= 0x8000_0000,
+        "addr=0x{:x} len=0x{:x}",
+        addr,
+        len,
+    );
+}
+
+#[test]
+fn guest_ram_limit_caps_brk_growth() {
+    let mut t = TestVm::new();
+    let cur = t.sys_brk(0) as u64;
+    let guest_limit = cur + 2 * PAGE_SIZE;
+    t.vm.guest_ram_limit = guest_limit as u32;
+
+    assert_eq!(t.sys_brk(cur + PAGE_SIZE), (cur + PAGE_SIZE) as i64);
+    assert_eq!(t.sys_brk(guest_limit + PAGE_SIZE), (cur + PAGE_SIZE) as i64);
 }
 
 #[test]
@@ -258,6 +596,300 @@ fn prot_none_reservation_keeps_rw_mmaps_low() {
     );
     assert!(mapped > 0);
     assert!((mapped as u64) < reserve as u64);
+}
+
+#[test]
+fn mprotect_materializes_high_prot_none_reservation_without_clobbering_current_thread_state() {
+    let mut t = TestVm::new();
+    let addr = 0x5c00_0000u64;
+    let len = 0x21_000u64;
+    t.vm.guest_ram_limit = 0x6000_0000;
+    t.vm.pc = 0x1234_5678;
+    t.vm.x[2] = 0x2345_6780;
+    t.vm.x[27] = 0x3456_7890;
+
+    let reserved = t.sys_mmap(
+        addr,
+        len,
+        PROT_NONE,
+        MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED,
+        -1,
+        0,
+    );
+    assert_eq!(reserved as u64, addr);
+
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    ps.thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
+
+    assert_eq!(t.sys_mprotect(addr, len, PROT_READ | PROT_WRITE), 0);
+    assert_eq!(t.vm.pc, 0x1234_5678);
+    assert_eq!(t.vm.x[2], 0x2345_6780);
+    assert_eq!(t.vm.x[27], 0x3456_7890);
+
+    let materialized = t.guest_mem(addr, len as usize);
+    assert!(
+        materialized.iter().all(|byte| *byte == 0),
+        "materialized mapping should be zero-filled",
+    );
+}
+
+#[test]
+fn thread_step_mprotect_materialization_preserves_parent_context_in_multithreaded_process() {
+    let mut t = TestVm::new();
+    let code = t.sys_mmap(
+        0x10000,
+        0x1000,
+        PROT_READ | PROT_EXEC,
+        MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS,
+        -1,
+        0,
+    );
+    assert_eq!(code, 0x10000);
+
+    let reserve_addr = 0x5c00_0000u64;
+    let reserve_len = 0x21_000u64;
+    t.vm.guest_ram_limit = 0x6000_0000;
+    let reserved = t.sys_mmap(
+        reserve_addr,
+        reserve_len,
+        PROT_NONE,
+        MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED,
+        -1,
+        0,
+    );
+    assert_eq!(reserved as u64, reserve_addr);
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, 0x10000, 0x0000_0073);
+        tidemark_kernel::guest_mem::write_u32(t.base, 0x10004, 0x0000_8067);
+        tidemark_kernel::guest_mem::write_u16(t.base, 0x10008, 0x0001);
+    }
+
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    ps.thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
+
+    t.vm.pc = 0x10000;
+    t.vm.x[1] = 0x10008;
+    t.vm.x[2] = 0x2345_6780;
+    t.vm.x[10] = reserve_addr;
+    t.vm.x[11] = reserve_len;
+    t.vm.x[12] = (PROT_READ | PROT_WRITE) as u64;
+    t.vm.x[17] = SYS_MPROTECT;
+    t.vm.x[27] = 0x3456_7890;
+
+    let remaining = tidemark_kernel::abi::thread_step(&mut t.vm as *mut _ as u32, 2);
+    assert_eq!(remaining, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x10008);
+    assert_eq!(t.vm.x[10], 0);
+    assert_eq!(t.vm.x[2], 0x2345_6780);
+    assert_eq!(t.vm.x[27], 0x3456_7890);
+
+    let materialized = t.guest_mem(reserve_addr, reserve_len as usize);
+    assert!(
+        materialized.iter().all(|byte| *byte == 0),
+        "materialized mapping should be zero-filled after syscall path",
+    );
+}
+
+#[test]
+fn multithreaded_flush_icache_reexec_preserves_parent_context() {
+    let mut t = TestVm::new();
+    let code = t.sys_mmap(
+        0,
+        PAGE_SIZE,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    );
+    assert!(code > 0, "code={code}");
+    let code = code as u64;
+
+    unsafe {
+        // addi a0, zero, 1
+        tidemark_kernel::guest_mem::write_u32(t.base, code, 0x0010_0513);
+        // jalr zero, ra, 0
+        tidemark_kernel::guest_mem::write_u32(t.base, code + 4, 0x0000_8067);
+        // c.nop
+        tidemark_kernel::guest_mem::write_u16(t.base, code + 8, 0x0001);
+    }
+
+    assert_eq!(t.sys_mprotect(code, PAGE_SIZE, PROT_READ | PROT_EXEC), 0);
+
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    ps.thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
+
+    t.vm.pc = code;
+    t.vm.x[1] = code + 8;
+    t.vm.x[2] = 0x2345_6780;
+    t.vm.x[10] = 0;
+    t.vm.x[27] = 0x3456_7890;
+    t.vm.status = STATUS_OK;
+    t.vm.sig_mask = 0;
+    t.vm.sig_pending = 0;
+
+    let remaining = tidemark_kernel::abi::thread_step(&mut t.vm as *mut _ as u32, 2);
+    assert_eq!(remaining, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, code + 8);
+    assert_eq!(t.vm.x[10], 1);
+    assert_eq!(t.vm.x[2], 0x2345_6780);
+    assert_eq!(t.vm.x[27], 0x3456_7890);
+
+    assert_eq!(t.sys_mprotect(code, PAGE_SIZE, PROT_READ | PROT_WRITE), 0);
+    unsafe {
+        // addi a0, zero, 42
+        tidemark_kernel::guest_mem::write_u32(t.base, code, 0x02a0_0513);
+    }
+    assert_eq!(
+        tidemark_kernel::syscall::identity::sys_riscv_flush_icache(
+            &t.vm,
+            t.base,
+            code,
+            code + 8,
+            0
+        ),
+        0
+    );
+    assert_eq!(t.sys_mprotect(code, PAGE_SIZE, PROT_READ | PROT_EXEC), 0);
+
+    t.vm.pc = code;
+    t.vm.x[1] = code + 8;
+    t.vm.x[2] = 0x2345_6780;
+    t.vm.x[10] = 0;
+    t.vm.x[27] = 0x3456_7890;
+    t.vm.status = STATUS_OK;
+    t.vm.sig_mask = 0;
+    t.vm.sig_pending = 0;
+
+    let remaining = tidemark_kernel::abi::thread_step(&mut t.vm as *mut _ as u32, 2);
+    assert_eq!(remaining, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, code + 8);
+    assert_eq!(t.vm.x[10], 42);
+    assert_eq!(t.vm.x[2], 0x2345_6780);
+    assert_eq!(t.vm.x[27], 0x3456_7890);
+}
+
+#[test]
+fn guest_generated_high_code_cache_flush_icache_executes_in_multithreaded_process() {
+    let mut t = TestVm::new();
+    t.vm.guest_ram_limit = 0x7fff_ffff;
+
+    let reserve_base = 0x7053_0000u64;
+    let reserve_len = 0x90_000u64;
+    let code_page = 0x7053_8000u64;
+    let code_addr = code_page + 0x80;
+    let entry = 0x10000u64;
+
+    let reserved = t.sys_mmap(
+        reserve_base,
+        reserve_len,
+        PROT_NONE,
+        MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED,
+        -1,
+        0,
+    );
+    assert_eq!(reserved as u64, reserve_base);
+
+    let mapped = t.sys_mmap(
+        code_page,
+        PAGE_SIZE,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
+        MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED,
+        -1,
+        0,
+    );
+    assert_eq!(mapped as u64, code_page);
+
+    let entry_map = t.sys_mmap(
+        entry,
+        PAGE_SIZE,
+        PROT_READ | PROT_EXEC,
+        MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED,
+        -1,
+        0,
+    );
+    assert_eq!(entry_map as u64, entry);
+
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    ps.thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
+
+    let li_t0_addr = encode_li(5, code_addr as u32);
+    let li_t1_addi42 = encode_li(6, 0x02a0_0513);
+    let li_t1_ret = encode_li(6, 0x0000_8067);
+
+    unsafe {
+        let mut pc = entry;
+        for insn in li_t0_addr {
+            tidemark_kernel::guest_mem::write_u32(t.base, pc, insn);
+            pc += 4;
+        }
+        for insn in li_t1_addi42 {
+            tidemark_kernel::guest_mem::write_u32(t.base, pc, insn);
+            pc += 4;
+        }
+        tidemark_kernel::guest_mem::write_u32(t.base, pc, encode_s(0x23, 0b010, 5, 6, 0));
+        pc += 4;
+        for insn in li_t1_ret {
+            tidemark_kernel::guest_mem::write_u32(t.base, pc, insn);
+            pc += 4;
+        }
+        tidemark_kernel::guest_mem::write_u32(t.base, pc, encode_s(0x23, 0b010, 5, 6, 4));
+        pc += 4;
+        tidemark_kernel::guest_mem::write_u32(t.base, pc, encode_i(0x13, 10, 0, 5, 0));
+        pc += 4;
+        tidemark_kernel::guest_mem::write_u32(t.base, pc, encode_i(0x13, 11, 0, 5, 8));
+        pc += 4;
+        tidemark_kernel::guest_mem::write_u32(t.base, pc, encode_i(0x13, 12, 0, 0, 0));
+        pc += 4;
+        tidemark_kernel::guest_mem::write_u32(
+            t.base,
+            pc,
+            encode_i(0x13, 17, 0, 0, SYS_RISCV_FLUSH_ICACHE as i32),
+        );
+        pc += 4;
+        tidemark_kernel::guest_mem::write_u32(t.base, pc, 0x0000_0073);
+        pc += 4;
+        tidemark_kernel::guest_mem::write_u32(t.base, pc, encode_i(0x67, 1, 0, 5, 0));
+        pc += 4;
+        tidemark_kernel::guest_mem::write_u16(t.base, pc, 0x0001);
+    }
+
+    let return_pc = entry + 14 * 4;
+    t.vm.pc = entry;
+    t.vm.x[1] = 0;
+    t.vm.x[2] = 0x2345_6780;
+    t.vm.x[10] = 0;
+    t.vm.x[27] = 0x3456_7890;
+    t.vm.status = STATUS_OK;
+    t.vm.sig_mask = 0;
+    t.vm.sig_pending = 0;
+
+    let remaining = tidemark_kernel::abi::thread_step(&mut t.vm as *mut _ as u32, 16);
+    assert_eq!(remaining, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, return_pc);
+    assert_eq!(t.vm.x[1], return_pc);
+    assert_eq!(t.vm.x[10], 42);
+    assert_eq!(t.vm.x[2], 0x2345_6780);
+    assert_eq!(t.vm.x[27], 0x3456_7890);
+
+    unsafe {
+        assert_eq!(
+            tidemark_kernel::guest_mem::read_u32(t.base, code_addr),
+            0x02a0_0513
+        );
+        assert_eq!(
+            tidemark_kernel::guest_mem::read_u32(t.base, code_addr + 4),
+            0x0000_8067
+        );
+    }
 }
 
 #[test]

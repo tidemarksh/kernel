@@ -214,7 +214,10 @@ fn maybe_free_pty(pty_idx: u32) {
 
 pub fn init() {
     unsafe {
-        core::ptr::write(core::ptr::addr_of_mut!(PTY_TABLE_PTR), core::ptr::null_mut());
+        core::ptr::write(
+            core::ptr::addr_of_mut!(PTY_TABLE_PTR),
+            core::ptr::null_mut(),
+        );
         let size = core::mem::size_of::<[PtySlot; MAX_PTYS]>() as u32;
         let align = core::mem::align_of::<PtySlot>() as u32;
         let ptr = alloc::alloc_zeroed(size, align);
@@ -501,12 +504,7 @@ pub fn master_write(pty_idx: u32, data: &[u8]) -> i64 {
     master_write_with_context(pty_idx, data, None)
 }
 
-pub fn master_write_from_thread(
-    pty_idx: u32,
-    data: &[u8],
-    vm: &mut ThreadState,
-    base: u32,
-) -> i64 {
+pub fn master_write_from_thread(pty_idx: u32, data: &[u8], vm: &mut ThreadState, base: u32) -> i64 {
     master_write_with_context(pty_idx, data, Some((vm, base)))
 }
 
@@ -527,7 +525,8 @@ fn master_write_with_context(
     }
     for &raw_byte in data {
         if slot.c_lflag & ICANON == 0 {
-            let n = crate::syscall::pipe::pipe_write(slot.input_pipe, core::slice::from_ref(&raw_byte));
+            let n =
+                crate::syscall::pipe::pipe_write(slot.input_pipe, core::slice::from_ref(&raw_byte));
             if n <= 0 {
                 return if consumed > 0 { consumed as i64 } else { n };
             }
@@ -539,7 +538,11 @@ fn master_write_with_context(
         if slot.canon_ready_len != 0 {
             let flushed = flush_ready_input(slot);
             if flushed == EAGAIN && slot.canon_ready_len != 0 {
-                return if consumed > 0 { consumed as i64 } else { EAGAIN };
+                return if consumed > 0 {
+                    consumed as i64
+                } else {
+                    EAGAIN
+                };
             }
         }
 
@@ -589,7 +592,11 @@ fn master_write_with_context(
         if byte == slot.c_cc[VEOF] {
             let committed = queue_canonical_line(slot, None);
             if committed == EAGAIN {
-                return if consumed > 0 { consumed as i64 } else { EAGAIN };
+                return if consumed > 0 {
+                    consumed as i64
+                } else {
+                    EAGAIN
+                };
             }
             consumed += 1;
             continue;
@@ -602,7 +609,11 @@ fn master_write_with_context(
             echo_input_byte(slot, byte);
             let committed = queue_canonical_line(slot, Some(byte));
             if committed == EAGAIN {
-                return if consumed > 0 { consumed as i64 } else { EAGAIN };
+                return if consumed > 0 {
+                    consumed as i64
+                } else {
+                    EAGAIN
+                };
             }
             consumed += 1;
             continue;
@@ -610,7 +621,11 @@ fn master_write_with_context(
 
         let line_len = slot.canon_line_len as usize;
         if line_len >= slot.canon_buf.len() {
-            return if consumed > 0 { consumed as i64 } else { EAGAIN };
+            return if consumed > 0 {
+                consumed as i64
+            } else {
+                EAGAIN
+            };
         }
         slot.canon_buf[line_len] = byte;
         slot.canon_line_len += 1;

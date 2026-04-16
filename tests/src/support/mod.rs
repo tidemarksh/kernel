@@ -2,8 +2,8 @@
 //! Uses Result<(), String> to avoid panics (wasm32-wasip1 uses panic=abort,
 //! so any panic causes a WASM trap that terminates the entire test binary).
 
-use std::collections::VecDeque;
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -53,7 +53,10 @@ fn enqueue_deferred_clone_thread(
             .iter()
             .any(|queued| queued.owner_pid == owner_pid && queued.child_ptr == child_ptr)
     {
-        deferred_clone_threads.push_back(DeferredCloneThread { owner_pid, child_ptr });
+        deferred_clone_threads.push_back(DeferredCloneThread {
+            owner_pid,
+            child_ptr,
+        });
     }
 }
 
@@ -196,8 +199,7 @@ impl GuestMemorySnapshot {
         if end > self.len {
             return Err(format!(
                 "snapshot read out of range: off={} len={}",
-                guest_addr,
-                self.len
+                guest_addr, self.len
             ));
         }
         let mut file = self.file.borrow_mut();
@@ -216,9 +218,7 @@ impl GuestMemorySnapshot {
         if end > self.len {
             return Err(format!(
                 "snapshot restore out of range: off={} len={} snapshot_len={}",
-                guest_addr,
-                len,
-                self.len
+                guest_addr, len, self.len
             ));
         }
         let mut file = self.file.borrow_mut();
@@ -302,7 +302,7 @@ fn ensure_file(parent_ino: u32, name: &[u8], data: &[u8], mode: u32) -> Result<u
 const PROC_MEMINFO_BYTES: &[u8] =
     b"MemTotal: 262144 kB\nMemFree: 131072 kB\nMemAvailable: 131072 kB\nCached: 0 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n";
 const PROC_CPUINFO_BYTES: &[u8] =
-    b"processor\t: 0\nhart\t\t: 0\nisa\t\t: rv64imafdc\nmmu\t\t: sv39\n";
+    b"processor\t: 0\nhart\t\t: 0\nisa\t\t: rv64imafdc_zicsr_zifencei_zmmul_zaamo_zalrsc_zca_zcd\nmmu\t\t: sv39\n";
 const PROC_PID1_STAT_BYTES: &[u8] = b"1 (init) S 0 1\n";
 const ETC_PASSWD_BYTES: &[u8] = b"root:x:0:0:root:/root:/bin/sh\nbin:x:1:1:bin:/bin:/bin/sh\ndaemon:x:2:2:daemon:/usr/sbin:/bin/sh\nnobody:x:65534:65534:nobody:/nonexistent:/bin/sh\n";
 const ETC_GROUP_BYTES: &[u8] = b"root:x:0:\nbin:x:1:\ndaemon:x:2:\nnobody:x:65534:\n";
@@ -653,7 +653,11 @@ fn restore_process_state_snapshot(
     base: u32,
     process_ptr: u32,
 ) -> Result<(), String> {
-    snapshot.restore_range(base, process_ptr as usize, core::mem::size_of::<ProcessState>())?;
+    snapshot.restore_range(
+        base,
+        process_ptr as usize,
+        core::mem::size_of::<ProcessState>(),
+    )?;
 
     let pid_off = process_ptr as usize + core::mem::offset_of!(ProcessState, pid);
     let ppid_off = process_ptr as usize + core::mem::offset_of!(ProcessState, ppid);
@@ -663,8 +667,16 @@ fn restore_process_state_snapshot(
     let thread_count = snapshot.read_i32(thread_count_off)? as u32;
 
     unsafe {
-        guest_mem::write_u32(base, process_ptr as u64 + core::mem::offset_of!(ProcessState, pid) as u64, pid);
-        guest_mem::write_u32(base, process_ptr as u64 + core::mem::offset_of!(ProcessState, ppid) as u64, ppid);
+        guest_mem::write_u32(
+            base,
+            process_ptr as u64 + core::mem::offset_of!(ProcessState, pid) as u64,
+            pid,
+        );
+        guest_mem::write_u32(
+            base,
+            process_ptr as u64 + core::mem::offset_of!(ProcessState, ppid) as u64,
+            ppid,
+        );
         guest_mem::write_u32(
             base,
             process_ptr as u64 + core::mem::offset_of!(ProcessState, thread_count) as u64,
@@ -686,13 +698,12 @@ fn repair_current_main_thread_record(vm: &ThreadState, base: u32) {
         let valid = record.tid == vm.tid
             && !matches!(record.state, THREAD_NONE | THREAD_DEAD)
             && record.thread_ptr == vm_ptr;
-        if valid
-            && ps.thread_count.load(std::sync::atomic::Ordering::Acquire) > 0
-        {
+        if valid && ps.thread_count.load(std::sync::atomic::Ordering::Acquire) > 0 {
             return;
         }
         *record = ThreadRecord::new(vm.tid, THREAD_RUNNING, vm_ptr, vm.clear_child_tid as u32, 0);
-        ps.thread_count.store(1, std::sync::atomic::Ordering::Release);
+        ps.thread_count
+            .store(1, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -1208,10 +1219,7 @@ fn run_next_deferred_plain_fork(
                         base,
                     ) == 0
                     {
-                        tidemark_kernel::syscall::thread::resume_futex_wait(
-                            &mut deferred.vm,
-                            base,
-                        );
+                        tidemark_kernel::syscall::thread::resume_futex_wait(&mut deferred.vm, base);
                     } else {
                         tidemark_kernel::harness::support::register_plain_fork_futex_wait(
                             deferred.pid,
@@ -1219,7 +1227,8 @@ fn run_next_deferred_plain_fork(
                         );
                         refresh_proc_pid_stat(&deferred.vm, base, b'S')?;
                         deferred.guest_memory = snapshot_guest_memory(base)?;
-                        deferred.mm_state = tidemark_kernel::harness::support::snapshot_plain_fork();
+                        deferred.mm_state =
+                            tidemark_kernel::harness::support::snapshot_plain_fork();
                         deferred_plain_forks.push_back(deferred);
                         break false;
                     }
@@ -1282,10 +1291,8 @@ fn run_next_deferred_plain_fork(
                 break true;
             }
             VmRunOutcome::Deferred(_child_pc) => {
-                if count_deferred_clone_threads_for_process(
-                    deferred_clone_threads,
-                    deferred.pid,
-                ) > 0
+                if count_deferred_clone_threads_for_process(deferred_clone_threads, deferred.pid)
+                    > 0
                 {
                     continue;
                 }
@@ -1396,11 +1403,7 @@ fn service_ready_deferred_clone_threads(
                 refresh_proc_pid_stat(child_vm, base, b'R')?;
             }
             VmRunOutcome::Deferred(_) => {
-                enqueue_deferred_clone_thread(
-                    deferred_clone_threads,
-                    current_pid,
-                    child_ptr,
-                );
+                enqueue_deferred_clone_thread(deferred_clone_threads, current_pid, child_ptr);
                 refresh_proc_pid_stat(child_vm, base, b'S')?;
             }
         }
@@ -1762,6 +1765,13 @@ fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> Result<(i32, u64, Vec<u8>
             let elf_load_addr: u64 = 0xC0_0000;
             tidemark_kernel::guest_mem::write_bytes(base, elf_load_addr, elf_bytes);
 
+            let load_segments = tidemark_kernel::elf::collect_load_segments(
+                (base as u64 + elf_load_addr) as u32,
+                elf_bytes.len() as u32,
+                0,
+            )
+            .map_err(|e| format!("ELF segment inspection failed: {}", e))?;
+
             let elf_result = tidemark_kernel::elf::load_elf(
                 base,
                 GUEST_RAM_SIZE as u64,
@@ -1769,6 +1779,11 @@ fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> Result<(i32, u64, Vec<u8>
                 elf_bytes.len() as u32,
             )
             .map_err(|e| format!("ELF load failed: {}", e))?;
+            tidemark_kernel::elf::zero_fill_load_padding(
+                base,
+                elf_result.load_end,
+                elf_result.brk_start,
+            );
 
             // Keep kernel-private allocations outside the guest RAM window.
             // After this point, avoid std heap allocations on the success path:
@@ -1780,6 +1795,18 @@ fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> Result<(i32, u64, Vec<u8>
             let guest_brk_start = elf_result.brk_start;
             tidemark_kernel::syscall::time::init();
             tidemark_kernel::syscall::memory::init(guest_brk_start);
+            for segment in load_segments {
+                // riscv-tests run in a bare-metal style harness, not under Linux
+                // ELF permission enforcement. Tests such as rv64ui/fence_i
+                // self-modify and execute bytes placed in the data LOAD
+                // segment, so treat all loaded guest segments as executable
+                // within this riscv-tests-only runner.
+                tidemark_kernel::syscall::memory::register_elf_load_segment(
+                    segment.start,
+                    segment.end,
+                    segment.prot | tidemark_kernel::abi::PROT_EXEC,
+                );
+            }
             tidemark_kernel::syscall::process::init();
             tidemark_kernel::syscall::thread::init();
             tidemark_kernel::syscall::signal::init();
@@ -1966,8 +1993,7 @@ pub fn assert_elf_pass_no_cache(name: &str, elf_bytes: &[u8]) -> Result<(), Stri
 mod tests {
     use super::*;
     use tidemark_kernel::abi::{
-        CLONE_FS, CLONE_SIGHAND, CLONE_THREAD, CLONE_VM, FUTEX_WAIT, FUTEX_WAKE,
-        STATUS_FUTEX_WAIT,
+        CLONE_FS, CLONE_SIGHAND, CLONE_THREAD, CLONE_VM, FUTEX_WAIT, FUTEX_WAKE, STATUS_FUTEX_WAIT,
     };
     use tidemark_kernel::fs::memfs;
     use tidemark_kernel::guest_mem;
@@ -2032,10 +2058,22 @@ mod tests {
 
     fn write_futex_wake_then_exit_program(base: u32, pc: u64, exit_code: u8) {
         let code = [
-            0x73, 0x00, 0x00, 0x00, // ecall (futex)
-            0x13, 0x05, exit_code << 4, 0x00, // addi a0, zero, exit_code
-            0x93, 0x08, 0xd0, 0x05, // addi a7, zero, 93 (SYS_exit)
-            0x73, 0x00, 0x00, 0x00, // ecall
+            0x73,
+            0x00,
+            0x00,
+            0x00, // ecall (futex)
+            0x13,
+            0x05,
+            exit_code << 4,
+            0x00, // addi a0, zero, exit_code
+            0x93,
+            0x08,
+            0xd0,
+            0x05, // addi a7, zero, 93 (SYS_exit)
+            0x73,
+            0x00,
+            0x00,
+            0x00, // ecall
         ];
         unsafe {
             guest_mem::write_bytes(base, pc, &code);
@@ -2147,7 +2185,10 @@ mod tests {
         refresh_proc_pid_stat(child_vm, t.base, b'R').expect("proc refresh should succeed");
         let stat = proc_pid_stat_bytes(pid);
         let text = String::from_utf8(stat).expect("pid stat should be utf8");
-        assert!(text.contains(" S "), "expected sleeping leader state, got {text:?}");
+        assert!(
+            text.contains(" S "),
+            "expected sleeping leader state, got {text:?}"
+        );
 
         let mut deferred_plain_forks = VecDeque::new();
         let mut deferred_clone_threads = VecDeque::new();
@@ -2324,8 +2365,18 @@ mod tests {
 
         assert_eq!(progressed, 0);
         assert_eq!(deferred_clone_threads.len(), 1);
-        assert_eq!(deferred_clone_threads.front().map(|queued| queued.owner_pid), Some(pid + 1));
-        assert_eq!(deferred_clone_threads.front().map(|queued| queued.child_ptr), Some(child_ptr));
+        assert_eq!(
+            deferred_clone_threads
+                .front()
+                .map(|queued| queued.owner_pid),
+            Some(pid + 1)
+        );
+        assert_eq!(
+            deferred_clone_threads
+                .front()
+                .map(|queued| queued.child_ptr),
+            Some(child_ptr)
+        );
     }
 
     #[test]
@@ -2358,7 +2409,10 @@ mod tests {
 
         let stat = proc_pid_stat_bytes(pid);
         let text = String::from_utf8(stat).expect("pid stat should be utf8");
-        assert!(text.contains(" S "), "expected sleeping leader state, got {text:?}");
+        assert!(
+            text.contains(" S "),
+            "expected sleeping leader state, got {text:?}"
+        );
     }
 
     #[test]
@@ -2382,8 +2436,12 @@ mod tests {
         refresh_proc_pid_stat(child_vm, t.base, b'R').expect("proc refresh should succeed");
         assert_ne!(proc_task_stat_ino(pid, child_tid), 0);
 
-        assert_eq!(thread_impl::sys_exit(child_vm, t.base, 0), tidemark_kernel::abi::STATUS_FAULT);
-        refresh_proc_pid_stat(child_vm, t.base, b'R').expect("proc refresh after exit should succeed");
+        assert_eq!(
+            thread_impl::sys_exit(child_vm, t.base, 0),
+            tidemark_kernel::abi::STATUS_FAULT
+        );
+        refresh_proc_pid_stat(child_vm, t.base, b'R')
+            .expect("proc refresh after exit should succeed");
         assert_eq!(proc_task_stat_ino(pid, child_tid), 0);
     }
 
@@ -2419,7 +2477,8 @@ mod tests {
         let tid = t.vm.tid;
         let vm_ptr = &t.vm as *const ThreadState as u32;
         let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
-        ps.thread_count.store(0, std::sync::atomic::Ordering::Release);
+        ps.thread_count
+            .store(0, std::sync::atomic::Ordering::Release);
         ps.threads[(tid - 1) as usize] = ThreadRecord::new(0, THREAD_NONE, 0, 0, 0);
 
         repair_current_main_thread_record(&t.vm, t.base);

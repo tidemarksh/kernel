@@ -204,13 +204,13 @@ pub(super) unsafe fn exec_load(x: &mut [u64; 32], raw: u32, base: u32, pc: &mut 
     let addr = (x[rs1] as i64 + decode::imm_i(raw)) as u64;
     let val: u64 = unsafe {
         match decode::funct3(raw) {
-            0 => guest_mem::read_i8(base, addr) as u64,  // LB
-            1 => guest_mem::read_i16(base, addr) as u64, // LH
-            2 => guest_mem::read_i32(base, addr) as u64, // LW
-            3 => guest_mem::read_u64(base, addr),        // LD
-            4 => guest_mem::read_u8(base, addr) as u64,  // LBU
-            5 => guest_mem::read_u16(base, addr) as u64, // LHU
-            6 => guest_mem::read_u32(base, addr) as u64, // LWU
+            0 => guest_mem::read_i8(base, addr) as u64, // LB
+            1 => (guest_mem::read_u16_seqlock(base, addr) as i16) as u64, // LH
+            2 => (guest_mem::read_u32_seqlock(base, addr) as i32) as u64, // LW
+            3 => guest_mem::read_u64_seqlock(base, addr), // LD
+            4 => guest_mem::read_u8(base, addr) as u64, // LBU
+            5 => guest_mem::read_u16_seqlock(base, addr) as u64, // LHU
+            6 => guest_mem::read_u32_seqlock(base, addr) as u64, // LWU
             _ => 0,
         }
     };

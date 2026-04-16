@@ -51,7 +51,14 @@ fn socketpair_unix_stream_roundtrip() {
     let mut t = TestVm::new();
     let sv_addr = t.scratch + 0x80;
     assert_eq!(
-        socket::sys_socketpair(&mut t.vm, t.base, AF_UNIX as u64, SOCK_STREAM as u64, 0, sv_addr),
+        socket::sys_socketpair(
+            &mut t.vm,
+            t.base,
+            AF_UNIX as u64,
+            SOCK_STREAM as u64,
+            0,
+            sv_addr
+        ),
         0
     );
 
@@ -78,7 +85,6 @@ fn socketpair_unix_stream_roundtrip() {
         tidemark_kernel::guest_mem::read_bytes(t.base, read_addr, &mut actual);
     }
     assert_eq!(&actual, b"ping");
-
 }
 
 #[test]
@@ -103,8 +109,14 @@ fn socketpair_unix_dgram_honors_type_flags() {
     let right_ofd = fd_table::get_ofd(t.base, &t.vm, right_fd).unwrap();
     assert_ne!(left_ofd.status_flags & O_NONBLOCK, 0);
     assert_ne!(right_ofd.status_flags & O_NONBLOCK, 0);
-    assert_ne!(fd_table::sys_fcntl(&mut t.vm, t.base, left_fd, F_GETFD, 0), 0);
-    assert_ne!(fd_table::sys_fcntl(&mut t.vm, t.base, right_fd, F_GETFD, 0), 0);
+    assert_ne!(
+        fd_table::sys_fcntl(&mut t.vm, t.base, left_fd, F_GETFD, 0),
+        0
+    );
+    assert_ne!(
+        fd_table::sys_fcntl(&mut t.vm, t.base, right_fd, F_GETFD, 0),
+        0
+    );
 }
 
 #[test]
@@ -123,12 +135,27 @@ fn unix_stream_bind_listen_connect_accept_roundtrip() {
     t.write_mem(addr, &sockaddr[..2 + path.len()]);
 
     assert_eq!(
-        socket::sys_bind(&mut t.vm, t.base, listener_fd as u64, addr, (2 + path.len()) as u64),
+        socket::sys_bind(
+            &mut t.vm,
+            t.base,
+            listener_fd as u64,
+            addr,
+            (2 + path.len()) as u64
+        ),
         0
     );
-    assert_eq!(socket::sys_listen(&mut t.vm, t.base, listener_fd as u64, 8), 0);
     assert_eq!(
-        socket::sys_connect(&mut t.vm, t.base, client_fd as u64, addr, (2 + path.len()) as u64),
+        socket::sys_listen(&mut t.vm, t.base, listener_fd as u64, 8),
+        0
+    );
+    assert_eq!(
+        socket::sys_connect(
+            &mut t.vm,
+            t.base,
+            client_fd as u64,
+            addr,
+            (2 + path.len()) as u64
+        ),
         0
     );
 
@@ -167,7 +194,6 @@ fn unix_stream_bind_listen_connect_accept_roundtrip() {
         tidemark_kernel::guest_mem::read_bytes(t.base, peer_addr, &mut actual_peer);
     }
     assert_eq!(&actual_peer[..], &sockaddr[..actual_len]);
-
 }
 
 #[test]
@@ -186,11 +212,23 @@ fn unix_dgram_connect_routes_to_bound_peer() {
     t.write_mem(addr, &sockaddr[..2 + path.len()]);
 
     assert_eq!(
-        socket::sys_bind(&mut t.vm, t.base, server_fd as u64, addr, (2 + path.len()) as u64),
+        socket::sys_bind(
+            &mut t.vm,
+            t.base,
+            server_fd as u64,
+            addr,
+            (2 + path.len()) as u64
+        ),
         0
     );
     assert_eq!(
-        socket::sys_connect(&mut t.vm, t.base, client_fd as u64, addr, (2 + path.len()) as u64),
+        socket::sys_connect(
+            &mut t.vm,
+            t.base,
+            client_fd as u64,
+            addr,
+            (2 + path.len()) as u64
+        ),
         0
     );
 
@@ -827,7 +865,10 @@ fn socket_connect_block_captures_snd_timeout_ms() {
     t.write_mem(addr, &sockaddr);
     t.vm.x[10] = fd as u64;
     t.vm.x[17] = SYS_CONNECT;
-    assert_eq!(socket::sys_connect(&mut t.vm, t.base, fd as u64, addr, 16), 0);
+    assert_eq!(
+        socket::sys_connect(&mut t.vm, t.base, fd as u64, addr, 16),
+        0
+    );
     assert_eq!(t.vm.status, STATUS_CONNECT);
     assert_eq!(t.vm.socket_timeout_ms, 2);
 }
@@ -861,7 +902,10 @@ fn socket_connect_timeout_returns_etimedout() {
     t.write_mem(addr, &sockaddr);
     t.vm.x[10] = fd as u64;
     t.vm.x[17] = SYS_CONNECT;
-    assert_eq!(socket::sys_connect(&mut t.vm, t.base, fd as u64, addr, 16), 0);
+    assert_eq!(
+        socket::sys_connect(&mut t.vm, t.base, fd as u64, addr, 16),
+        0
+    );
     assert_eq!(t.vm.status, STATUS_CONNECT);
 
     let vm_ptr = &mut t.vm as *mut _ as u32;
@@ -884,7 +928,10 @@ fn socket_connect_timeout_returns_etimedout() {
         ),
         0
     );
-    assert_eq!(unsafe { tidemark_kernel::guest_mem::read_u32(t.base, t.scratch + 0x900) } as i64, -ETIMEDOUT);
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, t.scratch + 0x900) } as i64,
+        -ETIMEDOUT
+    );
 }
 
 #[test]

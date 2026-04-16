@@ -804,7 +804,11 @@ fn resolve_path_with_symlink_policy(
             let target = &link_target[..target_len];
             let mut combined = [0u8; 512];
             let combined_path = concat_symlink_target_and_rest(target, rest, &mut combined)?;
-            let restart_ino = if target.first() == Some(&b'/') { 1 } else { ino };
+            let restart_ino = if target.first() == Some(&b'/') {
+                1
+            } else {
+                ino
+            };
             return resolve_path_with_symlink_policy(
                 restart_ino,
                 combined_path,
@@ -1205,12 +1209,8 @@ fn resolve_parent_and_name(
         if name.is_empty() {
             return Err(ENOENT);
         }
-        let parent_ino = resolve_path_with_symlink_policy(
-            1,
-            parent_path,
-            true,
-            MAX_PATH_SYMLINK_FOLLOWS,
-        )?;
+        let parent_ino =
+            resolve_path_with_symlink_policy(1, parent_path, true, MAX_PATH_SYMLINK_FOLLOWS)?;
         let parent_ino = ensure_directory_inode(parent_ino)?;
         name_buf[..name.len()].copy_from_slice(name);
         return Ok((parent_ino, name_buf, name.len()));
@@ -1334,19 +1334,7 @@ pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) 
         return n;
     }
 
-    let mut tmp = [0u8; 4096];
-    let to_read = (count as usize).min(tmp.len());
-    let n = memfs::read_file(ofd.ino, ofd.offset as u64, &mut tmp[..to_read]);
-    if n > 0 {
-        if !crate::syscall::memory::guest_range_accessible(base, buf, n as u64) {
-            return EFAULT;
-        }
-        unsafe {
-            guest_mem::write_bytes(base, buf, &tmp[..n as usize]);
-        }
-        fd_table::advance_offset(base, vm, fd, n as u64);
-    }
-    n
+    read_regular_file_to_guest(vm, base, fd, buf, count, None)
 }
 
 /// pread64: read at specified offset without changing OFD offset.
@@ -1367,18 +1355,54 @@ pub fn sys_pread64(
         return 0;
     }
 
+    read_regular_file_to_guest(vm, base, fd, buf, count, Some(offset))
+}
+
+fn read_regular_file_to_guest(
+    vm: &mut ThreadState,
+    base: u32,
+    fd: u64,
+    guest_buf: u64,
+    count: u64,
+    offset: Option<u64>,
+) -> i64 {
+    if count == 0 {
+        return 0;
+    }
+
+    let ofd = match fd_table::get_ofd(base, vm, fd) {
+        Some(o) => o,
+        None => return EBADF,
+    };
+    let start_offset = offset.unwrap_or(ofd.offset as u64);
     let mut tmp = [0u8; 4096];
-    let to_read = (count as usize).min(tmp.len());
-    let n = memfs::read_file(ofd.ino, offset, &mut tmp[..to_read]);
-    if n > 0 {
-        if !crate::syscall::memory::guest_range_accessible(base, buf, n as u64) {
-            return EFAULT;
+    let mut total = 0u64;
+
+    while total < count {
+        let to_read = ((count - total) as usize).min(tmp.len());
+        let n = memfs::read_file(ofd.ino, start_offset + total, &mut tmp[..to_read]);
+        if n < 0 {
+            return if total > 0 { total as i64 } else { n };
+        }
+        if n == 0 {
+            break;
+        }
+        if !crate::syscall::memory::guest_range_accessible(base, guest_buf + total, n as u64) {
+            return if total > 0 { total as i64 } else { EFAULT };
         }
         unsafe {
-            guest_mem::write_bytes(base, buf, &tmp[..n as usize]);
+            guest_mem::write_bytes(base, guest_buf + total, &tmp[..n as usize]);
+        }
+        total += n as u64;
+        if (n as usize) < to_read {
+            break;
         }
     }
-    n
+
+    if total > 0 && offset.is_none() {
+        fd_table::advance_offset(base, vm, fd, total);
+    }
+    total as i64
 }
 
 // =========================================================================
@@ -1978,12 +2002,7 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
             let n = if ofd.fd_type == FD_TYPE_PTY_SLAVE {
                 crate::syscall::pty::slave_write(ofd.ino, &tmp[..to_write])
             } else {
-                crate::syscall::pty::master_write_from_thread(
-                    ofd.ino,
-                    &tmp[..to_write],
-                    vm,
-                    base,
-                )
+                crate::syscall::pty::master_write_from_thread(ofd.ino, &tmp[..to_write], vm, base)
             };
             if n == EPIPE {
                 signal::send_signal(vm, SIGPIPE);

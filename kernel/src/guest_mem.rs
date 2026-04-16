@@ -135,16 +135,61 @@ pub unsafe fn read_u32_seqlock(base: u32, addr: u64) -> u32 {
     if !unsafe { is_multi_threaded() } {
         return unsafe { read_u32(base, addr) };
     }
-    let slot = ((addr >> 3) & 63) as usize;
+    let (first_slot, last_slot) = seqlock_slots(addr, 4);
     loop {
-        let gen_before = unsafe { read_gen(slot) };
-        if gen_before & 1 != 0 {
+        let gen_before_first = unsafe { read_gen(first_slot) };
+        let gen_before_last = if last_slot == first_slot {
+            gen_before_first
+        } else {
+            unsafe { read_gen(last_slot) }
+        };
+        if (gen_before_first | gen_before_last) & 1 != 0 {
             core::hint::spin_loop();
             continue;
-        } // odd = write in progress
+        }
         let val = unsafe { read_u32(base, addr) };
-        let gen_after = unsafe { read_gen(slot) };
-        if gen_before == gen_after {
+        let gen_after_first = unsafe { read_gen(first_slot) };
+        let gen_after_last = if last_slot == first_slot {
+            gen_after_first
+        } else {
+            unsafe { read_gen(last_slot) }
+        };
+        if gen_before_first == gen_after_first && gen_before_last == gen_after_last {
+            return val;
+        }
+    }
+}
+
+/// Read a u16 with seqlock protection.
+///
+/// # Safety
+/// `base + addr` must point to a readable 2-byte guest location in the current
+/// WASM linear memory for the duration of the call.
+#[inline(always)]
+pub unsafe fn read_u16_seqlock(base: u32, addr: u64) -> u16 {
+    if !unsafe { is_multi_threaded() } {
+        return unsafe { read_u16(base, addr) };
+    }
+    let (first_slot, last_slot) = seqlock_slots(addr, 2);
+    loop {
+        let gen_before_first = unsafe { read_gen(first_slot) };
+        let gen_before_last = if last_slot == first_slot {
+            gen_before_first
+        } else {
+            unsafe { read_gen(last_slot) }
+        };
+        if (gen_before_first | gen_before_last) & 1 != 0 {
+            core::hint::spin_loop();
+            continue;
+        }
+        let val = unsafe { read_u16(base, addr) };
+        let gen_after_first = unsafe { read_gen(first_slot) };
+        let gen_after_last = if last_slot == first_slot {
+            gen_after_first
+        } else {
+            unsafe { read_gen(last_slot) }
+        };
+        if gen_before_first == gen_after_first && gen_before_last == gen_after_last {
             return val;
         }
     }
@@ -160,19 +205,36 @@ pub unsafe fn read_u64_seqlock(base: u32, addr: u64) -> u64 {
     if !unsafe { is_multi_threaded() } {
         return unsafe { read_u64(base, addr) };
     }
-    let slot = ((addr >> 3) & 63) as usize;
+    let (first_slot, last_slot) = seqlock_slots(addr, 8);
     loop {
-        let gen_before = unsafe { read_gen(slot) };
-        if gen_before & 1 != 0 {
+        let gen_before_first = unsafe { read_gen(first_slot) };
+        let gen_before_last = if last_slot == first_slot {
+            gen_before_first
+        } else {
+            unsafe { read_gen(last_slot) }
+        };
+        if (gen_before_first | gen_before_last) & 1 != 0 {
             core::hint::spin_loop();
             continue;
         }
         let val = unsafe { read_u64(base, addr) };
-        let gen_after = unsafe { read_gen(slot) };
-        if gen_before == gen_after {
+        let gen_after_first = unsafe { read_gen(first_slot) };
+        let gen_after_last = if last_slot == first_slot {
+            gen_after_first
+        } else {
+            unsafe { read_gen(last_slot) }
+        };
+        if gen_before_first == gen_after_first && gen_before_last == gen_after_last {
             return val;
         }
     }
+}
+
+#[inline(always)]
+fn seqlock_slots(addr: u64, len: usize) -> (usize, usize) {
+    let first = ((addr >> 3) & 63) as usize;
+    let last = (((addr + len as u64 - 1) >> 3) & 63) as usize;
+    (first, last)
 }
 
 #[inline(always)]
@@ -650,7 +712,11 @@ pub unsafe fn zero_mem(base: u32, addr: u64, len: usize) {
     );
     if unsafe { is_multi_threaded() } && len > 0 {
         let mask = stripe_mask(addr, len);
-        crate::harness_hooks::record_execve_stage(361, unsafe { debug_thread_count() }, mask as u64);
+        crate::harness_hooks::record_execve_stage(
+            361,
+            unsafe { debug_thread_count() },
+            mask as u64,
+        );
         unsafe { lock_mask(mask) };
         crate::harness_hooks::record_execve_stage(362, addr, len as u64);
         unsafe { seqlock_begin_mask(mask) };
@@ -743,8 +809,48 @@ mod tests {
                 val, 0xDEAD_BEEF,
                 "seqlock read should return the written value"
             );
+            let half = super::read_u16_seqlock(base, addr);
+            assert_eq!(half, 0xBEEF, "u16 seqlock read should see the low halfword");
 
             // Reset to single-threaded so subsequent tests are not affected.
+            super::init(core::ptr::null(), core::ptr::null(), core::ptr::null());
+        }
+    }
+
+    #[test]
+    fn seqlock_slots_cover_cross_granule_reads() {
+        assert_eq!(super::seqlock_slots(0x1000, 2), (0, 0));
+        assert_eq!(super::seqlock_slots(0x1007, 2), (0, 1));
+        assert_eq!(super::seqlock_slots(0x1005, 4), (0, 1));
+        assert_eq!(super::seqlock_slots(0x1004, 8), (0, 1));
+    }
+
+    #[test]
+    fn cross_granule_writes_bump_both_slots_and_reads_roundtrip() {
+        unsafe {
+            let gen_table: [AtomicU32; 64] = core::array::from_fn(|_| AtomicU32::new(0));
+            let lock_table: [AtomicU32; 64] = core::array::from_fn(|_| AtomicU32::new(0));
+            let thread_count = AtomicU32::new(2);
+            super::init(
+                gen_table.as_ptr(),
+                lock_table.as_ptr(),
+                &thread_count as *const AtomicU32,
+            );
+
+            let base: u32 = 0;
+            let addr: u64 = 0x1004;
+            let (first_slot, last_slot) = super::seqlock_slots(addr, 8);
+            assert_ne!(
+                first_slot, last_slot,
+                "test address should cross a granule boundary"
+            );
+
+            super::write_u64(base, addr, 0x1122_3344_5566_7788);
+
+            assert_eq!(gen_table[first_slot].load(Ordering::SeqCst), 2);
+            assert_eq!(gen_table[last_slot].load(Ordering::SeqCst), 2);
+            assert_eq!(super::read_u64_seqlock(base, addr), 0x1122_3344_5566_7788);
+
             super::init(core::ptr::null(), core::ptr::null(), core::ptr::null());
         }
     }

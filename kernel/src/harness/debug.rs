@@ -43,6 +43,12 @@ static mut LAST_WRITE_BYTES_LEN: u32 = 0;
 pub struct SyscallTraceSummary {
     pub vm_ptr: u32,
     pub nr: u64,
+    pub arg0: u64,
+    pub arg1: u64,
+    pub arg2: u64,
+    pub arg3: u64,
+    pub arg4: u64,
+    pub arg5: u64,
     pub result: i64,
     pub status: i32,
     pub pid_sample0: u64,
@@ -52,6 +58,12 @@ pub struct SyscallTraceSummary {
 static mut SYSCALL_TRACE: SyscallTraceSummary = SyscallTraceSummary {
     vm_ptr: 0,
     nr: 0,
+    arg0: 0,
+    arg1: 0,
+    arg2: 0,
+    arg3: 0,
+    arg4: 0,
+    arg5: 0,
     result: 0,
     status: 0,
     pid_sample0: 0,
@@ -61,6 +73,12 @@ const SYSCALL_TRACE_CAP: usize = 256;
 static mut SYSCALL_TRACE_RING: [SyscallTraceSummary; SYSCALL_TRACE_CAP] = [SyscallTraceSummary {
     vm_ptr: 0,
     nr: 0,
+    arg0: 0,
+    arg1: 0,
+    arg2: 0,
+    arg3: 0,
+    arg4: 0,
+    arg5: 0,
     result: 0,
     status: 0,
     pid_sample0: 0,
@@ -68,6 +86,38 @@ static mut SYSCALL_TRACE_RING: [SyscallTraceSummary; SYSCALL_TRACE_CAP] = [Sysca
 }; SYSCALL_TRACE_CAP];
 static mut SYSCALL_TRACE_RING_LEN: u32 = 0;
 static mut SYSCALL_TRACE_RING_NEXT: u32 = 0;
+
+const RISCV_SYSCALL_TRACE_CAP: usize = 64;
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RiscvSyscallTraceEntry {
+    pub vm_ptr: u32,
+    pub nr: u64,
+    pub arg0: u64,
+    pub arg1: u64,
+    pub arg2: u64,
+    pub arg3: u64,
+    pub arg4: u64,
+    pub arg5: u64,
+    pub result: i64,
+    pub status: i32,
+}
+
+static mut RISCV_SYSCALL_TRACE: [RiscvSyscallTraceEntry; RISCV_SYSCALL_TRACE_CAP] =
+    [RiscvSyscallTraceEntry {
+        vm_ptr: 0,
+        nr: 0,
+        arg0: 0,
+        arg1: 0,
+        arg2: 0,
+        arg3: 0,
+        arg4: 0,
+        arg5: 0,
+        result: 0,
+        status: 0,
+    }; RISCV_SYSCALL_TRACE_CAP];
+static mut RISCV_SYSCALL_TRACE_LEN: u32 = 0;
+static mut RISCV_SYSCALL_TRACE_NEXT: u32 = 0;
 
 const FD_SYSCALL_TRACE_CAP: usize = 1024;
 const PATH_SYSCALL_TRACE_CAP: usize = 128;
@@ -153,6 +203,7 @@ pub struct MemoryTraceSummary {
     pub result: i64,
 }
 
+const MEMORY_TRACE_CAP: usize = 64;
 static mut MEMORY_TRACE: MemoryTraceSummary = MemoryTraceSummary {
     nr: 0,
     arg0: 0,
@@ -161,6 +212,16 @@ static mut MEMORY_TRACE: MemoryTraceSummary = MemoryTraceSummary {
     arg3: 0,
     result: 0,
 };
+static mut MEMORY_TRACE_RING: [MemoryTraceSummary; MEMORY_TRACE_CAP] = [MemoryTraceSummary {
+    nr: 0,
+    arg0: 0,
+    arg1: 0,
+    arg2: 0,
+    arg3: 0,
+    result: 0,
+}; MEMORY_TRACE_CAP];
+static mut MEMORY_TRACE_LEN: u32 = 0;
+static mut MEMORY_TRACE_NEXT: u32 = 0;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -297,16 +358,16 @@ pub struct GuestWriteOverlapTraceEntry {
 
 static mut GUEST_WRITE_WATCH: [GuestWriteWatchRegion; GUEST_WRITE_WATCH_CAP] =
     [GuestWriteWatchRegion { start: 0, end: 0 }; GUEST_WRITE_WATCH_CAP];
-static mut GUEST_WRITE_OVERLAP_TRACE:
-    [GuestWriteOverlapTraceEntry; GUEST_WRITE_OVERLAP_TRACE_CAP] = [GuestWriteOverlapTraceEntry {
-    slot: 0,
-    op: 0,
-    addr: 0,
-    len: 0,
-    sample_len: 0,
-    sample: 0,
-    execve_stage: 0,
-}; GUEST_WRITE_OVERLAP_TRACE_CAP];
+static mut GUEST_WRITE_OVERLAP_TRACE: [GuestWriteOverlapTraceEntry; GUEST_WRITE_OVERLAP_TRACE_CAP] =
+    [GuestWriteOverlapTraceEntry {
+        slot: 0,
+        op: 0,
+        addr: 0,
+        len: 0,
+        sample_len: 0,
+        sample: 0,
+        execve_stage: 0,
+    }; GUEST_WRITE_OVERLAP_TRACE_CAP];
 static mut GUEST_WRITE_OVERLAP_TRACE_LEN: u32 = 0;
 static mut GUEST_WRITE_OVERLAP_TRACE_NEXT: u32 = 0;
 
@@ -376,6 +437,12 @@ pub fn clear_syscall_trace() {
             SyscallTraceSummary {
                 vm_ptr: 0,
                 nr: 0,
+                arg0: 0,
+                arg1: 0,
+                arg2: 0,
+                arg3: 0,
+                arg4: 0,
+                arg5: 0,
                 result: 0,
                 status: 0,
                 pid_sample0: 0,
@@ -387,6 +454,12 @@ pub fn clear_syscall_trace() {
             [SyscallTraceSummary {
                 vm_ptr: 0,
                 nr: 0,
+                arg0: 0,
+                arg1: 0,
+                arg2: 0,
+                arg3: 0,
+                arg4: 0,
+                arg5: 0,
                 result: 0,
                 status: 0,
                 pid_sample0: 0,
@@ -549,6 +622,8 @@ pub fn clear_memory_trace() {
                 result: 0,
             },
         );
+        core::ptr::write(core::ptr::addr_of_mut!(MEMORY_TRACE_LEN), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(MEMORY_TRACE_NEXT), 0);
     }
 }
 
@@ -618,8 +693,7 @@ pub fn record_guest_write_overlap(addr: u64, len: u32, op: u32, sample: u64, sam
                 sample,
                 execve_stage: LAST_EXECVE_STAGE,
             };
-            GUEST_WRITE_OVERLAP_TRACE_NEXT =
-                GUEST_WRITE_OVERLAP_TRACE_NEXT.wrapping_add(1);
+            GUEST_WRITE_OVERLAP_TRACE_NEXT = GUEST_WRITE_OVERLAP_TRACE_NEXT.wrapping_add(1);
             GUEST_WRITE_OVERLAP_TRACE_LEN =
                 (GUEST_WRITE_OVERLAP_TRACE_LEN + 1).min(GUEST_WRITE_OVERLAP_TRACE_CAP as u32);
         }
@@ -772,9 +846,22 @@ pub fn pipe_close_trace_summary() -> PipeCloseTraceSummary {
     unsafe { core::ptr::read(core::ptr::addr_of!(PIPE_CLOSE_TRACE)) }
 }
 
-pub fn record_syscall(vm_ptr: u32, nr: u64, result: i64, status: i32) {
+pub fn record_syscall(
+    vm_ptr: u32,
+    nr: u64,
+    arg0: u64,
+    arg1: u64,
+    arg2: u64,
+    arg3: u64,
+    arg4: u64,
+    arg5: u64,
+    result: i64,
+    status: i32,
+) {
     if !RUNTIME_DEBUG_ENABLED {
-        let _ = (vm_ptr, nr, result, status);
+        let _ = (
+            vm_ptr, nr, arg0, arg1, arg2, arg3, arg4, arg5, result, status,
+        );
         return;
     }
     let (pid_sample0, pid_sample1) = sample_process_pid_bytes(vm_ptr);
@@ -784,6 +871,12 @@ pub fn record_syscall(vm_ptr: u32, nr: u64, result: i64, status: i32) {
             SyscallTraceSummary {
                 vm_ptr,
                 nr,
+                arg0,
+                arg1,
+                arg2,
+                arg3,
+                arg4,
+                arg5,
                 result,
                 status,
                 pid_sample0,
@@ -796,6 +889,12 @@ pub fn record_syscall(vm_ptr: u32, nr: u64, result: i64, status: i32) {
             SyscallTraceSummary {
                 vm_ptr,
                 nr,
+                arg0,
+                arg1,
+                arg2,
+                arg3,
+                arg4,
+                arg5,
                 result,
                 status,
                 pid_sample0,
@@ -809,6 +908,36 @@ pub fn record_syscall(vm_ptr: u32, nr: u64, result: i64, status: i32) {
         let len = core::ptr::read(core::ptr::addr_of!(SYSCALL_TRACE_RING_LEN));
         if len < SYSCALL_TRACE_CAP as u32 {
             core::ptr::write(core::ptr::addr_of_mut!(SYSCALL_TRACE_RING_LEN), len + 1);
+        }
+        if nr == crate::abi::SYS_RISCV_HWPROBE || nr == crate::abi::SYS_RISCV_FLUSH_ICACHE {
+            let riscv_next =
+                core::ptr::read(core::ptr::addr_of!(RISCV_SYSCALL_TRACE_NEXT)) as usize;
+            core::ptr::write(
+                core::ptr::addr_of_mut!(RISCV_SYSCALL_TRACE[riscv_next]),
+                RiscvSyscallTraceEntry {
+                    vm_ptr,
+                    nr,
+                    arg0,
+                    arg1,
+                    arg2,
+                    arg3,
+                    arg4,
+                    arg5,
+                    result,
+                    status,
+                },
+            );
+            core::ptr::write(
+                core::ptr::addr_of_mut!(RISCV_SYSCALL_TRACE_NEXT),
+                ((riscv_next + 1) % RISCV_SYSCALL_TRACE_CAP) as u32,
+            );
+            let riscv_len = core::ptr::read(core::ptr::addr_of!(RISCV_SYSCALL_TRACE_LEN));
+            if riscv_len < RISCV_SYSCALL_TRACE_CAP as u32 {
+                core::ptr::write(
+                    core::ptr::addr_of_mut!(RISCV_SYSCALL_TRACE_LEN),
+                    riscv_len + 1,
+                );
+            }
         }
         if status == crate::abi::STATUS_OK {
             let effects = match nr {
@@ -1130,17 +1259,25 @@ pub fn record_memory_syscall(nr: u64, arg0: u64, arg1: u64, arg2: u64, arg3: u64
         return;
     }
     unsafe {
+        let entry = MemoryTraceSummary {
+            nr,
+            arg0,
+            arg1,
+            arg2,
+            arg3,
+            result,
+        };
+        core::ptr::write(core::ptr::addr_of_mut!(MEMORY_TRACE), entry);
+        let next = core::ptr::read(core::ptr::addr_of!(MEMORY_TRACE_NEXT)) as usize;
+        core::ptr::write(core::ptr::addr_of_mut!(MEMORY_TRACE_RING[next]), entry);
         core::ptr::write(
-            core::ptr::addr_of_mut!(MEMORY_TRACE),
-            MemoryTraceSummary {
-                nr,
-                arg0,
-                arg1,
-                arg2,
-                arg3,
-                result,
-            },
+            core::ptr::addr_of_mut!(MEMORY_TRACE_NEXT),
+            ((next + 1) % MEMORY_TRACE_CAP) as u32,
         );
+        let len = core::ptr::read(core::ptr::addr_of!(MEMORY_TRACE_LEN));
+        if len < MEMORY_TRACE_CAP as u32 {
+            core::ptr::write(core::ptr::addr_of_mut!(MEMORY_TRACE_LEN), len + 1);
+        }
     }
 }
 
@@ -1159,7 +1296,11 @@ pub fn record_execve_stage(stage: u32, value0: u64, value1: u64) {
         core::ptr::write(core::ptr::addr_of_mut!(LAST_EXECVE_VALUE1), value1);
         let len = core::ptr::read(core::ptr::addr_of!(EXECVE_STAGE_TRACE_LEN)) as usize;
         let next = core::ptr::read(core::ptr::addr_of!(EXECVE_STAGE_TRACE_NEXT)) as usize;
-        let slot = if len < EXECVE_STAGE_TRACE_CAP { len } else { next };
+        let slot = if len < EXECVE_STAGE_TRACE_CAP {
+            len
+        } else {
+            next
+        };
         core::ptr::write(
             core::ptr::addr_of_mut!(EXECVE_STAGE_TRACE[slot]),
             ExecveStageTraceEntry {
@@ -1169,7 +1310,10 @@ pub fn record_execve_stage(stage: u32, value0: u64, value1: u64) {
             },
         );
         if len < EXECVE_STAGE_TRACE_CAP {
-            core::ptr::write(core::ptr::addr_of_mut!(EXECVE_STAGE_TRACE_LEN), (len + 1) as u32);
+            core::ptr::write(
+                core::ptr::addr_of_mut!(EXECVE_STAGE_TRACE_LEN),
+                (len + 1) as u32,
+            );
         } else {
             core::ptr::write(
                 core::ptr::addr_of_mut!(EXECVE_STAGE_TRACE_NEXT),
@@ -1203,7 +1347,10 @@ pub fn record_execve_approach(vm_ptr: u32, pc: u64, raw: u32) {
             },
         );
         if len < EXECVE_APPROACH_TRACE_CAP {
-            core::ptr::write(core::ptr::addr_of_mut!(EXECVE_APPROACH_TRACE_LEN), (len + 1) as u32);
+            core::ptr::write(
+                core::ptr::addr_of_mut!(EXECVE_APPROACH_TRACE_LEN),
+                (len + 1) as u32,
+            );
         } else {
             core::ptr::write(
                 core::ptr::addr_of_mut!(EXECVE_APPROACH_TRACE_NEXT),
@@ -1240,7 +1387,10 @@ pub fn record_execve_dispatch(vm_ptr: u32, stage: u32) {
             },
         );
         if len < EXECVE_DISPATCH_TRACE_CAP {
-            core::ptr::write(core::ptr::addr_of_mut!(EXECVE_DISPATCH_TRACE_LEN), (len + 1) as u32);
+            core::ptr::write(
+                core::ptr::addr_of_mut!(EXECVE_DISPATCH_TRACE_LEN),
+                (len + 1) as u32,
+            );
         } else {
             core::ptr::write(
                 core::ptr::addr_of_mut!(EXECVE_DISPATCH_TRACE_NEXT),
@@ -1318,6 +1468,12 @@ pub fn syscall_trace_summary() -> SyscallTraceSummary {
         return SyscallTraceSummary {
             vm_ptr: 0,
             nr: 0,
+            arg0: 0,
+            arg1: 0,
+            arg2: 0,
+            arg3: 0,
+            arg4: 0,
+            arg5: 0,
             result: 0,
             status: 0,
             pid_sample0: 0,
@@ -1341,6 +1497,12 @@ pub fn syscall_trace_entry(index: u32) -> SyscallTraceSummary {
         return SyscallTraceSummary {
             vm_ptr: 0,
             nr: 0,
+            arg0: 0,
+            arg1: 0,
+            arg2: 0,
+            arg3: 0,
+            arg4: 0,
+            arg5: 0,
             result: 0,
             status: 0,
             pid_sample0: 0,
@@ -1353,6 +1515,12 @@ pub fn syscall_trace_entry(index: u32) -> SyscallTraceSummary {
             return SyscallTraceSummary {
                 vm_ptr: 0,
                 nr: 0,
+                arg0: 0,
+                arg1: 0,
+                arg2: 0,
+                arg3: 0,
+                arg4: 0,
+                arg5: 0,
                 result: 0,
                 status: 0,
                 pid_sample0: 0,
@@ -1371,6 +1539,57 @@ pub fn syscall_trace_entry(index: u32) -> SyscallTraceSummary {
 }
 
 #[cfg(any(test, feature = "harness"))]
+pub fn riscv_syscall_trace_len() -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(RISCV_SYSCALL_TRACE_LEN)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn riscv_syscall_trace_entry(index: u32) -> RiscvSyscallTraceEntry {
+    if !RUNTIME_DEBUG_ENABLED {
+        return RiscvSyscallTraceEntry {
+            vm_ptr: 0,
+            nr: 0,
+            arg0: 0,
+            arg1: 0,
+            arg2: 0,
+            arg3: 0,
+            arg4: 0,
+            arg5: 0,
+            result: 0,
+            status: 0,
+        };
+    }
+    unsafe {
+        let len = core::ptr::read(core::ptr::addr_of!(RISCV_SYSCALL_TRACE_LEN));
+        if index >= len {
+            return RiscvSyscallTraceEntry {
+                vm_ptr: 0,
+                nr: 0,
+                arg0: 0,
+                arg1: 0,
+                arg2: 0,
+                arg3: 0,
+                arg4: 0,
+                arg5: 0,
+                result: 0,
+                status: 0,
+            };
+        }
+        let next = core::ptr::read(core::ptr::addr_of!(RISCV_SYSCALL_TRACE_NEXT)) as usize;
+        let len_usize = len as usize;
+        let slot = if len_usize < RISCV_SYSCALL_TRACE_CAP {
+            index as usize
+        } else {
+            (next + index as usize) % RISCV_SYSCALL_TRACE_CAP
+        };
+        core::ptr::read(core::ptr::addr_of!(RISCV_SYSCALL_TRACE[slot]))
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
 pub fn memory_trace_summary() -> MemoryTraceSummary {
     if !RUNTIME_DEBUG_ENABLED {
         return MemoryTraceSummary {
@@ -1383,6 +1602,49 @@ pub fn memory_trace_summary() -> MemoryTraceSummary {
         };
     }
     unsafe { *core::ptr::addr_of!(MEMORY_TRACE) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn memory_trace_len() -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(MEMORY_TRACE_LEN)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn memory_trace_entry(index: u32) -> MemoryTraceSummary {
+    if !RUNTIME_DEBUG_ENABLED {
+        return MemoryTraceSummary {
+            nr: 0,
+            arg0: 0,
+            arg1: 0,
+            arg2: 0,
+            arg3: 0,
+            result: 0,
+        };
+    }
+    unsafe {
+        let len = core::ptr::read(core::ptr::addr_of!(MEMORY_TRACE_LEN));
+        if index >= len {
+            return MemoryTraceSummary {
+                nr: 0,
+                arg0: 0,
+                arg1: 0,
+                arg2: 0,
+                arg3: 0,
+                result: 0,
+            };
+        }
+        let next = core::ptr::read(core::ptr::addr_of!(MEMORY_TRACE_NEXT)) as usize;
+        let len_usize = len as usize;
+        let slot = if len_usize < MEMORY_TRACE_CAP {
+            index as usize
+        } else {
+            (next + index as usize) % MEMORY_TRACE_CAP
+        };
+        core::ptr::read(core::ptr::addr_of!(MEMORY_TRACE_RING[slot]))
+    }
 }
 
 #[cfg(any(test, feature = "harness"))]
@@ -1837,17 +2099,18 @@ static mut ZERO_REG_TRACE_RING: [ZeroRegTraceSummary; CPU_REG_TRACE_CAP] = [Zero
 static mut ZERO_REG_TRACE_LEN: u32 = 0;
 static mut ZERO_REG_TRACE_NEXT: u32 = 0;
 
-static mut S11_WRITE_TRACE_RING: [RegWriteTraceSummary; CPU_REG_TRACE_CAP] = [RegWriteTraceSummary {
-    vm_ptr: 0,
-    tid: 0,
-    pc: 0,
-    raw: 0,
-    source: 0,
-    prev_value: 0,
-    value: 0,
-    rs1: 0,
-    rs1_value: 0,
-}; CPU_REG_TRACE_CAP];
+static mut S11_WRITE_TRACE_RING: [RegWriteTraceSummary; CPU_REG_TRACE_CAP] =
+    [RegWriteTraceSummary {
+        vm_ptr: 0,
+        tid: 0,
+        pc: 0,
+        raw: 0,
+        source: 0,
+        prev_value: 0,
+        value: 0,
+        rs1: 0,
+        rs1_value: 0,
+    }; CPU_REG_TRACE_CAP];
 static mut S11_WRITE_TRACE_LEN: u32 = 0;
 static mut S11_WRITE_TRACE_NEXT: u32 = 0;
 
@@ -1911,7 +2174,8 @@ static mut LAST_SYNC_FAULT_EXEC_TRACE: [ExecTraceEntry; FAULT_EXEC_TRACE_CAP] = 
     ra: 0,
     a0: 0,
     s11: 0,
-}; FAULT_EXEC_TRACE_CAP];
+};
+    FAULT_EXEC_TRACE_CAP];
 static mut LAST_SYNC_FAULT_EXEC_TRACE_LEN: u32 = 0;
 static mut LAST_THREAD_STEP_EXEC_TRACE_VM_PTR: u32 = 0;
 static mut LAST_THREAD_STEP_EXEC_TRACE_EPOCH: u32 = 0;
@@ -1926,7 +2190,8 @@ static mut LAST_THREAD_STEP_EXEC_TRACE: [ExecTraceEntry; FAULT_EXEC_TRACE_CAP] =
     ra: 0,
     a0: 0,
     s11: 0,
-}; FAULT_EXEC_TRACE_CAP];
+};
+    FAULT_EXEC_TRACE_CAP];
 static mut LAST_THREAD_STEP_EXEC_TRACE_LEN: u32 = 0;
 static mut LAST_BREAK_EXEC_TRACE_VM_PTR: u32 = 0;
 static mut LAST_BREAK_EXEC_TRACE_EPOCH: u32 = 0;
@@ -1955,16 +2220,17 @@ static mut LAST_THREAD_STEP_TRACE: ThreadStepTraceSummary = ThreadStepTraceSumma
     sp: 0,
     s11: 0,
 };
-static mut LAST_THREAD_STEP_ENTRY_TRACE: ThreadStepEntryTraceSummary = ThreadStepEntryTraceSummary {
-    vm_ptr: 0,
-    tid: 0,
-    status: 0,
-    budget: 0,
-    pc: 0,
-    ra: 0,
-    sp: 0,
-    s11: 0,
-};
+static mut LAST_THREAD_STEP_ENTRY_TRACE: ThreadStepEntryTraceSummary =
+    ThreadStepEntryTraceSummary {
+        vm_ptr: 0,
+        tid: 0,
+        status: 0,
+        budget: 0,
+        pc: 0,
+        ra: 0,
+        sp: 0,
+        s11: 0,
+    };
 static mut LAST_THREAD_STEP_PHASE: ThreadStepPhaseSummary = ThreadStepPhaseSummary {
     vm_ptr: 0,
     tid: 0,
@@ -2126,7 +2392,9 @@ fn bump_exec_trace_epoch_for_vm(vm_ptr: u32) -> u32 {
         return 0;
     }
     unsafe {
-        let next_epoch = current_exec_trace_epoch_for_vm(vm_ptr).wrapping_add(1).max(1);
+        let next_epoch = current_exec_trace_epoch_for_vm(vm_ptr)
+            .wrapping_add(1)
+            .max(1);
         let slot = (EXEC_TRACE_EPOCH_BY_VM_NEXT as usize) % THREAD_STEP_VM_TRACE_CAP;
         EXEC_TRACE_EPOCH_BY_VM[slot] = (vm_ptr, next_epoch);
         EXEC_TRACE_EPOCH_BY_VM_NEXT = EXEC_TRACE_EPOCH_BY_VM_NEXT.wrapping_add(1);
@@ -2358,7 +2626,10 @@ pub fn record_thread_step_trace(vm: &crate::types::ThreadState, budget: i32, rem
         core::ptr::write(core::ptr::addr_of_mut!(LAST_THREAD_STEP_TRACE), summary);
         record_thread_step_trace_by_vm(summary);
         let next = core::ptr::read(core::ptr::addr_of!(THREAD_STEP_TRACE_NEXT)) as usize;
-        core::ptr::write(core::ptr::addr_of_mut!(THREAD_STEP_TRACE_RING[next]), summary);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(THREAD_STEP_TRACE_RING[next]),
+            summary,
+        );
         core::ptr::write(
             core::ptr::addr_of_mut!(THREAD_STEP_TRACE_NEXT),
             ((next + 1) % THREAD_STEP_TRACE_CAP) as u32,
@@ -2392,17 +2663,26 @@ pub fn record_thread_step_entry_trace(vm: &crate::types::ThreadState, budget: i3
     };
     unsafe {
         bump_exec_trace_epoch_for_vm(summary.vm_ptr);
-        core::ptr::write(core::ptr::addr_of_mut!(LAST_THREAD_STEP_ENTRY_TRACE), summary);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_THREAD_STEP_ENTRY_TRACE),
+            summary,
+        );
         record_thread_step_entry_trace_by_vm(summary);
         let next = core::ptr::read(core::ptr::addr_of!(THREAD_STEP_ENTRY_TRACE_NEXT)) as usize;
-        core::ptr::write(core::ptr::addr_of_mut!(THREAD_STEP_ENTRY_TRACE_RING[next]), summary);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(THREAD_STEP_ENTRY_TRACE_RING[next]),
+            summary,
+        );
         core::ptr::write(
             core::ptr::addr_of_mut!(THREAD_STEP_ENTRY_TRACE_NEXT),
             ((next + 1) % THREAD_STEP_TRACE_CAP) as u32,
         );
         let len = core::ptr::read(core::ptr::addr_of!(THREAD_STEP_ENTRY_TRACE_LEN));
         if len < THREAD_STEP_TRACE_CAP as u32 {
-            core::ptr::write(core::ptr::addr_of_mut!(THREAD_STEP_ENTRY_TRACE_LEN), len + 1);
+            core::ptr::write(
+                core::ptr::addr_of_mut!(THREAD_STEP_ENTRY_TRACE_LEN),
+                len + 1,
+            );
         }
     }
 }
@@ -2542,7 +2822,9 @@ pub fn record_sync_signal_trace(
     fault_addr: u64,
 ) {
     if !RUNTIME_DEBUG_ENABLED {
-        let _ = (vm, local_pc, local_ra, local_sp, local_s11, local_a0, fault_addr);
+        let _ = (
+            vm, local_pc, local_ra, local_sp, local_s11, local_a0, fault_addr,
+        );
         return;
     }
     unsafe {
@@ -2735,7 +3017,8 @@ pub fn thread_step_exec_trace_entry_for_vm(vm_ptr: u32, index: u32) -> ExecTrace
         };
     }
     unsafe {
-        if LAST_THREAD_STEP_EXEC_TRACE_VM_PTR != vm_ptr || index >= LAST_THREAD_STEP_EXEC_TRACE_LEN {
+        if LAST_THREAD_STEP_EXEC_TRACE_VM_PTR != vm_ptr || index >= LAST_THREAD_STEP_EXEC_TRACE_LEN
+        {
             return ExecTraceEntry {
                 vm_ptr: 0,
                 epoch: 0,
@@ -3007,9 +3290,8 @@ pub fn record_jalr(vm_ptr: u32, pc: u64, rd: usize, rs1: usize, rs1_value: u64, 
         rs1: rs1 as u32,
     };
     let clone_pc = crate::syscall::thread::last_clone_spawn().1;
-    let capture_clone_startup = clone_pc != 0
-        && pc >= clone_pc.saturating_add(0x40)
-        && pc < clone_pc.saturating_add(0x48);
+    let capture_clone_startup =
+        clone_pc != 0 && pc >= clone_pc.saturating_add(0x40) && pc < clone_pc.saturating_add(0x48);
     if capture_clone_startup {
         unsafe {
             core::ptr::write(core::ptr::addr_of_mut!(LAST_CLONE_JALR_TRACE), entry);
@@ -3165,10 +3447,7 @@ pub fn record_zero_reg_transition(
                 sp: x[2],
                 s11: x[27],
             };
-            core::ptr::write(
-                core::ptr::addr_of_mut!(LAST_ZERO_REG_TRACE),
-                entry,
-            );
+            core::ptr::write(core::ptr::addr_of_mut!(LAST_ZERO_REG_TRACE), entry);
             push_zero_reg_trace(entry);
             snapshot_break_exec_trace_for_vm(vm_ptr, current_exec_trace_epoch_for_vm(vm_ptr));
             return;
@@ -3184,10 +3463,7 @@ pub fn record_zero_reg_transition(
                 sp: x[2],
                 s11: x[27],
             };
-            core::ptr::write(
-                core::ptr::addr_of_mut!(LAST_ZERO_REG_TRACE),
-                entry,
-            );
+            core::ptr::write(core::ptr::addr_of_mut!(LAST_ZERO_REG_TRACE), entry);
             push_zero_reg_trace(entry);
             snapshot_break_exec_trace_for_vm(vm_ptr, current_exec_trace_epoch_for_vm(vm_ptr));
         }
@@ -3229,10 +3505,7 @@ pub fn record_special_reg_transitions(
                 rs1,
                 rs1_value,
             };
-            core::ptr::write(
-                core::ptr::addr_of_mut!(LAST_S11_WRITE_TRACE),
-                entry,
-            );
+            core::ptr::write(core::ptr::addr_of_mut!(LAST_S11_WRITE_TRACE), entry);
             push_reg_write_trace(
                 core::ptr::addr_of_mut!(S11_WRITE_TRACE_RING),
                 core::ptr::addr_of_mut!(S11_WRITE_TRACE_NEXT),
@@ -3252,10 +3525,7 @@ pub fn record_special_reg_transitions(
                 rs1,
                 rs1_value,
             };
-            core::ptr::write(
-                core::ptr::addr_of_mut!(LAST_SP_WRITE_TRACE),
-                entry,
-            );
+            core::ptr::write(core::ptr::addr_of_mut!(LAST_SP_WRITE_TRACE), entry);
             push_reg_write_trace(
                 core::ptr::addr_of_mut!(SP_WRITE_TRACE_RING),
                 core::ptr::addr_of_mut!(SP_WRITE_TRACE_NEXT),
@@ -3542,8 +3812,8 @@ pub fn last_thread_step_trace_for_vm(vm_ptr: u32) -> ThreadStepTraceSummary {
                 return entry;
             }
         }
-        let len =
-            core::ptr::read(core::ptr::addr_of!(THREAD_STEP_TRACE_LEN)).min(THREAD_STEP_TRACE_CAP as u32);
+        let len = core::ptr::read(core::ptr::addr_of!(THREAD_STEP_TRACE_LEN))
+            .min(THREAD_STEP_TRACE_CAP as u32);
         let next = core::ptr::read(core::ptr::addr_of!(THREAD_STEP_TRACE_NEXT)) as usize;
         for offset in 0..len as usize {
             let idx = (next + THREAD_STEP_TRACE_CAP - 1 - offset) % THREAD_STEP_TRACE_CAP;
@@ -3985,7 +4255,10 @@ pub fn clear_cpu_trace() {
                 s11: 0,
             }; THREAD_STEP_VM_TRACE_CAP],
         );
-        core::ptr::write(core::ptr::addr_of_mut!(THREAD_STEP_ENTRY_TRACE_BY_VM_NEXT), 0);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(THREAD_STEP_ENTRY_TRACE_BY_VM_NEXT),
+            0,
+        );
         core::ptr::write(
             core::ptr::addr_of_mut!(THREAD_STEP_PHASE_BY_VM),
             [ThreadStepPhaseSummary {
@@ -4154,7 +4427,10 @@ pub fn clear_cpu_trace() {
             }; FAULT_EXEC_TRACE_CAP],
         );
         core::ptr::write(core::ptr::addr_of_mut!(LAST_FAULT_EXEC_TRACE_LEN), 0);
-        core::ptr::write(core::ptr::addr_of_mut!(LAST_SYNC_FAULT_EXEC_TRACE_VM_PTR), 0);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_SYNC_FAULT_EXEC_TRACE_VM_PTR),
+            0,
+        );
         core::ptr::write(core::ptr::addr_of_mut!(LAST_SYNC_FAULT_EXEC_TRACE_EPOCH), 0);
         core::ptr::write(
             core::ptr::addr_of_mut!(LAST_SYNC_FAULT_EXEC_TRACE),
@@ -4172,8 +4448,14 @@ pub fn clear_cpu_trace() {
             }; FAULT_EXEC_TRACE_CAP],
         );
         core::ptr::write(core::ptr::addr_of_mut!(LAST_SYNC_FAULT_EXEC_TRACE_LEN), 0);
-        core::ptr::write(core::ptr::addr_of_mut!(LAST_THREAD_STEP_EXEC_TRACE_VM_PTR), 0);
-        core::ptr::write(core::ptr::addr_of_mut!(LAST_THREAD_STEP_EXEC_TRACE_EPOCH), 0);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_THREAD_STEP_EXEC_TRACE_VM_PTR),
+            0,
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_THREAD_STEP_EXEC_TRACE_EPOCH),
+            0,
+        );
         core::ptr::write(
             core::ptr::addr_of_mut!(LAST_THREAD_STEP_EXEC_TRACE),
             [ExecTraceEntry {
@@ -4305,6 +4587,33 @@ mod tests {
         assert_eq!(entry.ra, 0x244);
         assert_eq!(entry.sp, 0x344);
         assert_eq!(entry.s11, 0x444);
+    }
+
+    #[test]
+    fn memory_trace_ring_keeps_recent_entries() {
+        clear_memory_trace();
+
+        record_memory_syscall(crate::abi::SYS_MMAP, 0x1000, 0x2000, 3, 0x22, 0x1000);
+        record_memory_syscall(crate::abi::SYS_MPROTECT, 0x3000, 0x1000, 5, 0, 0);
+
+        assert_eq!(memory_trace_len(), 2);
+        let first = memory_trace_entry(0);
+        assert_eq!(first.nr, crate::abi::SYS_MMAP);
+        assert_eq!(first.arg0, 0x1000);
+        assert_eq!(first.arg1, 0x2000);
+        assert_eq!(first.arg2, 3);
+        assert_eq!(first.arg3, 0x22);
+        assert_eq!(first.result, 0x1000);
+
+        let second = memory_trace_entry(1);
+        assert_eq!(second.nr, crate::abi::SYS_MPROTECT);
+        assert_eq!(second.arg0, 0x3000);
+        assert_eq!(second.arg1, 0x1000);
+        assert_eq!(second.arg2, 5);
+        assert_eq!(second.result, 0);
+
+        clear_memory_trace();
+        assert_eq!(memory_trace_len(), 0);
     }
 
     #[test]

@@ -345,7 +345,12 @@ pub fn sys_clock_nanosleep(
         if req == 0 {
             return None;
         }
-        Some(unsafe { (guest_mem::read_u64(base, req), guest_mem::read_u64(base, req + 8)) })
+        Some(unsafe {
+            (
+                guest_mem::read_u64(base, req),
+                guest_mem::read_u64(base, req + 8),
+            )
+        })
     })() else {
         vm.x[10] = abi::EFAULT as u64;
         return abi::STATUS_OK;
@@ -365,8 +370,12 @@ pub fn sys_clock_nanosleep(
             vm.x[10] = abi::EINVAL as u64;
             return abi::STATUS_OK;
         };
-        let now_total = now_sec.saturating_mul(1_000_000_000).saturating_add(now_nsec);
-        let req_total = req_sec.saturating_mul(1_000_000_000).saturating_add(req_nsec);
+        let now_total = now_sec
+            .saturating_mul(1_000_000_000)
+            .saturating_add(now_nsec);
+        let req_total = req_sec
+            .saturating_mul(1_000_000_000)
+            .saturating_add(req_nsec);
         if req_total <= now_total {
             (0, 0)
         } else {
@@ -432,7 +441,13 @@ pub fn sys_sched_getaffinity(
 /// Tidemark currently exposes a single online CPU on a single node, so both are 0.
 /// Either pointer may be NULL; the third argument is unused by modern Linux.
 /// https://man7.org/linux/man-pages/man2/getcpu.2.html
-pub fn sys_getcpu(_vm: &ThreadState, base: u32, cpu_addr: u64, node_addr: u64, _tcache: u64) -> i64 {
+pub fn sys_getcpu(
+    _vm: &ThreadState,
+    base: u32,
+    cpu_addr: u64,
+    node_addr: u64,
+    _tcache: u64,
+) -> i64 {
     if cpu_addr != 0 {
         if !crate::syscall::memory::guest_range_accessible(base, cpu_addr, 4) {
             return abi::EFAULT;

@@ -153,11 +153,16 @@ pub unsafe fn exec_at_base(
                 x[0] = 0;
                 crate::harness_hooks::record_zero_reg_transition(
                     vm as *const ThreadState as u32,
-                    vm.tid, instr_pc, 0, prev_sp, prev_s11, &x,
+                    vm.tid,
+                    instr_pc,
+                    0,
+                    prev_sp,
+                    prev_s11,
+                    &x,
                 );
                 continue;
             }
-            if !crate::syscall::memory::guest_range_permitted(pc, 2, abi::PROT_EXEC) {
+            if !crate::syscall::memory::guest_range_permitted(vm, base, pc, 2, abi::PROT_EXEC) {
                 let fault_addr = pc;
                 let accerr = guest_range_in_bounds(base, pc, 2);
                 if !deliver_sync_sigsegv(
@@ -167,7 +172,7 @@ pub unsafe fn exec_at_base(
                 }
                 continue;
             }
-            let raw16 = guest_mem::read_u16(base, pc);
+            let raw16 = guest_mem::read_u16_seqlock(base, pc);
             let (raw, step): (u32, u64) = if (raw16 & 3) != 3 {
                 // Compressed (RVC)
                 let expanded = decode::expand_compressed(raw16);
@@ -202,7 +207,7 @@ pub unsafe fn exec_at_base(
                 }
                 (expanded, 2)
             } else {
-                if !crate::syscall::memory::guest_range_permitted(pc, 4, abi::PROT_EXEC) {
+                if !crate::syscall::memory::guest_range_permitted(vm, base, pc, 4, abi::PROT_EXEC) {
                     let fault_addr = pc;
                     let accerr = guest_range_in_bounds(base, pc, 4);
                     if !deliver_sync_sigsegv(
@@ -212,7 +217,7 @@ pub unsafe fn exec_at_base(
                     }
                     continue;
                 }
-                (guest_mem::read_u32(base, pc), 4)
+                (guest_mem::read_u32_seqlock(base, pc), 4)
             };
 
             // --- Trace recording (JIT the JIT compiler hook) ---
@@ -292,7 +297,12 @@ pub unsafe fn exec_at_base(
             );
             crate::harness_hooks::record_zero_reg_transition(
                 vm as *const ThreadState as u32,
-                vm.tid, instr_pc, raw, prev_sp, prev_s11, &x,
+                vm.tid,
+                instr_pc,
+                raw,
+                prev_sp,
+                prev_s11,
+                &x,
             );
         }
 

@@ -223,13 +223,40 @@ pub fn guest_range_accessible(base: u32, start: u64, len: u64) -> bool {
     let Some(end) = start.checked_add(len) else {
         return false;
     };
-    let guest_limit = ((core::arch::wasm32::memory_size(0) as u64) * 65536)
-        .saturating_sub(base as u64)
-        .min(0x8000_0000);
+    let guest_limit = current_linear_guest_limit(base);
     if start > u32::MAX as u64 || end > guest_limit || end > u32::MAX as u64 {
         return false;
     }
     !range_has_prot_none(start, len)
+}
+
+fn max_guest_addr_limit(base: u32) -> u64 {
+    crate::abi::max_guest_window_for_base(base)
+}
+
+fn current_linear_guest_limit(base: u32) -> u64 {
+    ((core::arch::wasm32::memory_size(0) as u64) * 65536)
+        .saturating_sub(base as u64)
+        .min(max_guest_addr_limit(base))
+}
+
+fn prot_none_reservation_limit() -> u64 {
+    u32::MAX as u64 + 1
+}
+
+fn needs_sparse_linear_backing(base: u32, guest_end: u64) -> bool {
+    match (base as u64).checked_add(guest_end) {
+        Some(needed) => needed > 0x1_0000_0000,
+        None => true,
+    }
+}
+
+pub(crate) fn effective_guest_limit(vm: &ThreadState, base: u32) -> u64 {
+    if vm.guest_ram_limit != 0 {
+        (vm.guest_ram_limit as u64).min(max_guest_addr_limit(base))
+    } else {
+        current_linear_guest_limit(base)
+    }
 }
 
 fn range_cover_end_with_prot(s: &AddressSpaceState, addr: u64, prot: i32) -> u64 {
@@ -252,14 +279,49 @@ fn range_cover_end_with_prot(s: &AddressSpaceState, addr: u64, prot: i32) -> u64
     cover_end
 }
 
-pub fn guest_range_permitted(start: u64, len: u64, prot: i32) -> bool {
+fn range_cover_end_with_sparse_anon_reservation(s: &AddressSpaceState, addr: u64) -> u64 {
+    let mut cover_end = 0u64;
+    for v in s.vmas.iter() {
+        if addr < v.start || addr >= v.end {
+            continue;
+        }
+        if v.prot != PROT_NONE
+            || v.fd >= 0
+            || (v.flags as u64 & MAP_ANONYMOUS) == 0
+            || (v.flags as u64 & MAP_NORESERVE) == 0
+        {
+            continue;
+        }
+        cover_end = cover_end.max(v.end);
+    }
+    cover_end
+}
+
+fn range_fully_covered_by_sparse_anon_reservation(
+    s: &AddressSpaceState,
+    start: u64,
+    end: u64,
+) -> bool {
+    let mut cur = start;
+    while cur < end {
+        let cover_end = range_cover_end_with_sparse_anon_reservation(s, cur);
+        if cover_end <= cur {
+            return false;
+        }
+        cur = cover_end.min(end);
+    }
+    true
+}
+
+pub fn guest_range_permitted(vm: &ThreadState, base: u32, start: u64, len: u64, prot: i32) -> bool {
     if len == 0 {
         return true;
     }
     let Some(end) = start.checked_add(len) else {
         return false;
     };
-    if start > u32::MAX as u64 || end > 0x8000_0000 || end > u32::MAX as u64 {
+    let guest_limit = effective_guest_limit(vm, base);
+    if start > u32::MAX as u64 || end > guest_limit || end > u32::MAX as u64 {
         return false;
     }
 
@@ -368,16 +430,24 @@ fn ensure_memory_capacity_for_guest_range(base: u32, guest_end: u64) -> bool {
         return false;
     }
 
-    let mem_size = (core::arch::wasm32::memory_size(0) as u64) * 65536;
+    let mut mem_size = (core::arch::wasm32::memory_size(0) as u64) * 65536;
     if needed <= mem_size {
         return true;
     }
 
-    let deficit = needed - mem_size;
-    let grow_unit = 16u64 * 65536; // 1 MB
-    let grow_bytes = deficit.div_ceil(grow_unit) * grow_unit;
-    let pages = (grow_bytes / 65536) as usize;
-    core::arch::wasm32::memory_grow(0, pages) != usize::MAX
+    // Imported shared memories can reject a large single grow even when the
+    // final size is otherwise reachable, so advance in 1 MiB chunks.
+    const GROW_CHUNK_PAGES: u64 = 16;
+    const WASM_PAGE_BYTES: u64 = 65536;
+    while mem_size < needed {
+        let remaining_pages = (needed - mem_size).div_ceil(WASM_PAGE_BYTES);
+        let step_pages = remaining_pages.min(GROW_CHUNK_PAGES) as usize;
+        if core::arch::wasm32::memory_grow(0, step_pages) == usize::MAX {
+            return false;
+        }
+        mem_size += (step_pages as u64) * WASM_PAGE_BYTES;
+    }
+    true
 }
 
 pub fn ensure_guest_memory_capacity(base: u32, guest_end: u64) -> bool {
@@ -508,7 +578,7 @@ pub fn proc_self_maps_snapshot() -> Vec<u8> {
     out
 }
 
-fn map_fixed_anonymous(base: u32, start: u64, length: u64, prot: i32) -> i64 {
+fn map_fixed_anonymous(base: u32, start: u64, length: u64, prot: i32, guest_limit: u64) -> i64 {
     if start & (PAGE_SIZE - 1) != 0 || length == 0 {
         return EINVAL;
     }
@@ -516,7 +586,7 @@ fn map_fixed_anonymous(base: u32, start: u64, length: u64, prot: i32) -> i64 {
     let Some(end) = start.checked_add(len) else {
         return ENOMEM;
     };
-    if end > 0x8000_0000 {
+    if end > guest_limit {
         return ENOMEM;
     }
 
@@ -547,7 +617,7 @@ fn map_fixed_anonymous(base: u32, start: u64, length: u64, prot: i32) -> i64 {
 /// Reserve the initial process stack and a guard page below it.
 /// Returns the logical stack top used for argv/env/auxv placement.
 pub fn map_initial_stack(base: u32, guest_limit: u64, stack_size: u64) -> i64 {
-    let guest_limit = guest_limit.min(0x8000_0000);
+    let guest_limit = guest_limit.min(max_guest_addr_limit(base));
     let usable = page_align_up(stack_size.max(MIN_STACK_SIZE));
     if guest_limit <= usable + PAGE_SIZE {
         return ENOMEM;
@@ -556,11 +626,17 @@ pub fn map_initial_stack(base: u32, guest_limit: u64, stack_size: u64) -> i64 {
     let stack_start = guest_limit - usable;
     let guard_start = stack_start - PAGE_SIZE;
 
-    let guard = map_fixed_anonymous(base, guard_start, PAGE_SIZE, PROT_NONE);
+    let guard = map_fixed_anonymous(base, guard_start, PAGE_SIZE, PROT_NONE, guest_limit);
     if guard < 0 {
         return guard;
     }
-    let stack = map_fixed_anonymous(base, stack_start, usable, PROT_READ | PROT_WRITE);
+    let stack = map_fixed_anonymous(
+        base,
+        stack_start,
+        usable,
+        PROT_READ | PROT_WRITE,
+        guest_limit,
+    );
     if stack < 0 {
         return stack;
     }
@@ -575,7 +651,7 @@ pub fn grow_brk(base: u32, new_brk: u64) -> i64 {
     if new_brk <= s.brk_current {
         return s.brk_current as i64;
     }
-    if new_brk > 0x8000_0000 {
+    if new_brk > max_guest_addr_limit(base) {
         return s.brk_current as i64;
     }
     if brk_growth_overlaps_vma(s, s.brk_current, new_brk) {
@@ -593,16 +669,16 @@ pub fn grow_brk(base: u32, new_brk: u64) -> i64 {
 
 /// brk: adjust program break. addr=0 returns current break.
 /// Grows WASM memory via memory.grow if needed, zero-fills new region.
-pub fn sys_brk(_vm: &mut ThreadState, base: u32, addr: u64) -> i64 {
+pub fn sys_brk(vm: &mut ThreadState, base: u32, addr: u64) -> i64 {
     let s = ms();
+    let guest_limit = effective_guest_limit(vm, base);
     if addr == 0 {
         return s.brk_current as i64;
     }
     if addr < s.brk_base {
         return s.brk_current as i64;
     }
-    // 2GB address space ceiling
-    if addr > 0x8000_0000 {
+    if addr > guest_limit {
         return s.brk_current as i64;
     }
     if brk_growth_overlaps_vma(s, s.brk_current, addr) {
@@ -644,13 +720,16 @@ pub fn sys_mmap(
     offset: u64,
 ) -> i64 {
     let s = ms();
+    let guest_limit = effective_guest_limit(vm, base);
     if length == 0 {
         return EINVAL;
     }
     let len = (length + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
 
-    let is_fixed = (flags & MAP_FIXED) != 0;
+    let is_fixed_noreplace = (flags & MAP_FIXED_NOREPLACE) != 0;
+    let is_fixed = (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) != 0;
     let is_anon = (flags & MAP_ANONYMOUS) != 0;
+    let is_prot_none_reservation = is_anon && prot as i32 == PROT_NONE && (flags & MAP_NORESERVE) != 0;
 
     // Validate fd for file-backed mmap
     // https://man7.org/linux/man-pages/man2/mmap.2.html
@@ -665,36 +744,49 @@ pub fn sys_mmap(
         }
     };
 
+    let mut sparse_fixed_upgrade = false;
     let start = if is_fixed {
         if addr & (PAGE_SIZE - 1) != 0 {
             return EINVAL;
         }
-        // 2GB address space ceiling
-        if addr + len > 0x8000_0000 {
+        let Some(end) = addr.checked_add(len) else {
+            return ENOMEM;
+        };
+        let sparse_fixed_upgrade_candidate = is_anon
+            && prot as i32 != PROT_NONE
+            && needs_sparse_linear_backing(base, end)
+            && range_fully_covered_by_sparse_anon_reservation(s, addr, end);
+        let fixed_limit = if is_prot_none_reservation || sparse_fixed_upgrade_candidate {
+            prot_none_reservation_limit()
+        } else {
+            guest_limit
+        };
+        if end > fixed_limit {
             return ENOMEM;
         }
-        remove_overlap(s, addr, addr + len);
+        if is_fixed_noreplace {
+            if overlaps(s, addr, end) {
+                return EEXIST;
+            }
+        } else {
+            sparse_fixed_upgrade = sparse_fixed_upgrade_candidate;
+            remove_overlap(s, addr, end);
+        }
         addr
     } else if addr != 0
         && addr >= mmap_floor(s)
-        && addr + len <= 0x8000_0000
+        && addr + len <= guest_limit
         && !overlaps(s, addr, addr + len)
     {
         addr
     } else if addr != 0 {
-        let hole = find_hole_from(s, mmap_floor(s), len);
-        if hole == 0 {
-            return ENOMEM;
-        }
-        hole
-    } else if is_anon && prot as i32 == PROT_NONE {
-        let hole = find_hole_high(s, len);
+        let hole = find_hole_from(s, mmap_floor(s), len, guest_limit);
         if hole == 0 {
             return ENOMEM;
         }
         hole
     } else {
-        let hole = find_hole(s, len);
+        let hole = find_hole(s, len, guest_limit);
         if hole == 0 {
             return ENOMEM;
         }
@@ -702,7 +794,7 @@ pub fn sys_mmap(
     };
 
     let needs_materialization = !is_anon || prot as i32 != PROT_NONE;
-    if needs_materialization {
+    if needs_materialization && !sparse_fixed_upgrade {
         // PROT_NONE reservations do not require backing linear-memory pages yet.
         if !ensure_memory_capacity_for_guest_range(base, start + len) {
             return ENOMEM;
@@ -710,7 +802,7 @@ pub fn sys_mmap(
     }
 
     if is_anon {
-        if prot as i32 != PROT_NONE {
+        if prot as i32 != PROT_NONE && !sparse_fixed_upgrade {
             unsafe {
                 guest_mem::zero_mem(base, start, len as usize);
             }
@@ -803,7 +895,7 @@ pub fn sys_msync(_vm: &mut ThreadState, _base: u32, _addr: u64, _length: u64, _f
 /// mremap: resize or relocate an existing mapping.
 /// Shrink in-place, grow in-place if adjacent space is free, or relocate.
 pub fn sys_mremap(
-    _vm: &mut ThreadState,
+    vm: &mut ThreadState,
     base: u32,
     old_addr: u64,
     old_size: u64,
@@ -812,6 +904,7 @@ pub fn sys_mremap(
     _new_addr: u64,
 ) -> i64 {
     let s = ms();
+    let guest_limit = effective_guest_limit(vm, base);
     let old_len = (old_size + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
     let new_len = (new_size + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
 
@@ -837,7 +930,7 @@ pub fn sys_mremap(
         return old_addr as i64;
     }
 
-    let new_start = find_hole(s, new_len);
+    let new_start = find_hole(s, new_len, guest_limit);
     if new_start == 0 {
         return ENOMEM;
     }
@@ -941,25 +1034,25 @@ fn mmap_floor(s: &AddressSpaceState) -> u64 {
     ((s.brk_current.max(s.brk_base) + 0x1F_FFFF) & !0xF_FFFF).max(0x20_0000)
 }
 
-fn find_hole(s: &mut AddressSpaceState, len: u64) -> u64 {
+fn find_hole(s: &mut AddressSpaceState, len: u64, guest_limit: u64) -> u64 {
     let floor = mmap_floor(s);
-    let hole = find_hole_from(s, s.mmap_next.max(floor), len);
+    let hole = find_hole_from(s, s.mmap_next.max(floor), len, guest_limit);
     if hole != 0 {
         s.mmap_next = hole + len;
         return hole;
     }
 
-    let hole = find_hole_from(s, floor, len);
+    let hole = find_hole_from(s, floor, len, guest_limit);
     if hole != 0 {
         s.mmap_next = hole + len;
     }
     hole
 }
 
-fn find_hole_from(s: &AddressSpaceState, start: u64, len: u64) -> u64 {
+fn find_hole_from(s: &AddressSpaceState, start: u64, len: u64, guest_limit: u64) -> u64 {
     let mut candidate = (start + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
     loop {
-        if candidate + len > 0x8000_0000 {
+        if candidate + len > guest_limit {
             return 0;
         }
         if !overlaps(s, candidate, candidate + len) {
@@ -969,38 +1062,6 @@ fn find_hole_from(s: &AddressSpaceState, start: u64, len: u64) -> u64 {
             if v.start < candidate + len && v.end > candidate {
                 candidate = (v.end + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
                 break;
-            }
-        }
-    }
-}
-
-fn find_hole_high(s: &AddressSpaceState, len: u64) -> u64 {
-    let floor = mmap_floor(s);
-    if len == 0 || len > 0x8000_0000 - floor {
-        return 0;
-    }
-
-    let mut candidate = (0x8000_0000 - len) & !(PAGE_SIZE - 1);
-    loop {
-        if candidate < floor {
-            return 0;
-        }
-
-        let mut overlap = None;
-        for v in s.vmas.iter().rev() {
-            if v.start < candidate + len && v.end > candidate {
-                overlap = Some(v.start);
-                break;
-            }
-        }
-
-        match overlap {
-            None => return candidate,
-            Some(start) => {
-                if start < len {
-                    return 0;
-                }
-                candidate = (start - len) & !(PAGE_SIZE - 1);
             }
         }
     }

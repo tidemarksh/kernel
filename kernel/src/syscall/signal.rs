@@ -23,7 +23,7 @@ use crate::abi::*;
 use crate::guest_mem;
 use crate::types::{
     MAX_SIGNALS, ProcessState, SIG_DFL, SIG_IGN, SigAction, THREAD_BLOCKED_FUTEX, THREAD_DEAD,
-    THREAD_NONE, ThreadState,
+    THREAD_NONE, ThreadRecord, ThreadState,
 };
 
 // SA flags (https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/signal-defs.h)
@@ -74,6 +74,21 @@ struct SignalTrace {
     s11: u64,
 }
 
+#[derive(Clone, Copy)]
+struct DefaultSignalTrace {
+    vm_ptr: u32,
+    sig: u32,
+    sig_info_code: i32,
+    pc: u64,
+    ra: u64,
+    sp: u64,
+    gp: u64,
+    tp: u64,
+    s11: u64,
+    fault_pc: u64,
+    fault_addr: u64,
+}
+
 static mut LAST_SIGNAL_DELIVERY: SignalTrace = SignalTrace {
     vm_ptr: 0,
     sig: 0,
@@ -96,6 +111,19 @@ static mut LAST_SIGRETURN: SignalTrace = SignalTrace {
     tp: 0,
     s11: 0,
 };
+static mut LAST_DEFAULT_SIGNAL: DefaultSignalTrace = DefaultSignalTrace {
+    vm_ptr: 0,
+    sig: 0,
+    sig_info_code: 0,
+    pc: 0,
+    ra: 0,
+    sp: 0,
+    gp: 0,
+    tp: 0,
+    s11: 0,
+    fault_pc: 0,
+    fault_addr: 0,
+};
 static mut LAST_TRAMPOLINE_PC: u64 = 0;
 static mut LAST_TRAMPOLINE_HIT_TID: i32 = 0;
 static mut LAST_TRAMPOLINE_HIT_PC: u64 = 0;
@@ -114,6 +142,22 @@ static mut SIGNAL_DELIVERY_RING: [SignalTrace; SIGNAL_TRACE_RING_CAP] = [SignalT
 }; SIGNAL_TRACE_RING_CAP];
 static mut SIGNAL_DELIVERY_RING_LEN: u32 = 0;
 static mut SIGNAL_DELIVERY_RING_NEXT: u32 = 0;
+static mut DEFAULT_SIGNAL_RING: [DefaultSignalTrace; SIGNAL_TRACE_RING_CAP] = [DefaultSignalTrace {
+    vm_ptr: 0,
+    sig: 0,
+    sig_info_code: 0,
+    pc: 0,
+    ra: 0,
+    sp: 0,
+    gp: 0,
+    tp: 0,
+    s11: 0,
+    fault_pc: 0,
+    fault_addr: 0,
+};
+    SIGNAL_TRACE_RING_CAP];
+static mut DEFAULT_SIGNAL_RING_LEN: u32 = 0;
+static mut DEFAULT_SIGNAL_RING_NEXT: u32 = 0;
 
 const SYNC_FAULT_SIGNAL_MASK: u64 = (1u64 << (SIGILL - 1))
     | (1u64 << (SIGBUS - 1))
@@ -163,9 +207,8 @@ pub fn last_signal_delivery_for_vm(vm_ptr: u32) -> (u32, u64, u64, u64, u64, u64
     unsafe {
         let len = SIGNAL_DELIVERY_RING_LEN.min(SIGNAL_TRACE_RING_CAP as u32);
         for offset in 0..len {
-            let index =
-                ((SIGNAL_DELIVERY_RING_NEXT + SIGNAL_TRACE_RING_CAP as u32 - 1 - offset)
-                    % SIGNAL_TRACE_RING_CAP as u32) as usize;
+            let index = ((SIGNAL_DELIVERY_RING_NEXT + SIGNAL_TRACE_RING_CAP as u32 - 1 - offset)
+                % SIGNAL_TRACE_RING_CAP as u32) as usize;
             let trace = SIGNAL_DELIVERY_RING[index];
             if trace.vm_ptr == vm_ptr {
                 return (
@@ -188,6 +231,52 @@ pub fn last_sigreturn() -> (u32, u64, u64, u64, u64, u64, u64, u64) {
     unsafe {
         let t = LAST_SIGRETURN;
         (t.sig, t.frame_base, t.pc, t.ra, t.sp, t.gp, t.tp, t.s11)
+    }
+}
+
+pub fn last_default_signal() -> (u32, i32, u64, u64, u64, u64, u64, u64, u64, u64) {
+    unsafe {
+        let t = LAST_DEFAULT_SIGNAL;
+        (
+            t.sig,
+            t.sig_info_code,
+            t.pc,
+            t.ra,
+            t.sp,
+            t.gp,
+            t.tp,
+            t.s11,
+            t.fault_pc,
+            t.fault_addr,
+        )
+    }
+}
+
+pub fn last_default_signal_for_vm(
+    vm_ptr: u32,
+) -> (u32, i32, u64, u64, u64, u64, u64, u64, u64, u64) {
+    unsafe {
+        let len = DEFAULT_SIGNAL_RING_LEN.min(SIGNAL_TRACE_RING_CAP as u32);
+        for offset in 0..len {
+            let index = ((DEFAULT_SIGNAL_RING_NEXT + SIGNAL_TRACE_RING_CAP as u32 - 1 - offset)
+                % SIGNAL_TRACE_RING_CAP as u32) as usize;
+            let trace = DEFAULT_SIGNAL_RING[index];
+            if trace.vm_ptr == vm_ptr {
+                return (
+                    trace.sig,
+                    trace.sig_info_code,
+                    trace.pc,
+                    trace.ra,
+                    trace.sp,
+                    trace.gp,
+                    trace.tp,
+                    trace.s11,
+                    trace.fault_pc,
+                    trace.fault_addr,
+                );
+            }
+        }
+        (0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
     }
 }
 
@@ -225,12 +314,51 @@ pub fn clear_debug_trace() {
             tp: 0,
             s11: 0,
         };
+        LAST_DEFAULT_SIGNAL = DefaultSignalTrace {
+            vm_ptr: 0,
+            sig: 0,
+            sig_info_code: 0,
+            pc: 0,
+            ra: 0,
+            sp: 0,
+            gp: 0,
+            tp: 0,
+            s11: 0,
+            fault_pc: 0,
+            fault_addr: 0,
+        };
         LAST_TRAMPOLINE_PC = 0;
         LAST_TRAMPOLINE_HIT_TID = 0;
         LAST_TRAMPOLINE_HIT_PC = 0;
         SIGRETURN_COUNT = 0;
         SIGNAL_DELIVERY_RING_LEN = 0;
         SIGNAL_DELIVERY_RING_NEXT = 0;
+        DEFAULT_SIGNAL_RING_LEN = 0;
+        DEFAULT_SIGNAL_RING_NEXT = 0;
+    }
+}
+
+fn record_default_signal(vm: &ThreadState, sig: usize) {
+    let trace = DefaultSignalTrace {
+        vm_ptr: vm as *const ThreadState as u32,
+        sig: sig as u32,
+        sig_info_code: vm.sig_info_code,
+        pc: vm.pc,
+        ra: vm.x[1],
+        sp: vm.x[2],
+        gp: vm.x[3],
+        tp: vm.x[4],
+        s11: vm.x[27],
+        fault_pc: vm.fault_pc,
+        fault_addr: vm.fault_addr,
+    };
+    unsafe {
+        LAST_DEFAULT_SIGNAL = trace;
+        DEFAULT_SIGNAL_RING[DEFAULT_SIGNAL_RING_NEXT as usize] = trace;
+        DEFAULT_SIGNAL_RING_NEXT = (DEFAULT_SIGNAL_RING_NEXT + 1) % SIGNAL_TRACE_RING_CAP as u32;
+        if DEFAULT_SIGNAL_RING_LEN < SIGNAL_TRACE_RING_CAP as u32 {
+            DEFAULT_SIGNAL_RING_LEN += 1;
+        }
     }
 }
 
@@ -267,9 +395,19 @@ pub fn attach_process_signal_state(sig_slots_ptr: u32, process_pending_ptr: u32)
 }
 
 #[inline(always)]
-fn sigactions_for(pid: i32) -> &'static mut [SigAction; MAX_SIGNALS] {
+fn sigactions_for(pid: i32) -> Option<&'static mut [SigAction; MAX_SIGNALS]> {
+    if pid <= 0 {
+        return None;
+    }
     let idx = (pid - 1) as usize;
-    unsafe { &mut *sig_slots()[idx] }
+    if idx >= MAX_PROCESSES {
+        return None;
+    }
+    let slot = sig_slots()[idx];
+    if slot.is_null() {
+        return None;
+    }
+    unsafe { Some(&mut *slot) }
 }
 
 /// Read PID from ProcessState in guest Memory via ThreadState.process_ptr.
@@ -296,6 +434,14 @@ fn process_state_from_vm(vm: &ThreadState, base: u32) -> Option<&'static mut Pro
     unsafe { Some(&mut *absolute) }
 }
 
+unsafe fn read_thread_record(record: *const ThreadRecord) -> ThreadRecord {
+    unsafe { core::ptr::read_unaligned(record) }
+}
+
+unsafe fn write_thread_record(record: *mut ThreadRecord, value: ThreadRecord) {
+    unsafe { core::ptr::write_unaligned(record, value) }
+}
+
 fn take_thread_pending_signals(vm: &mut ThreadState, base: u32) {
     let Some(ps) = process_state_from_vm(vm, base) else {
         return;
@@ -304,15 +450,21 @@ fn take_thread_pending_signals(vm: &mut ThreadState, base: u32) {
     if tid <= 0 {
         return;
     }
-    let Some(record) = ps.threads.iter_mut().find(|record| record.tid == tid) else {
+    for index in 0..ps.threads.len() {
+        let record_ptr = core::ptr::addr_of_mut!(ps.threads[index]);
+        let mut record = unsafe { read_thread_record(record_ptr) };
+        if record.tid != tid {
+            continue;
+        }
+        vm.sig_pending |= record.pending_sigset;
+        if record.pending_siginfo_code != 0 {
+            vm.sig_info_code = record.pending_siginfo_code;
+        }
+        record.pending_sigset = 0;
+        record.pending_siginfo_code = 0;
+        unsafe { write_thread_record(record_ptr, record) };
         return;
-    };
-    vm.sig_pending |= record.pending_sigset;
-    if record.pending_siginfo_code != 0 {
-        vm.sig_info_code = record.pending_siginfo_code;
     }
-    record.pending_sigset = 0;
-    record.pending_siginfo_code = 0;
 }
 
 /// Initialize signal subsystem. Must be called once at kernel init.
@@ -382,8 +534,12 @@ pub fn fork_from_parent(parent_pid: i32, child_pid: i32) {
     }
 
     init_for_process(child_pid);
-    let parent = sigactions_for(parent_pid);
-    let child = sigactions_for(child_pid);
+    let Some(parent) = sigactions_for(parent_pid) else {
+        return;
+    };
+    let Some(child) = sigactions_for(child_pid) else {
+        return;
+    };
     child.copy_from_slice(parent);
     process_pending()[child_idx] = 0;
 }
@@ -429,7 +585,9 @@ pub fn reset_on_execve(pid: i32) {
     if idx >= MAX_PROCESSES {
         return;
     }
-    let table = sigactions_for(pid);
+    let Some(table) = sigactions_for(pid) else {
+        return;
+    };
     for action in table.iter_mut().take(MAX_SIGNALS).skip(1) {
         if action.handler != SIG_DFL && action.handler != SIG_IGN {
             *action = SigAction {
@@ -463,7 +621,9 @@ pub fn sys_rt_sigaction(
     }
 
     let pid = pid_from_vm(vm, base);
-    let table = sigactions_for(pid);
+    let Some(table) = sigactions_for(pid) else {
+        return ESRCH;
+    };
 
     unsafe {
         // Write old action
@@ -638,7 +798,7 @@ const TRAMPOLINE_CODE: [u8; 8] = [
 ///
 /// When the handler returns (via ra), it executes the trampoline which
 /// calls SYS_RT_SIGRETURN to restore the saved context.
-fn push_signal_frame(vm: &mut ThreadState, base: u32, sig: usize, action: &SigAction) {
+fn push_signal_frame(vm: &mut ThreadState, base: u32, sig: usize, action: &SigAction) -> bool {
     // Choose stack: use sigaltstack if SA_ONSTACK and stack is configured
     let use_altstack = action.flags & SA_ONSTACK != 0
         && vm.sigaltstack_flags != SS_DISABLE
@@ -651,7 +811,9 @@ fn push_signal_frame(vm: &mut ThreadState, base: u32, sig: usize, action: &SigAc
     };
 
     // Align down to 16 bytes, then reserve frame
-    let frame_base = (sp - SIGFRAME_SIZE) & !15;
+    let Some(frame_base) = sp.checked_sub(SIGFRAME_SIZE).map(|value| value & !15) else {
+        return false;
+    };
     let siginfo_base = frame_base + SIGFRAME_OFF_SIGINFO;
     let ucontext_base = frame_base + SIGFRAME_OFF_UCONTEXT;
     let regs_base = ucontext_base + UCONTEXT_OFF_MCONTEXT + MCONTEXT_OFF_REGS;
@@ -736,11 +898,13 @@ fn push_signal_frame(vm: &mut ThreadState, base: u32, sig: usize, action: &SigAc
     // If SA_RESETHAND, reset disposition to SIG_DFL
     if action.flags & SA_RESETHAND != 0 {
         let pid = pid_from_vm(vm, base);
-        sigactions_for(pid)[sig] = SigAction {
-            handler: SIG_DFL,
-            flags: 0,
-            mask: 0,
-        };
+        if let Some(table) = sigactions_for(pid) {
+            table[sig] = SigAction {
+                handler: SIG_DFL,
+                flags: 0,
+                mask: 0,
+            };
+        }
     }
     if use_altstack {
         vm.sigaltstack_flags |= SS_ONSTACK;
@@ -774,6 +938,7 @@ fn push_signal_frame(vm: &mut ThreadState, base: u32, sig: usize, action: &SigAc
     vm.x[11] = siginfo_base;
     vm.x[12] = ucontext_base;
     vm.pc = action.handler;
+    true
 }
 
 /// rt_sigreturn: restore state from signal frame on stack.
@@ -860,7 +1025,13 @@ pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
     // Clear from pending
     vm.sig_pending &= !(1u64 << (sig - 1));
 
-    let action = sigactions_for(pid)[sig];
+    let action = sigactions_for(pid)
+        .map(|table| table[sig])
+        .unwrap_or(SigAction {
+            handler: SIG_DFL,
+            flags: 0,
+            mask: 0,
+        });
 
     match action.handler {
         0 => {
@@ -869,6 +1040,7 @@ pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
                 SIGCHLD | SIGURG | SIGWINCH => {} // ignore by default
                 SIGCONT => {}                     // ignore (no job control)
                 _ => {
+                    record_default_signal(vm, sig);
                     crate::syscall::thread::terminate_process_with_reason(
                         vm,
                         base,
@@ -882,7 +1054,16 @@ pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
         1 => {} // SIG_IGN: ignore
         _handler_addr => {
             // User handler: push signal frame and redirect to handler
-            push_signal_frame(vm, base, sig, &action);
+            if !push_signal_frame(vm, base, sig, &action) {
+                record_default_signal(vm, sig);
+                crate::syscall::thread::terminate_process_with_reason(
+                    vm,
+                    base,
+                    128 + sig as i32,
+                    sig as i32,
+                    crate::syscall::thread::TERMINATE_REASON_DEFAULT_SIGNAL,
+                );
+            }
         }
     }
 
@@ -918,7 +1099,8 @@ pub fn send_signal_to_pid(vm: &mut ThreadState, base: u32, pid: i32, sig: i32) -
     if pid == pid_from_vm(vm, base) {
         vm.sig_info_code = SI_USER;
         if let Some(ps) = process_state_from_vm(vm, base) {
-            for record in ps.threads.iter() {
+            for index in 0..ps.threads.len() {
+                let record = unsafe { read_thread_record(core::ptr::addr_of!(ps.threads[index])) };
                 if record.state != THREAD_BLOCKED_FUTEX || record.blocked_addr == 0 {
                     continue;
                 }
@@ -946,7 +1128,9 @@ pub fn send_signal_to_tid(vm: &mut ThreadState, base: u32, tid: i32, sig: i32) -
         return ESRCH;
     };
 
-    for record in ps.threads.iter_mut() {
+    for index in 0..ps.threads.len() {
+        let record_ptr = core::ptr::addr_of_mut!(ps.threads[index]);
+        let mut record = unsafe { read_thread_record(record_ptr) };
         if record.tid != tid || record.thread_ptr == 0 {
             continue;
         }
@@ -955,11 +1139,10 @@ pub fn send_signal_to_tid(vm: &mut ThreadState, base: u32, tid: i32, sig: i32) -
         }
         record.pending_sigset |= 1u64 << (sig - 1);
         record.pending_siginfo_code = SI_TKILL;
-        if record.state == THREAD_BLOCKED_FUTEX
-            && record.blocked_addr != 0
-        {
+        if record.state == THREAD_BLOCKED_FUTEX && record.blocked_addr != 0 {
             crate::syscall::thread::notify_futex_addr(base, record.blocked_addr, 1);
         }
+        unsafe { write_thread_record(record_ptr, record) };
         return 0;
     }
 
