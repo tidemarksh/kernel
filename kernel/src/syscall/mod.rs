@@ -34,7 +34,7 @@ fn debug_return(
     result: i64,
     status: i32,
 ) -> i32 {
-    crate::harness_hooks::record_syscall(
+    crate::tracepoints::record_syscall(
         vm as *const ThreadState as u32,
         nr,
         a0,
@@ -53,7 +53,7 @@ fn debug_return(
 fn record_memory_trace(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64, result: i64) {
     match nr {
         SYS_BRK | SYS_MMAP | SYS_MUNMAP | SYS_MSYNC | SYS_MREMAP | SYS_MPROTECT => {
-            crate::harness_hooks::record_memory_syscall(nr, a0, a1, a2, a3, result);
+            crate::tracepoints::record_memory_syscall(nr, a0, a1, a2, a3, result);
         }
         _ => {}
     }
@@ -76,7 +76,7 @@ fn trace_fd_snapshot(base: u32, vm: &ThreadState, fd: u64) -> (u32, i32) {
 pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
     let nr = vm.x[17]; // a7 = syscall number
     if nr == SYS_EXECVE {
-        crate::harness_debug::record_execve_dispatch(vm as *const ThreadState as u32, 1);
+        crate::tracepoints::record_execve_dispatch(vm as *const ThreadState as u32, 1);
     }
     let a0 = vm.x[10];
     let a1 = vm.x[11];
@@ -427,7 +427,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         }
         SYS_EXECVE => {
             let ret = process::sys_execve(vm, base, a0, a1, a2);
-            crate::harness_debug::record_execve_dispatch(vm as *const ThreadState as u32, 2);
+            crate::tracepoints::record_execve_dispatch(vm as *const ThreadState as u32, 2);
             if vm.status == abi::STATUS_EXECVE_SPAWN {
                 return debug_return(
                     vm,
@@ -494,10 +494,10 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
     // Check and deliver pending signals at syscall return boundary
     signal::check_pending(vm, base);
     if nr == SYS_EXECVE {
-        crate::harness_debug::record_execve_dispatch(vm as *const ThreadState as u32, 3);
+        crate::tracepoints::record_execve_dispatch(vm as *const ThreadState as u32, 3);
     }
     let status = vm.status;
-    crate::harness_hooks::record_fd_syscall(
+    crate::tracepoints::record_fd_syscall(
         vm as *const ThreadState as u32,
         nr,
         a0,
@@ -511,7 +511,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         result,
         status,
     );
-    crate::harness_hooks::record_syscall(
+    crate::tracepoints::record_syscall(
         vm as *const ThreadState as u32,
         nr,
         a0,

@@ -80,15 +80,15 @@ pub(super) unsafe fn deliver_sync_sigsegv(
     addr: u64,
     accerr: bool,
 ) -> bool {
-    crate::harness_debug::record_fault_dispatch_trace(vm, 1, *pc, x[1], x[2], x[27], addr);
+    crate::tracepoints::record_fault_dispatch_trace(vm, 1, *pc, x[1], x[2], x[27], addr);
     vm.x = *x;
     vm.f = *f;
     vm.pc = *pc;
     vm.fcsr = *fcsr;
-    crate::harness_debug::record_sync_signal_trace(vm, *pc, x[1], x[2], x[27], x[10], addr);
+    crate::tracepoints::record_sync_signal_trace(vm, *pc, x[1], x[2], x[27], x[10], addr);
     crate::syscall::signal::queue_sigsegv(vm, *pc, addr, accerr);
     crate::syscall::signal::check_pending(vm, base);
-    crate::harness_debug::record_fault_dispatch_trace(
+    crate::tracepoints::record_fault_dispatch_trace(
         vm, 2, vm.pc, vm.x[1], vm.x[2], vm.x[27], addr,
     );
     *x = vm.x;

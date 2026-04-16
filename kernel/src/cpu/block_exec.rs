@@ -39,7 +39,7 @@ pub(super) unsafe fn exec_block(
         let prev_tp = x[4];
         let prev_s11 = x[27];
         let op_pc = cur_pc;
-        crate::harness_hooks::record_exec_trace(vm_ptr, tid, op_pc, 0, op.step(), x);
+        crate::tracepoints::record_exec_trace(vm_ptr, tid, op_pc, 0, op.step(), x);
         let rd = op.rd();
         let r1 = op.rs1();
         let r2 = op.rs2();
@@ -257,7 +257,7 @@ pub(super) unsafe fn exec_block(
                     cur_pc + step
                 };
                 x[0] = 0;
-                crate::harness_hooks::record_special_reg_transitions(
+                crate::tracepoints::record_special_reg_transitions(
                     vm_ptr,
                     tid,
                     op_pc,
@@ -276,7 +276,7 @@ pub(super) unsafe fn exec_block(
                 }
                 *pc = (cur_pc as i64 + imm) as u64;
                 x[0] = 0;
-                crate::harness_hooks::record_special_reg_transitions(
+                crate::tracepoints::record_special_reg_transitions(
                     vm_ptr,
                     tid,
                     op_pc,
@@ -291,13 +291,13 @@ pub(super) unsafe fn exec_block(
             }
             11 => {
                 let target = ((x[r1] as i64 + imm) as u64) & !1;
-                crate::harness_hooks::record_jalr(vm_ptr, cur_pc, rd, r1, x[r1], target);
+                crate::tracepoints::record_jalr(vm_ptr, cur_pc, rd, r1, x[r1], target);
                 if rd != 0 {
                     x[rd] = cur_pc + step;
                 }
                 *pc = target;
                 x[0] = 0;
-                crate::harness_hooks::record_special_reg_transitions(
+                crate::tracepoints::record_special_reg_transitions(
                     vm_ptr,
                     tid,
                     op_pc,
@@ -314,7 +314,7 @@ pub(super) unsafe fn exec_block(
             _ => {
                 *pc = cur_pc;
                 x[0] = 0;
-                crate::harness_hooks::record_special_reg_transitions(
+                crate::tracepoints::record_special_reg_transitions(
                     vm_ptr,
                     tid,
                     op_pc,
@@ -330,7 +330,7 @@ pub(super) unsafe fn exec_block(
         }
 
         x[0] = 0;
-        crate::harness_hooks::record_special_reg_transitions(
+        crate::tracepoints::record_special_reg_transitions(
             vm_ptr,
             tid,
             op_pc,

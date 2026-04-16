@@ -326,7 +326,7 @@ fn decrement_thread_count(vm: &ThreadState, base: u32) -> u32 {
             })
             .unwrap_or(0);
         let after = before.saturating_sub(1);
-        crate::harness_hooks::record_thread_count(
+        crate::tracepoints::record_thread_count(
             THREAD_COUNT_TRACE_EXIT_DEC,
             vm as *const ThreadState as u32,
             vm.tid,
@@ -363,7 +363,7 @@ pub fn init_main_thread(vm_ptr: u32, base: u32) {
             core::ptr::addr_of!(ps.reservation_lock) as *const core::sync::atomic::AtomicU32;
         let tc_ptr = core::ptr::addr_of!(ps.thread_count);
         guest_mem::init(gen_ptr, lock_ptr, tc_ptr);
-        crate::harness_hooks::record_thread_count(
+        crate::tracepoints::record_thread_count(
             THREAD_COUNT_TRACE_INIT_MAIN,
             vm_ptr,
             vm.tid,
@@ -426,7 +426,7 @@ pub fn discard_other_threads_for_exec(vm: &ThreadState, base: u32) -> u32 {
                 0,
             );
             ps.thread_count.store(1, Ordering::Release);
-            crate::harness_hooks::record_thread_count(
+            crate::tracepoints::record_thread_count(
                 THREAD_COUNT_TRACE_EXEC_RESET,
                 vm as *const ThreadState as u32,
                 vm.tid,
@@ -568,7 +568,7 @@ pub fn terminate_process_with_reason(
                 *record = ThreadRecord::empty();
             }
             ps.thread_count.store(0, Ordering::Release);
-            crate::harness_hooks::record_thread_count(
+            crate::tracepoints::record_thread_count(
                 THREAD_COUNT_TRACE_TERMINATE,
                 vm as *const ThreadState as u32,
                 vm.tid,
@@ -648,7 +648,7 @@ pub fn sys_clone(
                 return ESRCH;
             };
             let before = (*ps).thread_count.fetch_add(1, Ordering::AcqRel);
-            crate::harness_hooks::record_thread_count(
+            crate::tracepoints::record_thread_count(
                 THREAD_COUNT_TRACE_CLONE_INC,
                 vm as *const ThreadState as u32,
                 vm.tid,
@@ -981,8 +981,11 @@ pub fn sys_futex(
                 val.min(u32::MAX as u64) as u32,
                 wake_bitset,
             );
+            // Deferred plain-fork children are not represented by live
+            // ThreadRecord slots while the harness runner keeps the parent
+            // executing, so external waiters must be counted separately.
             #[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
-            let external = crate::harness_support::wake_plain_fork_futex_waits(
+            let external = crate::external_futex::wake_plain_fork_futex_waits(
                 addr as u32,
                 val.min(u32::MAX as u64) as u32,
             );
@@ -1012,7 +1015,7 @@ pub fn sys_futex(
             );
             #[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
             let external_wake =
-                crate::harness_support::wake_plain_fork_futex_waits(addr as u32, wake_count);
+                crate::external_futex::wake_plain_fork_futex_waits(addr as u32, wake_count);
             #[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
             let external_wake = 0u32;
 
@@ -1024,7 +1027,7 @@ pub fn sys_futex(
                 requeue_count,
             );
             #[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
-            let external_requeue = crate::harness_support::requeue_plain_fork_futex_waits(
+            let external_requeue = crate::external_futex::requeue_plain_fork_futex_waits(
                 addr as u32,
                 addr2 as u32,
                 requeue_count,
@@ -1062,7 +1065,7 @@ pub fn resume_futex_wait_result(vm: &mut ThreadState, base: u32, result: i64) {
     vm.futex_wait_flags = 0;
     vm.status = STATUS_OK;
     vm.x[10] = result as u64;
-    crate::harness_debug::record_futex_resume_trace(vm, 1);
+    crate::tracepoints::record_futex_resume_trace(vm, 1);
     crate::syscall::signal::check_pending(vm, base);
-    crate::harness_debug::record_futex_resume_trace(vm, 2);
+    crate::tracepoints::record_futex_resume_trace(vm, 2);
 }

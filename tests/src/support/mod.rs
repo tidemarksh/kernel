@@ -1723,13 +1723,38 @@ pub fn run_elf_no_cache_with_output(elf_bytes: &[u8]) -> Result<(i32, u64, Vec<u
     run_elf_inner(elf_bytes, false)
 }
 
+fn drain_pipe_slot(pipe_slot: u32, out: &mut Vec<u8>) {
+    if pipe_slot == 0 {
+        return;
+    }
+    let mut buf = [0u8; 512];
+    loop {
+        let n = tidemark_kernel::syscall::pipe::pipe_read(pipe_slot, &mut buf);
+        if n <= 0 {
+            break;
+        }
+        out.extend_from_slice(&buf[..n as usize]);
+    }
+}
+
+fn collect_guest_stdio(vm: &ThreadState) -> Vec<u8> {
+    let vm_ptr = vm as *const ThreadState as u32;
+    let stdout = tidemark_kernel::abi::process_stdout_pipe(vm_ptr);
+    let stderr = tidemark_kernel::abi::process_stderr_pipe(vm_ptr);
+    let mut out = Vec::new();
+    drain_pipe_slot(stdout, &mut out);
+    if stderr != 0 && stderr != stdout {
+        drain_pipe_slot(stderr, &mut out);
+    }
+    out
+}
+
 fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> Result<(i32, u64, Vec<u8>), String> {
     let helper_binaries = load_ltp_helper_binaries()?;
-    tidemark_kernel::harness::support::clear_guest_output();
     tidemark_kernel::harness::support::clear_plain_fork_futex_waits();
     let mut deferred_plain_forks = VecDeque::new();
     let mut deferred_clone_threads = VecDeque::new();
-    let result = (|| -> Result<(i32, u64), String> {
+    let result = (|| -> Result<(i32, u64, Vec<u8>), String> {
         unsafe {
             tidemark_kernel::guest_mem::init(
                 core::ptr::null(),
@@ -1942,25 +1967,22 @@ fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> Result<(i32, u64, Vec<u8>
                 0
             };
 
-            run_vm(
+            let (code, pc) = run_vm(
                 &mut vm,
                 base,
                 use_cache,
                 &mut deferred_plain_forks,
                 &mut deferred_clone_threads,
-            )
+            )?;
+            let output = collect_guest_stdio(&vm);
+            Ok((code, pc, output))
         }
     })();
-    let output = tidemark_kernel::harness::support::take_guest_output();
 
     match result {
-        Ok((code, pc)) => Ok((code, pc, output)),
+        Ok((code, pc, output)) => Ok((code, pc, output)),
         Err(err) => {
-            if output.is_empty() {
-                Err(err)
-            } else {
-                Err(format!("{err}\n{}", String::from_utf8_lossy(&output)))
-            }
+            Err(err)
         }
     }
 }
@@ -1993,13 +2015,29 @@ pub fn assert_elf_pass_no_cache(name: &str, elf_bytes: &[u8]) -> Result<(), Stri
 mod tests {
     use super::*;
     use tidemark_kernel::abi::{
-        CLONE_FS, CLONE_SIGHAND, CLONE_THREAD, CLONE_VM, FUTEX_WAIT, FUTEX_WAKE, STATUS_FUTEX_WAIT,
+        CLONE_FS, CLONE_SIGHAND, CLONE_THREAD, CLONE_VM, FUTEX_CMP_REQUEUE, FUTEX_WAIT,
+        FUTEX_WAKE, MAP_ANONYMOUS, MAP_PRIVATE, PAGE_SIZE, PROT_EXEC, PROT_READ, PROT_WRITE,
+        STATUS_FUTEX_WAIT,
     };
     use tidemark_kernel::fs::memfs;
     use tidemark_kernel::guest_mem;
     use tidemark_kernel::harness::TestVm;
+    use tidemark_kernel::syscall::process as process_impl;
     use tidemark_kernel::syscall::thread as thread_impl;
     use tidemark_kernel::types::{ProcessState, THREAD_NONE};
+
+    fn alloc_exec_code_page(t: &mut TestVm) -> u64 {
+        let mapped = t.sys_mmap(
+            0,
+            PAGE_SIZE,
+            PROT_READ | PROT_WRITE | PROT_EXEC,
+            MAP_PRIVATE | MAP_ANONYMOUS,
+            -1,
+            0,
+        );
+        assert!(mapped >= 0);
+        mapped as u64 + 0x80
+    }
 
     fn read_memfs_file(ino: u32) -> Vec<u8> {
         let mut buf = vec![0u8; 128];
@@ -2056,6 +2094,20 @@ mod tests {
         }
     }
 
+    fn encode_i(opcode: u32, rd: u32, funct3: u32, rs1: u32, imm: i32) -> u32 {
+        (((imm as u32) & 0x0fff) << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode
+    }
+
+    fn encode_u(opcode: u32, rd: u32, imm20: u32) -> u32 {
+        (imm20 << 12) | (rd << 7) | opcode
+    }
+
+    fn encode_li(rd: u32, value: u32) -> [u32; 2] {
+        let upper = (value.wrapping_add(0x800)) >> 12;
+        let lower = value.wrapping_sub(upper << 12) as i32;
+        [encode_u(0x37, rd, upper), encode_i(0x13, rd, 0, rd, lower)]
+    }
+
     fn write_futex_wake_then_exit_program(base: u32, pc: u64, exit_code: u8) {
         let code = [
             0x73,
@@ -2091,12 +2143,84 @@ mod tests {
         }
     }
 
+    fn write_futex_wait_return_then_exit_program(base: u32, pc: u64, futex_addr: u32) {
+        let li_a0 = encode_li(10, futex_addr);
+        unsafe {
+            guest_mem::write_u32(base, pc, li_a0[0]);
+            guest_mem::write_u32(base, pc + 4, li_a0[1]);
+            guest_mem::write_u32(base, pc + 8, 0x0000_0073); // ecall
+            guest_mem::write_u32(base, pc + 12, 0x05d0_0893); // addi a7, zero, 93
+            guest_mem::write_u32(base, pc + 16, 0x0000_0073); // ecall
+        }
+    }
+
+    fn setup_deferred_plain_fork_futex_waiter(
+        t: &mut TestVm,
+        futex_addr: u64,
+    ) -> (i32, VecDeque<DeferredPlainFork>, VecDeque<DeferredCloneThread>) {
+        set_process_identity(t.base, t.vm.process_ptr, INITIAL_PID, INITIAL_PPID);
+        t.vm.tid = INITIAL_PID;
+        tidemark_kernel::syscall::thread::init_main_thread(
+            &mut t.vm as *mut ThreadState as u32,
+            t.base,
+        );
+
+        let code_addr = alloc_exec_code_page(t);
+        write_futex_wait_return_then_exit_program(t.base, code_addr, futex_addr as u32);
+        unsafe {
+            guest_mem::write_u32(t.base, futex_addr, 0);
+        }
+
+        t.vm.pc = code_addr;
+        t.vm.x[11] = FUTEX_WAIT as u64;
+        t.vm.x[12] = 0;
+        t.vm.x[13] = 0;
+        t.vm.x[14] = 0;
+        t.vm.x[15] = 0;
+        t.vm.x[17] = tidemark_kernel::abi::SYS_FUTEX;
+
+        let child_pid = process_impl::sys_fork(&mut t.vm, t.base, 0, 0, 0, 0, 0) as i32;
+        assert!(child_pid > 0);
+
+        let mut deferred_plain_forks = VecDeque::new();
+        let mut deferred_clone_threads = VecDeque::new();
+        handle_plain_fork(
+            &mut t.vm,
+            t.base,
+            false,
+            &mut deferred_plain_forks,
+            &mut deferred_clone_threads,
+        )
+        .expect("plain fork child should defer on futex wait");
+
+        assert_eq!(deferred_clone_threads.len(), 0);
+        assert_eq!(deferred_plain_forks.len(), 1);
+        let deferred = deferred_plain_forks
+            .front()
+            .expect("deferred plain fork child should exist");
+        assert_eq!(deferred.pid, child_pid);
+        assert_eq!(deferred.vm.status, STATUS_FUTEX_WAIT);
+
+        let exited = run_next_deferred_plain_fork(
+            &mut t.vm,
+            t.base,
+            false,
+            &mut deferred_plain_forks,
+            &mut deferred_clone_threads,
+        )
+        .expect("plain fork child should re-park and register external futex wait");
+        assert!(!exited);
+        assert_eq!(deferred_plain_forks.len(), 1);
+
+        (child_pid, deferred_plain_forks, deferred_clone_threads)
+    }
+
     #[test]
     fn deferred_clone_thread_resumes_after_futex_wake() {
         let mut t = TestVm::new();
         let pid = process_pid(t.base, t.vm.process_ptr);
         let futex_addr = t.scratch + 0x400;
-        let code_addr = t.scratch + 0x800;
+        let code_addr = alloc_exec_code_page(&mut t);
         write_exit_program(t.base, code_addr, 9);
         unsafe {
             guest_mem::write_u32(t.base, futex_addr, 0);
@@ -2144,6 +2268,58 @@ mod tests {
     }
 
     #[test]
+    fn plain_fork_futex_waiter_counts_in_parent_wake_result() {
+        let mut t = TestVm::new();
+        let futex_addr = t.scratch + 0x420;
+        let (child_pid, mut deferred_plain_forks, mut deferred_clone_threads) =
+            setup_deferred_plain_fork_futex_waiter(&mut t, futex_addr);
+
+        let wake_ret =
+            thread_impl::sys_futex(&mut t.vm, t.base, futex_addr, FUTEX_WAKE as u64, 1, 0, 0, 0);
+        assert_eq!(wake_ret, 1);
+
+        let exited = run_next_deferred_plain_fork(
+            &mut t.vm,
+            t.base,
+            false,
+            &mut deferred_plain_forks,
+            &mut deferred_clone_threads,
+        )
+        .expect("woken plain fork child should resume and exit");
+        assert!(exited);
+        assert!(deferred_plain_forks.is_empty());
+        assert!(child_pid > 0);
+    }
+
+    #[test]
+    fn plain_fork_futex_waiter_counts_in_parent_cmp_requeue_result() {
+        let mut t = TestVm::new();
+        let from_addr = t.scratch + 0x424;
+        let to_addr = t.scratch + 0x428;
+        let (child_pid, deferred_plain_forks, _deferred_clone_threads) =
+            setup_deferred_plain_fork_futex_waiter(&mut t, from_addr);
+
+        let requeue_ret = thread_impl::sys_futex(
+            &mut t.vm,
+            t.base,
+            from_addr,
+            FUTEX_CMP_REQUEUE as u64,
+            0,
+            1,
+            to_addr,
+            0,
+        );
+        assert_eq!(requeue_ret, 1);
+
+        let wake_ret =
+            thread_impl::sys_futex(&mut t.vm, t.base, to_addr, FUTEX_WAKE as u64, 1, 0, 0, 0);
+        assert_eq!(wake_ret, 1);
+        tidemark_kernel::harness::support::clear_plain_fork_futex_wait(child_pid);
+        assert_eq!(deferred_plain_forks.len(), 1);
+        assert!(child_pid > 0);
+    }
+
+    #[test]
     fn blocked_leader_futex_wait_services_deferred_clone_waker_thread() {
         let mut t = TestVm::new();
         let pid = 2;
@@ -2155,7 +2331,7 @@ mod tests {
         );
 
         let futex_addr = t.scratch + 0x440;
-        let code_addr = t.scratch + 0x840;
+        let code_addr = alloc_exec_code_page(&mut t);
         write_futex_wake_then_exit_program(t.base, code_addr, 0);
         unsafe {
             guest_mem::write_u32(t.base, futex_addr, 0);
@@ -2227,7 +2403,7 @@ mod tests {
         );
 
         let futex_addr = t.scratch + 0x4c0;
-        let code_addr = t.scratch + 0x8c0;
+        let code_addr = alloc_exec_code_page(&mut t);
         write_futex_wake_return_then_exit_program(t.base, code_addr);
         unsafe {
             guest_mem::write_u32(t.base, futex_addr, 0);
@@ -2284,7 +2460,7 @@ mod tests {
         );
 
         let futex_addr = t.scratch + 0x500;
-        let code_addr = t.scratch + 0x900;
+        let code_addr = alloc_exec_code_page(&mut t);
         write_futex_wake_return_then_exit_program(t.base, code_addr);
         unsafe {
             guest_mem::write_u32(t.base, futex_addr, 0);
@@ -2501,7 +2677,8 @@ mod tests {
             t.base,
         );
 
-        write_exit_program(t.base, t.vm.pc, 0);
+        let code_addr = t.vm.pc;
+        write_exit_program(t.base, code_addr, 0);
         t.vm.x[10] = 3;
 
         let mut deferred_plain_forks = VecDeque::new();

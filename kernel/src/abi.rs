@@ -1355,8 +1355,8 @@ pub extern "C" fn thread_step(vm_ptr: u32, budget: i32) -> i32 {
     unsafe {
         let vm = &mut *(vm_ptr as *mut crate::types::ThreadState);
         let base = vm.guest_base;
-        crate::harness_debug::record_thread_step_entry_trace(vm, budget);
-        crate::harness_debug::record_thread_step_phase(vm, 1, budget, 0);
+        crate::tracepoints::record_thread_step_entry_trace(vm, budget);
+        crate::tracepoints::record_thread_step_phase(vm, 1, budget, 0);
         if vm.process_ptr != 0 {
             let ps = &*((base as u64 + vm.process_ptr as u64) as *const crate::types::ProcessState);
             let gen_ptr =
@@ -1366,19 +1366,19 @@ pub extern "C" fn thread_step(vm_ptr: u32, budget: i32) -> i32 {
             let tc_ptr = core::ptr::addr_of!(ps.thread_count);
             crate::guest_mem::init(gen_ptr, lock_ptr, tc_ptr);
         }
-        crate::harness_debug::record_thread_step_phase(vm, 2, budget, 0);
+        crate::tracepoints::record_thread_step_phase(vm, 2, budget, 0);
         if !crate::syscall::thread::thread_may_step(vm, base) {
-            crate::harness_debug::record_thread_step_phase(vm, 3, budget, budget);
-            crate::harness_debug::record_thread_step_trace(vm, budget, budget);
-            crate::harness_debug::record_thread_step_phase(vm, 5, budget, budget);
+            crate::tracepoints::record_thread_step_phase(vm, 3, budget, budget);
+            crate::tracepoints::record_thread_step_trace(vm, budget, budget);
+            crate::tracepoints::record_thread_step_phase(vm, 5, budget, budget);
             return budget;
         }
         vm.status = STATUS_OK;
-        crate::harness_debug::record_thread_step_phase(vm, 3, budget, 0);
+        crate::tracepoints::record_thread_step_phase(vm, 3, budget, 0);
         let remaining = crate::cpu::exec(vm, budget, None, None, None, None);
-        crate::harness_debug::record_thread_step_phase(vm, 4, budget, remaining);
-        crate::harness_debug::record_thread_step_trace(vm, budget, remaining);
-        crate::harness_debug::record_thread_step_phase(vm, 5, budget, remaining);
+        crate::tracepoints::record_thread_step_phase(vm, 4, budget, remaining);
+        crate::tracepoints::record_thread_step_trace(vm, budget, remaining);
+        crate::tracepoints::record_thread_step_phase(vm, 5, budget, remaining);
         remaining
     }
 }

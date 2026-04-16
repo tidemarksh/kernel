@@ -41,19 +41,22 @@ pub mod abi;
 pub mod alloc;
 pub mod cpu;
 pub mod elf;
+mod external_futex;
 pub mod fs;
 pub mod guest_mem;
 #[cfg(any(test, all(target_arch = "wasm32", feature = "harness")))]
 pub mod harness;
+#[cfg(any(test, all(target_arch = "wasm32", feature = "harness")))]
 #[path = "harness/debug.rs"]
 mod harness_debug;
+#[cfg(any(test, all(target_arch = "wasm32", feature = "harness")))]
 #[path = "harness/exports.rs"]
 mod harness_exports;
-#[path = "harness/hooks.rs"]
-mod harness_hooks;
+#[cfg(any(test, all(target_arch = "wasm32", feature = "harness")))]
 #[path = "harness/support.rs"]
 mod harness_support;
 pub mod jit;
 pub mod net;
 pub mod syscall;
+mod tracepoints;
 pub mod types;

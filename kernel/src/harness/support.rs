@@ -29,23 +29,12 @@ pub struct PlainForkSnapshot {
     mm_state: memory::AddressSpaceSnapshot,
 }
 
-static mut GUEST_OUTPUT: Option<Vec<u8>> = None;
 static mut PLAIN_FORK_FUTEX_WAITS: Option<Vec<PlainForkFutexWait>> = None;
 
 #[cfg(any(test, feature = "harness"))]
 pub fn snapshot_plain_fork() -> PlainForkSnapshot {
     PlainForkSnapshot {
         mm_state: memory::snapshot_for_plain_fork(),
-    }
-}
-
-#[cfg(any(test, feature = "harness"))]
-pub fn clear_guest_output() {
-    if !HARNESS_RUNTIME_SUPPORT_ENABLED {
-        return;
-    }
-    unsafe {
-        core::ptr::write(core::ptr::addr_of_mut!(GUEST_OUTPUT), Some(Vec::new()));
     }
 }
 
@@ -178,33 +167,6 @@ pub fn take_plain_fork_futex_wake(pid: i32, addr: u32) -> bool {
         } else {
             false
         }
-    }
-}
-
-pub fn append_guest_output(bytes: &[u8]) {
-    if !HARNESS_RUNTIME_SUPPORT_ENABLED {
-        let _ = bytes;
-        return;
-    }
-    unsafe {
-        let slot = &mut *core::ptr::addr_of_mut!(GUEST_OUTPUT);
-        if slot.is_none() {
-            *slot = Some(Vec::new());
-        }
-        if let Some(buf) = slot.as_mut() {
-            buf.extend_from_slice(bytes);
-        }
-    }
-}
-
-#[cfg(any(test, feature = "harness"))]
-pub fn take_guest_output() -> Vec<u8> {
-    if !HARNESS_RUNTIME_SUPPORT_ENABLED {
-        return Vec::new();
-    }
-    unsafe {
-        let slot = &mut *core::ptr::addr_of_mut!(GUEST_OUTPUT);
-        slot.take().unwrap_or_default()
     }
 }
 

@@ -153,7 +153,7 @@ pub(super) unsafe fn exec_decoded(
                 let rd = decode::rd(raw);
                 let rs1v = decode::rs1(raw);
                 let target = ((x[rs1v] as i64 + decode::imm_i(raw)) as u64) & !1;
-                crate::harness_hooks::record_jalr(
+                crate::tracepoints::record_jalr(
                     vm as *const ThreadState as u32,
                     *pc,
                     rd,

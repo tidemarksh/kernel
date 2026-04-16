@@ -511,7 +511,7 @@ unsafe fn write_scalar_with_mode_and_sync(
         8 => WRITE_OP_U64,
         _ => WRITE_OP_BYTES,
     };
-    crate::harness_hooks::record_guest_write_overlap(
+    crate::tracepoints::record_guest_write_overlap(
         addr,
         bytes.len().min(u32::MAX as usize) as u32,
         op,
@@ -668,7 +668,7 @@ pub unsafe fn write_bytes(base: u32, addr: u64, data: &[u8]) {
     }
     record_access(addr, data.len() as u32, ACCESS_WRITE);
     let (sample, sample_len) = sample_u64(data);
-    crate::harness_hooks::record_guest_write_overlap(
+    crate::tracepoints::record_guest_write_overlap(
         addr,
         data.len().min(u32::MAX as usize) as u32,
         WRITE_OP_BYTES,
@@ -702,8 +702,8 @@ pub unsafe fn zero_mem(base: u32, addr: u64, len: usize) {
         return;
     }
     record_access(addr, len.min(u32::MAX as usize) as u32, ACCESS_ZERO);
-    crate::harness_hooks::record_execve_stage(360, addr, len as u64);
-    crate::harness_hooks::record_guest_write_overlap(
+    crate::tracepoints::record_execve_stage(360, addr, len as u64);
+    crate::tracepoints::record_guest_write_overlap(
         addr,
         len.min(u32::MAX as usize) as u32,
         WRITE_OP_ZERO,
@@ -712,25 +712,25 @@ pub unsafe fn zero_mem(base: u32, addr: u64, len: usize) {
     );
     if unsafe { is_multi_threaded() } && len > 0 {
         let mask = stripe_mask(addr, len);
-        crate::harness_hooks::record_execve_stage(
+        crate::tracepoints::record_execve_stage(
             361,
             unsafe { debug_thread_count() },
             mask as u64,
         );
         unsafe { lock_mask(mask) };
-        crate::harness_hooks::record_execve_stage(362, addr, len as u64);
+        crate::tracepoints::record_execve_stage(362, addr, len as u64);
         unsafe { seqlock_begin_mask(mask) };
         let dst = (base + addr as u32) as *mut u8;
         unsafe { core::ptr::write_bytes(dst, 0, len) };
-        crate::harness_hooks::record_execve_stage(363, addr, len as u64);
+        crate::tracepoints::record_execve_stage(363, addr, len as u64);
         unsafe { seqlock_end_mask(mask) };
         unsafe { unlock_mask(mask) };
-        crate::harness_hooks::record_execve_stage(364, addr, len as u64);
+        crate::tracepoints::record_execve_stage(364, addr, len as u64);
     } else {
-        crate::harness_hooks::record_execve_stage(365, unsafe { debug_thread_count() }, len as u64);
+        crate::tracepoints::record_execve_stage(365, unsafe { debug_thread_count() }, len as u64);
         let dst = (base + addr as u32) as *mut u8;
         unsafe { core::ptr::write_bytes(dst, 0, len) };
-        crate::harness_hooks::record_execve_stage(366, addr, len as u64);
+        crate::tracepoints::record_execve_stage(366, addr, len as u64);
     }
 }
 

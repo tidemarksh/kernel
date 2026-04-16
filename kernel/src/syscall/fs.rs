@@ -952,7 +952,7 @@ pub fn sys_openat(
             let base_ino = match dirfd_base_ino(vm, dirfd, base) {
                 Ok(ino) => ino,
                 Err(errno) => {
-                    crate::harness_hooks::record_path_syscall(
+                    crate::tracepoints::record_path_syscall(
                         vm as *const ThreadState as u32,
                         crate::abi::SYS_OPENAT,
                         dirfd as i64,
@@ -987,7 +987,7 @@ pub fn sys_openat(
         let base_ino = match dirfd_base_ino(vm, dirfd, base) {
             Ok(ino) => ino,
             Err(errno) => {
-                crate::harness_hooks::record_path_syscall(
+                crate::tracepoints::record_path_syscall(
                     vm as *const ThreadState as u32,
                     crate::abi::SYS_OPENAT,
                     dirfd as i64,
@@ -1037,7 +1037,7 @@ pub fn sys_openat(
             }
         }
     };
-    crate::harness_hooks::record_path_syscall(
+    crate::tracepoints::record_path_syscall(
         vm as *const ThreadState as u32,
         crate::abi::SYS_OPENAT,
         dirfd as i64,
@@ -1480,7 +1480,7 @@ fn trace_write_attempt(
     pipe_write_open: i32,
     bytes: Option<&[u8]>,
 ) -> i64 {
-    crate::harness_hooks::record_write_attempt(
+    crate::tracepoints::record_write_attempt(
         fd,
         nr,
         buf_addr,
@@ -1560,7 +1560,6 @@ pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64,
             unsafe {
                 guest_mem::read_bytes(base, buf, &mut tmp[..to_write]);
             }
-            crate::harness_support::append_guest_output(&tmp[..to_write]);
             if let Ok(s) = core::str::from_utf8(&tmp[..to_write]) {
                 eprint!("{s}");
             } else {
@@ -1942,7 +1941,6 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
                 unsafe {
                     guest_mem::read_bytes(base, iov_base, &mut tmp[..to_write]);
                 }
-                crate::harness_support::append_guest_output(&tmp[..to_write]);
                 if let Ok(s) = core::str::from_utf8(&tmp[..to_write]) {
                     eprint!("{s}");
                 } else {
@@ -2408,7 +2406,7 @@ pub fn sys_newfstatat(
             Err(errno) => errno,
         }
     };
-    crate::harness_hooks::record_path_syscall(
+    crate::tracepoints::record_path_syscall(
         vm as *const ThreadState as u32,
         crate::abi::SYS_NEWFSTATAT,
         dirfd as i64,
@@ -2717,7 +2715,7 @@ pub fn sys_faccessat(
         Ok(_) => 0,
         Err(errno) => errno,
     };
-    crate::harness_hooks::record_path_syscall(
+    crate::tracepoints::record_path_syscall(
         vm as *const ThreadState as u32,
         crate::abi::SYS_FACCESSAT,
         dirfd as i64,
@@ -2818,7 +2816,7 @@ pub fn sys_readlinkat(
         let ino = match resolve_at(vm, dirfd, path_addr, base) {
             Ok(ino) => ino,
             Err(errno) => {
-                crate::harness_hooks::record_path_syscall(
+                crate::tracepoints::record_path_syscall(
                     vm as *const ThreadState as u32,
                     crate::abi::SYS_READLINKAT,
                     dirfd as i64,
@@ -2842,7 +2840,7 @@ pub fn sys_readlinkat(
             out as i64
         }
     };
-    crate::harness_hooks::record_path_syscall(
+    crate::tracepoints::record_path_syscall(
         vm as *const ThreadState as u32,
         crate::abi::SYS_READLINKAT,
         dirfd as i64,
