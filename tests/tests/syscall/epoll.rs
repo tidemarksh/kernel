@@ -79,6 +79,84 @@ fn epoll_pwait_reports_ready_pipe() {
 }
 
 #[test]
+fn epoll_ctl_mod_reports_pipe_write_end_level_trigger_writable() {
+    let mut t = TestVm::new();
+    let pipefd_addr = t.scratch + 0x1000;
+    assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) } as u64;
+    let write_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr + 4) } as i64;
+
+    let epfd = epoll::sys_epoll_create1(&mut t.vm, t.base, 0);
+    assert!(epfd >= 3);
+
+    let read_event_addr = t.scratch + 0x2000;
+    let write_event_addr = t.scratch + 0x2010;
+    let out_addr = t.scratch + 0x3000;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, read_event_addr, EPOLLIN);
+        tidemark_kernel::guest_mem::write_u64(t.base, read_event_addr + 8, read_fd);
+        tidemark_kernel::guest_mem::write_u32(t.base, write_event_addr, EPOLLOUT);
+        tidemark_kernel::guest_mem::write_u64(t.base, write_event_addr + 8, write_fd as u64);
+    }
+
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            read_fd,
+            read_event_addr,
+        ),
+        0
+    );
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            write_fd as u64,
+            read_event_addr,
+        ),
+        0
+    );
+
+    assert_eq!(t.sys_write_data(write_fd, b"x"), 1);
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_MOD,
+            write_fd as u64,
+            write_event_addr,
+        ),
+        0
+    );
+    assert_eq!(
+        epoll::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 2, 0, 0),
+        2
+    );
+    let first_events = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) };
+    let first_data = unsafe { tidemark_kernel::guest_mem::read_u64(t.base, out_addr + 8) };
+    let second_events = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr + 16) };
+    let second_data = unsafe { tidemark_kernel::guest_mem::read_u64(t.base, out_addr + 24) };
+    let mut saw_read = false;
+    let mut saw_write = false;
+    for (events, data) in [(first_events, first_data), (second_events, second_data)] {
+        if events == EPOLLIN && data == read_fd {
+            saw_read = true;
+        }
+        if events == EPOLLOUT && data == write_fd as u64 {
+            saw_write = true;
+        }
+    }
+    assert!(saw_read, "expected EPOLLIN for the pipe read end");
+    assert!(saw_write, "expected EPOLLOUT for the pipe write end");
+}
+
+#[test]
 fn epoll_pwait_sets_wait_status_for_blocking_calls() {
     let mut t = TestVm::new();
     let pipefd_addr = t.scratch + 0x1000;

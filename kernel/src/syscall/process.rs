@@ -24,7 +24,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 // Process table — tracks child processes for wait4
 // =========================================================================
 
-const MAX_CHILDREN: usize = 64;
+const MAX_CHILDREN: usize = MAX_PROCESSES;
 pub const EXECVE_RAM_LIMIT: u64 = 0x8000_0000;
 const EXECVE_PATH_MAX: usize = 4096;
 const EXECVE_NAME_MAX: usize = 255;
@@ -161,7 +161,49 @@ struct ProcessRuntimeState {
     vfork_snapshot: VforkSnapshot,
 }
 
+#[cfg(any(test, feature = "harness"))]
+#[derive(Clone, Copy)]
+pub(crate) struct ProcessRuntimeSnapshot {
+    heap_ptr: u32,
+    children: [ChildEntry; MAX_CHILDREN],
+    next_pid: i32,
+    vfork_active: u32,
+    process_table: [ProcessEntry; MAX_PROCESSES],
+    vfork_snapshot: VforkSnapshot,
+}
+
+#[cfg(any(test, feature = "harness"))]
+impl ProcessRuntimeSnapshot {
+    pub(crate) fn empty() -> Self {
+        // Snapshot is plain runtime metadata (integers / fixed arrays / POD structs).
+        unsafe { core::mem::zeroed() }
+    }
+}
+
 static mut PROCESS_RUNTIME_STATE: *mut ProcessRuntimeState = core::ptr::null_mut();
+
+fn checked_process_runtime_state_ptr() -> *mut ProcessRuntimeState {
+    let ptr = unsafe { core::ptr::read(core::ptr::addr_of!(PROCESS_RUNTIME_STATE)) };
+    if ptr.is_null() {
+        return ptr;
+    }
+    let mem_size = (core::arch::wasm32::memory_size(0) as usize) * 65536;
+    let ptr_usize = ptr as usize;
+    let size = core::mem::size_of::<ProcessRuntimeState>();
+    let end = ptr_usize.saturating_add(size);
+    if end > mem_size {
+        #[cfg(any(test, feature = "harness"))]
+        panic!(
+            "PROCESS_RUNTIME_STATE out of wasm range ptr=0x{:x} end=0x{:x} mem_size=0x{:x}",
+            ptr_usize,
+            end,
+            mem_size,
+        );
+        #[cfg(not(any(test, feature = "harness")))]
+        return core::ptr::null_mut();
+    }
+    ptr
+}
 
 fn empty_vfork_snapshot() -> VforkSnapshot {
     VforkSnapshot {
@@ -252,13 +294,76 @@ fn seeded_process_table() -> [ProcessEntry; MAX_PROCESSES] {
 
 fn prs() -> &'static mut ProcessRuntimeState {
     unsafe {
-        let p = core::ptr::read(core::ptr::addr_of!(PROCESS_RUNTIME_STATE));
+        let p = checked_process_runtime_state_ptr();
         &mut *p
     }
 }
 
 fn children() -> &'static mut [ChildEntry; MAX_CHILDREN] {
     &mut prs().children
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn debug_child_entry(pid: i32) -> Option<(i32, bool, i32)> {
+    for child in children().iter() {
+        if child.pid == pid {
+            return Some((child.parent_pid, child.exited, child.wait_status));
+        }
+    }
+    None
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn debug_exited_children_for_parent(parent_pid: i32) -> Vec<(i32, i32)> {
+    let mut exited = Vec::new();
+    for child in children().iter() {
+        if child.parent_pid == parent_pid && child.exited {
+            exited.push((child.pid, child.wait_status));
+        }
+    }
+    exited
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn debug_child_entries_for_parent(parent_pid: i32) -> Vec<(i32, bool, i32)> {
+    let mut entries = Vec::new();
+    for child in children().iter() {
+        if child.parent_pid == parent_pid && child.pid > 0 {
+            entries.push((child.pid, child.exited, child.wait_status));
+        }
+    }
+    entries
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn debug_process_entry_exists(pid: i32) -> bool {
+    process_entry(pid).is_some()
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn sync_child_entry_for_parent(parent_pid: i32, pid: i32, exited: bool, wait_status: i32) {
+    if parent_pid <= 0 || pid <= 0 {
+        return;
+    }
+    for child in children().iter_mut() {
+        if child.pid == pid {
+            child.parent_pid = parent_pid;
+            child.exited = exited;
+            child.wait_status = wait_status;
+            return;
+        }
+    }
+    for child in children().iter_mut() {
+        if child.pid == 0 {
+            *child = ChildEntry {
+                pid,
+                parent_pid,
+                exited,
+                wait_status,
+            };
+            return;
+        }
+    }
 }
 
 fn processes() -> &'static mut [ProcessEntry; MAX_PROCESSES] {
@@ -318,7 +423,7 @@ pub fn attach_process_runtime_state_ptr(ptr: u32) {
 }
 
 pub fn shared_heap_base() -> Option<u32> {
-    let ptr = unsafe { core::ptr::read(core::ptr::addr_of!(PROCESS_RUNTIME_STATE)) };
+    let ptr = checked_process_runtime_state_ptr();
     if ptr.is_null() {
         None
     } else {
@@ -327,7 +432,7 @@ pub fn shared_heap_base() -> Option<u32> {
 }
 
 pub fn shared_heap_ptr() -> Option<u32> {
-    let ptr = unsafe { core::ptr::read(core::ptr::addr_of!(PROCESS_RUNTIME_STATE)) };
+    let ptr = checked_process_runtime_state_ptr();
     if ptr.is_null() {
         None
     } else {
@@ -336,16 +441,43 @@ pub fn shared_heap_ptr() -> Option<u32> {
 }
 
 pub fn shared_heap_alloc(size: u32, align: u32) -> Option<u32> {
-    let ptr = unsafe { core::ptr::read(core::ptr::addr_of!(PROCESS_RUNTIME_STATE)) };
+    let ptr = checked_process_runtime_state_ptr();
     if ptr.is_null() {
         return None;
     }
     let state = unsafe { &*ptr };
     loop {
         let current = state.heap_ptr.load(Ordering::Acquire);
-        let aligned = (current + align - 1) & !(align - 1);
-        let end = aligned + size;
         let mem_size = (core::arch::wasm32::memory_size(0) as u64) * 65536;
+        #[cfg(any(test, feature = "harness"))]
+        {
+            if current < state.heap_base {
+                panic!(
+                    "shared_heap_alloc: current 0x{:x} below heap_base 0x{:x} size={} align={}",
+                    current, state.heap_base, size, align
+                );
+            }
+            if current as u64 > mem_size {
+                panic!(
+                    "shared_heap_alloc: current 0x{:x} beyond mem_size 0x{:x} heap_base=0x{:x} size={} align={}",
+                    current, mem_size, state.heap_base, size, align
+                );
+            }
+        }
+        let align_mask = align.checked_sub(1)?;
+        let aligned = current.checked_add(align_mask).map(|value| value & !align_mask)?;
+        let Some(end) = aligned.checked_add(size) else {
+            return Some(0);
+        };
+        #[cfg(any(test, feature = "harness"))]
+        {
+            if aligned < state.heap_base {
+                panic!(
+                    "shared_heap_alloc: aligned 0x{:x} below heap_base 0x{:x} size={} align={}",
+                    aligned, state.heap_base, size, align
+                );
+            }
+        }
         if end as u64 > mem_size {
             let pages_needed = (end as u64 - mem_size).div_ceil(65536) as usize;
             let result = core::arch::wasm32::memory_grow(0, pages_needed);
@@ -361,6 +493,28 @@ pub fn shared_heap_alloc(size: u32, align: u32) -> Option<u32> {
             return Some(aligned);
         }
     }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn snapshot_process_context_into(snapshot: &mut ProcessRuntimeSnapshot) {
+    let state = prs();
+    snapshot.heap_ptr = state.heap_ptr.load(Ordering::Acquire);
+    snapshot.children = state.children;
+    snapshot.next_pid = state.next_pid;
+    snapshot.vfork_active = state.vfork_active;
+    snapshot.process_table = state.process_table;
+    snapshot.vfork_snapshot = state.vfork_snapshot;
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn restore_process_context(snapshot: &ProcessRuntimeSnapshot) {
+    let state = prs();
+    state.heap_ptr.store(snapshot.heap_ptr, Ordering::Release);
+    state.children = snapshot.children;
+    state.next_pid = snapshot.next_pid;
+    state.vfork_active = snapshot.vfork_active;
+    state.process_table = snapshot.process_table;
+    state.vfork_snapshot = snapshot.vfork_snapshot;
 }
 
 /// Reset process lifecycle state for unit tests.
@@ -389,7 +543,14 @@ fn current_process_state_mut(vm: &ThreadState, base: u32) -> Option<&'static mut
     if vm.process_ptr == 0 {
         return None;
     }
-    unsafe { Some(&mut *((base as u64 + vm.process_ptr as u64) as *mut ProcessState)) }
+    let absolute = (base as u64).checked_add(vm.process_ptr as u64)?;
+    let end = absolute.checked_add(core::mem::size_of::<ProcessState>() as u64)?;
+    let mem_size = (core::arch::wasm32::memory_size(0) as u64).saturating_mul(65536);
+    if end > mem_size {
+        None
+    } else {
+        unsafe { Some(&mut *(absolute as *mut ProcessState)) }
+    }
 }
 
 fn process_idx(pid: i32) -> Option<usize> {
@@ -480,6 +641,19 @@ fn reserve_pid(pid: i32) {
 }
 
 fn alloc_pid() -> i32 {
+    let next_pid = prs().next_pid.max(3);
+    for pid in next_pid..=(MAX_PROCESSES as i32) {
+        if process_entry(pid).is_none() && !children().iter().any(|child| child.pid == pid) {
+            reserve_pid(pid);
+            return pid;
+        }
+    }
+    for pid in 3..next_pid {
+        if process_entry(pid).is_none() && !children().iter().any(|child| child.pid == pid) {
+            reserve_pid(pid);
+            return pid;
+        }
+    }
     let pid = prs().next_pid;
     prs().next_pid = pid + 1;
     pid
@@ -657,7 +831,7 @@ pub fn prepare_fork_child_after_handoff(vm: &mut ThreadState, base: u32, pid: i3
     let clone_tls = vm.clone_tls;
     let clone_child_tidptr = vm.clone_child_tidptr;
 
-    vm.tid = 1;
+    vm.tid = pid;
     vm.x[0] = 0;
     vm.x[10] = 0;
     if clone_child_stack != 0 {
@@ -1652,7 +1826,7 @@ fn complete_execve_in_place_inner(
     vm.fcsr = 0;
     vm.status = STATUS_OK;
     vm.exit_code = 0;
-    vm.tid = 1;
+    vm.tid = target_pid;
     vm.tls_base = elf_result.tls_base;
     vm.sigaltstack_sp = 0;
     vm.sigaltstack_size = 0;
@@ -2333,6 +2507,7 @@ pub fn sys_wait4(
             let child_pid = c.pid;
             let wait_status = c.wait_status as u32;
             *c = empty_child_entry();
+            remove_process_entry(child_pid);
 
             if wstatus_addr != 0 {
                 unsafe { guest_mem::write_u32(base, wstatus_addr, wait_status) };
@@ -2415,6 +2590,7 @@ pub fn sys_waitid(
             let wait_status = child.wait_status;
             if !wnowait {
                 *child = empty_child_entry();
+                remove_process_entry(child_pid);
             }
             write_waitid_siginfo(base, infop_addr, child_pid, wait_status);
             clear_wait4_state(vm);

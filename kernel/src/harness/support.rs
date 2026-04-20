@@ -1,4 +1,6 @@
 #[cfg(any(test, feature = "harness"))]
+use alloc_crate::boxed::Box;
+#[cfg(any(test, feature = "harness"))]
 use alloc_crate::vec;
 use alloc_crate::vec::Vec;
 
@@ -17,7 +19,12 @@ struct SharedMappingSnapshot {
     bytes: Vec<u8>,
 }
 
-struct PlainForkFutexWait {
+#[cfg(any(test, feature = "harness"))]
+pub struct SharedMappingOverlay {
+    snapshots: Vec<SharedMappingSnapshot>,
+}
+
+struct ExternalFutexWait {
     #[cfg_attr(not(any(test, feature = "harness")), allow(dead_code))]
     pid: i32,
     addr: u32,
@@ -25,39 +32,116 @@ struct PlainForkFutexWait {
 }
 
 #[cfg(any(test, feature = "harness"))]
-pub struct PlainForkSnapshot {
+pub struct ProcessContextSnapshot {
     mm_state: memory::AddressSpaceSnapshot,
+    process_state: crate::syscall::process::ProcessRuntimeSnapshot,
+    signal_state: crate::syscall::signal::ProcessSignalSnapshot,
+    resource_state: crate::syscall::resource::ProcessResourceSnapshot,
 }
 
-static mut PLAIN_FORK_FUTEX_WAITS: Option<Vec<PlainForkFutexWait>> = None;
-
 #[cfg(any(test, feature = "harness"))]
-pub fn snapshot_plain_fork() -> PlainForkSnapshot {
-    PlainForkSnapshot {
-        mm_state: memory::snapshot_for_plain_fork(),
+impl ProcessContextSnapshot {
+    fn empty() -> Self {
+        Self {
+            mm_state: memory::AddressSpaceSnapshot::empty(),
+            process_state: crate::syscall::process::ProcessRuntimeSnapshot::empty(),
+            signal_state: crate::syscall::signal::ProcessSignalSnapshot::empty(),
+            resource_state: crate::syscall::resource::ProcessResourceSnapshot::empty(),
+        }
     }
 }
 
 #[cfg(any(test, feature = "harness"))]
-pub fn clear_plain_fork_futex_waits() {
+pub fn debug_validate_process_context_snapshot(snapshot: &ProcessContextSnapshot) -> Result<(), String> {
+    let (len, cap, ptr) = snapshot.mm_state.debug_vma_vec_meta();
+    let elem = core::mem::size_of::<crate::types::Vma>();
+    let mem_size = (core::arch::wasm32::memory_size(0) as usize).saturating_mul(65536);
+    if len > cap {
+        return Err(format!(
+            "process context snapshot invalid vmas len={} cap={} ptr=0x{:x}",
+            len, cap, ptr
+        ));
+    }
+    if cap == 0 {
+        return Ok(());
+    }
+    if ptr == 0 {
+        return Err(format!(
+            "process context snapshot invalid vmas null ptr len={} cap={}",
+            len, cap
+        ));
+    }
+    let bytes = cap.checked_mul(elem).ok_or_else(|| {
+        format!(
+            "process context snapshot invalid vmas cap overflow cap={} elem={}",
+            cap, elem
+        )
+    })?;
+    let end = ptr.checked_add(bytes).ok_or_else(|| {
+        format!(
+            "process context snapshot invalid vmas ptr overflow ptr=0x{:x} bytes={}",
+            ptr, bytes
+        )
+    })?;
+    if end > mem_size {
+        return Err(format!(
+            "process context snapshot invalid vmas out of wasm range ptr=0x{:x} len={} cap={} bytes={} mem_size=0x{:x}",
+            ptr, len, cap, bytes, mem_size
+        ));
+    }
+    Ok(())
+}
+
+static mut EXTERNAL_FUTEX_WAITS: Option<Vec<ExternalFutexWait>> = None;
+
+#[cfg(any(test, feature = "harness"))]
+pub fn snapshot_process_context() -> ProcessContextSnapshot {
+    *snapshot_process_context_boxed()
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn snapshot_process_context_boxed() -> Box<ProcessContextSnapshot> {
+    let mut snapshot = Box::new(ProcessContextSnapshot::empty());
+    snapshot_process_context_fill(snapshot.as_mut());
+    snapshot
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[inline(never)]
+fn snapshot_process_context_fill(snapshot: &mut ProcessContextSnapshot) {
+    memory::snapshot_process_context_into(&mut snapshot.mm_state);
+    crate::syscall::process::snapshot_process_context_into(&mut snapshot.process_state);
+    crate::syscall::signal::snapshot_process_context_into(&mut snapshot.signal_state);
+    crate::syscall::resource::snapshot_process_context_into(&mut snapshot.resource_state);
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn refresh_process_context_runtime_state(snapshot: &mut ProcessContextSnapshot) {
+    crate::syscall::process::snapshot_process_context_into(&mut snapshot.process_state);
+    crate::syscall::signal::snapshot_process_context_into(&mut snapshot.signal_state);
+    crate::syscall::resource::snapshot_process_context_into(&mut snapshot.resource_state);
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn clear_external_futex_waits() {
     if !HARNESS_RUNTIME_SUPPORT_ENABLED {
         return;
     }
     unsafe {
         core::ptr::write(
-            core::ptr::addr_of_mut!(PLAIN_FORK_FUTEX_WAITS),
+            core::ptr::addr_of_mut!(EXTERNAL_FUTEX_WAITS),
             Some(Vec::new()),
         );
     }
 }
 
 #[cfg(any(test, feature = "harness"))]
-pub fn register_plain_fork_futex_wait(pid: i32, addr: u32) {
+pub fn register_external_futex_wait(pid: i32, addr: u32) {
     if !HARNESS_RUNTIME_SUPPORT_ENABLED {
         return;
     }
     unsafe {
-        let slot = &mut *core::ptr::addr_of_mut!(PLAIN_FORK_FUTEX_WAITS);
+        let slot = &mut *core::ptr::addr_of_mut!(EXTERNAL_FUTEX_WAITS);
         if slot.is_none() {
             *slot = Some(Vec::new());
         }
@@ -67,7 +151,7 @@ pub fn register_plain_fork_futex_wait(pid: i32, addr: u32) {
                 wait.woken = false;
                 return;
             }
-            waits.push(PlainForkFutexWait {
+            waits.push(ExternalFutexWait {
                 pid,
                 addr,
                 woken: false,
@@ -77,19 +161,19 @@ pub fn register_plain_fork_futex_wait(pid: i32, addr: u32) {
 }
 
 #[cfg(any(test, feature = "harness"))]
-pub fn clear_plain_fork_futex_wait(pid: i32) {
+pub fn clear_external_futex_wait(pid: i32) {
     if !HARNESS_RUNTIME_SUPPORT_ENABLED {
         return;
     }
     unsafe {
-        let slot = &mut *core::ptr::addr_of_mut!(PLAIN_FORK_FUTEX_WAITS);
+        let slot = &mut *core::ptr::addr_of_mut!(EXTERNAL_FUTEX_WAITS);
         if let Some(waits) = slot.as_mut() {
             waits.retain(|wait| wait.pid != pid);
         }
     }
 }
 
-pub fn wake_plain_fork_futex_waits(addr: u32, max_wake: u32) -> u32 {
+pub fn wake_external_futex_waits(addr: u32, max_wake: u32) -> u32 {
     if !HARNESS_RUNTIME_SUPPORT_ENABLED {
         return 0;
     }
@@ -98,7 +182,7 @@ pub fn wake_plain_fork_futex_waits(addr: u32, max_wake: u32) -> u32 {
     }
 
     unsafe {
-        let slot = &mut *core::ptr::addr_of_mut!(PLAIN_FORK_FUTEX_WAITS);
+        let slot = &mut *core::ptr::addr_of_mut!(EXTERNAL_FUTEX_WAITS);
         let Some(waits) = slot.as_mut() else {
             return 0;
         };
@@ -118,7 +202,7 @@ pub fn wake_plain_fork_futex_waits(addr: u32, max_wake: u32) -> u32 {
     }
 }
 
-pub fn requeue_plain_fork_futex_waits(addr: u32, new_addr: u32, max_requeue: u32) -> u32 {
+pub fn requeue_external_futex_waits(addr: u32, new_addr: u32, max_requeue: u32) -> u32 {
     if !HARNESS_RUNTIME_SUPPORT_ENABLED {
         return 0;
     }
@@ -127,7 +211,7 @@ pub fn requeue_plain_fork_futex_waits(addr: u32, new_addr: u32, max_requeue: u32
     }
 
     unsafe {
-        let slot = &mut *core::ptr::addr_of_mut!(PLAIN_FORK_FUTEX_WAITS);
+        let slot = &mut *core::ptr::addr_of_mut!(EXTERNAL_FUTEX_WAITS);
         let Some(waits) = slot.as_mut() else {
             return 0;
         };
@@ -148,12 +232,12 @@ pub fn requeue_plain_fork_futex_waits(addr: u32, new_addr: u32, max_requeue: u32
 }
 
 #[cfg(any(test, feature = "harness"))]
-pub fn take_plain_fork_futex_wake(pid: i32, addr: u32) -> bool {
+pub fn take_external_futex_wake(pid: i32, addr: u32) -> bool {
     if !HARNESS_RUNTIME_SUPPORT_ENABLED {
         return false;
     }
     unsafe {
-        let slot = &mut *core::ptr::addr_of_mut!(PLAIN_FORK_FUTEX_WAITS);
+        let slot = &mut *core::ptr::addr_of_mut!(EXTERNAL_FUTEX_WAITS);
         let Some(waits) = slot.as_mut() else {
             return false;
         };
@@ -171,10 +255,90 @@ pub fn take_plain_fork_futex_wake(pid: i32, addr: u32) -> bool {
 }
 
 #[cfg(any(test, feature = "harness"))]
-pub fn restore_plain_fork_parent<F, E>(
+pub fn has_external_futex_wait(pid: i32) -> bool {
+    if !HARNESS_RUNTIME_SUPPORT_ENABLED {
+        return false;
+    }
+    unsafe {
+        let slot = &*core::ptr::addr_of!(EXTERNAL_FUTEX_WAITS);
+        let Some(waits) = slot.as_ref() else {
+            return false;
+        };
+
+        waits.iter().any(|wait| wait.pid == pid)
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn take_external_futex_wake_for_pid(pid: i32) -> bool {
+    if !HARNESS_RUNTIME_SUPPORT_ENABLED {
+        return false;
+    }
+    unsafe {
+        let slot = &mut *core::ptr::addr_of_mut!(EXTERNAL_FUTEX_WAITS);
+        let Some(waits) = slot.as_mut() else {
+            return false;
+        };
+
+        if let Some(idx) = waits
+            .iter()
+            .position(|wait| wait.pid == pid && wait.woken)
+        {
+            waits.remove(idx);
+            true
+        } else {
+            false
+        }
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn restore_process_context_parent<F, E>(
     base: u32,
     guest_limit: u64,
-    snapshot: &PlainForkSnapshot,
+    snapshot: &ProcessContextSnapshot,
+    restore_guest_memory: F,
+) -> Result<(), E>
+where
+    F: FnOnce() -> Result<(), E>,
+{
+    crate::syscall::process::restore_process_context(&snapshot.process_state);
+    crate::syscall::signal::restore_process_context(&snapshot.signal_state);
+    crate::syscall::resource::restore_process_context(&snapshot.resource_state);
+    memory::flush_shared_mappings(base);
+    let shared_mappings = snapshot_shared_mappings(base, guest_limit, &snapshot.mm_state);
+    restore_guest_memory()?;
+    memory::restore_process_context(&snapshot.mm_state);
+    memory::refresh_shared_file_mappings(base, guest_limit);
+    restore_shared_mappings(base, &shared_mappings);
+    Ok(())
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn restore_process_context_parent_without_shared_snapshot<F, E>(
+    base: u32,
+    guest_limit: u64,
+    snapshot: &ProcessContextSnapshot,
+    restore_guest_memory: F,
+) -> Result<(), E>
+where
+    F: FnOnce() -> Result<(), E>,
+{
+    crate::syscall::process::restore_process_context(&snapshot.process_state);
+    crate::syscall::signal::restore_process_context(&snapshot.signal_state);
+    crate::syscall::resource::restore_process_context(&snapshot.resource_state);
+    memory::flush_shared_mappings(base);
+    restore_guest_memory()?;
+    memory::restore_process_context(&snapshot.mm_state);
+    memory::refresh_shared_file_mappings(base, guest_limit);
+    Ok(())
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn restore_process_context_mm_only<F, E>(
+    base: u32,
+    guest_limit: u64,
+    snapshot: &ProcessContextSnapshot,
     restore_guest_memory: F,
 ) -> Result<(), E>
 where
@@ -183,10 +347,42 @@ where
     memory::flush_shared_mappings(base);
     let shared_mappings = snapshot_shared_mappings(base, guest_limit, &snapshot.mm_state);
     restore_guest_memory()?;
-    memory::restore_after_plain_fork(&snapshot.mm_state);
+    memory::restore_process_context(&snapshot.mm_state);
     memory::refresh_shared_file_mappings(base, guest_limit);
     restore_shared_mappings(base, &shared_mappings);
     Ok(())
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn restore_process_context_mm_only_from_guest_snapshot<F, E>(
+    base: u32,
+    guest_limit: u64,
+    snapshot: &ProcessContextSnapshot,
+    restore_guest_memory: F,
+) -> Result<(), E>
+where
+    F: FnOnce() -> Result<(), E>,
+{
+    memory::flush_shared_mappings(base);
+    restore_guest_memory()?;
+    memory::restore_process_context(&snapshot.mm_state);
+    memory::refresh_shared_file_mappings(base, guest_limit);
+    Ok(())
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn flush_shared_mapping_overlay(base: u32) {
+    memory::flush_shared_mappings(base);
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn restore_process_context_mm_state(snapshot: &ProcessContextSnapshot) {
+    memory::restore_process_context(&snapshot.mm_state);
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn refresh_shared_mapping_file_mappings(base: u32, guest_limit: u64) {
+    memory::refresh_shared_file_mappings(base, guest_limit);
 }
 
 #[cfg(any(test, feature = "harness"))]
@@ -216,6 +412,54 @@ fn snapshot_shared_mappings(
     }
 
     snapshots
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn capture_live_shared_mapping_overlay(
+    base: u32,
+    guest_limit: u64,
+    snapshot: &ProcessContextSnapshot,
+) -> SharedMappingOverlay {
+    SharedMappingOverlay {
+        snapshots: snapshot_shared_mappings(base, guest_limit, &snapshot.mm_state),
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn restore_live_shared_mapping_overlay(base: u32, mappings: &SharedMappingOverlay) {
+    restore_shared_mappings(base, &mappings.snapshots);
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn read_u32_from_shared_mapping_overlay(
+    mappings: &SharedMappingOverlay,
+    addr: u64,
+) -> Option<u32> {
+    let end = addr.checked_add(4)?;
+    for snapshot in mappings.snapshots.iter() {
+        let snap_end = snapshot.start.checked_add(snapshot.bytes.len() as u64)?;
+        if addr < snapshot.start || end > snap_end {
+            continue;
+        }
+        let off = (addr - snapshot.start) as usize;
+        let bytes = snapshot.bytes.get(off..off + 4)?;
+        return Some(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]));
+    }
+    None
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn cmp_requeue_shared_words_from_shared_mapping_overlay(
+    mappings: &SharedMappingOverlay,
+    futex_addr: u32,
+) -> Option<(u32, u32, u32, u32)> {
+    let addr = futex_addr as u64;
+    Some((
+        read_u32_from_shared_mapping_overlay(mappings, addr)?,
+        read_u32_from_shared_mapping_overlay(mappings, addr + 4)?,
+        read_u32_from_shared_mapping_overlay(mappings, addr + 8)?,
+        read_u32_from_shared_mapping_overlay(mappings, addr + 12)?,
+    ))
 }
 
 #[cfg(any(test, feature = "harness"))]

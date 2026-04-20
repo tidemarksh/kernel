@@ -475,7 +475,7 @@ fn poll_ofd(ofd: &OpenFileDesc, interest: u32) -> u32 {
             }
             // peek == EAGAIN: empty, write end open → not ready
         } else {
-            if super::pipe::pipe_writable(pipe_idx) {
+            if super::pipe::pipe_writable(pipe_idx, interest & EPOLLET != 0) {
                 revents |= EPOLLOUT;
             }
             // Check if read end closed → EPOLLERR

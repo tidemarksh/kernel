@@ -378,7 +378,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             // Dispatch based on clone flags:
             // CLONE_VFORK → vfork (process.rs)
             // CLONE_VM | CLONE_THREAD → new thread (thread.rs)
-            // neither → plain fork (process.rs)
+            // neither → process context (process.rs)
             if a0 & CLONE_VFORK != 0 {
                 let status = process::sys_vfork(vm, base);
                 return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, vm.x[10] as i64, status);

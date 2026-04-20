@@ -9,6 +9,21 @@ use core::alloc::{GlobalAlloc, Layout};
 static mut HEAP_BASE: u32 = 0;
 static mut HEAP_PTR: u32 = 0;
 
+#[cold]
+fn invalid_heap_range(op: &str, ptr: u32, size: u32, mem_size: u64) -> u32 {
+    #[cfg(any(test, feature = "harness"))]
+    panic!(
+        "{op} out of wasm range ptr=0x{ptr:x} size=0x{size:x} mem_size=0x{mem_size:x} heap_base=0x{:x} heap_ptr=0x{:x}",
+        heap_base(),
+        heap_ptr(),
+    );
+    #[cfg(not(any(test, feature = "harness")))]
+    {
+        let _ = (op, ptr, size, mem_size);
+        0
+    }
+}
+
 /// Global allocator backed by the bump allocator.
 #[allow(dead_code)]
 struct BumpAlloc;
@@ -71,10 +86,27 @@ pub unsafe fn reset(base: u32) {
 /// Caller must ensure the WASM linear memory is large enough.
 pub unsafe fn alloc(size: u32, align: u32) -> u32 {
     if let Some(ptr) = crate::syscall::process::shared_heap_alloc(size, align) {
+        if ptr != 0 {
+            let mem_size = (core::arch::wasm32::memory_size(0) as u64) * 65536;
+            let Some(end) = (ptr as u64).checked_add(size as u64) else {
+                return invalid_heap_range("alloc(shared overflow)", ptr, size, mem_size);
+            };
+            if end > mem_size {
+                return invalid_heap_range("alloc(shared)", ptr, size, mem_size);
+            }
+        }
         return ptr;
     }
-    let aligned = (unsafe { HEAP_PTR } + align - 1) & !(align - 1);
-    let end = aligned + size;
+    let Some(align_mask) = align.checked_sub(1) else {
+        return 0;
+    };
+    let current = unsafe { HEAP_PTR };
+    let Some(aligned) = current.checked_add(align_mask).map(|value| value & !align_mask) else {
+        return 0;
+    };
+    let Some(end) = aligned.checked_add(size) else {
+        return 0;
+    };
     // Check against WASM memory size
     let mem_size = (core::arch::wasm32::memory_size(0) as u64) * 65536;
     if end as u64 > mem_size {
@@ -96,6 +128,13 @@ pub unsafe fn alloc(size: u32, align: u32) -> u32 {
 pub unsafe fn alloc_zeroed(size: u32, align: u32) -> u32 {
     let ptr = unsafe { alloc(size, align) };
     if ptr != 0 {
+        let mem_size = (core::arch::wasm32::memory_size(0) as u64) * 65536;
+        let Some(end) = (ptr as u64).checked_add(size as u64) else {
+            return invalid_heap_range("alloc_zeroed overflow", ptr, size, mem_size);
+        };
+        if end > mem_size {
+            return invalid_heap_range("alloc_zeroed", ptr, size, mem_size);
+        }
         unsafe { core::ptr::write_bytes(ptr as *mut u8, 0, size as usize) };
     }
     ptr

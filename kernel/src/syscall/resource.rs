@@ -30,6 +30,21 @@ struct Rlimit64 {
 static mut RLIMIT_SLOTS_PTR: *mut [*mut [Rlimit64; RLIMIT_NLIMITS]; MAX_PROCESSES] =
     core::ptr::null_mut();
 
+#[cfg(any(test, feature = "harness"))]
+#[derive(Clone, Copy)]
+pub(crate) struct ProcessResourceSnapshot {
+    slots: [u32; MAX_PROCESSES],
+}
+
+#[cfg(any(test, feature = "harness"))]
+impl ProcessResourceSnapshot {
+    pub(crate) fn empty() -> Self {
+        Self {
+            slots: [0; MAX_PROCESSES],
+        }
+    }
+}
+
 fn default_limits() -> [Rlimit64; RLIMIT_NLIMITS] {
     let mut limits = [Rlimit64 {
         cur: RLIM64_INFINITY,
@@ -114,6 +129,20 @@ fn resolve_target_pid(vm: &ThreadState, base: u32, pid: i32) -> i32 {
     }
 }
 
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn snapshot_process_context_into(snapshot: &mut ProcessResourceSnapshot) {
+    for (idx, slot) in rlimit_slots().iter().enumerate() {
+        snapshot.slots[idx] = *slot as u32;
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn restore_process_context(snapshot: &ProcessResourceSnapshot) {
+    for (idx, slot) in rlimit_slots().iter_mut().enumerate() {
+        *slot = snapshot.slots[idx] as *mut [Rlimit64; RLIMIT_NLIMITS];
+    }
+}
+
 fn write_limit(base: u32, addr: u64, limit: Rlimit64) {
     unsafe {
         guest_mem::write_u64(base, addr, limit.cur);
@@ -148,12 +177,28 @@ pub fn init_for_process(pid: i32) {
     if index >= MAX_PROCESSES {
         return;
     }
+    let slot = rlimit_slots()[index];
+    if !slot.is_null() {
+        unsafe {
+            core::ptr::write(slot, default_limits());
+        }
+        return;
+    }
     unsafe {
         let size = core::mem::size_of::<[Rlimit64; RLIMIT_NLIMITS]>() as u32;
         let align = core::mem::align_of::<Rlimit64>() as u32;
         let ptr = crate::alloc::alloc_zeroed(size, align);
         if ptr == 0 {
-            core::arch::wasm32::unreachable();
+            panic!(
+                "resource::init_for_process oom pid={} index={} size={} align={} heap_base=0x{:x} heap_ptr=0x{:x} heap_used={}",
+                pid,
+                index,
+                size,
+                align,
+                crate::alloc::heap_base(),
+                crate::alloc::heap_ptr(),
+                crate::alloc::heap_used(),
+            );
         }
         core::ptr::write(ptr as *mut [Rlimit64; RLIMIT_NLIMITS], default_limits());
         rlimit_slots()[index] = ptr as *mut [Rlimit64; RLIMIT_NLIMITS];

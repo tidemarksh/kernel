@@ -274,11 +274,10 @@ pub fn pipe_peek(pipe_idx: u32) -> i64 {
 
 /// Check if the write side of a pipe should report writable to poll/epoll.
 ///
-/// In this ring-buffer model, plain `write(2)` may still accept partial bytes
-/// before the buffer becomes fully empty again. For readiness notifications we
-/// keep a stricter threshold so edge-triggered `EPOLLOUT` matches Linux-shaped
-/// behavior on a once-full pipe.
-pub fn pipe_writable(pipe_idx: u32) -> bool {
+/// Level-triggered readiness follows `write(2)`: any free byte means writable.
+/// Edge-triggered readiness uses a stricter threshold so `EPOLLOUT|EPOLLET`
+/// only re-arms once the pipe becomes fully writable again after backpressure.
+pub fn pipe_writable(pipe_idx: u32, edge_triggered: bool) -> bool {
     let addr = slot_addr(pipe_idx);
     if read_open_ptr(addr).load(Ordering::Acquire) <= 0 {
         return true; // writable in the sense that write() will return (EPIPE)
@@ -292,7 +291,11 @@ pub fn pipe_writable(pipe_idx: u32) -> bool {
         cap - head + tail
     };
     let free = cap - 1 - used;
-    free == cap - 1
+    if edge_triggered {
+        free == cap - 1
+    } else {
+        free > 0
+    }
 }
 
 /// Close one end of a pipe (kernel Worker control plane).

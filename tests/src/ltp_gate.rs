@@ -9,7 +9,7 @@ const EQUIVALENT_PATH: &str = "tests/fixtures/ltp/equivalent.txt";
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum Primitive {
-    PlainForkLifecycle,
+    ProcessLifecycle,
     Wait4Reap,
     ProcTaskVisibility,
     ThreadSleepVisibility,
@@ -22,7 +22,7 @@ pub enum Primitive {
 impl Primitive {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::PlainForkLifecycle => "plain_fork_lifecycle",
+            Self::ProcessLifecycle => "process_lifecycle",
             Self::Wait4Reap => "wait4_reap",
             Self::ProcTaskVisibility => "proc_task_visibility",
             Self::ThreadSleepVisibility => "thread_sleep_visibility",
@@ -36,7 +36,7 @@ impl Primitive {
     fn is_wrapper(self) -> bool {
         matches!(
             self,
-            Self::PlainForkLifecycle | Self::Wait4Reap | Self::CloneFallback
+            Self::ProcessLifecycle | Self::Wait4Reap | Self::CloneFallback
         )
     }
 }
@@ -314,7 +314,7 @@ fn included_local_headers(source: &str) -> Vec<String> {
 fn extract_required_primitives(source: &str) -> BTreeSet<Primitive> {
     let mut set = BTreeSet::new();
     if source.contains("SAFE_FORK(") {
-        set.insert(Primitive::PlainForkLifecycle);
+        set.insert(Primitive::ProcessLifecycle);
     }
     if source.contains("waitpid(-1") || source.contains("wait4(") {
         set.insert(Primitive::Wait4Reap);
@@ -382,8 +382,8 @@ fn extract_blocked_primitives(reason: &str) -> BTreeSet<Primitive> {
     let mut set = BTreeSet::new();
     let lower = reason.to_ascii_lowercase();
 
-    if lower.contains("plain-fork") {
-        set.insert(Primitive::PlainForkLifecycle);
+    if lower.contains("process") {
+        set.insert(Primitive::ProcessLifecycle);
     }
     if lower.contains("wait4/reap") || lower.contains("wake/reap") {
         set.insert(Primitive::Wait4Reap);

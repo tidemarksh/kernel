@@ -41,7 +41,6 @@ pub mod abi;
 pub mod alloc;
 pub mod cpu;
 pub mod elf;
-mod external_futex;
 pub mod fs;
 pub mod guest_mem;
 #[cfg(any(test, all(target_arch = "wasm32", feature = "harness")))]

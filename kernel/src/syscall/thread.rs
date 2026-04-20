@@ -17,6 +17,32 @@ use crate::types::{
 };
 use core::sync::atomic::Ordering;
 
+#[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
+#[inline(always)]
+fn wake_external_waiters(addr: u32, max_wake: u32) -> u32 {
+    crate::harness_support::wake_external_futex_waits(addr, max_wake)
+}
+
+#[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
+#[inline(always)]
+fn wake_external_waiters(addr: u32, max_wake: u32) -> u32 {
+    let _ = (addr, max_wake);
+    0
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
+#[inline(always)]
+fn requeue_external_waiters(addr: u32, new_addr: u32, max_requeue: u32) -> u32 {
+    crate::harness_support::requeue_external_futex_waits(addr, new_addr, max_requeue)
+}
+
+#[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
+#[inline(always)]
+fn requeue_external_waiters(addr: u32, new_addr: u32, max_requeue: u32) -> u32 {
+    let _ = (addr, new_addr, max_requeue);
+    0
+}
+
 const ROBUST_LIST_HEAD_LEN: u64 = 24;
 const FUTEX_WAITERS: u32 = 0x8000_0000;
 const FUTEX_OWNER_DIED: u32 = 0x4000_0000;
@@ -981,16 +1007,10 @@ pub fn sys_futex(
                 val.min(u32::MAX as u64) as u32,
                 wake_bitset,
             );
-            // Deferred plain-fork children are not represented by live
+            // Deferred process children are not represented by live
             // ThreadRecord slots while the harness runner keeps the parent
             // executing, so external waiters must be counted separately.
-            #[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
-            let external = crate::external_futex::wake_plain_fork_futex_waits(
-                addr as u32,
-                val.min(u32::MAX as u64) as u32,
-            );
-            #[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
-            let external = 0u32;
+            let external = wake_external_waiters(addr as u32, val.min(u32::MAX as u64) as u32);
             (local + external) as i64
         }
         FUTEX_CMP_REQUEUE => {
@@ -1013,11 +1033,7 @@ pub fn sys_futex(
                 wake_count,
                 FUTEX_BITSET_MATCH_ANY,
             );
-            #[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
-            let external_wake =
-                crate::external_futex::wake_plain_fork_futex_waits(addr as u32, wake_count);
-            #[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
-            let external_wake = 0u32;
+            let external_wake = wake_external_waiters(addr as u32, wake_count);
 
             let local_requeue = requeue_futex_waiters_by_process_ptr(
                 vm.process_ptr,
@@ -1026,14 +1042,7 @@ pub fn sys_futex(
                 addr2 as u32,
                 requeue_count,
             );
-            #[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
-            let external_requeue = crate::external_futex::requeue_plain_fork_futex_waits(
-                addr as u32,
-                addr2 as u32,
-                requeue_count,
-            );
-            #[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
-            let external_requeue = 0u32;
+            let external_requeue = requeue_external_waiters(addr as u32, addr2 as u32, requeue_count);
 
             (local_wake + external_wake + local_requeue + external_requeue) as i64
         }

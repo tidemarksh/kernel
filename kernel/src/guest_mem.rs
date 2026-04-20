@@ -8,9 +8,9 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 #[derive(Clone, Copy)]
 pub struct GuestMemorySyncContext {
-    reservation_gen: *const AtomicU32,
-    reservation_lock: *const AtomicU32,
-    thread_count: *const AtomicU32,
+    pub(crate) reservation_gen: *const AtomicU32,
+    pub(crate) reservation_lock: *const AtomicU32,
+    pub(crate) thread_count: *const AtomicU32,
 }
 
 impl GuestMemorySyncContext {
@@ -47,6 +47,25 @@ const WRITE_OP_U32: u32 = 3;
 const WRITE_OP_U64: u32 = 4;
 const WRITE_OP_BYTES: u32 = 5;
 const WRITE_OP_ZERO: u32 = 6;
+
+#[inline(always)]
+fn check_range(base: u32, addr: u64, len: usize, op: &str) {
+    #[cfg(any(test, feature = "harness"))]
+    {
+        let absolute = (base as u64)
+            .checked_add(addr)
+            .unwrap_or_else(|| panic!("{op}: address overflow base=0x{base:x} addr=0x{addr:x} len=0x{len:x}"));
+        let end = absolute
+            .checked_add(len as u64)
+            .unwrap_or_else(|| panic!("{op}: end overflow absolute=0x{absolute:x} len=0x{len:x}"));
+        let mem_size = (core::arch::wasm32::memory_size(0) as u64).saturating_mul(65536);
+        if end > mem_size {
+            panic!(
+                "{op}: out of bounds base=0x{base:x} addr=0x{addr:x} absolute=0x{absolute:x} end=0x{end:x} len=0x{len:x} mem_size=0x{mem_size:x}"
+            );
+        }
+    }
+}
 
 #[inline(always)]
 fn record_access(addr: u64, len: u32, kind: u32) {
@@ -254,6 +273,7 @@ unsafe fn read_gen(slot: usize) -> u32 {
 #[inline(always)]
 pub unsafe fn read_u8(base: u32, addr: u64) -> u8 {
     record_access(addr, 1, ACCESS_READ);
+    check_range(base, addr, 1, "guest_mem::read_u8");
     unsafe { *((base + addr as u32) as *const u8) }
 }
 
@@ -264,6 +284,7 @@ pub unsafe fn read_u8(base: u32, addr: u64) -> u8 {
 #[inline(always)]
 pub unsafe fn read_u16(base: u32, addr: u64) -> u16 {
     record_access(addr, 2, ACCESS_READ);
+    check_range(base, addr, 2, "guest_mem::read_u16");
     unsafe { ((base + addr as u32) as *const u16).read_unaligned() }
 }
 
@@ -274,6 +295,7 @@ pub unsafe fn read_u16(base: u32, addr: u64) -> u16 {
 #[inline(always)]
 pub unsafe fn read_u32(base: u32, addr: u64) -> u32 {
     record_access(addr, 4, ACCESS_READ);
+    check_range(base, addr, 4, "guest_mem::read_u32");
     let ptr = (base + addr as u32) as usize;
     unsafe { (ptr as *const u32).read_unaligned() }
 }
@@ -285,6 +307,7 @@ pub unsafe fn read_u32(base: u32, addr: u64) -> u32 {
 #[inline(always)]
 pub unsafe fn read_u64(base: u32, addr: u64) -> u64 {
     record_access(addr, 8, ACCESS_READ);
+    check_range(base, addr, 8, "guest_mem::read_u64");
     let ptr = (base + addr as u32) as usize;
     unsafe { (ptr as *const u64).read_unaligned() }
 }
@@ -331,6 +354,7 @@ pub unsafe fn read_bytes(base: u32, addr: u64, buf: &mut [u8]) {
         return;
     }
     record_access(addr, buf.len() as u32, ACCESS_READ);
+    check_range(base, addr, buf.len(), "guest_mem::read_bytes");
     let src = (base + addr as u32) as *const u8;
     debug_assert!(
         !src.is_null(),
@@ -561,6 +585,7 @@ unsafe fn write_scalar_with_mode_and_sync(
 #[inline(always)]
 pub unsafe fn write_u8(base: u32, addr: u64, val: u8) {
     record_access(addr, 1, ACCESS_WRITE);
+    check_range(base, addr, 1, "guest_mem::write_u8");
     if unsafe { is_multi_threaded() } {
         let slot = ((addr >> 3) & 63) as usize;
         unsafe { lock_slot(slot) };
@@ -580,6 +605,7 @@ pub unsafe fn write_u8(base: u32, addr: u64, val: u8) {
 #[inline(always)]
 pub unsafe fn write_u16(base: u32, addr: u64, val: u16) {
     record_access(addr, 2, ACCESS_WRITE);
+    check_range(base, addr, 2, "guest_mem::write_u16");
     if unsafe { is_multi_threaded() } {
         let mask = stripe_mask(addr, 2);
         unsafe { lock_mask(mask) };
@@ -599,6 +625,7 @@ pub unsafe fn write_u16(base: u32, addr: u64, val: u16) {
 #[inline(always)]
 pub unsafe fn write_u32(base: u32, addr: u64, val: u32) {
     record_access(addr, 4, ACCESS_WRITE);
+    check_range(base, addr, 4, "guest_mem::write_u32");
     let bytes = val.to_le_bytes();
     unsafe { write_scalar_with_mode(base, addr, &bytes, true, true, false) };
 }
@@ -610,6 +637,7 @@ pub unsafe fn write_u32(base: u32, addr: u64, val: u32) {
 #[inline(always)]
 pub unsafe fn write_u64(base: u32, addr: u64, val: u64) {
     record_access(addr, 8, ACCESS_WRITE);
+    check_range(base, addr, 8, "guest_mem::write_u64");
     let bytes = val.to_le_bytes();
     unsafe { write_scalar_with_mode(base, addr, &bytes, true, true, false) };
 }
@@ -622,6 +650,12 @@ pub unsafe fn sync_context_from_process(
     if process_ptr == 0 {
         return None;
     }
+    check_range(
+        base,
+        process_ptr as u64,
+        core::mem::size_of::<crate::types::ProcessState>(),
+        "guest_mem::sync_context_from_process",
+    );
     let ps = unsafe { &*((base as u64 + process_ptr as u64) as *const crate::types::ProcessState) };
     Some(GuestMemorySyncContext::new(
         core::ptr::addr_of!(ps.reservation_gen) as *const AtomicU32,
@@ -667,6 +701,7 @@ pub unsafe fn write_bytes(base: u32, addr: u64, data: &[u8]) {
         return;
     }
     record_access(addr, data.len() as u32, ACCESS_WRITE);
+    check_range(base, addr, data.len(), "guest_mem::write_bytes");
     let (sample, sample_len) = sample_u64(data);
     crate::tracepoints::record_guest_write_overlap(
         addr,
@@ -702,6 +737,7 @@ pub unsafe fn zero_mem(base: u32, addr: u64, len: usize) {
         return;
     }
     record_access(addr, len.min(u32::MAX as usize) as u32, ACCESS_ZERO);
+    check_range(base, addr, len, "guest_mem::zero_mem");
     crate::tracepoints::record_execve_stage(360, addr, len as u64);
     crate::tracepoints::record_guest_write_overlap(
         addr,

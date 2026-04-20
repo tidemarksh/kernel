@@ -259,7 +259,7 @@ pub const MAX_EPOLL_ENTRIES: usize = 64;
 pub const MAX_EVENTFDS: usize = 16;
 pub const MAX_TIMERFDS: usize = 8;
 pub const MAX_PIPES: usize = 64;
-pub const MAX_PROCESSES: usize = 64;
+pub const MAX_PROCESSES: usize = 2048;
 
 // Futex operations (https://man7.org/linux/man-pages/man2/futex.2.html)
 pub const FUTEX_WAIT: u32 = 0;
@@ -1497,43 +1497,51 @@ pub extern "C" fn process_state_bytes() -> u32 {
     core::mem::size_of::<crate::types::ProcessState>() as u32
 }
 
-#[unsafe(no_mangle)]
-pub extern "C" fn process_thread_tid(vm_ptr: u32, slot: u32) -> i32 {
+fn process_state_from_vm(vm_ptr: u32) -> Option<&'static mut crate::types::ProcessState> {
     unsafe {
         let vm = &*(vm_ptr as *const crate::types::ThreadState);
-        if vm.process_ptr == 0 || slot as usize >= MAX_THREADS {
-            return 0;
+        if vm.process_ptr == 0 {
+            None
+        } else {
+            Some(
+                &mut *((vm.guest_base as u64 + vm.process_ptr as u64)
+                    as *mut crate::types::ProcessState),
+            )
         }
-        let ps =
-            &*((vm.guest_base as u64 + vm.process_ptr as u64) as *const crate::types::ProcessState);
-        ps.threads[slot as usize].tid
     }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn process_thread_tid(vm_ptr: u32, slot: u32) -> i32 {
+    let Some(ps) = process_state_from_vm(vm_ptr) else {
+        return 0;
+    };
+    if slot as usize >= MAX_THREADS {
+        return 0;
+    }
+    ps.threads[slot as usize].tid
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn process_thread_state(vm_ptr: u32, slot: u32) -> i32 {
-    unsafe {
-        let vm = &*(vm_ptr as *const crate::types::ThreadState);
-        if vm.process_ptr == 0 || slot as usize >= MAX_THREADS {
-            return crate::types::THREAD_NONE;
-        }
-        let ps =
-            &*((vm.guest_base as u64 + vm.process_ptr as u64) as *const crate::types::ProcessState);
-        ps.threads[slot as usize].state
+    let Some(ps) = process_state_from_vm(vm_ptr) else {
+        return crate::types::THREAD_NONE;
+    };
+    if slot as usize >= MAX_THREADS {
+        return crate::types::THREAD_NONE;
     }
+    ps.threads[slot as usize].state
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn process_thread_vm_ptr(vm_ptr: u32, slot: u32) -> u32 {
-    unsafe {
-        let vm = &*(vm_ptr as *const crate::types::ThreadState);
-        if vm.process_ptr == 0 || slot as usize >= MAX_THREADS {
-            return 0;
-        }
-        let ps =
-            &*((vm.guest_base as u64 + vm.process_ptr as u64) as *const crate::types::ProcessState);
-        ps.threads[slot as usize].thread_ptr
+    let Some(ps) = process_state_from_vm(vm_ptr) else {
+        return 0;
+    };
+    if slot as usize >= MAX_THREADS {
+        return 0;
     }
+    ps.threads[slot as usize].thread_ptr
 }
 
 #[unsafe(no_mangle)]
@@ -1954,20 +1962,6 @@ pub extern "C" fn process_upsert_process_entry(
 #[unsafe(no_mangle)]
 pub extern "C" fn process_remove_process_entry(pid: i32) {
     crate::syscall::process::remove_process_entry(pid);
-}
-
-fn process_state_from_vm(vm_ptr: u32) -> Option<&'static mut crate::types::ProcessState> {
-    unsafe {
-        let vm = &*(vm_ptr as *const crate::types::ThreadState);
-        if vm.process_ptr == 0 {
-            None
-        } else {
-            Some(
-                &mut *((vm.guest_base as u64 + vm.process_ptr as u64)
-                    as *mut crate::types::ProcessState),
-            )
-        }
-    }
 }
 
 #[unsafe(no_mangle)]

@@ -61,6 +61,23 @@ static mut SIG_SLOTS_PTR: *mut [*mut [SigAction; MAX_SIGNALS]; MAX_PROCESSES] =
     core::ptr::null_mut();
 static mut PROCESS_PENDING_PTR: *mut [u64; MAX_PROCESSES] = core::ptr::null_mut();
 
+#[cfg(any(test, feature = "harness"))]
+#[derive(Clone, Copy)]
+pub(crate) struct ProcessSignalSnapshot {
+    sig_slots: [u32; MAX_PROCESSES],
+    process_pending: [u64; MAX_PROCESSES],
+}
+
+#[cfg(any(test, feature = "harness"))]
+impl ProcessSignalSnapshot {
+    pub(crate) fn empty() -> Self {
+        Self {
+            sig_slots: [0; MAX_PROCESSES],
+            process_pending: [0; MAX_PROCESSES],
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct SignalTrace {
     vm_ptr: u32,
@@ -394,6 +411,22 @@ pub fn attach_process_signal_state(sig_slots_ptr: u32, process_pending_ptr: u32)
     }
 }
 
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn snapshot_process_context_into(snapshot: &mut ProcessSignalSnapshot) {
+    for (idx, slot) in sig_slots().iter().enumerate() {
+        snapshot.sig_slots[idx] = *slot as u32;
+    }
+    snapshot.process_pending = *process_pending();
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn restore_process_context(snapshot: &ProcessSignalSnapshot) {
+    for (idx, slot) in sig_slots().iter_mut().enumerate() {
+        *slot = snapshot.sig_slots[idx] as *mut [SigAction; MAX_SIGNALS];
+    }
+    *process_pending() = snapshot.process_pending;
+}
+
 #[inline(always)]
 fn sigactions_for(pid: i32) -> Option<&'static mut [SigAction; MAX_SIGNALS]> {
     if pid <= 0 {
@@ -510,11 +543,30 @@ pub fn init_for_process(pid: i32) {
         return;
     }
     unsafe {
+        let existing = sig_slots()[idx];
+        if !existing.is_null() {
+            core::ptr::write_bytes(
+                existing as *mut u8,
+                0,
+                core::mem::size_of::<[SigAction; MAX_SIGNALS]>(),
+            );
+            process_pending()[idx] = 0;
+            return;
+        }
         let size = core::mem::size_of::<[SigAction; MAX_SIGNALS]>() as u32;
         let align = core::mem::align_of::<SigAction>() as u32;
         let ptr = crate::alloc::alloc_zeroed(size, align);
         if ptr == 0 {
-            core::arch::wasm32::unreachable();
+            panic!(
+                "signal::init_for_process oom pid={} idx={} size={} align={} heap_base=0x{:x} heap_ptr=0x{:x} heap_used={}",
+                pid,
+                idx,
+                size,
+                align,
+                crate::alloc::heap_base(),
+                crate::alloc::heap_ptr(),
+                crate::alloc::heap_used(),
+            );
         }
         sig_slots()[idx] = ptr as *mut [SigAction; MAX_SIGNALS];
         process_pending()[idx] = 0;

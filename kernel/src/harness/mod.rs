@@ -1,8 +1,20 @@
 pub mod support {
     pub use crate::harness_support::{
-        PlainForkSnapshot, clear_plain_fork_futex_wait, clear_plain_fork_futex_waits,
-        register_plain_fork_futex_wait, restore_plain_fork_parent, snapshot_plain_fork,
-        take_plain_fork_futex_wake,
+        SharedMappingOverlay, capture_live_shared_mapping_overlay,
+        ProcessContextSnapshot, clear_external_futex_wait, clear_external_futex_waits,
+        debug_validate_process_context_snapshot,
+        has_external_futex_wait, refresh_process_context_runtime_state,
+        flush_shared_mapping_overlay, refresh_shared_mapping_file_mappings,
+        cmp_requeue_shared_words_from_shared_mapping_overlay,
+        register_external_futex_wait,
+        read_u32_from_shared_mapping_overlay,
+        restore_process_context_mm_state,
+        restore_live_shared_mapping_overlay,
+        restore_process_context_mm_only, restore_process_context_mm_only_from_guest_snapshot,
+        restore_process_context_parent, restore_process_context_parent_without_shared_snapshot,
+        snapshot_process_context,
+        snapshot_process_context_boxed,
+        take_external_futex_wake, take_external_futex_wake_for_pid,
     };
 }
 
@@ -16,7 +28,7 @@ pub const DEFAULT_BRK_START: u64 = 0x12_0000;
 pub const DEFAULT_MEMORY_PAGES: usize = 256;
 pub const DEFAULT_GUEST_RAM_SIZE: u32 = 0x100_0000;
 pub const DEFAULT_GUEST_RAM_ALIGN: u32 = 0x20_0000;
-pub const DEFAULT_GUEST_BASE_PADDING: u32 = 0x080_00000;
+pub const DEFAULT_GUEST_BASE_PADDING: u32 = 0x200_00000;
 pub const DEFAULT_HOST_HEAP_PADDING: u32 = 0x040_00000;
 
 static mut TEST_GUEST_BASE: u32 = 0;
@@ -93,18 +105,18 @@ impl TestVm {
     pub fn new() -> Self {
         unsafe {
             let current_pages = core::arch::wasm32::memory_size(0);
+            let current_bytes = (current_pages as u64).saturating_mul(65536);
+            let guest_base_hint =
+                current_bytes.saturating_add(DEFAULT_GUEST_BASE_PADDING as u64);
+            let aligned = guest_base_hint.saturating_add((DEFAULT_GUEST_RAM_ALIGN - 1) as u64)
+                & !((DEFAULT_GUEST_RAM_ALIGN - 1) as u64);
+            let candidate_base = aligned.min(u32::MAX as u64) as u32;
             let base = if TEST_GUEST_BASE != 0 {
-                TEST_GUEST_BASE
+                TEST_GUEST_BASE.max(candidate_base)
             } else {
-                let current_bytes = (current_pages as u64).saturating_mul(65536);
-                let guest_base_hint =
-                    current_bytes.saturating_add(DEFAULT_GUEST_BASE_PADDING as u64);
-                let aligned = guest_base_hint.saturating_add((DEFAULT_GUEST_RAM_ALIGN - 1) as u64)
-                    & !((DEFAULT_GUEST_RAM_ALIGN - 1) as u64);
-                let base = aligned.min(u32::MAX as u64) as u32;
-                TEST_GUEST_BASE = base;
-                base
+                candidate_base
             };
+            TEST_GUEST_BASE = base;
             let target_bytes = (base as u64).saturating_add(DEFAULT_GUEST_RAM_SIZE as u64);
             let target_pages = target_bytes.div_ceil(65536) as usize;
             let target_pages = target_pages.max(DEFAULT_MEMORY_PAGES);

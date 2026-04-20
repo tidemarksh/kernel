@@ -55,7 +55,7 @@ struct ProcMapsEntry {
     label: ProcMapsLabel,
 }
 
-/// Internal snapshot of address space state used by plain-fork handoff support.
+/// Internal snapshot of address space state used by process handoff support.
 #[derive(Clone)]
 #[allow(dead_code)]
 pub(crate) struct AddressSpaceSnapshot {
@@ -70,6 +70,21 @@ impl AddressSpaceSnapshot {
     #[allow(dead_code)]
     pub(crate) fn vmas(&self) -> &[Vma] {
         &self.vmas
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn empty() -> Self {
+        Self {
+            vmas: Vec::new(),
+            brk_base: 0,
+            brk_current: 0,
+            mmap_next: 0,
+            has_prot_none: 0,
+        }
+    }
+
+    pub(crate) fn debug_vma_vec_meta(&self) -> (usize, usize, usize) {
+        (self.vmas.len(), self.vmas.capacity(), self.vmas.as_ptr() as usize)
     }
 }
 
@@ -139,23 +154,68 @@ pub fn has_prot_none() -> bool {
 }
 
 #[allow(dead_code)]
-pub(crate) fn snapshot_for_plain_fork() -> AddressSpaceSnapshot {
-    let s = ms();
-    AddressSpaceSnapshot {
-        // Plain-fork handoff snapshots only address-space metadata; kernel-owned
-        // objects are reattached by the runtime from the canonical owner.
-        vmas: s.vmas.clone(),
-        brk_base: s.brk_base,
-        brk_current: s.brk_current,
-        mmap_next: s.mmap_next,
-        has_prot_none: s.has_prot_none,
-    }
+pub(crate) fn snapshot_process_context() -> AddressSpaceSnapshot {
+    let mut snapshot = AddressSpaceSnapshot::empty();
+    snapshot_process_context_into(&mut snapshot);
+    snapshot
 }
 
 #[allow(dead_code)]
-pub(crate) fn restore_after_plain_fork(snapshot: &AddressSpaceSnapshot) {
+pub(crate) fn snapshot_process_context_into(snapshot: &mut AddressSpaceSnapshot) {
     let s = ms();
-    s.vmas = snapshot.vmas.clone();
+    validate_vma_vec_for_snapshot(&s.vmas);
+    let vmas = snapshot_process_context_clone_vmas(&s.vmas);
+    snapshot.vmas = vmas;
+    snapshot.brk_base = s.brk_base;
+    snapshot.brk_current = s.brk_current;
+    snapshot.mmap_next = s.mmap_next;
+    snapshot.has_prot_none = s.has_prot_none;
+}
+
+#[inline(never)]
+fn snapshot_process_context_clone_vmas(vmas: &Vec<Vma>) -> Vec<Vma> {
+    vmas.clone()
+}
+
+#[allow(dead_code)]
+fn validate_vma_vec_for_snapshot(vmas: &Vec<Vma>) {
+    let len = vmas.len();
+    let cap = vmas.capacity();
+    let ptr = vmas.as_ptr() as usize;
+    let elem = core::mem::size_of::<Vma>();
+    let mem_size = (core::arch::wasm32::memory_size(0) as usize).saturating_mul(65536);
+    if len > cap {
+        panic!("snapshot_process_context: len {} > cap {}", len, cap);
+    }
+    if cap == 0 {
+        return;
+    }
+    if ptr == 0 {
+        panic!("snapshot_process_context: non-empty vma vec with null ptr len={} cap={}", len, cap);
+    }
+    let bytes = cap
+        .checked_mul(elem)
+        .unwrap_or_else(|| panic!("snapshot_process_context: cap overflow cap={} elem={}", cap, elem));
+    let end = ptr
+        .checked_add(bytes)
+        .unwrap_or_else(|| panic!("snapshot_process_context: ptr overflow ptr=0x{:x} bytes={}", ptr, bytes));
+    if end > mem_size {
+        panic!(
+            "snapshot_process_context: vma vec out of linear memory ptr=0x{:x} len={} cap={} bytes={} mem_size=0x{:x}",
+            ptr, len, cap, bytes, mem_size
+        );
+    }
+}
+
+fn validate_snapshot_for_restore(snapshot: &AddressSpaceSnapshot) {
+    validate_vma_vec_for_snapshot(&snapshot.vmas);
+}
+
+#[allow(dead_code)]
+pub(crate) fn restore_process_context(snapshot: &AddressSpaceSnapshot) {
+    validate_snapshot_for_restore(snapshot);
+    let s = ms();
+    s.vmas.clone_from(&snapshot.vmas);
     s.brk_base = snapshot.brk_base;
     s.brk_current = snapshot.brk_current;
     s.mmap_next = snapshot.mmap_next;
@@ -981,47 +1041,60 @@ pub fn sys_mprotect(_vm: &mut ThreadState, base: u32, addr: u64, length: u64, pr
     let end = addr + len;
     let s = ms();
 
-    let mut i = 0;
-    while i < s.vmas.len() {
-        let v = s.vmas[i];
+    let original_vmas = s.vmas.clone();
+    let mut rebuilt_vmas = Vec::with_capacity(original_vmas.len() + 2);
+
+    for v in original_vmas {
         if v.end <= addr || v.start >= end {
-            i += 1;
+            rebuilt_vmas.push(v);
             continue;
         }
 
         if v.start < addr {
-            s.vmas.push(Vma {
+            rebuilt_vmas.push(Vma {
                 start: v.start,
                 end: addr,
                 ..v
             });
-            s.vmas[i].start = addr;
         }
+
+        let segment = Vma {
+            start: v.start.max(addr),
+            end: v.end.min(end),
+            prot: prot as i32,
+            ..v
+        };
+
+        if segment.end > segment.start {
+            let was_prot_none = v.prot == PROT_NONE;
+            if prot as i32 != PROT_NONE
+                && was_prot_none
+                && (segment.flags as u64 & MAP_ANONYMOUS) != 0
+            {
+                unsafe {
+                    if !ensure_memory_capacity_for_guest_range(base, segment.end) {
+                        return ENOMEM;
+                    }
+                    guest_mem::zero_mem(
+                        base,
+                        segment.start,
+                        (segment.end - segment.start) as usize,
+                    );
+                }
+            }
+            rebuilt_vmas.push(segment);
+        }
+
         if v.end > end {
-            let cur = s.vmas[i];
-            s.vmas.push(Vma {
+            rebuilt_vmas.push(Vma {
                 start: end,
                 end: v.end,
-                ..cur
+                ..v
             });
-            s.vmas[i].end = end;
         }
-        let was_prot_none = s.vmas[i].prot == PROT_NONE;
-        let segment = s.vmas[i];
-        if prot as i32 != PROT_NONE && was_prot_none && (segment.flags as u64 & MAP_ANONYMOUS) != 0
-        {
-            unsafe {
-                if !ensure_memory_capacity_for_guest_range(base, segment.end) {
-                    return ENOMEM;
-                }
-                guest_mem::zero_mem(base, segment.start, (segment.end - segment.start) as usize);
-            }
-        }
-        s.vmas[i].prot = prot as i32;
-        i += 1;
     }
 
-    s.vmas.sort_by_key(|v| v.start);
+    s.vmas = rebuilt_vmas;
     recompute_prot_none(s);
     0
 }

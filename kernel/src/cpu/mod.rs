@@ -32,6 +32,20 @@ use crate::types::ThreadState;
 const REG_WRITE_SOURCE_STEP: u32 = 1;
 const REG_WRITE_SOURCE_VM_RESTORE: u32 = 2;
 
+struct ExecLoopCtx<'a> {
+    vm: &'a mut ThreadState,
+    base: u32,
+    pc: &'a mut u64,
+    x: &'a mut [u64; 32],
+    f: &'a mut [u64; 32],
+    fcsr: &'a mut u32,
+    remaining: &'a mut i32,
+    cache: Option<&'a mut BlockCache>,
+    hot_counts: Option<&'a mut HotCounts>,
+    jit_bitmap: Option<&'a JitBitmap>,
+    trace_buf: Option<&'a mut TraceBuffer>,
+}
+
 /// Execute up to `budget` guest instructions.
 /// Returns remaining budget (negative = overrun).
 ///
@@ -71,7 +85,21 @@ pub unsafe fn exec(
 /// # Safety
 /// `vm` must point to a valid ThreadState. Guest memory at `base..` must be
 /// accessible for the guest address space referenced by the thread.
+#[inline(never)]
 pub unsafe fn exec_at_base(
+    vm: &mut ThreadState,
+    budget: i32,
+    base: u32,
+    cache: Option<&mut BlockCache>,
+    hot_counts: Option<&mut HotCounts>,
+    jit_bitmap: Option<&JitBitmap>,
+    trace_buf: Option<&mut TraceBuffer>,
+) -> i32 {
+    unsafe { exec_at_base_impl(vm, budget, base, cache, hot_counts, jit_bitmap, trace_buf) }
+}
+
+#[inline(never)]
+unsafe fn exec_at_base_impl(
     vm: &mut ThreadState,
     budget: i32,
     base: u32,
@@ -86,235 +114,247 @@ pub unsafe fn exec_at_base(
         let mut f = vm.f;
         let mut fcsr = vm.fcsr;
         let mut remaining = budget;
+        let mut ctx = ExecLoopCtx {
+            vm,
+            base,
+            pc: &mut pc,
+            x: &mut x,
+            f: &mut f,
+            fcsr: &mut fcsr,
+            remaining: &mut remaining,
+            cache: cache.as_deref_mut(),
+            hot_counts: hot_counts.as_deref_mut(),
+            jit_bitmap,
+            trace_buf: trace_buf.as_deref_mut(),
+        };
+        remaining = exec_at_base_loop(&mut ctx);
+        vm.x = x;
+        vm.f = f;
+        vm.pc = pc;
+        vm.fcsr = fcsr;
+        let executed = (budget - remaining) as u64;
+        crate::syscall::time::advance_monotonic(executed);
+        remaining
+    }
+}
 
-        loop {
-            if remaining <= 0 {
-                // Budget boundary: check pending signals (RISC-V ISA spec + Linux semantics)
-                // WASM has no async interrupts, so check at budget boundaries in addition
-                // to syscall return boundaries.
-                let prev_sp = x[2];
-                let prev_tp = x[4];
-                let prev_s11 = x[27];
-                vm.x = x;
-                vm.f = f;
-                vm.pc = pc;
-                vm.fcsr = fcsr;
-                if crate::syscall::signal::check_pending(vm, base) {
-                    x = vm.x;
-                    f = vm.f;
-                    pc = vm.pc;
-                    fcsr = vm.fcsr;
-                    crate::tracepoints::record_special_reg_transitions(
-                        vm as *const ThreadState as u32,
-                        vm.tid,
-                        pc,
-                        0,
-                        REG_WRITE_SOURCE_VM_RESTORE,
-                        prev_sp,
-                        prev_tp,
-                        prev_s11,
-                        &x,
-                    );
-                    if vm.status != abi::STATUS_OK {
-                        return remaining;
-                    }
-                }
-                break;
-            }
-            remaining -= 1;
+#[inline(never)]
+unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
+    let vm = &mut *ctx.vm;
+    let base = ctx.base;
+    let pc = &mut *ctx.pc;
+    let x = &mut *ctx.x;
+    let f = &mut *ctx.f;
+    let fcsr = &mut *ctx.fcsr;
+    let remaining = &mut *ctx.remaining;
+    let mut cache = ctx.cache.take();
+    let mut hot_counts = ctx.hot_counts.take();
+    let jit_bitmap = ctx.jit_bitmap;
+    let mut trace_buf = ctx.trace_buf.take();
+    loop {
+        if *remaining <= 0 {
             let prev_sp = x[2];
             let prev_tp = x[4];
             let prev_s11 = x[27];
-            let instr_pc = pc;
-
-            // Fetch instruction
-            crate::syscall::signal::note_pc(vm, pc);
-            if crate::syscall::signal::is_current_sigreturn_trampoline(x[2], pc) {
-                vm.x = x;
-                vm.f = f;
-                vm.pc = pc;
-                vm.fcsr = fcsr;
-                crate::syscall::signal::sys_rt_sigreturn(vm, base);
-                x = vm.x;
-                f = vm.f;
-                pc = vm.pc;
-                fcsr = vm.fcsr;
+            vm.x = *x;
+            vm.f = *f;
+            vm.pc = *pc;
+            vm.fcsr = *fcsr;
+            if crate::syscall::signal::check_pending(vm, base) {
+                *x = vm.x;
+                *f = vm.f;
+                *pc = vm.pc;
+                *fcsr = vm.fcsr;
                 crate::tracepoints::record_special_reg_transitions(
                     vm as *const ThreadState as u32,
                     vm.tid,
-                    instr_pc,
+                    *pc,
                     0,
                     REG_WRITE_SOURCE_VM_RESTORE,
                     prev_sp,
                     prev_tp,
                     prev_s11,
-                    &x,
+                    x,
                 );
-                x[0] = 0;
-                crate::tracepoints::record_zero_reg_transition(
-                    vm as *const ThreadState as u32,
-                    vm.tid,
-                    instr_pc,
-                    0,
-                    prev_sp,
-                    prev_s11,
-                    &x,
-                );
-                continue;
-            }
-            if !crate::syscall::memory::guest_range_permitted(vm, base, pc, 2, abi::PROT_EXEC) {
-                let fault_addr = pc;
-                let accerr = guest_range_in_bounds(base, pc, 2);
-                if !deliver_sync_sigsegv(
-                    vm, &mut x, &mut f, &mut fcsr, &mut pc, base, fault_addr, accerr,
-                ) {
-                    return remaining;
+                if vm.status != abi::STATUS_OK {
+                    return *remaining;
                 }
-                continue;
             }
-            let raw16 = guest_mem::read_u16_seqlock(base, pc);
-            let (raw, step): (u32, u64) = if (raw16 & 3) != 3 {
-                // Compressed (RVC)
-                let expanded = decode::expand_compressed(raw16);
-                if expanded == 0 {
-                    // Invalid compressed instruction → SIGILL
-                    vm.x = x;
-                    vm.f = f;
-                    vm.pc = pc;
-                    vm.fcsr = fcsr;
-                    crate::syscall::signal::queue_sigill(vm, pc);
-                    crate::syscall::signal::check_pending(vm, base);
-                    x = vm.x;
-                    f = vm.f;
-                    pc = vm.pc;
-                    fcsr = vm.fcsr;
-                    crate::tracepoints::record_special_reg_transitions(
-                        vm as *const ThreadState as u32,
-                        vm.tid,
-                        instr_pc,
-                        raw16 as u32,
-                        REG_WRITE_SOURCE_VM_RESTORE,
-                        prev_sp,
-                        prev_tp,
-                        prev_s11,
-                        &x,
-                    );
-                    if vm.status != abi::STATUS_OK {
-                        return remaining;
-                    }
-                    // If handler returned, skip the instruction
-                    continue;
-                }
-                (expanded, 2)
-            } else {
-                if !crate::syscall::memory::guest_range_permitted(vm, base, pc, 4, abi::PROT_EXEC) {
-                    let fault_addr = pc;
-                    let accerr = guest_range_in_bounds(base, pc, 4);
-                    if !deliver_sync_sigsegv(
-                        vm, &mut x, &mut f, &mut fcsr, &mut pc, base, fault_addr, accerr,
-                    ) {
-                        return remaining;
-                    }
-                    continue;
-                }
-                (guest_mem::read_u32_seqlock(base, pc), 4)
-            };
+            break;
+        }
+        *remaining -= 1;
+        let prev_sp = x[2];
+        let prev_tp = x[4];
+        let prev_s11 = x[27];
+        let instr_pc = *pc;
 
-            // --- Trace recording (JIT the JIT compiler hook) ---
-            if let Some(ref mut tb) = trace_buf
-                && tb.recording != 0
-                && tb.record(pc, raw, step as u32)
-            {
-                // Buffer full → stop recording, signal trace ready
-                tb.stop();
-                vm.x = x;
-                vm.f = f;
-                vm.pc = pc;
-                vm.status = abi::STATUS_JIT_READY;
-                return remaining;
-            }
-
-            crate::tracepoints::record_exec_trace(
-                vm as *const ThreadState as u32,
-                vm.tid,
-                instr_pc,
-                raw,
-                step,
-                &x,
-            );
-            if x[17] == crate::abi::SYS_EXECVE {
-                crate::tracepoints::record_execve_approach(
-                    vm as *const ThreadState as u32,
-                    instr_pc,
-                    raw,
-                );
-            }
-            if raw == 0x0000_0073 && x[17] == crate::abi::SYS_EXECVE {
-                crate::tracepoints::record_execve_pre_dispatch(
-                    instr_pc,
-                    raw,
-                    vm.process_ptr as u64
-                        + core::mem::offset_of!(crate::types::ProcessState, pid) as u64,
-                    x[11],
-                );
-            }
-            match exec_decoded(
-                vm,
-                raw,
-                step,
-                instr_pc,
-                base,
-                &mut x,
-                &mut f,
-                &mut fcsr,
-                &mut pc,
-                &mut remaining,
-                cache.as_deref_mut(),
-                hot_counts.as_deref_mut(),
-                jit_bitmap,
-                trace_buf.as_deref_mut(),
-                prev_sp,
-                prev_tp,
-                prev_s11,
-            ) {
-                StepOutcome::Advance => {}
-                StepOutcome::Restart => continue,
-                StepOutcome::Return(remaining) => return remaining,
-            }
-
-            // Enforce x0 = 0
-            x[0] = 0;
+        crate::syscall::signal::note_pc(vm, *pc);
+        if crate::syscall::signal::is_current_sigreturn_trampoline(x[2], *pc) {
+            vm.x = *x;
+            vm.f = *f;
+            vm.pc = *pc;
+            vm.fcsr = *fcsr;
+            crate::syscall::signal::sys_rt_sigreturn(vm, base);
+            *x = vm.x;
+            *f = vm.f;
+            *pc = vm.pc;
+            *fcsr = vm.fcsr;
             crate::tracepoints::record_special_reg_transitions(
                 vm as *const ThreadState as u32,
                 vm.tid,
                 instr_pc,
-                raw,
-                REG_WRITE_SOURCE_STEP,
+                0,
+                REG_WRITE_SOURCE_VM_RESTORE,
                 prev_sp,
                 prev_tp,
                 prev_s11,
-                &x,
+                x,
             );
+            x[0] = 0;
             crate::tracepoints::record_zero_reg_transition(
                 vm as *const ThreadState as u32,
                 vm.tid,
                 instr_pc,
-                raw,
+                0,
                 prev_sp,
                 prev_s11,
-                &x,
+                x,
+            );
+            continue;
+        }
+        if !crate::syscall::memory::guest_range_permitted(vm, base, *pc, 2, abi::PROT_EXEC) {
+            let fault_addr = *pc;
+            let accerr = guest_range_in_bounds(base, *pc, 2);
+            if !unsafe { deliver_sync_sigsegv(vm, x, f, fcsr, pc, base, fault_addr, accerr) } {
+                return *remaining;
+            }
+            continue;
+        }
+        let raw16 = unsafe { guest_mem::read_u16_seqlock(base, *pc) };
+        let (raw, step): (u32, u64) = if (raw16 & 3) != 3 {
+            let expanded = decode::expand_compressed(raw16);
+            if expanded == 0 {
+                vm.x = *x;
+                vm.f = *f;
+                vm.pc = *pc;
+                vm.fcsr = *fcsr;
+                crate::syscall::signal::queue_sigill(vm, *pc);
+                crate::syscall::signal::check_pending(vm, base);
+                *x = vm.x;
+                *f = vm.f;
+                *pc = vm.pc;
+                *fcsr = vm.fcsr;
+                crate::tracepoints::record_special_reg_transitions(
+                    vm as *const ThreadState as u32,
+                    vm.tid,
+                    instr_pc,
+                    raw16 as u32,
+                    REG_WRITE_SOURCE_VM_RESTORE,
+                    prev_sp,
+                    prev_tp,
+                    prev_s11,
+                    x,
+                );
+                if vm.status != abi::STATUS_OK {
+                    return *remaining;
+                }
+                continue;
+            }
+            (expanded, 2)
+        } else {
+            if !crate::syscall::memory::guest_range_permitted(vm, base, *pc, 4, abi::PROT_EXEC) {
+                let fault_addr = *pc;
+                let accerr = guest_range_in_bounds(base, *pc, 4);
+                if !unsafe { deliver_sync_sigsegv(vm, x, f, fcsr, pc, base, fault_addr, accerr) }
+                {
+                    return *remaining;
+                }
+                continue;
+            }
+            (unsafe { guest_mem::read_u32_seqlock(base, *pc) }, 4)
+        };
+        if let Some(ref mut tb) = trace_buf
+            && tb.recording != 0
+            && tb.record(*pc, raw, step as u32)
+        {
+            tb.stop();
+            vm.x = *x;
+            vm.f = *f;
+            vm.pc = *pc;
+            vm.status = abi::STATUS_JIT_READY;
+            return *remaining;
+        }
+        crate::tracepoints::record_exec_trace(
+            vm as *const ThreadState as u32,
+            vm.tid,
+            instr_pc,
+            raw,
+            step,
+            x,
+        );
+        if x[17] == crate::abi::SYS_EXECVE {
+            crate::tracepoints::record_execve_approach(
+                vm as *const ThreadState as u32,
+                instr_pc,
+                raw,
             );
         }
-
-        vm.x = x;
-        vm.f = f;
-        vm.pc = pc;
-        vm.fcsr = fcsr;
-        // Advance monotonic clock by instructions executed
-        let executed = (budget - remaining) as u64;
-        crate::syscall::time::advance_monotonic(executed);
-        remaining
+        if raw == 0x0000_0073 && x[17] == crate::abi::SYS_EXECVE {
+            crate::tracepoints::record_execve_pre_dispatch(
+                instr_pc,
+                raw,
+                vm.process_ptr as u64 + core::mem::offset_of!(crate::types::ProcessState, pid) as u64,
+                x[11],
+            );
+        }
+        match unsafe {
+            exec_decoded(
+            vm,
+            raw,
+            step,
+            instr_pc,
+            base,
+            x,
+            f,
+            fcsr,
+            pc,
+            remaining,
+            cache.as_deref_mut(),
+            hot_counts.as_deref_mut(),
+            jit_bitmap,
+            trace_buf.as_deref_mut(),
+            prev_sp,
+            prev_tp,
+            prev_s11,
+        )
+        } {
+            StepOutcome::Advance => {}
+            StepOutcome::Restart => continue,
+            StepOutcome::Return(remaining) => return remaining,
+        }
+        x[0] = 0;
+        crate::tracepoints::record_special_reg_transitions(
+            vm as *const ThreadState as u32,
+            vm.tid,
+            instr_pc,
+            raw,
+            REG_WRITE_SOURCE_STEP,
+            prev_sp,
+            prev_tp,
+            prev_s11,
+            x,
+        );
+        crate::tracepoints::record_zero_reg_transition(
+            vm as *const ThreadState as u32,
+            vm.tid,
+            instr_pc,
+            raw,
+            prev_sp,
+            prev_s11,
+            x,
+        );
     }
+    *remaining
 }
 
 /// Get RAM base address. Always 0 because each thread-worker WASM instance

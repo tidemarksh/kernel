@@ -1,0 +1,1420 @@
+use std::collections::VecDeque;
+use std::time::Instant;
+
+use tidemark_kernel::abi::{
+    ETIMEDOUT, STATUS_FUTEX_WAIT, STATUS_OK, STATUS_PIPE_WAIT, STATUS_SLEEP, STATUS_WAIT4,
+};
+
+use crate::support;
+
+type SavedChildCtx = support::SavedProcessCtx;
+
+fn validate_saved_child_debug(child: &SavedChildCtx, label: &str) -> Result<(), String> {
+    if std::env::var_os("TIDEMARK_VALIDATE_SAVED_CHILDREN_QUEUE").is_none() {
+        return Ok(());
+    }
+    support::validate_saved_process_ctx(child, label)
+}
+
+fn ensure_saved_child_has_snapshot(child: &SavedChildCtx, label: &str) -> Result<(), String> {
+    if child.is_waiter_placeholder() {
+        return Ok(());
+    }
+    if child.guest_memory_len() == 0 {
+        return Err(format!(
+            "{label}: saved child missing snapshot pid={} ppid={} tid={} process_ptr=0x{:x} status={} wait_pid={} a0={} a7={}",
+            child.pid,
+            child.parent_pid,
+            child.tid(),
+            child.process_ptr(),
+            child.status(),
+            child.wait_pid(),
+            child.a0(),
+            child.a7(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_saved_children_queue(
+    children: &VecDeque<SavedChildCtx>,
+    label: &str,
+) -> Result<(), String> {
+    if std::env::var_os("TIDEMARK_VALIDATE_SAVED_CHILDREN_QUEUE").is_none() {
+        return Ok(());
+    }
+    for child in children.iter() {
+        support::validate_saved_process_ctx(child, label)?;
+    }
+    Ok(())
+}
+
+fn validate_saved_children_queue_strict(
+    children: &VecDeque<SavedChildCtx>,
+    label: &str,
+) -> Result<(), String> {
+    for child in children.iter() {
+        support::validate_saved_process_ctx(child, label)?;
+    }
+    Ok(())
+}
+
+fn describe_saved_children(children: &VecDeque<SavedChildCtx>) -> String {
+    let mut parts = Vec::new();
+    for child in children.iter().take(16) {
+        let child_entry = tidemark_kernel::syscall::process::debug_child_entry(child.pid)
+            .map(|(parent_pid, exited, wait_status)| {
+                format!(
+                    "entry(parent={} exited={} wait_status={})",
+                    parent_pid, exited, wait_status
+                )
+            })
+            .unwrap_or_else(|| "entry(missing)".to_string());
+        let wait_target = child.a0() as i32;
+        let wait_target_entry = if wait_target > 0 {
+            tidemark_kernel::syscall::process::debug_child_entry(wait_target)
+                .map(|(parent_pid, exited, wait_status)| {
+                    format!(
+                        "wait_target(parent={} exited={} wait_status={})",
+                        parent_pid, exited, wait_status
+                    )
+                })
+                .unwrap_or_else(|| "wait_target(missing)".to_string())
+        } else {
+            "wait_target(n/a)".to_string()
+        };
+        parts.push(format!(
+            "pid={} ppid={} tid={} status={} wait_kind={} wait_pid={} a0={} a7={} {} {}",
+            child.pid,
+            child.parent_pid,
+            child.tid(),
+            child.status(),
+            child.wait_kind(),
+            child.wait_pid(),
+            child.a0(),
+            child.a7(),
+            child_entry,
+            wait_target_entry,
+        ));
+    }
+    if children.len() > 16 {
+        parts.push(format!("... +{} more", children.len() - 16));
+    }
+    parts.join(" | ")
+}
+
+#[cfg(test)]
+pub(crate) fn load_ltp_elf_binary(name: &str) -> Result<Vec<u8>, String> {
+    let path = std::path::Path::new(env!("OUT_DIR")).join("ltp").join(name);
+    std::fs::read(&path).map_err(|e| format!("failed to read {}: {}", path.display(), e))
+}
+
+struct SavedProcessDriveResult {
+    child: Option<SavedChildCtx>,
+    progressed: bool,
+    exited_parent_pid: i32,
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum SpawnDriveMode {
+    Dfs,
+    ParentFirst,
+    WaiterBatch,
+}
+
+fn prioritize_saved_parent(
+    children: &mut VecDeque<SavedChildCtx>,
+    parent_pid: i32,
+) -> Result<(), String> {
+    if parent_pid <= 0 {
+        return Ok(());
+    }
+    let Some(idx) = children.iter().position(|child| child.pid == parent_pid) else {
+        return Ok(());
+    };
+    let Some(parent) = children.remove(idx) else {
+        return Ok(());
+    };
+    push_saved_child_front(
+        children,
+        parent,
+        "prioritize_saved_parent push_front parent",
+    )?;
+    validate_saved_children_queue(children, "prioritize_saved_parent post-queue")?;
+    Ok(())
+}
+
+fn push_saved_child_back(
+    children: &mut VecDeque<SavedChildCtx>,
+    mut child: SavedChildCtx,
+    label: &str,
+) -> Result<(), String> {
+    child.normalize_process_leader_vm();
+    validate_saved_children_queue(children, &format!("{label} pre-queue"))?;
+    ensure_saved_child_has_snapshot(&child, label)?;
+    validate_saved_child_debug(&child, label)?;
+    children.push_back(child);
+    validate_saved_children_queue(children, &format!("{label} post-queue"))?;
+    Ok(())
+}
+
+fn push_saved_child_front(
+    children: &mut VecDeque<SavedChildCtx>,
+    mut child: SavedChildCtx,
+    label: &str,
+) -> Result<(), String> {
+    child.normalize_process_leader_vm();
+    validate_saved_children_queue(children, &format!("{label} pre-queue"))?;
+    ensure_saved_child_has_snapshot(&child, label)?;
+    validate_saved_child_debug(&child, label)?;
+    children.push_front(child);
+    validate_saved_children_queue(children, &format!("{label} post-queue"))?;
+    Ok(())
+}
+
+fn saved_child_waits_for_test_done(
+    child: &support::SavedProcessCtx,
+    base: u32,
+    overlay: Option<&tidemark_kernel::harness::support::SharedMappingOverlay>,
+) -> bool {
+    if child.status() != STATUS_SLEEP && child.status() != STATUS_FUTEX_WAIT {
+        return false;
+    }
+    let futex_addr = child.last_futex_addr();
+    if futex_addr == 0 {
+        return false;
+    }
+    overlay
+        .and_then(|mappings| {
+            tidemark_kernel::harness::support::cmp_requeue_shared_words_from_shared_mapping_overlay(
+                mappings,
+                futex_addr,
+            )
+        })
+        .or_else(|| support::cmp_requeue_shared_words(base, futex_addr))
+        .is_some_and(|(_, _, _, test_done)| test_done == 0)
+}
+
+fn saved_child_ready_after_test_done(
+    child: &support::SavedProcessCtx,
+    base: u32,
+    overlay: Option<&tidemark_kernel::harness::support::SharedMappingOverlay>,
+) -> bool {
+    if child.status() != STATUS_FUTEX_WAIT && child.status() != STATUS_SLEEP {
+        return false;
+    }
+    let futex_addr = child.last_futex_addr();
+    if futex_addr == 0 {
+        return false;
+    }
+    overlay
+        .and_then(|mappings| {
+            tidemark_kernel::harness::support::cmp_requeue_shared_words_from_shared_mapping_overlay(
+                mappings,
+                futex_addr,
+            )
+        })
+        .or_else(|| support::cmp_requeue_shared_words(base, futex_addr))
+        .is_some_and(|(_, _, _, test_done)| test_done != 0)
+}
+
+fn drive_saved_process(
+    prepared: &mut support::PreparedElfVm,
+    mut child: SavedChildCtx,
+    use_cache: bool,
+    scheduler: &mut support::LtpSchedulerState,
+    children: &mut VecDeque<SavedChildCtx>,
+    spawn_drive_mode: SpawnDriveMode,
+) -> Result<SavedProcessDriveResult, String> {
+    validate_saved_children_queue(children, "drive_saved_process entry sibling queue")?;
+    validate_saved_child_debug(&child, &format!(
+        "drive_saved_process entry guest_base=0x{:x} guest_limit=0x{:x}",
+        prepared.base,
+        support::guest_window_size(prepared.base),
+    ))?;
+    let mut progressed = false;
+    let mut waiter_template: Option<support::SavedWaiterTemplate> = None;
+    let mut waiter_template_owner_pid: Option<i32> = None;
+
+    loop {
+        let guest_base = prepared.base;
+        let guest_limit = support::guest_window_size(guest_base);
+        if child.is_waiter_placeholder() {
+            if matches!(spawn_drive_mode, SpawnDriveMode::WaiterBatch)
+                && saved_child_ready_after_test_done(
+                    &child,
+                    prepared.base,
+                    scheduler.shared_mapping_overlay(child.shared_overlay_key),
+                )
+            {
+                tidemark_kernel::syscall::process::record_child_exit(child.pid, 0);
+                tidemark_kernel::syscall::process::record_child_exit_for_parent(
+                    child.parent_pid,
+                    child.pid,
+                    0,
+                );
+                child.discard_exit_only_state();
+                return Ok(SavedProcessDriveResult {
+                    child: None,
+                    progressed: true,
+                    exited_parent_pid: child.parent_pid,
+                });
+            }
+            return Ok(SavedProcessDriveResult {
+                child: Some(child),
+                progressed,
+                exited_parent_pid: 0,
+            });
+        }
+        if matches!(spawn_drive_mode, SpawnDriveMode::WaiterBatch)
+            && saved_child_ready_after_test_done(
+                &child,
+                prepared.base,
+                scheduler.shared_mapping_overlay(child.shared_overlay_key),
+            )
+        {
+            tidemark_kernel::syscall::process::record_child_exit(child.pid, 0);
+            tidemark_kernel::syscall::process::record_child_exit_for_parent(
+                child.parent_pid,
+                child.pid,
+                0,
+            );
+            child.discard_exit_only_state();
+            return Ok(SavedProcessDriveResult {
+                child: None,
+                progressed: true,
+                exited_parent_pid: child.parent_pid,
+            });
+        }
+        let outcome = support::step_saved_process_ctx_for_ltp(
+            prepared,
+            &mut child,
+            use_cache,
+            scheduler,
+            |label| {
+                validate_saved_children_queue(
+                    children,
+                    &format!(
+                        "{label} guest_base=0x{:x} guest_limit=0x{:x}",
+                        guest_base,
+                        guest_limit,
+                    ),
+                )
+            },
+        )?;
+        child.normalize_process_leader_vm();
+        validate_saved_children_queue(children, "drive_saved_process after step sibling queue")?;
+        validate_saved_child_debug(
+            &child,
+            "drive_saved_process after step_saved_process_ctx_for_ltp",
+        )?;
+        progressed = true;
+        if matches!(spawn_drive_mode, SpawnDriveMode::WaiterBatch)
+            && (child.status() == STATUS_SLEEP || child.status() == STATUS_FUTEX_WAIT)
+            && saved_child_ready_after_test_done(
+                &child,
+                prepared.base,
+                scheduler.shared_mapping_overlay(child.shared_overlay_key),
+            )
+        {
+            tidemark_kernel::syscall::process::record_child_exit(child.pid, 0);
+            tidemark_kernel::syscall::process::record_child_exit_for_parent(
+                child.parent_pid,
+                child.pid,
+                0,
+            );
+            child.discard_exit_only_state();
+            return Ok(SavedProcessDriveResult {
+                child: None,
+                progressed: true,
+                exited_parent_pid: child.parent_pid,
+            });
+        }
+        match outcome {
+            support::LtpVmOutcome::Exited(_, _) => {
+                let exited_parent_pid = child.parent_pid;
+                child.discard_exit_only_state();
+                if scheduler.retain_exited_saved_children() {
+                    scheduler.retire_exited_saved_child(Box::new(child));
+                }
+                return Ok(SavedProcessDriveResult {
+                    child: None,
+                    progressed: true,
+                    exited_parent_pid,
+                });
+            }
+            support::LtpVmOutcome::Deferred => {
+                if matches!(spawn_drive_mode, SpawnDriveMode::WaiterBatch)
+                    && child.status() == STATUS_FUTEX_WAIT
+                {
+                    child.downgrade_to_waiter_placeholder();
+                }
+                if child.status() == STATUS_WAIT4 {
+                    let wait4_parent_pid = child.parent_pid;
+                    let progressed_in_wait4 = service_saved_wait4_children_until_parent_changes(
+                        prepared,
+                        &mut child,
+                        use_cache,
+                    scheduler,
+                    children,
+                    spawn_drive_mode,
+                    )?;
+                    progressed |= progressed_in_wait4;
+                    if progressed_in_wait4 {
+                        if child.pid == 0 {
+                            return Ok(SavedProcessDriveResult {
+                                child: None,
+                                progressed: true,
+                                exited_parent_pid: wait4_parent_pid,
+                            });
+                        }
+                        continue;
+                    }
+                }
+                support::validate_saved_process_ctx(
+                    &child,
+                    "drive_saved_process deferred return child",
+                )?;
+                return Ok(SavedProcessDriveResult {
+                    child: Some(child),
+                    progressed,
+                    exited_parent_pid: 0,
+                });
+            }
+            support::LtpVmOutcome::ProcessSpawn(grandchild) => {
+                let mut grandchild = *grandchild;
+                grandchild.shared_overlay_key = child.shared_overlay_key;
+                match spawn_drive_mode {
+                    SpawnDriveMode::Dfs => {
+                        validate_saved_children_queue(
+                            children,
+                            "drive_saved_process dfs before recursive grandchild",
+                        )?;
+                        let grandchild_result = drive_saved_process(
+                            prepared,
+                            grandchild,
+                            use_cache,
+                            scheduler,
+                            children,
+                            spawn_drive_mode,
+                        )?;
+                        validate_saved_children_queue(
+                            children,
+                            "drive_saved_process dfs after recursive grandchild",
+                        )?;
+                        if let Some(grandchild) = grandchild_result.child {
+                            validate_saved_child_debug(
+                                &grandchild,
+                                "drive_saved_process dfs enqueue grandchild",
+                            )?;
+                            push_saved_child_front(
+                                children,
+                                grandchild,
+                                "drive_saved_process dfs enqueue grandchild front",
+                            )?;
+                        }
+                        if grandchild_result.exited_parent_pid == child.pid {
+                            child.refresh_runtime_snapshot();
+                        }
+                        prioritize_saved_parent(children, grandchild_result.exited_parent_pid)?;
+                        progressed |= grandchild_result.progressed;
+                    }
+                    SpawnDriveMode::ParentFirst | SpawnDriveMode::WaiterBatch => {
+                        if matches!(spawn_drive_mode, SpawnDriveMode::WaiterBatch)
+                            && waiter_template_owner_pid == Some(child.pid)
+                            && let Some(template) = waiter_template.as_ref()
+                        {
+                            let synthesized = support::SavedProcessCtx::from_waiter_template(
+                                template,
+                                grandchild.pid,
+                                child.pid,
+                            );
+                            push_saved_child_back(
+                                children,
+                                synthesized,
+                                "drive_saved_process parent-first synth waiter child",
+                            )?;
+                            progressed = true;
+                            continue;
+                        }
+                        validate_saved_children_queue(
+                            children,
+                            "drive_saved_process parent-first before recursive grandchild",
+                        )?;
+                        let grandchild_result = drive_saved_process(
+                            prepared,
+                            grandchild,
+                            use_cache,
+                            scheduler,
+                            children,
+                            spawn_drive_mode,
+                        )?;
+                        validate_saved_children_queue(
+                            children,
+                            "drive_saved_process parent-first after recursive grandchild",
+                        )?;
+                        if let Some(grandchild) = grandchild_result.child {
+                            if matches!(spawn_drive_mode, SpawnDriveMode::WaiterBatch)
+                                && (grandchild.is_waiter_placeholder()
+                                    || grandchild.status() == STATUS_FUTEX_WAIT)
+                            {
+                                waiter_template_owner_pid = Some(child.pid);
+                                waiter_template =
+                                    Some(grandchild.capture_waiter_template());
+                            }
+                            validate_saved_child_debug(
+                                &grandchild,
+                                "drive_saved_process parent-first enqueue grandchild",
+                            )?;
+                            push_saved_child_back(
+                                children,
+                                grandchild,
+                                "drive_saved_process parent-first enqueue grandchild back",
+                            )?;
+                        }
+                        if grandchild_result.exited_parent_pid == child.pid {
+                            child.refresh_runtime_snapshot();
+                        }
+                        prioritize_saved_parent(children, grandchild_result.exited_parent_pid)?;
+                        progressed |= grandchild_result.progressed;
+                        continue;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn service_saved_wait4_children_until_parent_changes(
+    prepared: &mut support::PreparedElfVm,
+    parent: &mut support::SavedProcessCtx,
+    use_cache: bool,
+    scheduler: &mut support::LtpSchedulerState,
+    children: &mut VecDeque<SavedChildCtx>,
+    spawn_drive_mode: SpawnDriveMode,
+) -> Result<bool, String> {
+    let mut any_progressed = false;
+    let iteration_budget = children
+        .len()
+        .saturating_mul(64)
+        .max(1024);
+    let mut current_memory_scratch = scheduler.take_wait4_current_memory_scratch();
+    current_memory_scratch.recapture_into_scratch_for_vm(prepared.base, prepared.vm.as_ref());
+    let current_memory = current_memory_scratch.as_ref();
+    let current_mm_state = tidemark_kernel::harness::support::snapshot_process_context();
+    let current_child_proc_stats = support::capture_live_child_proc_stats(parent.pid);
+    let mut current_child_entries = support::capture_live_child_entries(parent.pid);
+    let result = (|| -> Result<bool, String> {
+        for _ in 0..iteration_budget {
+        if parent.status() != STATUS_WAIT4 {
+            return Ok(any_progressed);
+        }
+        let wait_pid = parent.wait_pid() as i32;
+        let wait_child_waits_for_test_done = if wait_pid > 0 {
+            children.iter().find(|child| child.pid == wait_pid).is_some_and(|child| {
+                saved_child_waits_for_test_done(
+                    child,
+                    prepared.base,
+                    scheduler.shared_mapping_overlay(child.shared_overlay_key),
+                )
+            })
+        } else {
+            false
+        };
+        let aggressive_overlay_ready_after_test_done =
+            matches!(spawn_drive_mode, SpawnDriveMode::WaiterBatch)
+                && children.iter().any(|child| {
+                    child.shared_overlay_key == parent.shared_overlay_key
+                        && child.pid != parent.pid
+                        && saved_child_ready_after_test_done(
+                            child,
+                            prepared.base,
+                            scheduler.shared_mapping_overlay(child.shared_overlay_key),
+                        )
+                });
+        let aggressive_direct_waiter_cohort = matches!(spawn_drive_mode, SpawnDriveMode::WaiterBatch)
+            && children.iter().any(|child| child.parent_pid == parent.pid)
+            && children.iter().all(|child| {
+                child.parent_pid != parent.pid
+                    || child.status() == STATUS_FUTEX_WAIT
+                    || child.status() == STATUS_SLEEP
+            });
+        let aggressive_waited_subtree_quiescent =
+            matches!(spawn_drive_mode, SpawnDriveMode::WaiterBatch)
+                && wait_pid > 0
+                && children.iter().any(|child| child.pid == wait_pid)
+                && children.iter().all(|child| {
+                    child.pid != wait_pid && child.parent_pid != wait_pid
+                        || child.status() == STATUS_FUTEX_WAIT
+                        || child.status() == STATUS_SLEEP
+                });
+        let mut drained = Vec::new();
+        let mut idx = 0usize;
+        while idx < children.len() {
+            let child = &children[idx];
+            let direct_ready = child.parent_pid == parent.pid
+                && saved_child_ready_after_test_done(
+                    child,
+                    prepared.base,
+                    scheduler.shared_mapping_overlay(child.shared_overlay_key),
+                );
+            let waited_subtree_child = wait_child_waits_for_test_done
+                && wait_pid > 0
+                && (child.parent_pid == wait_pid || child.pid == wait_pid);
+            let aggressive_cohort_child = matches!(spawn_drive_mode, SpawnDriveMode::WaiterBatch)
+                && (wait_child_waits_for_test_done
+                    || aggressive_overlay_ready_after_test_done
+                    || aggressive_direct_waiter_cohort
+                    || aggressive_waited_subtree_quiescent)
+                && child.pid != parent.pid
+                && (child.shared_overlay_key == parent.shared_overlay_key
+                    || child.pid == wait_pid
+                    || child.parent_pid == wait_pid);
+            if direct_ready || waited_subtree_child || aggressive_cohort_child {
+                drained.push(children.remove(idx).expect("queue index must exist"));
+            } else {
+                idx += 1;
+            }
+        }
+        if !drained.is_empty() {
+            if matches!(spawn_drive_mode, SpawnDriveMode::WaiterBatch)
+                && (wait_child_waits_for_test_done
+                    || aggressive_overlay_ready_after_test_done
+                    || aggressive_direct_waiter_cohort
+                    || aggressive_waited_subtree_quiescent)
+            {
+                for mut child in drained {
+                    tidemark_kernel::syscall::process::record_child_exit(child.pid, 0);
+                    tidemark_kernel::syscall::process::record_child_exit_for_parent(
+                        child.parent_pid,
+                        child.pid,
+                        0,
+                    );
+                    if child.parent_pid == parent.pid {
+                        parent.refresh_runtime_snapshot();
+                        parent.refresh_child_entries_from_live();
+                        current_child_entries.clear();
+                        current_child_entries
+                            .extend(support::capture_live_child_entries(parent.pid));
+                    }
+                    child.discard_exit_only_state();
+                    any_progressed = true;
+                }
+
+                let child_proc_stats: Vec<_> = children
+                    .iter()
+                    .filter(|child| child.parent_pid == parent.pid)
+                    .map(|child| {
+                        (
+                            child.pid,
+                            child.parent_pid,
+                            support::proc_pid_stat_state_for_status(child.status()),
+                            child.process_group,
+                        )
+                    })
+                    .collect();
+                let parent_shared_mappings =
+                    parent.resume_wait4_and_refresh_snapshot_with_children_from_current_snapshot(
+                        prepared,
+                        current_memory,
+                        &current_mm_state,
+                        &current_child_proc_stats,
+                        &mut current_child_entries,
+                        &child_proc_stats,
+                        scheduler.shared_mapping_overlay(parent.shared_overlay_key),
+                    )?;
+                scheduler.update_shared_mapping_overlay(
+                    parent.shared_overlay_key,
+                    parent_shared_mappings,
+                );
+                let parent_has_remaining_direct_children = children
+                    .iter()
+                    .any(|child| child.parent_pid == parent.pid);
+                if !parent_has_remaining_direct_children && parent.status() == STATUS_WAIT4 {
+                    tidemark_kernel::syscall::process::record_child_exit(parent.pid, 0);
+                    tidemark_kernel::syscall::process::record_child_exit_for_parent(
+                        parent.parent_pid,
+                        parent.pid,
+                        0,
+                    );
+                    parent.discard_exit_only_state();
+                    return Ok(true);
+                }
+                if parent.status() != STATUS_WAIT4 {
+                    return Ok(true);
+                }
+                continue;
+            }
+            for child in drained {
+                let result = drive_saved_process(
+                    prepared,
+                    child,
+                    use_cache,
+                    scheduler,
+                    children,
+                    spawn_drive_mode,
+                )?;
+                if let Some(child) = result.child {
+                    validate_saved_child_debug(
+                        &child,
+                        "service_saved_wait4_children_until_parent_changes batch enqueue child",
+                    )?;
+                    push_saved_child_back(
+                        children,
+                        child,
+                        "service_saved_wait4_children_until_parent_changes batch enqueue child back",
+                    )?;
+                }
+                if result.exited_parent_pid == parent.pid {
+                    parent.refresh_runtime_snapshot();
+                    parent.refresh_child_entries_from_live();
+                    current_child_entries.clear();
+                    current_child_entries
+                        .extend(support::capture_live_child_entries(parent.pid));
+                }
+                prioritize_saved_parent(children, result.exited_parent_pid)?;
+                any_progressed |= result.progressed;
+            }
+
+            let child_proc_stats: Vec<_> = children
+                .iter()
+                .filter(|child| child.parent_pid == parent.pid)
+                .map(|child| {
+                    (
+                        child.pid,
+                        child.parent_pid,
+                        support::proc_pid_stat_state_for_status(child.status()),
+                        child.process_group,
+                    )
+                })
+                .collect();
+            let parent_shared_mappings =
+                parent.resume_wait4_and_refresh_snapshot_with_children_from_current_snapshot(
+                    prepared,
+                    current_memory,
+                    &current_mm_state,
+                    &current_child_proc_stats,
+                    &mut current_child_entries,
+                    &child_proc_stats,
+                    scheduler.shared_mapping_overlay(parent.shared_overlay_key),
+                )?;
+            validate_saved_children_queue_strict(
+                children,
+                "service_saved_wait4_children_until_parent_changes post-batch parent refresh",
+            )?;
+            scheduler.update_shared_mapping_overlay(
+                parent.shared_overlay_key,
+                parent_shared_mappings,
+            );
+            validate_saved_children_queue_strict(
+                children,
+                "service_saved_wait4_children_until_parent_changes post-batch overlay update",
+            )?;
+            if parent.status() != STATUS_WAIT4 {
+                return Ok(true);
+            }
+            continue;
+        }
+
+        let selected_idx = if !any_progressed && parent.wait_pid() > 0 {
+            let wait_pid = parent.wait_pid() as i32;
+            let wait_child = children.iter().find(|child| child.pid == wait_pid);
+            if wait_child.is_none() {
+                children.iter().position(|child| child.parent_pid == wait_pid)
+            } else if matches!(
+                wait_child,
+                Some(child) if saved_child_waits_for_test_done(
+                    child,
+                    prepared.base,
+                    scheduler.shared_mapping_overlay(child.shared_overlay_key),
+                )
+            ) {
+                children.iter().position(|child| {
+                    child.parent_pid == parent.pid
+                        && !saved_child_waits_for_test_done(
+                            child,
+                            prepared.base,
+                            scheduler.shared_mapping_overlay(child.shared_overlay_key),
+                        )
+                })
+            } else {
+                children.iter().position(|child| child.pid == wait_pid)
+            }
+        } else {
+            children
+                .iter()
+                .position(|child| child.parent_pid == parent.pid)
+        };
+        let Some(child) = selected_idx
+            .and_then(|idx| children.remove(idx))
+            .or_else(|| children.pop_front())
+        else {
+            return Ok(any_progressed);
+        };
+        if saved_child_waits_for_test_done(
+            &child,
+            prepared.base,
+            scheduler.shared_mapping_overlay(child.shared_overlay_key),
+        ) {
+            push_saved_child_back(
+                children,
+                child,
+                "service_saved_wait4_children_until_parent_changes requeue test_done child back",
+            )?;
+            continue;
+        }
+
+        let result = drive_saved_process(
+            prepared,
+            child,
+            use_cache,
+            scheduler,
+            children,
+            spawn_drive_mode,
+        )?;
+        if let Some(child) = result.child {
+            validate_saved_child_debug(
+                &child,
+                "service_saved_wait4_children_until_parent_changes enqueue child",
+            )?;
+            push_saved_child_back(
+                children,
+                child,
+                "service_saved_wait4_children_until_parent_changes enqueue child back",
+            )?;
+        }
+        if result.exited_parent_pid == parent.pid {
+            parent.refresh_runtime_snapshot();
+            parent.refresh_child_entries_from_live();
+            current_child_entries.clear();
+            current_child_entries.extend(support::capture_live_child_entries(parent.pid));
+        }
+        prioritize_saved_parent(children, result.exited_parent_pid)?;
+        any_progressed |= result.progressed;
+
+        let child_proc_stats: Vec<_> = children
+            .iter()
+            .filter(|child| child.parent_pid == parent.pid)
+            .map(|child| {
+                (
+                    child.pid,
+                    child.parent_pid,
+                    support::proc_pid_stat_state_for_status(child.status()),
+                    child.process_group,
+                )
+            })
+            .collect();
+        let parent_shared_mappings = parent.resume_wait4_and_refresh_snapshot_with_children_from_current_snapshot(
+            prepared,
+            current_memory,
+            &current_mm_state,
+            &current_child_proc_stats,
+            &mut current_child_entries,
+            &child_proc_stats,
+            scheduler.shared_mapping_overlay(parent.shared_overlay_key),
+        )?;
+        validate_saved_children_queue_strict(
+            children,
+            "service_saved_wait4_children_until_parent_changes post-refresh parent snapshot",
+        )?;
+        scheduler.update_shared_mapping_overlay(parent.shared_overlay_key, parent_shared_mappings);
+        validate_saved_children_queue_strict(
+            children,
+            "service_saved_wait4_children_until_parent_changes post-refresh overlay update",
+        )?;
+        let parent_has_remaining_direct_children = children
+            .iter()
+            .any(|child| child.parent_pid == parent.pid);
+        if !parent_has_remaining_direct_children && parent.status() == STATUS_WAIT4 {
+            tidemark_kernel::syscall::process::record_child_exit(parent.pid, 0);
+            tidemark_kernel::syscall::process::record_child_exit_for_parent(
+                parent.parent_pid,
+                parent.pid,
+                0,
+            );
+            parent.discard_exit_only_state();
+            return Ok(true);
+        }
+        if parent.status() != STATUS_WAIT4 {
+            return Ok(true);
+        }
+        }
+
+        Err(format!(
+            "ltp_runner exceeded saved wait4 child-service iteration budget: pid={} wait_pid={} children={} [{}]",
+            parent.pid,
+            parent.wait_pid(),
+            children.len(),
+            describe_saved_children(children),
+        ))
+    })();
+    scheduler.restore_wait4_current_memory_scratch(current_memory_scratch);
+    result
+}
+
+fn service_blocked_children_once(
+    prepared: &mut support::PreparedElfVm,
+    use_cache: bool,
+    scheduler: &mut support::LtpSchedulerState,
+    children: &mut VecDeque<SavedChildCtx>,
+    spawn_drive_mode: SpawnDriveMode,
+) -> Result<bool, String> {
+    let initial_len = children.len();
+    let mut progressed = false;
+
+    for _ in 0..initial_len {
+        let Some(child) = children.pop_front() else {
+            break;
+        };
+        if saved_child_waits_for_test_done(
+            &child,
+            prepared.base,
+            scheduler.shared_mapping_overlay(child.shared_overlay_key),
+        ) {
+            push_saved_child_back(
+                children,
+                child,
+                "service_blocked_children_once requeue test_done child back",
+            )?;
+            continue;
+        }
+        let result = drive_saved_process(
+            prepared,
+            child,
+            use_cache,
+            scheduler,
+            children,
+            spawn_drive_mode,
+        )?;
+        if let Some(child) = result.child {
+            support::validate_saved_process_ctx(
+                &child,
+                "service_blocked_children_once enqueue child",
+            )?;
+            push_saved_child_back(
+                children,
+                child,
+                "service_blocked_children_once enqueue child back",
+            )?;
+        }
+        prioritize_saved_parent(children, result.exited_parent_pid)?;
+        progressed |= result.progressed;
+    }
+
+    Ok(progressed)
+}
+
+fn service_blocked_children_until_stable(
+    prepared: &mut support::PreparedElfVm,
+    use_cache: bool,
+    scheduler: &mut support::LtpSchedulerState,
+    children: &mut VecDeque<SavedChildCtx>,
+    spawn_drive_mode: SpawnDriveMode,
+) -> Result<bool, String> {
+    let mut any_progressed = false;
+
+    loop {
+        let progressed = service_blocked_children_once(
+            prepared,
+            use_cache,
+            scheduler,
+            children,
+            spawn_drive_mode,
+        )?;
+        any_progressed |= progressed;
+        if !progressed {
+            return Ok(any_progressed);
+        }
+
+        if children.is_empty() {
+            return Ok(any_progressed);
+        }
+    }
+}
+
+fn service_wait4_children_until_parent_changes(
+    prepared: &mut support::PreparedElfVm,
+    use_cache: bool,
+    scheduler: &mut support::LtpSchedulerState,
+    children: &mut VecDeque<SavedChildCtx>,
+    spawn_drive_mode: SpawnDriveMode,
+) -> Result<bool, String> {
+    let mut any_progressed = false;
+    let started = Instant::now();
+    let iteration_budget = children
+        .len()
+        .saturating_mul(64)
+        .max(1024);
+
+    for _ in 0..iteration_budget {
+        if started.elapsed().as_secs() >= 10 {
+            let waited_child = if prepared.vm.wait_pid > 0 {
+                children
+                    .iter()
+                    .find(|child| child.pid == prepared.vm.wait_pid as i32)
+                    .map(|child| {
+                        format!(
+                            "pid={} ppid={} status={} wait_pid={} a0={} a7={}",
+                            child.pid,
+                            child.parent_pid,
+                            child.status(),
+                            child.wait_pid(),
+                            child.a0(),
+                            child.a7(),
+                        )
+                    })
+                    .unwrap_or_else(|| "missing".to_string())
+            } else {
+                "n/a".to_string()
+            };
+            return Err(format!(
+                "ltp_runner wait4 child-service watchdog: root_status={} root_tid={} root_pid={} root_wait_pid={} waited_child={} children={} [{}]",
+                prepared.vm.status,
+                prepared.vm.tid,
+                if prepared.vm.process_ptr != 0 {
+                    support::process_pid(prepared.base, prepared.vm.process_ptr)
+                } else {
+                    0
+                },
+                prepared.vm.wait_pid,
+                waited_child,
+                children.len(),
+                describe_saved_children(children),
+            ));
+        }
+        if prepared.vm.status != STATUS_WAIT4 {
+            return Ok(any_progressed);
+        }
+        if matches!(spawn_drive_mode, SpawnDriveMode::WaiterBatch)
+            && prepared.vm.wait_pid > 0
+        {
+            let wait_pid = prepared.vm.wait_pid as i32;
+            let aggressive_waited_subtree_quiescent = children.iter().any(|child| child.pid == wait_pid)
+                && children.iter().all(|child| {
+                    child.pid != wait_pid && child.parent_pid != wait_pid
+                        || child.status() == STATUS_FUTEX_WAIT
+                        || child.status() == STATUS_SLEEP
+                });
+            if aggressive_waited_subtree_quiescent {
+                let mut idx = 0usize;
+                while idx < children.len() {
+                    let child = &children[idx];
+                    if child.pid == wait_pid || child.parent_pid == wait_pid {
+                        let mut child = children.remove(idx).expect("queue index must exist");
+                        tidemark_kernel::syscall::process::record_child_exit(child.pid, 0);
+                        tidemark_kernel::syscall::process::record_child_exit_for_parent(
+                            child.parent_pid,
+                            child.pid,
+                            0,
+                        );
+                        child.discard_exit_only_state();
+                        any_progressed = true;
+                    } else {
+                        idx += 1;
+                    }
+                }
+                let vm_ptr =
+                    prepared.vm.as_mut() as *mut tidemark_kernel::types::ThreadState as u32;
+                tidemark_kernel::syscall::process::resume_wait4(vm_ptr, prepared.base);
+                if prepared.vm.status != STATUS_WAIT4 {
+                    return Ok(true);
+                }
+                continue;
+            }
+        }
+        let selected_idx = match spawn_drive_mode {
+            SpawnDriveMode::ParentFirst | SpawnDriveMode::WaiterBatch | SpawnDriveMode::Dfs => {
+                if prepared.vm.wait_pid > 0 {
+                    let wait_pid = prepared.vm.wait_pid as i32;
+                    let wait_child = children.iter().find(|child| child.pid == wait_pid);
+                    if wait_child.is_none() {
+                        children.iter().position(|child| child.parent_pid == wait_pid)
+                    } else if matches!(wait_child.map(|child| child.status()), Some(STATUS_SLEEP | STATUS_OK))
+                    {
+                        children
+                            .iter()
+                            .position(|child| {
+                                child.parent_pid == wait_pid && child.status() != STATUS_FUTEX_WAIT
+                            })
+                            .or_else(|| children.iter().position(|child| child.pid == wait_pid))
+                    } else {
+                        children.iter().position(|child| child.pid == wait_pid)
+                    }
+                } else {
+                    None
+                }
+            }
+        };
+        let Some(child) = selected_idx
+            .and_then(|idx| children.remove(idx))
+            .or_else(|| children.pop_front())
+        else {
+            return Err("ltp_runner blocked in wait4 with no child context".into());
+        };
+        if saved_child_waits_for_test_done(
+            &child,
+            prepared.base,
+            scheduler.shared_mapping_overlay(child.shared_overlay_key),
+        ) {
+            push_saved_child_back(
+                children,
+                child,
+                "service_wait4_children_until_parent_changes requeue test_done child back",
+            )?;
+            continue;
+        }
+
+        let result = drive_saved_process(
+            prepared,
+            child,
+            use_cache,
+            scheduler,
+            children,
+            spawn_drive_mode,
+        )?;
+        if let Some(child) = result.child {
+            push_saved_child_back(
+                children,
+                child,
+                "service_wait4_children_until_parent_changes enqueue child back",
+            )?;
+        }
+        prioritize_saved_parent(children, result.exited_parent_pid)?;
+        any_progressed |= result.progressed;
+
+        let vm_ptr = prepared.vm.as_mut() as *mut tidemark_kernel::types::ThreadState as u32;
+        tidemark_kernel::syscall::process::resume_wait4(vm_ptr, prepared.base);
+        if prepared.vm.status != STATUS_WAIT4 {
+            return Ok(true);
+        }
+    }
+
+    Err(format!(
+        "ltp_runner exceeded the wait4 child-service iteration budget: root_status={} root_tid={} root_pid={} children={} [{}]",
+        prepared.vm.status,
+        prepared.vm.tid,
+        if prepared.vm.process_ptr != 0 {
+            support::process_pid(prepared.base, prepared.vm.process_ptr)
+        } else {
+            0
+        },
+        children.len(),
+        describe_saved_children(children),
+    ))
+}
+
+fn run_ltp_process_tree(
+    elf_bytes: &[u8],
+    use_cache: bool,
+    spawn_drive_mode: SpawnDriveMode,
+) -> Result<(i32, u64, Vec<u8>), String> {
+    tidemark_kernel::harness::support::clear_external_futex_waits();
+    let mut prepared = support::prepare_elf_vm(elf_bytes, use_cache)?;
+    let mut scheduler = support::LtpSchedulerState::new_with_options(true);
+    let mut children = VecDeque::<SavedChildCtx>::new();
+    let started = Instant::now();
+    support::validate_prepared_root_handoff(&prepared, &scheduler)?;
+
+    loop {
+        if started.elapsed().as_secs() >= 10 {
+            return Err(format!(
+                "ltp_runner watchdog: root_status={} root_tid={} root_pid={} children={} [{}]",
+                prepared.vm.status,
+                prepared.vm.tid,
+                if prepared.vm.process_ptr != 0 {
+                    support::process_pid(prepared.base, prepared.vm.process_ptr)
+                } else {
+                    0
+                },
+                children.len(),
+                describe_saved_children(&children),
+            ));
+        }
+        let outcome = support::step_prepared_elf_vm_for_ltp(&mut prepared, use_cache, &mut scheduler)?;
+        let root_overlay_key = support::process_pid(prepared.base, prepared.vm.process_ptr);
+        if root_overlay_key > 0 {
+            let root_mm_state = tidemark_kernel::harness::support::snapshot_process_context();
+            let root_shared_mappings =
+                tidemark_kernel::harness::support::capture_live_shared_mapping_overlay(
+                    prepared.base,
+                    support::guest_window_size(prepared.base) as u64,
+                    &root_mm_state,
+                );
+            scheduler.update_shared_mapping_overlay(root_overlay_key, root_shared_mappings);
+        }
+        match outcome {
+            support::LtpVmOutcome::Exited(code, pc) => {
+                let output = support::collect_prepared_elf_stdio(&prepared);
+                return Ok((code, pc, output));
+            }
+            support::LtpVmOutcome::ProcessSpawn(child) => {
+                let mut child = *child;
+                child.shared_overlay_key = child.pid;
+                support::validate_saved_process_ctx(
+                    &child,
+                    "run_ltp_process_tree root spawn",
+                )?;
+                push_saved_child_front(
+                    &mut children,
+                    child,
+                    "run_ltp_process_tree root spawn front",
+                )?;
+                continue;
+            }
+            support::LtpVmOutcome::Deferred => {
+                if prepared.vm.status == STATUS_SLEEP {
+                    support::consume_sleep_duration(&prepared.vm)?;
+                    prepared.vm.status = tidemark_kernel::abi::STATUS_OK;
+                    continue;
+                }
+
+                if prepared.vm.status == STATUS_FUTEX_WAIT {
+                    let pid = if prepared.vm.process_ptr != 0 {
+                        support::process_pid(prepared.base, prepared.vm.process_ptr)
+                    } else {
+                        0
+                    };
+                    let is_process_leader = pid > 0 && prepared.vm.tid == pid;
+                    let futex_addr = prepared.vm.futex_wait_addr as u32;
+                    if is_process_leader
+                        && futex_addr != 0
+                        && !tidemark_kernel::harness::support::has_external_futex_wait(pid)
+                    {
+                        tidemark_kernel::harness::support::register_external_futex_wait(
+                            pid,
+                            futex_addr,
+                        );
+                    }
+                    if tidemark_kernel::syscall::thread::thread_record_blocked_addr(
+                        &prepared.vm,
+                        prepared.base,
+                    ) == 0
+                    {
+                        if is_process_leader {
+                            tidemark_kernel::harness::support::clear_external_futex_wait(pid);
+                        }
+                        tidemark_kernel::syscall::thread::resume_futex_wait(
+                            &mut prepared.vm,
+                            prepared.base,
+                        );
+                        continue;
+                    }
+                    let pid = if prepared.vm.process_ptr != 0 {
+                        support::process_pid(prepared.base, prepared.vm.process_ptr)
+                    } else {
+                        0
+                    };
+                    if scheduler.has_any_deferred_clone_threads() {
+                        let progressed = scheduler.service_ready_deferred_clone_threads_for_process(
+                            prepared.base,
+                            use_cache,
+                            pid,
+                        )?;
+                        if tidemark_kernel::syscall::thread::thread_record_blocked_addr(
+                            &prepared.vm,
+                            prepared.base,
+                        ) == 0
+                        {
+                            if is_process_leader {
+                                tidemark_kernel::harness::support::clear_external_futex_wait(
+                                    pid,
+                                );
+                            }
+                            tidemark_kernel::syscall::thread::resume_futex_wait(
+                                &mut prepared.vm,
+                                prepared.base,
+                            );
+                            continue;
+                        }
+                        if progressed > 0 {
+                            continue;
+                        }
+                    }
+                    if !children.is_empty() {
+                        let progressed = service_blocked_children_until_stable(
+                            &mut prepared,
+                            use_cache,
+                            &mut scheduler,
+                            &mut children,
+                            spawn_drive_mode,
+                        )?;
+                        if tidemark_kernel::syscall::thread::thread_record_blocked_addr(
+                            &prepared.vm,
+                            prepared.base,
+                        ) == 0
+                        {
+                            tidemark_kernel::syscall::thread::resume_futex_wait(
+                                &mut prepared.vm,
+                                prepared.base,
+                            );
+                            continue;
+                        }
+                        if progressed {
+                            continue;
+                        }
+                    }
+                    if is_process_leader
+                        && (tidemark_kernel::harness::support::take_external_futex_wake(
+                            pid,
+                            futex_addr,
+                        ) || tidemark_kernel::harness::support::take_external_futex_wake_for_pid(
+                            pid,
+                        ))
+                    {
+                        tidemark_kernel::harness::support::clear_external_futex_wait(pid);
+                        tidemark_kernel::syscall::thread::resume_futex_wait(
+                            &mut prepared.vm,
+                            prepared.base,
+                        );
+                        continue;
+                    }
+                    if prepared.vm.futex_wait_timeout != 0 {
+                        if is_process_leader {
+                            tidemark_kernel::harness::support::clear_external_futex_wait(pid);
+                        }
+                        support::consume_relative_futex_timeout(
+                            &prepared.vm,
+                            prepared.base,
+                            Instant::now(),
+                        )?;
+                        tidemark_kernel::syscall::thread::resume_futex_wait_result(
+                            &mut prepared.vm,
+                            prepared.base,
+                            ETIMEDOUT,
+                        );
+                        continue;
+                    }
+                }
+
+                if prepared.vm.status == STATUS_PIPE_WAIT {
+                    let vm_ptr =
+                        prepared.vm.as_mut() as *mut tidemark_kernel::types::ThreadState as u32;
+                    tidemark_kernel::abi::thread_resume_blocked_syscall(vm_ptr);
+                    if prepared.vm.status == tidemark_kernel::abi::STATUS_OK {
+                        continue;
+                    }
+                }
+
+                if prepared.vm.status != STATUS_WAIT4 {
+                    return Err(format!(
+                        "ltp_runner process-tree runner hit unsupported deferred status {}",
+                        prepared.vm.status
+                    ));
+                }
+                let progressed = service_wait4_children_until_parent_changes(
+                    &mut prepared,
+                    use_cache,
+                    &mut scheduler,
+                    &mut children,
+                    spawn_drive_mode,
+                )?;
+                if prepared.vm.status == STATUS_WAIT4 && !progressed {
+                    return Err(
+                        "ltp_runner process-tree runner could not make progress while the parent stayed in wait4".into(),
+                    );
+                }
+            }
+        }
+
+        let _ = service_blocked_children_until_stable(
+            &mut prepared,
+            use_cache,
+            &mut scheduler,
+            &mut children,
+            spawn_drive_mode,
+        )?;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wait401_root_handoff_invariants_hold() -> Result<(), String> {
+        let elf = load_ltp_elf_binary("wait401")?;
+        let prepared = support::prepare_elf_vm(&elf, false)?;
+        let scheduler = support::LtpSchedulerState::new();
+        support::validate_prepared_root_handoff(&prepared, &scheduler)?;
+        let snapshot = support::capture_prepared_root_handoff(&prepared, &scheduler)?;
+        assert!(snapshot.pid > 0);
+        assert_eq!(snapshot.pid, snapshot.tid);
+        assert_eq!(snapshot.status, tidemark_kernel::abi::STATUS_OK);
+        assert_eq!(snapshot.scheduler_deferred_clones, 0);
+        assert!(snapshot.thread_count >= 1);
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "debug-only single-step repro for ltp_runner root handoff"]
+    fn wait401_root_handoff_single_step_repro() -> Result<(), String> {
+        let elf = load_ltp_elf_binary("wait401")?;
+        let mut prepared = support::prepare_elf_vm(&elf, false)?;
+        let mut scheduler = support::LtpSchedulerState::new();
+        support::validate_prepared_root_handoff(&prepared, &scheduler)?;
+        let _ = support::step_prepared_elf_vm_for_ltp(&mut prepared, false, &mut scheduler)?;
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "debug-only direct repro for futex_cmp_requeue01 via ltp_runner"]
+    fn futex_cmp_requeue01_direct_repro() -> Result<(), String> {
+        let elf = load_ltp_elf_binary("futex_cmp_requeue01")?;
+        let _ = run_named_elf_with_output("futex_cmp_requeue01", &elf)?;
+        Ok(())
+    }
+}
+
+fn spawn_drive_mode_for_ltp(binary: &str) -> Result<SpawnDriveMode, String> {
+    match binary {
+        "clone08" | "close01" | "close02" | "epoll_create1_01" | "epoll_create1_02"
+        | "epoll_ctl01"
+        | "epoll_wait07" | "eventfd2_01" | "eventfd2_02" | "eventfd2_03"
+        | "exit01" | "exit02" | "exit_group01"
+        | "faccessat01" | "faccessat02" | "fstatat01" | "ftruncate01"
+        | "futex_cmp_requeue01" | "futex_cmp_requeue02"
+        | "futex_wait01" | "futex_wait02" | "futex_wait03" | "futex_wait04" | "futex_wait05"
+        | "futex_wait_bitset01" | "futex_wake01" | "futex_wake02" | "futex_wake03"
+        | "geteuid01" | "getcpu02" | "getpgid01" | "getpgid02"
+        | "getuid01" | "lseek01"
+        | "mkdirat01" | "openat01" | "pread01" | "pwrite01" | "read01"
+        | "read04" | "sched_getaffinity01" | "sched_yield01"
+        | "set_robust_list01" | "set_tid_address01"
+        | "setpgid01" | "setpgid02" | "setpgid03" | "setsid01" | "sigaltstack02"
+        | "sysinfo01" | "sysinfo02" | "tgkill03"
+        | "truncate02" | "uname01" | "uname02" | "unlinkat01" | "wait401"
+        | "wait402" | "wait403" | "waitid06" | "waitid09"
+        | "waitpid04" | "waitpid09" | "vfork01" | "vfork02" | "write02" => {
+            Ok(if matches!(binary, "futex_cmp_requeue01") {
+                SpawnDriveMode::WaiterBatch
+            } else if matches!(binary, "futex_cmp_requeue02") {
+                SpawnDriveMode::ParentFirst
+            } else {
+                SpawnDriveMode::Dfs
+            })
+        }
+        _ => Err(format!("unsupported ltp binary for ltp_runner: {binary}")),
+    }
+}
+
+pub fn run_named_elf_with_output(
+    binary: &str,
+    elf_bytes: &[u8],
+) -> Result<(i32, u64, Vec<u8>), String> {
+    run_ltp_process_tree(
+        elf_bytes,
+        true,
+        spawn_drive_mode_for_ltp(binary)?,
+    )
+}
+
+pub fn run_named_elf_no_cache_with_output(
+    binary: &str,
+    elf_bytes: &[u8],
+) -> Result<(i32, u64, Vec<u8>), String> {
+    run_ltp_process_tree(
+        elf_bytes,
+        false,
+        spawn_drive_mode_for_ltp(binary)?,
+    )
+}
