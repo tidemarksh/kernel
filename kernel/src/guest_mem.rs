@@ -52,9 +52,9 @@ const WRITE_OP_ZERO: u32 = 6;
 fn check_range(base: u32, addr: u64, len: usize, op: &str) {
     #[cfg(any(test, feature = "harness"))]
     {
-        let absolute = (base as u64)
-            .checked_add(addr)
-            .unwrap_or_else(|| panic!("{op}: address overflow base=0x{base:x} addr=0x{addr:x} len=0x{len:x}"));
+        let absolute = (base as u64).checked_add(addr).unwrap_or_else(|| {
+            panic!("{op}: address overflow base=0x{base:x} addr=0x{addr:x} len=0x{len:x}")
+        });
         let end = absolute
             .checked_add(len as u64)
             .unwrap_or_else(|| panic!("{op}: end overflow absolute=0x{absolute:x} len=0x{len:x}"));
@@ -65,6 +65,9 @@ fn check_range(base: u32, addr: u64, len: usize, op: &str) {
             );
         }
     }
+
+    #[cfg(not(any(test, feature = "harness")))]
+    let _ = (base, addr, len, op);
 }
 
 #[inline(always)]
@@ -748,11 +751,7 @@ pub unsafe fn zero_mem(base: u32, addr: u64, len: usize) {
     );
     if unsafe { is_multi_threaded() } && len > 0 {
         let mask = stripe_mask(addr, len);
-        crate::tracepoints::record_execve_stage(
-            361,
-            unsafe { debug_thread_count() },
-            mask as u64,
-        );
+        crate::tracepoints::record_execve_stage(361, unsafe { debug_thread_count() }, mask as u64);
         unsafe { lock_mask(mask) };
         crate::tracepoints::record_execve_stage(362, addr, len as u64);
         unsafe { seqlock_begin_mask(mask) };
@@ -896,14 +895,14 @@ mod tests {
         unsafe {
             super::init(core::ptr::null(), core::ptr::null(), core::ptr::null());
         }
-        crate::harness_debug::clear_guest_write_watch_trace();
-        crate::harness_debug::record_execve_stage(716, 0, 0);
-        crate::harness_debug::configure_guest_write_watch(0, 0x2000, 0x2010);
+        crate::harness::debug::clear_guest_write_watch_trace();
+        crate::harness::debug::record_execve_stage(716, 0, 0);
+        crate::harness::debug::configure_guest_write_watch(0, 0x2000, 0x2010);
         unsafe {
             super::write_u32(0, 0x2004, 0x1122_3344);
         }
-        assert_eq!(crate::harness_debug::guest_write_overlap_trace_len(), 1);
-        let entry = crate::harness_debug::guest_write_overlap_trace_entry(0);
+        assert_eq!(crate::harness::debug::guest_write_overlap_trace_len(), 1);
+        let entry = crate::harness::debug::guest_write_overlap_trace_entry(0);
         assert_eq!(entry.slot, 0);
         assert_eq!(entry.op, super::WRITE_OP_U32);
         assert_eq!(entry.addr, 0x2004);
@@ -911,6 +910,6 @@ mod tests {
         assert_eq!(entry.sample_len, 4);
         assert_eq!(entry.sample, 0x1122_3344);
         assert_eq!(entry.execve_stage, 716);
-        crate::harness_debug::clear_guest_write_watch_trace();
+        crate::harness::debug::clear_guest_write_watch_trace();
     }
 }

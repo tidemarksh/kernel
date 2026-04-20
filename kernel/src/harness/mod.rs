@@ -1,22 +1,11 @@
-pub mod support {
-    pub use crate::harness_support::{
-        SharedMappingOverlay, capture_live_shared_mapping_overlay,
-        ProcessContextSnapshot, clear_external_futex_wait, clear_external_futex_waits,
-        debug_validate_process_context_snapshot,
-        has_external_futex_wait, refresh_process_context_runtime_state,
-        flush_shared_mapping_overlay, refresh_shared_mapping_file_mappings,
-        cmp_requeue_shared_words_from_shared_mapping_overlay,
-        register_external_futex_wait,
-        read_u32_from_shared_mapping_overlay,
-        restore_process_context_mm_state,
-        restore_live_shared_mapping_overlay,
-        restore_process_context_mm_only, restore_process_context_mm_only_from_guest_snapshot,
-        restore_process_context_parent, restore_process_context_parent_without_shared_snapshot,
-        snapshot_process_context,
-        snapshot_process_context_boxed,
-        take_external_futex_wake, take_external_futex_wake_for_pid,
-    };
-}
+pub(crate) mod debug;
+mod exports;
+pub mod memory;
+pub mod pipe;
+pub mod process;
+pub mod resource;
+pub mod signal;
+pub mod support;
 
 use crate::abi::*;
 use crate::fs;
@@ -106,8 +95,7 @@ impl TestVm {
         unsafe {
             let current_pages = core::arch::wasm32::memory_size(0);
             let current_bytes = (current_pages as u64).saturating_mul(65536);
-            let guest_base_hint =
-                current_bytes.saturating_add(DEFAULT_GUEST_BASE_PADDING as u64);
+            let guest_base_hint = current_bytes.saturating_add(DEFAULT_GUEST_BASE_PADDING as u64);
             let aligned = guest_base_hint.saturating_add((DEFAULT_GUEST_RAM_ALIGN - 1) as u64)
                 & !((DEFAULT_GUEST_RAM_ALIGN - 1) as u64);
             let candidate_base = aligned.min(u32::MAX as u64) as u32;

@@ -101,7 +101,10 @@ pub unsafe fn alloc(size: u32, align: u32) -> u32 {
         return 0;
     };
     let current = unsafe { HEAP_PTR };
-    let Some(aligned) = current.checked_add(align_mask).map(|value| value & !align_mask) else {
+    let Some(aligned) = current
+        .checked_add(align_mask)
+        .map(|value| value & !align_mask)
+    else {
         return 0;
     };
     let Some(end) = aligned.checked_add(size) else {

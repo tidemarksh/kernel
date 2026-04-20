@@ -92,643 +92,643 @@ pub extern "C" fn thread_stack_minus(vm_ptr: u32, byte_offset: u32) -> u64 {
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_clear_write_trace() {
-    crate::harness_debug::clear_write_trace();
+    crate::harness::debug::clear_write_trace();
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_clear_syscall_trace() {
-    crate::harness_debug::clear_syscall_trace();
+    crate::harness::debug::clear_syscall_trace();
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_clear_signal_trace() {
-    crate::syscall::signal::clear_debug_trace();
+    crate::harness::signal::clear_debug_trace();
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_clear_cpu_trace() {
-    crate::harness_debug::clear_cpu_trace();
+    crate::harness::debug::clear_cpu_trace();
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_clear_memory_trace() {
-    crate::harness_debug::clear_memory_trace();
+    crate::harness::debug::clear_memory_trace();
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_clear_guest_write_watch_trace() {
-    crate::harness_debug::clear_guest_write_watch_trace();
+    crate::harness::debug::clear_guest_write_watch_trace();
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_configure_guest_write_watch(slot: u32, start: u64, end: u64) {
-    crate::harness_debug::configure_guest_write_watch(slot, start, end);
+    crate::harness::debug::configure_guest_write_watch(slot, start, end);
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_guest_write_overlap_trace_len() -> u32 {
-    crate::harness_debug::guest_write_overlap_trace_len()
+    crate::harness::debug::guest_write_overlap_trace_len()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_guest_write_overlap_trace_slot(index: u32) -> u32 {
-    crate::harness_debug::guest_write_overlap_trace_entry(index).slot
+    crate::harness::debug::guest_write_overlap_trace_entry(index).slot
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_guest_write_overlap_trace_op(index: u32) -> u32 {
-    crate::harness_debug::guest_write_overlap_trace_entry(index).op
+    crate::harness::debug::guest_write_overlap_trace_entry(index).op
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_guest_write_overlap_trace_addr(index: u32) -> u64 {
-    crate::harness_debug::guest_write_overlap_trace_entry(index).addr
+    crate::harness::debug::guest_write_overlap_trace_entry(index).addr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_guest_write_overlap_trace_len_bytes(index: u32) -> u32 {
-    crate::harness_debug::guest_write_overlap_trace_entry(index).len
+    crate::harness::debug::guest_write_overlap_trace_entry(index).len
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_guest_write_overlap_trace_sample_len(index: u32) -> u32 {
-    crate::harness_debug::guest_write_overlap_trace_entry(index).sample_len
+    crate::harness::debug::guest_write_overlap_trace_entry(index).sample_len
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_guest_write_overlap_trace_sample(index: u32) -> u64 {
-    crate::harness_debug::guest_write_overlap_trace_entry(index).sample
+    crate::harness::debug::guest_write_overlap_trace_entry(index).sample
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_guest_write_overlap_trace_execve_stage(index: u32) -> u32 {
-    crate::harness_debug::guest_write_overlap_trace_entry(index).execve_stage
+    crate::harness::debug::guest_write_overlap_trace_entry(index).execve_stage
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_write_trace_write_calls() -> u32 {
-    crate::harness_debug::write_trace_summary().write_calls
+    crate::harness::debug::write_trace_summary().write_calls
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_write_trace_writev_calls() -> u32 {
-    crate::harness_debug::write_trace_summary().writev_calls
+    crate::harness::debug::write_trace_summary().writev_calls
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_write_trace_last_fd() -> u64 {
-    crate::harness_debug::write_trace_summary().last_fd
+    crate::harness::debug::write_trace_summary().last_fd
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_write_trace_last_nr() -> u64 {
-    crate::harness_debug::write_trace_summary().last_nr
+    crate::harness::debug::write_trace_summary().last_nr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_write_trace_last_buf_addr() -> u64 {
-    crate::harness_debug::write_trace_summary().last_buf_addr
+    crate::harness::debug::write_trace_summary().last_buf_addr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_write_trace_last_count() -> u64 {
-    crate::harness_debug::write_trace_summary().last_count
+    crate::harness::debug::write_trace_summary().last_count
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_write_trace_last_result() -> i64 {
-    crate::harness_debug::write_trace_summary().last_result
+    crate::harness::debug::write_trace_summary().last_result
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_write_trace_last_ofd_id() -> u32 {
-    crate::harness_debug::write_trace_summary().last_ofd_id
+    crate::harness::debug::write_trace_summary().last_ofd_id
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_write_trace_last_ofd_type() -> i32 {
-    crate::harness_debug::write_trace_summary().last_ofd_type
+    crate::harness::debug::write_trace_summary().last_ofd_type
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_write_trace_last_ofd_ino() -> u32 {
-    crate::harness_debug::write_trace_summary().last_ofd_ino
+    crate::harness::debug::write_trace_summary().last_ofd_ino
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_write_trace_last_status_flags() -> i32 {
-    crate::harness_debug::write_trace_summary().last_status_flags
+    crate::harness::debug::write_trace_summary().last_status_flags
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_write_trace_last_pipe_read_open() -> i32 {
-    crate::harness_debug::write_trace_summary().last_pipe_read_open
+    crate::harness::debug::write_trace_summary().last_pipe_read_open
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_write_trace_last_pipe_write_open() -> i32 {
-    crate::harness_debug::write_trace_summary().last_pipe_write_open
+    crate::harness::debug::write_trace_summary().last_pipe_write_open
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_write_trace_ptr() -> u32 {
-    crate::harness_debug::write_trace_ptr()
+    crate::harness::debug::write_trace_ptr()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_write_trace_len() -> u32 {
-    crate::harness_debug::write_trace_len()
+    crate::harness::debug::write_trace_len()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_pipe_read_open(slot: u32) -> i32 {
-    crate::syscall::pipe::debug_read_open(slot)
+    crate::harness::pipe::debug_read_open(slot)
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_pipe_write_open(slot: u32) -> i32 {
-    crate::syscall::pipe::debug_write_open(slot)
+    crate::harness::pipe::debug_write_open(slot)
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_last_pipe_close_slot() -> u32 {
-    crate::harness_debug::pipe_close_trace_summary().pipe_idx
+    crate::harness::debug::pipe_close_trace_summary().pipe_idx
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_last_pipe_close_is_read_end() -> u32 {
-    crate::harness_debug::pipe_close_trace_summary().is_read_end
+    crate::harness::debug::pipe_close_trace_summary().is_read_end
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_last_pipe_close_ofd_id() -> u32 {
-    crate::harness_debug::pipe_close_trace_summary().ofd_id
+    crate::harness::debug::pipe_close_trace_summary().ofd_id
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_last_pipe_close_read_open() -> i32 {
-    crate::harness_debug::pipe_close_trace_summary().read_open
+    crate::harness::debug::pipe_close_trace_summary().read_open
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_last_pipe_close_write_open() -> i32 {
-    crate::harness_debug::pipe_close_trace_summary().write_open
+    crate::harness::debug::pipe_close_trace_summary().write_open
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_syscall_trace_vm_ptr() -> u32 {
-    crate::harness_debug::syscall_trace_summary().vm_ptr
+    crate::harness::debug::syscall_trace_summary().vm_ptr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_syscall_trace_nr() -> u64 {
-    crate::harness_debug::syscall_trace_summary().nr
+    crate::harness::debug::syscall_trace_summary().nr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_syscall_trace_result() -> i64 {
-    crate::harness_debug::syscall_trace_summary().result
+    crate::harness::debug::syscall_trace_summary().result
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_syscall_trace_status() -> i32 {
-    crate::harness_debug::syscall_trace_summary().status
+    crate::harness::debug::syscall_trace_summary().status
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_syscall_trace_len() -> u32 {
-    crate::harness_debug::syscall_trace_len()
+    crate::harness::debug::syscall_trace_len()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_syscall_trace_entry_vm_ptr(index: u32) -> u32 {
-    crate::harness_debug::syscall_trace_entry(index).vm_ptr
+    crate::harness::debug::syscall_trace_entry(index).vm_ptr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_syscall_trace_entry_nr(index: u32) -> u64 {
-    crate::harness_debug::syscall_trace_entry(index).nr
+    crate::harness::debug::syscall_trace_entry(index).nr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_syscall_trace_entry_arg0(index: u32) -> u64 {
-    crate::harness_debug::syscall_trace_entry(index).arg0
+    crate::harness::debug::syscall_trace_entry(index).arg0
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_syscall_trace_entry_arg1(index: u32) -> u64 {
-    crate::harness_debug::syscall_trace_entry(index).arg1
+    crate::harness::debug::syscall_trace_entry(index).arg1
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_syscall_trace_entry_arg2(index: u32) -> u64 {
-    crate::harness_debug::syscall_trace_entry(index).arg2
+    crate::harness::debug::syscall_trace_entry(index).arg2
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_syscall_trace_entry_arg3(index: u32) -> u64 {
-    crate::harness_debug::syscall_trace_entry(index).arg3
+    crate::harness::debug::syscall_trace_entry(index).arg3
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_syscall_trace_entry_arg4(index: u32) -> u64 {
-    crate::harness_debug::syscall_trace_entry(index).arg4
+    crate::harness::debug::syscall_trace_entry(index).arg4
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_syscall_trace_entry_arg5(index: u32) -> u64 {
-    crate::harness_debug::syscall_trace_entry(index).arg5
+    crate::harness::debug::syscall_trace_entry(index).arg5
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_syscall_trace_entry_result(index: u32) -> i64 {
-    crate::harness_debug::syscall_trace_entry(index).result
+    crate::harness::debug::syscall_trace_entry(index).result
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_syscall_trace_entry_status(index: u32) -> i32 {
-    crate::harness_debug::syscall_trace_entry(index).status
+    crate::harness::debug::syscall_trace_entry(index).status
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_syscall_trace_entry_pid_sample0(index: u32) -> u64 {
-    crate::harness_debug::syscall_trace_entry(index).pid_sample0
+    crate::harness::debug::syscall_trace_entry(index).pid_sample0
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_syscall_trace_entry_pid_sample1(index: u32) -> u64 {
-    crate::harness_debug::syscall_trace_entry(index).pid_sample1
+    crate::harness::debug::syscall_trace_entry(index).pid_sample1
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_riscv_syscall_trace_len() -> u32 {
-    crate::harness_debug::riscv_syscall_trace_len()
+    crate::harness::debug::riscv_syscall_trace_len()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_riscv_syscall_trace_entry_vm_ptr(index: u32) -> u32 {
-    crate::harness_debug::riscv_syscall_trace_entry(index).vm_ptr
+    crate::harness::debug::riscv_syscall_trace_entry(index).vm_ptr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_riscv_syscall_trace_entry_nr(index: u32) -> u64 {
-    crate::harness_debug::riscv_syscall_trace_entry(index).nr
+    crate::harness::debug::riscv_syscall_trace_entry(index).nr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_riscv_syscall_trace_entry_arg0(index: u32) -> u64 {
-    crate::harness_debug::riscv_syscall_trace_entry(index).arg0
+    crate::harness::debug::riscv_syscall_trace_entry(index).arg0
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_riscv_syscall_trace_entry_arg1(index: u32) -> u64 {
-    crate::harness_debug::riscv_syscall_trace_entry(index).arg1
+    crate::harness::debug::riscv_syscall_trace_entry(index).arg1
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_riscv_syscall_trace_entry_arg2(index: u32) -> u64 {
-    crate::harness_debug::riscv_syscall_trace_entry(index).arg2
+    crate::harness::debug::riscv_syscall_trace_entry(index).arg2
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_riscv_syscall_trace_entry_arg3(index: u32) -> u64 {
-    crate::harness_debug::riscv_syscall_trace_entry(index).arg3
+    crate::harness::debug::riscv_syscall_trace_entry(index).arg3
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_riscv_syscall_trace_entry_arg4(index: u32) -> u64 {
-    crate::harness_debug::riscv_syscall_trace_entry(index).arg4
+    crate::harness::debug::riscv_syscall_trace_entry(index).arg4
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_riscv_syscall_trace_entry_arg5(index: u32) -> u64 {
-    crate::harness_debug::riscv_syscall_trace_entry(index).arg5
+    crate::harness::debug::riscv_syscall_trace_entry(index).arg5
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_riscv_syscall_trace_entry_result(index: u32) -> i64 {
-    crate::harness_debug::riscv_syscall_trace_entry(index).result
+    crate::harness::debug::riscv_syscall_trace_entry(index).result
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_riscv_syscall_trace_entry_status(index: u32) -> i32 {
-    crate::harness_debug::riscv_syscall_trace_entry(index).status
+    crate::harness::debug::riscv_syscall_trace_entry(index).status
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_completed_sync_effects() -> u32 {
-    crate::harness_debug::completed_sync_effects()
+    crate::harness::debug::completed_sync_effects()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_len() -> u32 {
-    crate::harness_debug::fd_syscall_trace_len()
+    crate::harness::debug::fd_syscall_trace_len()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_vm_ptr(index: u32) -> u32 {
-    crate::harness_debug::fd_syscall_trace_entry(index).vm_ptr
+    crate::harness::debug::fd_syscall_trace_entry(index).vm_ptr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_nr(index: u32) -> u64 {
-    crate::harness_debug::fd_syscall_trace_entry(index).nr
+    crate::harness::debug::fd_syscall_trace_entry(index).nr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_arg0(index: u32) -> u64 {
-    crate::harness_debug::fd_syscall_trace_entry(index).arg0
+    crate::harness::debug::fd_syscall_trace_entry(index).arg0
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_arg0_ofd_id(index: u32) -> u32 {
-    crate::harness_debug::fd_syscall_trace_entry(index).arg0_ofd_id
+    crate::harness::debug::fd_syscall_trace_entry(index).arg0_ofd_id
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_arg0_ofd_type(index: u32) -> i32 {
-    crate::harness_debug::fd_syscall_trace_entry(index).arg0_ofd_type
+    crate::harness::debug::fd_syscall_trace_entry(index).arg0_ofd_type
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_arg1(index: u32) -> u64 {
-    crate::harness_debug::fd_syscall_trace_entry(index).arg1
+    crate::harness::debug::fd_syscall_trace_entry(index).arg1
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_arg2(index: u32) -> u64 {
-    crate::harness_debug::fd_syscall_trace_entry(index).arg2
+    crate::harness::debug::fd_syscall_trace_entry(index).arg2
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_arg2_ofd_id(index: u32) -> u32 {
-    crate::harness_debug::fd_syscall_trace_entry(index).arg2_ofd_id
+    crate::harness::debug::fd_syscall_trace_entry(index).arg2_ofd_id
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_arg2_ofd_type(index: u32) -> i32 {
-    crate::harness_debug::fd_syscall_trace_entry(index).arg2_ofd_type
+    crate::harness::debug::fd_syscall_trace_entry(index).arg2_ofd_type
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_arg3(index: u32) -> u64 {
-    crate::harness_debug::fd_syscall_trace_entry(index).arg3
+    crate::harness::debug::fd_syscall_trace_entry(index).arg3
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_result(index: u32) -> i64 {
-    crate::harness_debug::fd_syscall_trace_entry(index).result
+    crate::harness::debug::fd_syscall_trace_entry(index).result
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_status(index: u32) -> i32 {
-    crate::harness_debug::fd_syscall_trace_entry(index).status
+    crate::harness::debug::fd_syscall_trace_entry(index).status
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_path_syscall_trace_len() -> u32 {
-    crate::harness_debug::path_syscall_trace_len()
+    crate::harness::debug::path_syscall_trace_len()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_path_syscall_trace_vm_ptr(index: u32) -> u32 {
-    crate::harness_debug::path_syscall_trace_entry(index).vm_ptr
+    crate::harness::debug::path_syscall_trace_entry(index).vm_ptr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_path_syscall_trace_nr(index: u32) -> u64 {
-    crate::harness_debug::path_syscall_trace_entry(index).nr
+    crate::harness::debug::path_syscall_trace_entry(index).nr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_path_syscall_trace_dirfd(index: u32) -> i64 {
-    crate::harness_debug::path_syscall_trace_entry(index).dirfd
+    crate::harness::debug::path_syscall_trace_entry(index).dirfd
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_path_syscall_trace_result(index: u32) -> i64 {
-    crate::harness_debug::path_syscall_trace_entry(index).result
+    crate::harness::debug::path_syscall_trace_entry(index).result
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_path_syscall_trace_status(index: u32) -> i32 {
-    crate::harness_debug::path_syscall_trace_entry(index).status
+    crate::harness::debug::path_syscall_trace_entry(index).status
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_path_syscall_trace_path_ptr(index: u32) -> u32 {
-    crate::harness_debug::path_syscall_trace_path_ptr(index)
+    crate::harness::debug::path_syscall_trace_path_ptr(index)
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_path_syscall_trace_path_len(index: u32) -> u32 {
-    crate::harness_debug::path_syscall_trace_entry(index).path_len
+    crate::harness::debug::path_syscall_trace_entry(index).path_len
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_count_trace_len() -> u32 {
-    crate::harness_debug::thread_count_trace_len()
+    crate::harness::debug::thread_count_trace_len()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_count_trace_kind(index: u32) -> u32 {
-    crate::harness_debug::thread_count_trace_entry(index).kind
+    crate::harness::debug::thread_count_trace_entry(index).kind
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_count_trace_vm_ptr(index: u32) -> u32 {
-    crate::harness_debug::thread_count_trace_entry(index).vm_ptr
+    crate::harness::debug::thread_count_trace_entry(index).vm_ptr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_count_trace_tid(index: u32) -> i32 {
-    crate::harness_debug::thread_count_trace_entry(index).tid
+    crate::harness::debug::thread_count_trace_entry(index).tid
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_count_trace_process_ptr(index: u32) -> u32 {
-    crate::harness_debug::thread_count_trace_entry(index).process_ptr
+    crate::harness::debug::thread_count_trace_entry(index).process_ptr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_count_trace_before(index: u32) -> u32 {
-    crate::harness_debug::thread_count_trace_entry(index).before
+    crate::harness::debug::thread_count_trace_entry(index).before
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_count_trace_after(index: u32) -> u32 {
-    crate::harness_debug::thread_count_trace_entry(index).after
+    crate::harness::debug::thread_count_trace_entry(index).after
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_trace_nr() -> u64 {
-    crate::harness_debug::memory_trace_summary().nr
+    crate::harness::debug::memory_trace_summary().nr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_trace_arg0() -> u64 {
-    crate::harness_debug::memory_trace_summary().arg0
+    crate::harness::debug::memory_trace_summary().arg0
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_trace_arg1() -> u64 {
-    crate::harness_debug::memory_trace_summary().arg1
+    crate::harness::debug::memory_trace_summary().arg1
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_trace_arg2() -> u64 {
-    crate::harness_debug::memory_trace_summary().arg2
+    crate::harness::debug::memory_trace_summary().arg2
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_trace_arg3() -> u64 {
-    crate::harness_debug::memory_trace_summary().arg3
+    crate::harness::debug::memory_trace_summary().arg3
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_trace_result() -> i64 {
-    crate::harness_debug::memory_trace_summary().result
+    crate::harness::debug::memory_trace_summary().result
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_trace_len() -> u32 {
-    crate::harness_debug::memory_trace_len()
+    crate::harness::debug::memory_trace_len()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_trace_entry_nr(index: u32) -> u64 {
-    crate::harness_debug::memory_trace_entry(index).nr
+    crate::harness::debug::memory_trace_entry(index).nr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_trace_entry_arg0(index: u32) -> u64 {
-    crate::harness_debug::memory_trace_entry(index).arg0
+    crate::harness::debug::memory_trace_entry(index).arg0
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_trace_entry_arg1(index: u32) -> u64 {
-    crate::harness_debug::memory_trace_entry(index).arg1
+    crate::harness::debug::memory_trace_entry(index).arg1
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_trace_entry_arg2(index: u32) -> u64 {
-    crate::harness_debug::memory_trace_entry(index).arg2
+    crate::harness::debug::memory_trace_entry(index).arg2
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_trace_entry_arg3(index: u32) -> u64 {
-    crate::harness_debug::memory_trace_entry(index).arg3
+    crate::harness::debug::memory_trace_entry(index).arg3
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_trace_entry_result(index: u32) -> i64 {
-    crate::harness_debug::memory_trace_entry(index).result
+    crate::harness::debug::memory_trace_entry(index).result
 }
 
 #[cfg(any(test, feature = "harness"))]
@@ -752,139 +752,139 @@ pub extern "C" fn debug_guest_mem_last_kind() -> u32 {
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_signal_delivery_sig() -> u32 {
-    crate::syscall::signal::last_signal_delivery().0
+    crate::harness::signal::last_signal_delivery().0
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_signal_delivery_for_vm_sig(vm_ptr: u32) -> u32 {
-    crate::syscall::signal::last_signal_delivery_for_vm(vm_ptr).0
+    crate::harness::signal::last_signal_delivery_for_vm(vm_ptr).0
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_signal_delivery_frame_base() -> u64 {
-    crate::syscall::signal::last_signal_delivery().1
+    crate::harness::signal::last_signal_delivery().1
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_signal_delivery_for_vm_frame_base(vm_ptr: u32) -> u64 {
-    crate::syscall::signal::last_signal_delivery_for_vm(vm_ptr).1
+    crate::harness::signal::last_signal_delivery_for_vm(vm_ptr).1
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_signal_delivery_pc() -> u64 {
-    crate::syscall::signal::last_signal_delivery().2
+    crate::harness::signal::last_signal_delivery().2
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_signal_delivery_for_vm_pc(vm_ptr: u32) -> u64 {
-    crate::syscall::signal::last_signal_delivery_for_vm(vm_ptr).2
+    crate::harness::signal::last_signal_delivery_for_vm(vm_ptr).2
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_signal_delivery_ra() -> u64 {
-    crate::syscall::signal::last_signal_delivery().3
+    crate::harness::signal::last_signal_delivery().3
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_signal_delivery_for_vm_ra(vm_ptr: u32) -> u64 {
-    crate::syscall::signal::last_signal_delivery_for_vm(vm_ptr).3
+    crate::harness::signal::last_signal_delivery_for_vm(vm_ptr).3
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_signal_delivery_sp() -> u64 {
-    crate::syscall::signal::last_signal_delivery().4
+    crate::harness::signal::last_signal_delivery().4
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_signal_delivery_for_vm_sp(vm_ptr: u32) -> u64 {
-    crate::syscall::signal::last_signal_delivery_for_vm(vm_ptr).4
+    crate::harness::signal::last_signal_delivery_for_vm(vm_ptr).4
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_signal_delivery_gp() -> u64 {
-    crate::syscall::signal::last_signal_delivery().5
+    crate::harness::signal::last_signal_delivery().5
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_signal_delivery_for_vm_gp(vm_ptr: u32) -> u64 {
-    crate::syscall::signal::last_signal_delivery_for_vm(vm_ptr).5
+    crate::harness::signal::last_signal_delivery_for_vm(vm_ptr).5
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_signal_delivery_tp() -> u64 {
-    crate::syscall::signal::last_signal_delivery().6
+    crate::harness::signal::last_signal_delivery().6
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_signal_delivery_for_vm_tp(vm_ptr: u32) -> u64 {
-    crate::syscall::signal::last_signal_delivery_for_vm(vm_ptr).6
+    crate::harness::signal::last_signal_delivery_for_vm(vm_ptr).6
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_signal_delivery_s11() -> u64 {
-    crate::syscall::signal::last_signal_delivery().7
+    crate::harness::signal::last_signal_delivery().7
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_signal_delivery_for_vm_s11(vm_ptr: u32) -> u64 {
-    crate::syscall::signal::last_signal_delivery_for_vm(vm_ptr).7
+    crate::harness::signal::last_signal_delivery_for_vm(vm_ptr).7
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sigreturn_frame_base() -> u64 {
-    crate::syscall::signal::last_sigreturn().1
+    crate::harness::signal::last_sigreturn().1
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sigreturn_pc() -> u64 {
-    crate::syscall::signal::last_sigreturn().2
+    crate::harness::signal::last_sigreturn().2
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sigreturn_ra() -> u64 {
-    crate::syscall::signal::last_sigreturn().3
+    crate::harness::signal::last_sigreturn().3
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sigreturn_sp() -> u64 {
-    crate::syscall::signal::last_sigreturn().4
+    crate::harness::signal::last_sigreturn().4
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sigreturn_gp() -> u64 {
-    crate::syscall::signal::last_sigreturn().5
+    crate::harness::signal::last_sigreturn().5
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sigreturn_tp() -> u64 {
-    crate::syscall::signal::last_sigreturn().6
+    crate::harness::signal::last_sigreturn().6
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sigreturn_s11() -> u64 {
-    crate::syscall::signal::last_sigreturn().7
+    crate::harness::signal::last_sigreturn().7
 }
 
 #[cfg(any(test, feature = "harness"))]
@@ -950,19 +950,19 @@ pub extern "C" fn debug_clone_spawn_stack_m8() -> u64 {
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_signal_trampoline_hit_tid() -> i32 {
-    crate::syscall::signal::last_trampoline_hit().0
+    crate::harness::signal::last_trampoline_hit().0
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_signal_trampoline_hit_pc() -> u64 {
-    crate::syscall::signal::last_trampoline_hit().1
+    crate::harness::signal::last_trampoline_hit().1
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sigreturn_count() -> u32 {
-    crate::syscall::signal::last_trampoline_hit().2
+    crate::harness::signal::last_trampoline_hit().2
 }
 
 #[cfg(any(test, feature = "harness"))]
@@ -992,1469 +992,1469 @@ pub extern "C" fn debug_panic_column() -> u32 {
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_jalr_pc() -> u64 {
-    crate::harness_debug::last_jalr_trace().pc
+    crate::harness::debug::last_jalr_trace().pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_clone_jalr_pc() -> u64 {
-    crate::harness_debug::last_clone_jalr_trace().pc
+    crate::harness::debug::last_clone_jalr_trace().pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_jalr_for_vm_pc(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_jalr_trace_for_vm(vm_ptr).pc
+    crate::harness::debug::last_jalr_trace_for_vm(vm_ptr).pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_zero_reg_pc() -> u64 {
-    crate::harness_debug::last_zero_reg_trace().pc
+    crate::harness::debug::last_zero_reg_trace().pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_zero_reg_for_vm_pc(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_zero_reg_trace_for_vm(vm_ptr).pc
+    crate::harness::debug::last_zero_reg_trace_for_vm(vm_ptr).pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_zero_reg_tid() -> i32 {
-    crate::harness_debug::last_zero_reg_trace().tid
+    crate::harness::debug::last_zero_reg_trace().tid
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_zero_reg_for_vm_tid(vm_ptr: u32) -> i32 {
-    crate::harness_debug::last_zero_reg_trace_for_vm(vm_ptr).tid
+    crate::harness::debug::last_zero_reg_trace_for_vm(vm_ptr).tid
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_zero_reg_raw() -> u32 {
-    crate::harness_debug::last_zero_reg_trace().raw
+    crate::harness::debug::last_zero_reg_trace().raw
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_zero_reg_for_vm_raw(vm_ptr: u32) -> u32 {
-    crate::harness_debug::last_zero_reg_trace_for_vm(vm_ptr).raw
+    crate::harness::debug::last_zero_reg_trace_for_vm(vm_ptr).raw
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_zero_reg_index() -> u32 {
-    crate::harness_debug::last_zero_reg_trace().reg
+    crate::harness::debug::last_zero_reg_trace().reg
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_zero_reg_for_vm_index(vm_ptr: u32) -> u32 {
-    crate::harness_debug::last_zero_reg_trace_for_vm(vm_ptr).reg
+    crate::harness::debug::last_zero_reg_trace_for_vm(vm_ptr).reg
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_zero_reg_prev_value() -> u64 {
-    crate::harness_debug::last_zero_reg_trace().prev_value
+    crate::harness::debug::last_zero_reg_trace().prev_value
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_zero_reg_for_vm_prev_value(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_zero_reg_trace_for_vm(vm_ptr).prev_value
+    crate::harness::debug::last_zero_reg_trace_for_vm(vm_ptr).prev_value
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_zero_reg_sp() -> u64 {
-    crate::harness_debug::last_zero_reg_trace().sp
+    crate::harness::debug::last_zero_reg_trace().sp
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_zero_reg_for_vm_sp(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_zero_reg_trace_for_vm(vm_ptr).sp
+    crate::harness::debug::last_zero_reg_trace_for_vm(vm_ptr).sp
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_zero_reg_s11() -> u64 {
-    crate::harness_debug::last_zero_reg_trace().s11
+    crate::harness::debug::last_zero_reg_trace().s11
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_zero_reg_for_vm_s11(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_zero_reg_trace_for_vm(vm_ptr).s11
+    crate::harness::debug::last_zero_reg_trace_for_vm(vm_ptr).s11
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_s11_write_tid() -> i32 {
-    crate::harness_debug::last_s11_write_trace().tid
+    crate::harness::debug::last_s11_write_trace().tid
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_s11_write_for_vm_tid(vm_ptr: u32) -> i32 {
-    crate::harness_debug::last_s11_write_trace_for_vm(vm_ptr).tid
+    crate::harness::debug::last_s11_write_trace_for_vm(vm_ptr).tid
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_s11_write_pc() -> u64 {
-    crate::harness_debug::last_s11_write_trace().pc
+    crate::harness::debug::last_s11_write_trace().pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_s11_write_for_vm_pc(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_s11_write_trace_for_vm(vm_ptr).pc
+    crate::harness::debug::last_s11_write_trace_for_vm(vm_ptr).pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_s11_write_raw() -> u32 {
-    crate::harness_debug::last_s11_write_trace().raw
+    crate::harness::debug::last_s11_write_trace().raw
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_s11_write_for_vm_raw(vm_ptr: u32) -> u32 {
-    crate::harness_debug::last_s11_write_trace_for_vm(vm_ptr).raw
+    crate::harness::debug::last_s11_write_trace_for_vm(vm_ptr).raw
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_s11_write_source() -> u32 {
-    crate::harness_debug::last_s11_write_trace().source
+    crate::harness::debug::last_s11_write_trace().source
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_s11_write_for_vm_source(vm_ptr: u32) -> u32 {
-    crate::harness_debug::last_s11_write_trace_for_vm(vm_ptr).source
+    crate::harness::debug::last_s11_write_trace_for_vm(vm_ptr).source
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_s11_write_prev_value() -> u64 {
-    crate::harness_debug::last_s11_write_trace().prev_value
+    crate::harness::debug::last_s11_write_trace().prev_value
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_s11_write_for_vm_prev_value(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_s11_write_trace_for_vm(vm_ptr).prev_value
+    crate::harness::debug::last_s11_write_trace_for_vm(vm_ptr).prev_value
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_s11_write_value() -> u64 {
-    crate::harness_debug::last_s11_write_trace().value
+    crate::harness::debug::last_s11_write_trace().value
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_s11_write_for_vm_value(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_s11_write_trace_for_vm(vm_ptr).value
+    crate::harness::debug::last_s11_write_trace_for_vm(vm_ptr).value
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_tp_write_pc() -> u64 {
-    crate::harness_debug::last_tp_write_trace().pc
+    crate::harness::debug::last_tp_write_trace().pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_tp_write_raw() -> u32 {
-    crate::harness_debug::last_tp_write_trace().raw
+    crate::harness::debug::last_tp_write_trace().raw
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_tp_write_source() -> u32 {
-    crate::harness_debug::last_tp_write_trace().source
+    crate::harness::debug::last_tp_write_trace().source
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_tp_write_prev_value() -> u64 {
-    crate::harness_debug::last_tp_write_trace().prev_value
+    crate::harness::debug::last_tp_write_trace().prev_value
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_tp_write_value() -> u64 {
-    crate::harness_debug::last_tp_write_trace().value
+    crate::harness::debug::last_tp_write_trace().value
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_tp_write_rs1() -> u32 {
-    crate::harness_debug::last_tp_write_trace().rs1
+    crate::harness::debug::last_tp_write_trace().rs1
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_tp_write_rs1_value() -> u64 {
-    crate::harness_debug::last_tp_write_trace().rs1_value
+    crate::harness::debug::last_tp_write_trace().rs1_value
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_tp_write_tid() -> i32 {
-    crate::harness_debug::last_tp_write_trace().tid
+    crate::harness::debug::last_tp_write_trace().tid
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sp_write_pc() -> u64 {
-    crate::harness_debug::last_sp_write_trace().pc
+    crate::harness::debug::last_sp_write_trace().pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sp_write_for_vm_pc(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_sp_write_trace_for_vm(vm_ptr).pc
+    crate::harness::debug::last_sp_write_trace_for_vm(vm_ptr).pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sp_write_raw() -> u32 {
-    crate::harness_debug::last_sp_write_trace().raw
+    crate::harness::debug::last_sp_write_trace().raw
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sp_write_for_vm_raw(vm_ptr: u32) -> u32 {
-    crate::harness_debug::last_sp_write_trace_for_vm(vm_ptr).raw
+    crate::harness::debug::last_sp_write_trace_for_vm(vm_ptr).raw
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sp_write_source() -> u32 {
-    crate::harness_debug::last_sp_write_trace().source
+    crate::harness::debug::last_sp_write_trace().source
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sp_write_for_vm_source(vm_ptr: u32) -> u32 {
-    crate::harness_debug::last_sp_write_trace_for_vm(vm_ptr).source
+    crate::harness::debug::last_sp_write_trace_for_vm(vm_ptr).source
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sp_write_prev_value() -> u64 {
-    crate::harness_debug::last_sp_write_trace().prev_value
+    crate::harness::debug::last_sp_write_trace().prev_value
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sp_write_for_vm_prev_value(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_sp_write_trace_for_vm(vm_ptr).prev_value
+    crate::harness::debug::last_sp_write_trace_for_vm(vm_ptr).prev_value
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sp_write_value() -> u64 {
-    crate::harness_debug::last_sp_write_trace().value
+    crate::harness::debug::last_sp_write_trace().value
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sp_write_for_vm_value(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_sp_write_trace_for_vm(vm_ptr).value
+    crate::harness::debug::last_sp_write_trace_for_vm(vm_ptr).value
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sp_write_tid() -> i32 {
-    crate::harness_debug::last_sp_write_trace().tid
+    crate::harness::debug::last_sp_write_trace().tid
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sp_write_for_vm_tid(vm_ptr: u32) -> i32 {
-    crate::harness_debug::last_sp_write_trace_for_vm(vm_ptr).tid
+    crate::harness::debug::last_sp_write_trace_for_vm(vm_ptr).tid
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_jalr_rs1_value() -> u64 {
-    crate::harness_debug::last_jalr_trace().rs1_value
+    crate::harness::debug::last_jalr_trace().rs1_value
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_clone_jalr_rs1_value() -> u64 {
-    crate::harness_debug::last_clone_jalr_trace().rs1_value
+    crate::harness::debug::last_clone_jalr_trace().rs1_value
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_jalr_for_vm_rs1_value(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_jalr_trace_for_vm(vm_ptr).rs1_value
+    crate::harness::debug::last_jalr_trace_for_vm(vm_ptr).rs1_value
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_jalr_target() -> u64 {
-    crate::harness_debug::last_jalr_trace().target
+    crate::harness::debug::last_jalr_trace().target
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_clone_jalr_target() -> u64 {
-    crate::harness_debug::last_clone_jalr_trace().target
+    crate::harness::debug::last_clone_jalr_trace().target
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_jalr_for_vm_target(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_jalr_trace_for_vm(vm_ptr).target
+    crate::harness::debug::last_jalr_trace_for_vm(vm_ptr).target
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_jalr_rd() -> u32 {
-    crate::harness_debug::last_jalr_trace().rd
+    crate::harness::debug::last_jalr_trace().rd
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_clone_jalr_rd() -> u32 {
-    crate::harness_debug::last_clone_jalr_trace().rd
+    crate::harness::debug::last_clone_jalr_trace().rd
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_jalr_for_vm_rd(vm_ptr: u32) -> u32 {
-    crate::harness_debug::last_jalr_trace_for_vm(vm_ptr).rd
+    crate::harness::debug::last_jalr_trace_for_vm(vm_ptr).rd
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_jalr_rs1() -> u32 {
-    crate::harness_debug::last_jalr_trace().rs1
+    crate::harness::debug::last_jalr_trace().rs1
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_clone_jalr_rs1() -> u32 {
-    crate::harness_debug::last_clone_jalr_trace().rs1
+    crate::harness::debug::last_clone_jalr_trace().rs1
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_clone_startup_trace_len() -> u32 {
-    crate::harness_debug::clone_startup_trace_len()
+    crate::harness::debug::clone_startup_trace_len()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_clone_startup_trace_entry_vm_ptr(index: u32) -> u32 {
-    crate::harness_debug::clone_startup_trace_entry(index).vm_ptr
+    crate::harness::debug::clone_startup_trace_entry(index).vm_ptr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_clone_startup_trace_entry_tid(index: u32) -> i32 {
-    crate::harness_debug::clone_startup_trace_entry(index).tid
+    crate::harness::debug::clone_startup_trace_entry(index).tid
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_clone_startup_trace_entry_pc(index: u32) -> u64 {
-    crate::harness_debug::clone_startup_trace_entry(index).pc
+    crate::harness::debug::clone_startup_trace_entry(index).pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_clone_startup_trace_entry_raw(index: u32) -> u32 {
-    crate::harness_debug::clone_startup_trace_entry(index).raw
+    crate::harness::debug::clone_startup_trace_entry(index).raw
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_clone_startup_trace_entry_a0(index: u32) -> u64 {
-    crate::harness_debug::clone_startup_trace_entry(index).a0
+    crate::harness::debug::clone_startup_trace_entry(index).a0
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_clone_startup_trace_entry_t1(index: u32) -> u64 {
-    crate::harness_debug::clone_startup_trace_entry(index).t1
+    crate::harness::debug::clone_startup_trace_entry(index).t1
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_clone_startup_trace_entry_t2(index: u32) -> u64 {
-    crate::harness_debug::clone_startup_trace_entry(index).t2
+    crate::harness::debug::clone_startup_trace_entry(index).t2
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_clone_startup_trace_entry_sp(index: u32) -> u64 {
-    crate::harness_debug::clone_startup_trace_entry(index).sp
+    crate::harness::debug::clone_startup_trace_entry(index).sp
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_clone_startup_trace_entry_s11(index: u32) -> u64 {
-    crate::harness_debug::clone_startup_trace_entry(index).s11
+    crate::harness::debug::clone_startup_trace_entry(index).s11
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_jalr_for_vm_rs1(vm_ptr: u32) -> u32 {
-    crate::harness_debug::last_jalr_trace_for_vm(vm_ptr).rs1
+    crate::harness::debug::last_jalr_trace_for_vm(vm_ptr).rs1
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_execve_stage() -> u32 {
-    crate::harness_debug::execve_stage()
+    crate::harness::debug::execve_stage()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_execve_value0() -> u64 {
-    crate::harness_debug::execve_value0()
+    crate::harness::debug::execve_value0()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_execve_value1() -> u64 {
-    crate::harness_debug::execve_value1()
+    crate::harness::debug::execve_value1()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_execve_ecall_value0() -> u64 {
-    crate::harness_debug::execve_ecall_value0()
+    crate::harness::debug::execve_ecall_value0()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_execve_ecall_value1() -> u64 {
-    crate::harness_debug::execve_ecall_value1()
+    crate::harness::debug::execve_ecall_value1()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_execve_pre_pc() -> u64 {
-    crate::harness_debug::execve_pre_pc()
+    crate::harness::debug::execve_pre_pc()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_execve_pre_raw() -> u32 {
-    crate::harness_debug::execve_pre_raw()
+    crate::harness::debug::execve_pre_raw()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_execve_pre_value0() -> u64 {
-    crate::harness_debug::execve_pre_value0()
+    crate::harness::debug::execve_pre_value0()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_execve_pre_value1() -> u64 {
-    crate::harness_debug::execve_pre_value1()
+    crate::harness::debug::execve_pre_value1()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_execve_approach_trace_len() -> u32 {
-    crate::harness_debug::execve_approach_trace_len()
+    crate::harness::debug::execve_approach_trace_len()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_execve_approach_trace_pc(index: u32) -> u64 {
-    crate::harness_debug::execve_approach_trace_entry(index).pc
+    crate::harness::debug::execve_approach_trace_entry(index).pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_execve_approach_trace_raw(index: u32) -> u32 {
-    crate::harness_debug::execve_approach_trace_entry(index).raw
+    crate::harness::debug::execve_approach_trace_entry(index).raw
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_execve_approach_trace_pid_sample0(index: u32) -> u64 {
-    crate::harness_debug::execve_approach_trace_entry(index).pid_sample0
+    crate::harness::debug::execve_approach_trace_entry(index).pid_sample0
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_execve_approach_trace_pid_sample1(index: u32) -> u64 {
-    crate::harness_debug::execve_approach_trace_entry(index).pid_sample1
+    crate::harness::debug::execve_approach_trace_entry(index).pid_sample1
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_execve_dispatch_trace_len() -> u32 {
-    crate::harness_debug::execve_dispatch_trace_len()
+    crate::harness::debug::execve_dispatch_trace_len()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_execve_dispatch_trace_stage(index: u32) -> u32 {
-    crate::harness_debug::execve_dispatch_trace_entry(index).stage
+    crate::harness::debug::execve_dispatch_trace_entry(index).stage
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_execve_dispatch_trace_pid_sample0(index: u32) -> u64 {
-    crate::harness_debug::execve_dispatch_trace_entry(index).pid_sample0
+    crate::harness::debug::execve_dispatch_trace_entry(index).pid_sample0
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_execve_dispatch_trace_pid_sample1(index: u32) -> u64 {
-    crate::harness_debug::execve_dispatch_trace_entry(index).pid_sample1
+    crate::harness::debug::execve_dispatch_trace_entry(index).pid_sample1
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_execve_stage_trace_len() -> u32 {
-    crate::harness_debug::execve_stage_trace_len()
+    crate::harness::debug::execve_stage_trace_len()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_execve_stage_trace_stage(index: u32) -> u32 {
-    crate::harness_debug::execve_stage_trace_entry(index).stage
+    crate::harness::debug::execve_stage_trace_entry(index).stage
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_execve_stage_trace_value0(index: u32) -> u64 {
-    crate::harness_debug::execve_stage_trace_entry(index).value0
+    crate::harness::debug::execve_stage_trace_entry(index).value0
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_execve_stage_trace_value1(index: u32) -> u64 {
-    crate::harness_debug::execve_stage_trace_entry(index).value1
+    crate::harness::debug::execve_stage_trace_entry(index).value1
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_exec_trace_len() -> u32 {
-    crate::harness_debug::exec_trace_len()
+    crate::harness::debug::exec_trace_len()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_exec_trace_entry_vm_ptr(index: u32) -> u32 {
-    crate::harness_debug::exec_trace_entry(index).vm_ptr
+    crate::harness::debug::exec_trace_entry(index).vm_ptr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_exec_trace_entry_epoch(index: u32) -> u32 {
-    crate::harness_debug::exec_trace_entry(index).epoch
+    crate::harness::debug::exec_trace_entry(index).epoch
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_exec_trace_entry_tid(index: u32) -> i32 {
-    crate::harness_debug::exec_trace_entry(index).tid
+    crate::harness::debug::exec_trace_entry(index).tid
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_exec_trace_entry_pc(index: u32) -> u64 {
-    crate::harness_debug::exec_trace_entry(index).pc
+    crate::harness::debug::exec_trace_entry(index).pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_exec_trace_entry_raw(index: u32) -> u32 {
-    crate::harness_debug::exec_trace_entry(index).raw
+    crate::harness::debug::exec_trace_entry(index).raw
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_exec_trace_entry_step(index: u32) -> u32 {
-    crate::harness_debug::exec_trace_entry(index).step
+    crate::harness::debug::exec_trace_entry(index).step
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_exec_trace_entry_sp(index: u32) -> u64 {
-    crate::harness_debug::exec_trace_entry(index).sp
+    crate::harness::debug::exec_trace_entry(index).sp
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_exec_trace_entry_ra(index: u32) -> u64 {
-    crate::harness_debug::exec_trace_entry(index).ra
+    crate::harness::debug::exec_trace_entry(index).ra
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_exec_trace_entry_a0(index: u32) -> u64 {
-    crate::harness_debug::exec_trace_entry(index).a0
+    crate::harness::debug::exec_trace_entry(index).a0
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_exec_trace_entry_s11(index: u32) -> u64 {
-    crate::harness_debug::exec_trace_entry(index).s11
+    crate::harness::debug::exec_trace_entry(index).s11
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_exec_trace_epoch_for_vm(vm_ptr: u32) -> u32 {
-    crate::harness_debug::exec_trace_epoch_for_vm(vm_ptr)
+    crate::harness::debug::exec_trace_epoch_for_vm(vm_ptr)
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fault_exec_trace_len_for_vm(vm_ptr: u32) -> u32 {
-    crate::harness_debug::fault_exec_trace_len_for_vm(vm_ptr)
+    crate::harness::debug::fault_exec_trace_len_for_vm(vm_ptr)
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sync_fault_exec_trace_len_for_vm(vm_ptr: u32) -> u32 {
-    crate::harness_debug::sync_fault_exec_trace_len_for_vm(vm_ptr)
+    crate::harness::debug::sync_fault_exec_trace_len_for_vm(vm_ptr)
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fault_exec_trace_entry_pc_for_vm(vm_ptr: u32, index: u32) -> u64 {
-    crate::harness_debug::fault_exec_trace_entry_for_vm(vm_ptr, index).pc
+    crate::harness::debug::fault_exec_trace_entry_for_vm(vm_ptr, index).pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fault_exec_trace_entry_raw_for_vm(vm_ptr: u32, index: u32) -> u32 {
-    crate::harness_debug::fault_exec_trace_entry_for_vm(vm_ptr, index).raw
+    crate::harness::debug::fault_exec_trace_entry_for_vm(vm_ptr, index).raw
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fault_exec_trace_entry_step_for_vm(vm_ptr: u32, index: u32) -> u32 {
-    crate::harness_debug::fault_exec_trace_entry_for_vm(vm_ptr, index).step
+    crate::harness::debug::fault_exec_trace_entry_for_vm(vm_ptr, index).step
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fault_exec_trace_entry_sp_for_vm(vm_ptr: u32, index: u32) -> u64 {
-    crate::harness_debug::fault_exec_trace_entry_for_vm(vm_ptr, index).sp
+    crate::harness::debug::fault_exec_trace_entry_for_vm(vm_ptr, index).sp
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fault_exec_trace_entry_ra_for_vm(vm_ptr: u32, index: u32) -> u64 {
-    crate::harness_debug::fault_exec_trace_entry_for_vm(vm_ptr, index).ra
+    crate::harness::debug::fault_exec_trace_entry_for_vm(vm_ptr, index).ra
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fault_exec_trace_entry_a0_for_vm(vm_ptr: u32, index: u32) -> u64 {
-    crate::harness_debug::fault_exec_trace_entry_for_vm(vm_ptr, index).a0
+    crate::harness::debug::fault_exec_trace_entry_for_vm(vm_ptr, index).a0
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fault_exec_trace_entry_s11_for_vm(vm_ptr: u32, index: u32) -> u64 {
-    crate::harness_debug::fault_exec_trace_entry_for_vm(vm_ptr, index).s11
+    crate::harness::debug::fault_exec_trace_entry_for_vm(vm_ptr, index).s11
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sync_fault_exec_trace_entry_pc_for_vm(vm_ptr: u32, index: u32) -> u64 {
-    crate::harness_debug::sync_fault_exec_trace_entry_for_vm(vm_ptr, index).pc
+    crate::harness::debug::sync_fault_exec_trace_entry_for_vm(vm_ptr, index).pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sync_fault_exec_trace_entry_raw_for_vm(vm_ptr: u32, index: u32) -> u32 {
-    crate::harness_debug::sync_fault_exec_trace_entry_for_vm(vm_ptr, index).raw
+    crate::harness::debug::sync_fault_exec_trace_entry_for_vm(vm_ptr, index).raw
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sync_fault_exec_trace_entry_step_for_vm(vm_ptr: u32, index: u32) -> u32 {
-    crate::harness_debug::sync_fault_exec_trace_entry_for_vm(vm_ptr, index).step
+    crate::harness::debug::sync_fault_exec_trace_entry_for_vm(vm_ptr, index).step
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sync_fault_exec_trace_entry_sp_for_vm(vm_ptr: u32, index: u32) -> u64 {
-    crate::harness_debug::sync_fault_exec_trace_entry_for_vm(vm_ptr, index).sp
+    crate::harness::debug::sync_fault_exec_trace_entry_for_vm(vm_ptr, index).sp
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sync_fault_exec_trace_entry_ra_for_vm(vm_ptr: u32, index: u32) -> u64 {
-    crate::harness_debug::sync_fault_exec_trace_entry_for_vm(vm_ptr, index).ra
+    crate::harness::debug::sync_fault_exec_trace_entry_for_vm(vm_ptr, index).ra
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sync_fault_exec_trace_entry_a0_for_vm(vm_ptr: u32, index: u32) -> u64 {
-    crate::harness_debug::sync_fault_exec_trace_entry_for_vm(vm_ptr, index).a0
+    crate::harness::debug::sync_fault_exec_trace_entry_for_vm(vm_ptr, index).a0
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sync_fault_exec_trace_entry_s11_for_vm(vm_ptr: u32, index: u32) -> u64 {
-    crate::harness_debug::sync_fault_exec_trace_entry_for_vm(vm_ptr, index).s11
+    crate::harness::debug::sync_fault_exec_trace_entry_for_vm(vm_ptr, index).s11
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_exec_trace_len_for_vm(vm_ptr: u32) -> u32 {
-    crate::harness_debug::thread_step_exec_trace_len_for_vm(vm_ptr)
+    crate::harness::debug::thread_step_exec_trace_len_for_vm(vm_ptr)
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_exec_trace_entry_pc_for_vm(vm_ptr: u32, index: u32) -> u64 {
-    crate::harness_debug::thread_step_exec_trace_entry_for_vm(vm_ptr, index).pc
+    crate::harness::debug::thread_step_exec_trace_entry_for_vm(vm_ptr, index).pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_exec_trace_entry_raw_for_vm(vm_ptr: u32, index: u32) -> u32 {
-    crate::harness_debug::thread_step_exec_trace_entry_for_vm(vm_ptr, index).raw
+    crate::harness::debug::thread_step_exec_trace_entry_for_vm(vm_ptr, index).raw
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_exec_trace_entry_step_for_vm(vm_ptr: u32, index: u32) -> u32 {
-    crate::harness_debug::thread_step_exec_trace_entry_for_vm(vm_ptr, index).step
+    crate::harness::debug::thread_step_exec_trace_entry_for_vm(vm_ptr, index).step
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_exec_trace_entry_sp_for_vm(vm_ptr: u32, index: u32) -> u64 {
-    crate::harness_debug::thread_step_exec_trace_entry_for_vm(vm_ptr, index).sp
+    crate::harness::debug::thread_step_exec_trace_entry_for_vm(vm_ptr, index).sp
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_exec_trace_entry_ra_for_vm(vm_ptr: u32, index: u32) -> u64 {
-    crate::harness_debug::thread_step_exec_trace_entry_for_vm(vm_ptr, index).ra
+    crate::harness::debug::thread_step_exec_trace_entry_for_vm(vm_ptr, index).ra
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_exec_trace_entry_a0_for_vm(vm_ptr: u32, index: u32) -> u64 {
-    crate::harness_debug::thread_step_exec_trace_entry_for_vm(vm_ptr, index).a0
+    crate::harness::debug::thread_step_exec_trace_entry_for_vm(vm_ptr, index).a0
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_exec_trace_entry_s11_for_vm(vm_ptr: u32, index: u32) -> u64 {
-    crate::harness_debug::thread_step_exec_trace_entry_for_vm(vm_ptr, index).s11
+    crate::harness::debug::thread_step_exec_trace_entry_for_vm(vm_ptr, index).s11
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_break_exec_trace_len_for_vm(vm_ptr: u32) -> u32 {
-    crate::harness_debug::break_exec_trace_len_for_vm(vm_ptr)
+    crate::harness::debug::break_exec_trace_len_for_vm(vm_ptr)
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_break_exec_trace_entry_pc_for_vm(vm_ptr: u32, index: u32) -> u64 {
-    crate::harness_debug::break_exec_trace_entry_for_vm(vm_ptr, index).pc
+    crate::harness::debug::break_exec_trace_entry_for_vm(vm_ptr, index).pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_break_exec_trace_entry_raw_for_vm(vm_ptr: u32, index: u32) -> u32 {
-    crate::harness_debug::break_exec_trace_entry_for_vm(vm_ptr, index).raw
+    crate::harness::debug::break_exec_trace_entry_for_vm(vm_ptr, index).raw
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_break_exec_trace_entry_step_for_vm(vm_ptr: u32, index: u32) -> u32 {
-    crate::harness_debug::break_exec_trace_entry_for_vm(vm_ptr, index).step
+    crate::harness::debug::break_exec_trace_entry_for_vm(vm_ptr, index).step
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_break_exec_trace_entry_sp_for_vm(vm_ptr: u32, index: u32) -> u64 {
-    crate::harness_debug::break_exec_trace_entry_for_vm(vm_ptr, index).sp
+    crate::harness::debug::break_exec_trace_entry_for_vm(vm_ptr, index).sp
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_break_exec_trace_entry_ra_for_vm(vm_ptr: u32, index: u32) -> u64 {
-    crate::harness_debug::break_exec_trace_entry_for_vm(vm_ptr, index).ra
+    crate::harness::debug::break_exec_trace_entry_for_vm(vm_ptr, index).ra
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_break_exec_trace_entry_a0_for_vm(vm_ptr: u32, index: u32) -> u64 {
-    crate::harness_debug::break_exec_trace_entry_for_vm(vm_ptr, index).a0
+    crate::harness::debug::break_exec_trace_entry_for_vm(vm_ptr, index).a0
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_break_exec_trace_entry_s11_for_vm(vm_ptr: u32, index: u32) -> u64 {
-    crate::harness_debug::break_exec_trace_entry_for_vm(vm_ptr, index).s11
+    crate::harness::debug::break_exec_trace_entry_for_vm(vm_ptr, index).s11
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_entry_trace_len() -> u32 {
-    crate::harness_debug::thread_step_entry_trace_len()
+    crate::harness::debug::thread_step_entry_trace_len()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_entry_trace_entry_vm_ptr(index: u32) -> u32 {
-    crate::harness_debug::thread_step_entry_trace_entry(index).vm_ptr
+    crate::harness::debug::thread_step_entry_trace_entry(index).vm_ptr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_entry_trace_entry_tid(index: u32) -> i32 {
-    crate::harness_debug::thread_step_entry_trace_entry(index).tid
+    crate::harness::debug::thread_step_entry_trace_entry(index).tid
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_entry_trace_entry_status(index: u32) -> i32 {
-    crate::harness_debug::thread_step_entry_trace_entry(index).status
+    crate::harness::debug::thread_step_entry_trace_entry(index).status
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_entry_trace_entry_budget(index: u32) -> i32 {
-    crate::harness_debug::thread_step_entry_trace_entry(index).budget
+    crate::harness::debug::thread_step_entry_trace_entry(index).budget
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_entry_trace_entry_pc(index: u32) -> u64 {
-    crate::harness_debug::thread_step_entry_trace_entry(index).pc
+    crate::harness::debug::thread_step_entry_trace_entry(index).pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_entry_trace_entry_ra(index: u32) -> u64 {
-    crate::harness_debug::thread_step_entry_trace_entry(index).ra
+    crate::harness::debug::thread_step_entry_trace_entry(index).ra
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_entry_trace_entry_sp(index: u32) -> u64 {
-    crate::harness_debug::thread_step_entry_trace_entry(index).sp
+    crate::harness::debug::thread_step_entry_trace_entry(index).sp
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_entry_trace_entry_s11(index: u32) -> u64 {
-    crate::harness_debug::thread_step_entry_trace_entry(index).s11
+    crate::harness::debug::thread_step_entry_trace_entry(index).s11
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_trace_len() -> u32 {
-    crate::harness_debug::thread_step_trace_len()
+    crate::harness::debug::thread_step_trace_len()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_trace_entry_vm_ptr(index: u32) -> u32 {
-    crate::harness_debug::thread_step_trace_entry(index).vm_ptr
+    crate::harness::debug::thread_step_trace_entry(index).vm_ptr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_trace_entry_tid(index: u32) -> i32 {
-    crate::harness_debug::thread_step_trace_entry(index).tid
+    crate::harness::debug::thread_step_trace_entry(index).tid
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_trace_entry_status(index: u32) -> i32 {
-    crate::harness_debug::thread_step_trace_entry(index).status
+    crate::harness::debug::thread_step_trace_entry(index).status
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_trace_entry_budget(index: u32) -> i32 {
-    crate::harness_debug::thread_step_trace_entry(index).budget
+    crate::harness::debug::thread_step_trace_entry(index).budget
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_trace_entry_remaining(index: u32) -> i32 {
-    crate::harness_debug::thread_step_trace_entry(index).remaining
+    crate::harness::debug::thread_step_trace_entry(index).remaining
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_trace_entry_pc(index: u32) -> u64 {
-    crate::harness_debug::thread_step_trace_entry(index).pc
+    crate::harness::debug::thread_step_trace_entry(index).pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_trace_entry_ra(index: u32) -> u64 {
-    crate::harness_debug::thread_step_trace_entry(index).ra
+    crate::harness::debug::thread_step_trace_entry(index).ra
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_trace_entry_sp(index: u32) -> u64 {
-    crate::harness_debug::thread_step_trace_entry(index).sp
+    crate::harness::debug::thread_step_trace_entry(index).sp
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_trace_entry_s11(index: u32) -> u64 {
-    crate::harness_debug::thread_step_trace_entry(index).s11
+    crate::harness::debug::thread_step_trace_entry(index).s11
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_entry_for_vm_tid(vm_ptr: u32) -> i32 {
-    crate::harness_debug::last_thread_step_entry_trace_for_vm(vm_ptr).tid
+    crate::harness::debug::last_thread_step_entry_trace_for_vm(vm_ptr).tid
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_entry_for_vm_status(vm_ptr: u32) -> i32 {
-    crate::harness_debug::last_thread_step_entry_trace_for_vm(vm_ptr).status
+    crate::harness::debug::last_thread_step_entry_trace_for_vm(vm_ptr).status
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_entry_for_vm_budget(vm_ptr: u32) -> i32 {
-    crate::harness_debug::last_thread_step_entry_trace_for_vm(vm_ptr).budget
+    crate::harness::debug::last_thread_step_entry_trace_for_vm(vm_ptr).budget
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_entry_for_vm_pc(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_thread_step_entry_trace_for_vm(vm_ptr).pc
+    crate::harness::debug::last_thread_step_entry_trace_for_vm(vm_ptr).pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_entry_for_vm_ra(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_thread_step_entry_trace_for_vm(vm_ptr).ra
+    crate::harness::debug::last_thread_step_entry_trace_for_vm(vm_ptr).ra
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_entry_for_vm_sp(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_thread_step_entry_trace_for_vm(vm_ptr).sp
+    crate::harness::debug::last_thread_step_entry_trace_for_vm(vm_ptr).sp
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_entry_for_vm_s11(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_thread_step_entry_trace_for_vm(vm_ptr).s11
+    crate::harness::debug::last_thread_step_entry_trace_for_vm(vm_ptr).s11
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_tid() -> i32 {
-    crate::harness_debug::last_thread_step_trace().tid
+    crate::harness::debug::last_thread_step_trace().tid
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_vm_ptr() -> u32 {
-    crate::harness_debug::last_thread_step_trace().vm_ptr
+    crate::harness::debug::last_thread_step_trace().vm_ptr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_for_vm_tid(vm_ptr: u32) -> i32 {
-    crate::harness_debug::last_thread_step_trace_for_vm(vm_ptr).tid
+    crate::harness::debug::last_thread_step_trace_for_vm(vm_ptr).tid
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_status() -> i32 {
-    crate::harness_debug::last_thread_step_trace().status
+    crate::harness::debug::last_thread_step_trace().status
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_for_vm_status(vm_ptr: u32) -> i32 {
-    crate::harness_debug::last_thread_step_trace_for_vm(vm_ptr).status
+    crate::harness::debug::last_thread_step_trace_for_vm(vm_ptr).status
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_budget() -> i32 {
-    crate::harness_debug::last_thread_step_trace().budget
+    crate::harness::debug::last_thread_step_trace().budget
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_for_vm_budget(vm_ptr: u32) -> i32 {
-    crate::harness_debug::last_thread_step_trace_for_vm(vm_ptr).budget
+    crate::harness::debug::last_thread_step_trace_for_vm(vm_ptr).budget
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_remaining() -> i32 {
-    crate::harness_debug::last_thread_step_trace().remaining
+    crate::harness::debug::last_thread_step_trace().remaining
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_for_vm_remaining(vm_ptr: u32) -> i32 {
-    crate::harness_debug::last_thread_step_trace_for_vm(vm_ptr).remaining
+    crate::harness::debug::last_thread_step_trace_for_vm(vm_ptr).remaining
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_pc() -> u64 {
-    crate::harness_debug::last_thread_step_trace().pc
+    crate::harness::debug::last_thread_step_trace().pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_for_vm_pc(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_thread_step_trace_for_vm(vm_ptr).pc
+    crate::harness::debug::last_thread_step_trace_for_vm(vm_ptr).pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_ra() -> u64 {
-    crate::harness_debug::last_thread_step_trace().ra
+    crate::harness::debug::last_thread_step_trace().ra
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_for_vm_ra(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_thread_step_trace_for_vm(vm_ptr).ra
+    crate::harness::debug::last_thread_step_trace_for_vm(vm_ptr).ra
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_sp() -> u64 {
-    crate::harness_debug::last_thread_step_trace().sp
+    crate::harness::debug::last_thread_step_trace().sp
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_for_vm_sp(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_thread_step_trace_for_vm(vm_ptr).sp
+    crate::harness::debug::last_thread_step_trace_for_vm(vm_ptr).sp
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_s11() -> u64 {
-    crate::harness_debug::last_thread_step_trace().s11
+    crate::harness::debug::last_thread_step_trace().s11
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_for_vm_s11(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_thread_step_trace_for_vm(vm_ptr).s11
+    crate::harness::debug::last_thread_step_trace_for_vm(vm_ptr).s11
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_phase() -> u32 {
-    crate::harness_debug::last_thread_step_phase().phase
+    crate::harness::debug::last_thread_step_phase().phase
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_phase_vm_ptr() -> u32 {
-    crate::harness_debug::last_thread_step_phase().vm_ptr
+    crate::harness::debug::last_thread_step_phase().vm_ptr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_phase_for_vm(vm_ptr: u32) -> u32 {
-    crate::harness_debug::last_thread_step_phase_for_vm(vm_ptr).phase
+    crate::harness::debug::last_thread_step_phase_for_vm(vm_ptr).phase
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_phase_status() -> i32 {
-    crate::harness_debug::last_thread_step_phase().status
+    crate::harness::debug::last_thread_step_phase().status
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_phase_for_vm_status(vm_ptr: u32) -> i32 {
-    crate::harness_debug::last_thread_step_phase_for_vm(vm_ptr).status
+    crate::harness::debug::last_thread_step_phase_for_vm(vm_ptr).status
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_phase_budget() -> i32 {
-    crate::harness_debug::last_thread_step_phase().budget
+    crate::harness::debug::last_thread_step_phase().budget
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_phase_for_vm_budget(vm_ptr: u32) -> i32 {
-    crate::harness_debug::last_thread_step_phase_for_vm(vm_ptr).budget
+    crate::harness::debug::last_thread_step_phase_for_vm(vm_ptr).budget
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_phase_remaining() -> i32 {
-    crate::harness_debug::last_thread_step_phase().remaining
+    crate::harness::debug::last_thread_step_phase().remaining
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_phase_for_vm_remaining(vm_ptr: u32) -> i32 {
-    crate::harness_debug::last_thread_step_phase_for_vm(vm_ptr).remaining
+    crate::harness::debug::last_thread_step_phase_for_vm(vm_ptr).remaining
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_phase_pc() -> u64 {
-    crate::harness_debug::last_thread_step_phase().pc
+    crate::harness::debug::last_thread_step_phase().pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_phase_for_vm_pc(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_thread_step_phase_for_vm(vm_ptr).pc
+    crate::harness::debug::last_thread_step_phase_for_vm(vm_ptr).pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_phase_ra() -> u64 {
-    crate::harness_debug::last_thread_step_phase().ra
+    crate::harness::debug::last_thread_step_phase().ra
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_phase_for_vm_ra(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_thread_step_phase_for_vm(vm_ptr).ra
+    crate::harness::debug::last_thread_step_phase_for_vm(vm_ptr).ra
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_phase_sp() -> u64 {
-    crate::harness_debug::last_thread_step_phase().sp
+    crate::harness::debug::last_thread_step_phase().sp
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_phase_for_vm_sp(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_thread_step_phase_for_vm(vm_ptr).sp
+    crate::harness::debug::last_thread_step_phase_for_vm(vm_ptr).sp
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_phase_s11() -> u64 {
-    crate::harness_debug::last_thread_step_phase().s11
+    crate::harness::debug::last_thread_step_phase().s11
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_phase_for_vm_s11(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_thread_step_phase_for_vm(vm_ptr).s11
+    crate::harness::debug::last_thread_step_phase_for_vm(vm_ptr).s11
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fault_dispatch_for_vm_phase(vm_ptr: u32) -> u32 {
-    crate::harness_debug::last_fault_dispatch_trace_for_vm(vm_ptr).phase
+    crate::harness::debug::last_fault_dispatch_trace_for_vm(vm_ptr).phase
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fault_dispatch_for_vm_tid(vm_ptr: u32) -> i32 {
-    crate::harness_debug::last_fault_dispatch_trace_for_vm(vm_ptr).tid
+    crate::harness::debug::last_fault_dispatch_trace_for_vm(vm_ptr).tid
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fault_dispatch_for_vm_pc(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_fault_dispatch_trace_for_vm(vm_ptr).pc
+    crate::harness::debug::last_fault_dispatch_trace_for_vm(vm_ptr).pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fault_dispatch_for_vm_ra(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_fault_dispatch_trace_for_vm(vm_ptr).ra
+    crate::harness::debug::last_fault_dispatch_trace_for_vm(vm_ptr).ra
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fault_dispatch_for_vm_sp(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_fault_dispatch_trace_for_vm(vm_ptr).sp
+    crate::harness::debug::last_fault_dispatch_trace_for_vm(vm_ptr).sp
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fault_dispatch_for_vm_s11(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_fault_dispatch_trace_for_vm(vm_ptr).s11
+    crate::harness::debug::last_fault_dispatch_trace_for_vm(vm_ptr).s11
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fault_dispatch_for_vm_addr(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_fault_dispatch_trace_for_vm(vm_ptr).fault_addr
+    crate::harness::debug::last_fault_dispatch_trace_for_vm(vm_ptr).fault_addr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sync_signal_for_vm_tid(vm_ptr: u32) -> i32 {
-    crate::harness_debug::last_sync_signal_trace_for_vm(vm_ptr).tid
+    crate::harness::debug::last_sync_signal_trace_for_vm(vm_ptr).tid
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sync_signal_for_vm_local_pc(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_sync_signal_trace_for_vm(vm_ptr).local_pc
+    crate::harness::debug::last_sync_signal_trace_for_vm(vm_ptr).local_pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sync_signal_for_vm_local_ra(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_sync_signal_trace_for_vm(vm_ptr).local_ra
+    crate::harness::debug::last_sync_signal_trace_for_vm(vm_ptr).local_ra
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sync_signal_for_vm_local_sp(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_sync_signal_trace_for_vm(vm_ptr).local_sp
+    crate::harness::debug::last_sync_signal_trace_for_vm(vm_ptr).local_sp
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sync_signal_for_vm_local_s11(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_sync_signal_trace_for_vm(vm_ptr).local_s11
+    crate::harness::debug::last_sync_signal_trace_for_vm(vm_ptr).local_s11
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sync_signal_for_vm_local_a0(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_sync_signal_trace_for_vm(vm_ptr).local_a0
+    crate::harness::debug::last_sync_signal_trace_for_vm(vm_ptr).local_a0
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sync_signal_for_vm_vm_pc(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_sync_signal_trace_for_vm(vm_ptr).vm_pc
+    crate::harness::debug::last_sync_signal_trace_for_vm(vm_ptr).vm_pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sync_signal_for_vm_vm_ra(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_sync_signal_trace_for_vm(vm_ptr).vm_ra
+    crate::harness::debug::last_sync_signal_trace_for_vm(vm_ptr).vm_ra
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sync_signal_for_vm_vm_sp(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_sync_signal_trace_for_vm(vm_ptr).vm_sp
+    crate::harness::debug::last_sync_signal_trace_for_vm(vm_ptr).vm_sp
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sync_signal_for_vm_vm_s11(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_sync_signal_trace_for_vm(vm_ptr).vm_s11
+    crate::harness::debug::last_sync_signal_trace_for_vm(vm_ptr).vm_s11
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sync_signal_for_vm_vm_a0(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_sync_signal_trace_for_vm(vm_ptr).vm_a0
+    crate::harness::debug::last_sync_signal_trace_for_vm(vm_ptr).vm_a0
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sync_signal_for_vm_addr(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_sync_signal_trace_for_vm(vm_ptr).fault_addr
+    crate::harness::debug::last_sync_signal_trace_for_vm(vm_ptr).fault_addr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sync_signal_for_vm_sig_pending(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_sync_signal_trace_for_vm(vm_ptr).sig_pending
+    crate::harness::debug::last_sync_signal_trace_for_vm(vm_ptr).sig_pending
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sync_signal_for_vm_sig_mask(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_sync_signal_trace_for_vm(vm_ptr).sig_mask
+    crate::harness::debug::last_sync_signal_trace_for_vm(vm_ptr).sig_mask
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_sync_signal_for_vm_sig_info_code(vm_ptr: u32) -> i32 {
-    crate::harness_debug::last_sync_signal_trace_for_vm(vm_ptr).sig_info_code
+    crate::harness::debug::last_sync_signal_trace_for_vm(vm_ptr).sig_info_code
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_futex_resume_for_vm_phase(vm_ptr: u32) -> u32 {
-    crate::harness_debug::last_futex_resume_trace_for_vm(vm_ptr).phase
+    crate::harness::debug::last_futex_resume_trace_for_vm(vm_ptr).phase
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_futex_resume_for_vm_tid(vm_ptr: u32) -> i32 {
-    crate::harness_debug::last_futex_resume_trace_for_vm(vm_ptr).tid
+    crate::harness::debug::last_futex_resume_trace_for_vm(vm_ptr).tid
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_futex_resume_for_vm_status(vm_ptr: u32) -> i32 {
-    crate::harness_debug::last_futex_resume_trace_for_vm(vm_ptr).status
+    crate::harness::debug::last_futex_resume_trace_for_vm(vm_ptr).status
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_futex_resume_for_vm_pc(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_futex_resume_trace_for_vm(vm_ptr).pc
+    crate::harness::debug::last_futex_resume_trace_for_vm(vm_ptr).pc
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_futex_resume_for_vm_ra(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_futex_resume_trace_for_vm(vm_ptr).ra
+    crate::harness::debug::last_futex_resume_trace_for_vm(vm_ptr).ra
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_futex_resume_for_vm_sp(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_futex_resume_trace_for_vm(vm_ptr).sp
+    crate::harness::debug::last_futex_resume_trace_for_vm(vm_ptr).sp
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_futex_resume_for_vm_s11(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_futex_resume_trace_for_vm(vm_ptr).s11
+    crate::harness::debug::last_futex_resume_trace_for_vm(vm_ptr).s11
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_futex_resume_for_vm_a0(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_futex_resume_trace_for_vm(vm_ptr).a0
+    crate::harness::debug::last_futex_resume_trace_for_vm(vm_ptr).a0
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_futex_resume_for_vm_sig_pending(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_futex_resume_trace_for_vm(vm_ptr).sig_pending
+    crate::harness::debug::last_futex_resume_trace_for_vm(vm_ptr).sig_pending
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_futex_resume_for_vm_sig_mask(vm_ptr: u32) -> u64 {
-    crate::harness_debug::last_futex_resume_trace_for_vm(vm_ptr).sig_mask
+    crate::harness::debug::last_futex_resume_trace_for_vm(vm_ptr).sig_mask
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_brk_base() -> u64 {
-    crate::syscall::memory::debug_brk_base()
+    crate::harness::memory::debug_brk_base()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_brk_current() -> u64 {
-    crate::syscall::memory::current_brk()
+    crate::harness::memory::current_brk()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_mmap_next() -> u64 {
-    crate::syscall::memory::debug_mmap_next()
+    crate::harness::memory::debug_mmap_next()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_vma_len() -> u32 {
-    crate::syscall::memory::debug_vma_len()
+    crate::harness::memory::debug_vma_len()
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_vma_start(index: u32) -> u64 {
-    crate::syscall::memory::debug_vma_start(index)
+    crate::harness::memory::debug_vma_start(index)
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_vma_end(index: u32) -> u64 {
-    crate::syscall::memory::debug_vma_end(index)
+    crate::harness::memory::debug_vma_end(index)
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_vma_prot(index: u32) -> i32 {
-    crate::syscall::memory::debug_vma_prot(index)
+    crate::harness::memory::debug_vma_prot(index)
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_vma_flags(index: u32) -> i32 {
-    crate::syscall::memory::debug_vma_flags(index)
+    crate::harness::memory::debug_vma_flags(index)
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_epoll_wait_epfd() -> u64 {
-    crate::harness_debug::epoll_wait_trace().epfd
+    crate::harness::debug::epoll_wait_trace().epfd
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_epoll_wait_ofd_id() -> u32 {
-    crate::harness_debug::epoll_wait_trace().ofd_id
+    crate::harness::debug::epoll_wait_trace().ofd_id
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_epoll_wait_ofd_type() -> i32 {
-    crate::harness_debug::epoll_wait_trace().ofd_type
+    crate::harness::debug::epoll_wait_trace().ofd_type
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_epoll_wait_idx() -> u32 {
-    crate::harness_debug::epoll_wait_trace().epoll_idx
+    crate::harness::debug::epoll_wait_trace().epoll_idx
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_epoll_wait_ptr() -> u32 {
-    crate::harness_debug::epoll_wait_trace().epoll_ptr
+    crate::harness::debug::epoll_wait_trace().epoll_ptr
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_epoll_wait_count() -> u32 {
-    crate::harness_debug::epoll_wait_trace().epoll_count
+    crate::harness::debug::epoll_wait_trace().epoll_count
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_epoll_wait_result() -> i64 {
-    crate::harness_debug::epoll_wait_trace().result
+    crate::harness::debug::epoll_wait_trace().result
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_epoll_wait_reason() -> u32 {
-    crate::harness_debug::epoll_wait_trace().reason
+    crate::harness::debug::epoll_wait_trace().reason
 }

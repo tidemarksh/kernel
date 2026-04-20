@@ -9,6 +9,165 @@ use crate::support;
 
 type SavedChildCtx = support::SavedProcessCtx;
 
+struct SavedChildren {
+    queue: VecDeque<SavedChildCtx>,
+}
+
+impl SavedChildren {
+    fn new() -> Self {
+        Self {
+            queue: VecDeque::new(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.queue.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.queue.is_empty()
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &SavedChildCtx> {
+        self.queue.iter()
+    }
+
+    fn find_by_pid(&self, pid: i32) -> Option<&SavedChildCtx> {
+        self.iter().find(|child| child.pid == pid)
+    }
+
+    fn position(&self, predicate: impl FnMut(&SavedChildCtx) -> bool) -> Option<usize> {
+        self.queue.iter().position(predicate)
+    }
+
+    fn any(&self, predicate: impl FnMut(&SavedChildCtx) -> bool) -> bool {
+        self.iter().any(predicate)
+    }
+
+    fn all(&self, predicate: impl FnMut(&SavedChildCtx) -> bool) -> bool {
+        self.iter().all(predicate)
+    }
+
+    fn pop_front(&mut self) -> Option<SavedChildCtx> {
+        self.queue.pop_front()
+    }
+
+    fn remove(&mut self, idx: usize) -> Option<SavedChildCtx> {
+        self.queue.remove(idx)
+    }
+
+    fn pop_selected_or_front(&mut self, selected_idx: Option<usize>) -> Option<SavedChildCtx> {
+        selected_idx
+            .and_then(|idx| self.remove(idx))
+            .or_else(|| self.pop_front())
+    }
+
+    fn remove_matching(
+        &mut self,
+        mut predicate: impl FnMut(&SavedChildCtx) -> bool,
+    ) -> Vec<SavedChildCtx> {
+        let mut drained = Vec::new();
+        let mut idx = 0usize;
+        while idx < self.queue.len() {
+            if predicate(&self.queue[idx]) {
+                drained.push(self.queue.remove(idx).expect("queue index must exist"));
+            } else {
+                idx += 1;
+            }
+        }
+        drained
+    }
+
+    fn validate(&self, label: &str) -> Result<(), String> {
+        if std::env::var_os("TIDEMARK_VALIDATE_SAVED_CHILDREN_QUEUE").is_none() {
+            return Ok(());
+        }
+        self.validate_strict(label)
+    }
+
+    fn validate_strict(&self, label: &str) -> Result<(), String> {
+        for child in self.iter() {
+            support::validate_saved_process_ctx(child, label)?;
+        }
+        Ok(())
+    }
+
+    fn push_back(&mut self, mut child: SavedChildCtx, label: &str) -> Result<(), String> {
+        child.normalize_process_leader_vm();
+        self.validate(&format!("{label} pre-queue"))?;
+        ensure_saved_child_has_snapshot(&child, label)?;
+        validate_saved_child_debug(&child, label)?;
+        self.queue.push_back(child);
+        self.validate(&format!("{label} post-queue"))
+    }
+
+    fn push_front(&mut self, mut child: SavedChildCtx, label: &str) -> Result<(), String> {
+        child.normalize_process_leader_vm();
+        self.validate(&format!("{label} pre-queue"))?;
+        ensure_saved_child_has_snapshot(&child, label)?;
+        validate_saved_child_debug(&child, label)?;
+        self.queue.push_front(child);
+        self.validate(&format!("{label} post-queue"))
+    }
+
+    fn prioritize_parent(&mut self, parent_pid: i32) -> Result<(), String> {
+        if parent_pid <= 0 {
+            return Ok(());
+        }
+        let Some(idx) = self.position(|child| child.pid == parent_pid) else {
+            return Ok(());
+        };
+        let Some(parent) = self.remove(idx) else {
+            return Ok(());
+        };
+        self.push_front(parent, "prioritize_saved_parent push_front parent")
+    }
+
+    fn describe(&self) -> String {
+        let mut parts = Vec::new();
+        for child in self.iter().take(16) {
+            let child_entry = tidemark_kernel::harness::process::debug_child_entry(child.pid)
+                .map(|(parent_pid, exited, wait_status)| {
+                    format!(
+                        "entry(parent={} exited={} wait_status={})",
+                        parent_pid, exited, wait_status
+                    )
+                })
+                .unwrap_or_else(|| "entry(missing)".to_string());
+            let wait_target = child.a0() as i32;
+            let wait_target_entry = if wait_target > 0 {
+                tidemark_kernel::harness::process::debug_child_entry(wait_target)
+                    .map(|(parent_pid, exited, wait_status)| {
+                        format!(
+                            "wait_target(parent={} exited={} wait_status={})",
+                            parent_pid, exited, wait_status
+                        )
+                    })
+                    .unwrap_or_else(|| "wait_target(missing)".to_string())
+            } else {
+                "wait_target(n/a)".to_string()
+            };
+            parts.push(format!(
+                "pid={} ppid={} tid={} status={} wait_kind={} wait_pid={} a0={} a7={} {} {}",
+                child.pid,
+                child.parent_pid,
+                child.tid(),
+                child.status(),
+                child.wait_kind(),
+                child.wait_pid(),
+                child.a0(),
+                child.a7(),
+                child_entry,
+                wait_target_entry,
+            ));
+        }
+        if self.len() > 16 {
+            parts.push(format!("... +{} more", self.len() - 16));
+        }
+        parts.join(" | ")
+    }
+}
+
 fn validate_saved_child_debug(child: &SavedChildCtx, label: &str) -> Result<(), String> {
     if std::env::var_os("TIDEMARK_VALIDATE_SAVED_CHILDREN_QUEUE").is_none() {
         return Ok(());
@@ -36,73 +195,6 @@ fn ensure_saved_child_has_snapshot(child: &SavedChildCtx, label: &str) -> Result
     Ok(())
 }
 
-fn validate_saved_children_queue(
-    children: &VecDeque<SavedChildCtx>,
-    label: &str,
-) -> Result<(), String> {
-    if std::env::var_os("TIDEMARK_VALIDATE_SAVED_CHILDREN_QUEUE").is_none() {
-        return Ok(());
-    }
-    for child in children.iter() {
-        support::validate_saved_process_ctx(child, label)?;
-    }
-    Ok(())
-}
-
-fn validate_saved_children_queue_strict(
-    children: &VecDeque<SavedChildCtx>,
-    label: &str,
-) -> Result<(), String> {
-    for child in children.iter() {
-        support::validate_saved_process_ctx(child, label)?;
-    }
-    Ok(())
-}
-
-fn describe_saved_children(children: &VecDeque<SavedChildCtx>) -> String {
-    let mut parts = Vec::new();
-    for child in children.iter().take(16) {
-        let child_entry = tidemark_kernel::syscall::process::debug_child_entry(child.pid)
-            .map(|(parent_pid, exited, wait_status)| {
-                format!(
-                    "entry(parent={} exited={} wait_status={})",
-                    parent_pid, exited, wait_status
-                )
-            })
-            .unwrap_or_else(|| "entry(missing)".to_string());
-        let wait_target = child.a0() as i32;
-        let wait_target_entry = if wait_target > 0 {
-            tidemark_kernel::syscall::process::debug_child_entry(wait_target)
-                .map(|(parent_pid, exited, wait_status)| {
-                    format!(
-                        "wait_target(parent={} exited={} wait_status={})",
-                        parent_pid, exited, wait_status
-                    )
-                })
-                .unwrap_or_else(|| "wait_target(missing)".to_string())
-        } else {
-            "wait_target(n/a)".to_string()
-        };
-        parts.push(format!(
-            "pid={} ppid={} tid={} status={} wait_kind={} wait_pid={} a0={} a7={} {} {}",
-            child.pid,
-            child.parent_pid,
-            child.tid(),
-            child.status(),
-            child.wait_kind(),
-            child.wait_pid(),
-            child.a0(),
-            child.a7(),
-            child_entry,
-            wait_target_entry,
-        ));
-    }
-    if children.len() > 16 {
-        parts.push(format!("... +{} more", children.len() - 16));
-    }
-    parts.join(" | ")
-}
-
 #[cfg(test)]
 pub(crate) fn load_ltp_elf_binary(name: &str) -> Result<Vec<u8>, String> {
     let path = std::path::Path::new(env!("OUT_DIR")).join("ltp").join(name);
@@ -122,56 +214,6 @@ enum SpawnDriveMode {
     WaiterBatch,
 }
 
-fn prioritize_saved_parent(
-    children: &mut VecDeque<SavedChildCtx>,
-    parent_pid: i32,
-) -> Result<(), String> {
-    if parent_pid <= 0 {
-        return Ok(());
-    }
-    let Some(idx) = children.iter().position(|child| child.pid == parent_pid) else {
-        return Ok(());
-    };
-    let Some(parent) = children.remove(idx) else {
-        return Ok(());
-    };
-    push_saved_child_front(
-        children,
-        parent,
-        "prioritize_saved_parent push_front parent",
-    )?;
-    validate_saved_children_queue(children, "prioritize_saved_parent post-queue")?;
-    Ok(())
-}
-
-fn push_saved_child_back(
-    children: &mut VecDeque<SavedChildCtx>,
-    mut child: SavedChildCtx,
-    label: &str,
-) -> Result<(), String> {
-    child.normalize_process_leader_vm();
-    validate_saved_children_queue(children, &format!("{label} pre-queue"))?;
-    ensure_saved_child_has_snapshot(&child, label)?;
-    validate_saved_child_debug(&child, label)?;
-    children.push_back(child);
-    validate_saved_children_queue(children, &format!("{label} post-queue"))?;
-    Ok(())
-}
-
-fn push_saved_child_front(
-    children: &mut VecDeque<SavedChildCtx>,
-    mut child: SavedChildCtx,
-    label: &str,
-) -> Result<(), String> {
-    child.normalize_process_leader_vm();
-    validate_saved_children_queue(children, &format!("{label} pre-queue"))?;
-    ensure_saved_child_has_snapshot(&child, label)?;
-    validate_saved_child_debug(&child, label)?;
-    children.push_front(child);
-    validate_saved_children_queue(children, &format!("{label} post-queue"))?;
-    Ok(())
-}
-
 fn saved_child_waits_for_test_done(
     child: &support::SavedProcessCtx,
     base: u32,
@@ -187,8 +229,7 @@ fn saved_child_waits_for_test_done(
     overlay
         .and_then(|mappings| {
             tidemark_kernel::harness::support::cmp_requeue_shared_words_from_shared_mapping_overlay(
-                mappings,
-                futex_addr,
+                mappings, futex_addr,
             )
         })
         .or_else(|| support::cmp_requeue_shared_words(base, futex_addr))
@@ -210,12 +251,65 @@ fn saved_child_ready_after_test_done(
     overlay
         .and_then(|mappings| {
             tidemark_kernel::harness::support::cmp_requeue_shared_words_from_shared_mapping_overlay(
-                mappings,
-                futex_addr,
+                mappings, futex_addr,
             )
         })
         .or_else(|| support::cmp_requeue_shared_words(base, futex_addr))
         .is_some_and(|(_, _, _, test_done)| test_done != 0)
+}
+
+fn record_saved_child_exit(child: &mut SavedChildCtx) -> i32 {
+    let parent_pid = child.parent_pid;
+    tidemark_kernel::syscall::process::record_child_exit(child.pid, 0);
+    tidemark_kernel::syscall::process::record_child_exit_for_parent(parent_pid, child.pid, 0);
+    child.discard_exit_only_state();
+    parent_pid
+}
+
+fn child_proc_stats_for_parent(
+    children: &SavedChildren,
+    parent_pid: i32,
+) -> Vec<(i32, i32, u8, i32)> {
+    children
+        .iter()
+        .filter(|child| child.parent_pid == parent_pid)
+        .map(|child| {
+            (
+                child.pid,
+                child.parent_pid,
+                support::proc_pid_stat_state_for_status(child.status()),
+                child.process_group,
+            )
+        })
+        .collect()
+}
+
+fn refresh_wait4_parent_snapshot(
+    prepared: &support::PreparedElfVm,
+    scheduler: &mut support::LtpSchedulerState,
+    parent: &mut SavedChildCtx,
+    children: &SavedChildren,
+    current_memory: &support::GuestMemorySnapshot,
+    current_mm_state: &tidemark_kernel::harness::support::ProcessContextSnapshot,
+    current_child_proc_stats: &[(i32, i32, u8, i32)],
+    current_child_entries: &mut Vec<(i32, bool, i32)>,
+    label: &str,
+) -> Result<(), String> {
+    let child_proc_stats = child_proc_stats_for_parent(children, parent.pid);
+    let parent_shared_mappings = parent
+        .resume_wait4_and_refresh_snapshot_with_children_from_current_snapshot(
+            prepared,
+            current_memory,
+            current_mm_state,
+            current_child_proc_stats,
+            current_child_entries,
+            &child_proc_stats,
+            scheduler.shared_mapping_overlay(parent.shared_overlay_key),
+        )?;
+    children.validate_strict(&format!("{label} post-refresh parent snapshot"))?;
+    scheduler.update_shared_mapping_overlay(parent.shared_overlay_key, parent_shared_mappings);
+    children.validate_strict(&format!("{label} post-refresh overlay update"))?;
+    Ok(())
 }
 
 fn drive_saved_process(
@@ -223,15 +317,18 @@ fn drive_saved_process(
     mut child: SavedChildCtx,
     use_cache: bool,
     scheduler: &mut support::LtpSchedulerState,
-    children: &mut VecDeque<SavedChildCtx>,
+    children: &mut SavedChildren,
     spawn_drive_mode: SpawnDriveMode,
 ) -> Result<SavedProcessDriveResult, String> {
-    validate_saved_children_queue(children, "drive_saved_process entry sibling queue")?;
-    validate_saved_child_debug(&child, &format!(
-        "drive_saved_process entry guest_base=0x{:x} guest_limit=0x{:x}",
-        prepared.base,
-        support::guest_window_size(prepared.base),
-    ))?;
+    children.validate("drive_saved_process entry sibling queue")?;
+    validate_saved_child_debug(
+        &child,
+        &format!(
+            "drive_saved_process entry guest_base=0x{:x} guest_limit=0x{:x}",
+            prepared.base,
+            support::guest_window_size(prepared.base),
+        ),
+    )?;
     let mut progressed = false;
     let mut waiter_template: Option<support::SavedWaiterTemplate> = None;
     let mut waiter_template_owner_pid: Option<i32> = None;
@@ -247,17 +344,10 @@ fn drive_saved_process(
                     scheduler.shared_mapping_overlay(child.shared_overlay_key),
                 )
             {
-                tidemark_kernel::syscall::process::record_child_exit(child.pid, 0);
-                tidemark_kernel::syscall::process::record_child_exit_for_parent(
-                    child.parent_pid,
-                    child.pid,
-                    0,
-                );
-                child.discard_exit_only_state();
                 return Ok(SavedProcessDriveResult {
                     child: None,
                     progressed: true,
-                    exited_parent_pid: child.parent_pid,
+                    exited_parent_pid: record_saved_child_exit(&mut child),
                 });
             }
             return Ok(SavedProcessDriveResult {
@@ -273,17 +363,10 @@ fn drive_saved_process(
                 scheduler.shared_mapping_overlay(child.shared_overlay_key),
             )
         {
-            tidemark_kernel::syscall::process::record_child_exit(child.pid, 0);
-            tidemark_kernel::syscall::process::record_child_exit_for_parent(
-                child.parent_pid,
-                child.pid,
-                0,
-            );
-            child.discard_exit_only_state();
             return Ok(SavedProcessDriveResult {
                 child: None,
                 progressed: true,
-                exited_parent_pid: child.parent_pid,
+                exited_parent_pid: record_saved_child_exit(&mut child),
             });
         }
         let outcome = support::step_saved_process_ctx_for_ltp(
@@ -292,18 +375,14 @@ fn drive_saved_process(
             use_cache,
             scheduler,
             |label| {
-                validate_saved_children_queue(
-                    children,
-                    &format!(
-                        "{label} guest_base=0x{:x} guest_limit=0x{:x}",
-                        guest_base,
-                        guest_limit,
-                    ),
-                )
+                children.validate(&format!(
+                    "{label} guest_base=0x{:x} guest_limit=0x{:x}",
+                    guest_base, guest_limit,
+                ))
             },
         )?;
         child.normalize_process_leader_vm();
-        validate_saved_children_queue(children, "drive_saved_process after step sibling queue")?;
+        children.validate("drive_saved_process after step sibling queue")?;
         validate_saved_child_debug(
             &child,
             "drive_saved_process after step_saved_process_ctx_for_ltp",
@@ -317,17 +396,10 @@ fn drive_saved_process(
                 scheduler.shared_mapping_overlay(child.shared_overlay_key),
             )
         {
-            tidemark_kernel::syscall::process::record_child_exit(child.pid, 0);
-            tidemark_kernel::syscall::process::record_child_exit_for_parent(
-                child.parent_pid,
-                child.pid,
-                0,
-            );
-            child.discard_exit_only_state();
             return Ok(SavedProcessDriveResult {
                 child: None,
                 progressed: true,
-                exited_parent_pid: child.parent_pid,
+                exited_parent_pid: record_saved_child_exit(&mut child),
             });
         }
         match outcome {
@@ -355,9 +427,9 @@ fn drive_saved_process(
                         prepared,
                         &mut child,
                         use_cache,
-                    scheduler,
-                    children,
-                    spawn_drive_mode,
+                        scheduler,
+                        children,
+                        spawn_drive_mode,
                     )?;
                     progressed |= progressed_in_wait4;
                     if progressed_in_wait4 {
@@ -386,10 +458,7 @@ fn drive_saved_process(
                 grandchild.shared_overlay_key = child.shared_overlay_key;
                 match spawn_drive_mode {
                     SpawnDriveMode::Dfs => {
-                        validate_saved_children_queue(
-                            children,
-                            "drive_saved_process dfs before recursive grandchild",
-                        )?;
+                        children.validate("drive_saved_process dfs before recursive grandchild")?;
                         let grandchild_result = drive_saved_process(
                             prepared,
                             grandchild,
@@ -398,17 +467,13 @@ fn drive_saved_process(
                             children,
                             spawn_drive_mode,
                         )?;
-                        validate_saved_children_queue(
-                            children,
-                            "drive_saved_process dfs after recursive grandchild",
-                        )?;
+                        children.validate("drive_saved_process dfs after recursive grandchild")?;
                         if let Some(grandchild) = grandchild_result.child {
                             validate_saved_child_debug(
                                 &grandchild,
                                 "drive_saved_process dfs enqueue grandchild",
                             )?;
-                            push_saved_child_front(
-                                children,
+                            children.push_front(
                                 grandchild,
                                 "drive_saved_process dfs enqueue grandchild front",
                             )?;
@@ -416,7 +481,7 @@ fn drive_saved_process(
                         if grandchild_result.exited_parent_pid == child.pid {
                             child.refresh_runtime_snapshot();
                         }
-                        prioritize_saved_parent(children, grandchild_result.exited_parent_pid)?;
+                        children.prioritize_parent(grandchild_result.exited_parent_pid)?;
                         progressed |= grandchild_result.progressed;
                     }
                     SpawnDriveMode::ParentFirst | SpawnDriveMode::WaiterBatch => {
@@ -429,16 +494,14 @@ fn drive_saved_process(
                                 grandchild.pid,
                                 child.pid,
                             );
-                            push_saved_child_back(
-                                children,
+                            children.push_back(
                                 synthesized,
                                 "drive_saved_process parent-first synth waiter child",
                             )?;
                             progressed = true;
                             continue;
                         }
-                        validate_saved_children_queue(
-                            children,
+                        children.validate(
                             "drive_saved_process parent-first before recursive grandchild",
                         )?;
                         let grandchild_result = drive_saved_process(
@@ -449,8 +512,7 @@ fn drive_saved_process(
                             children,
                             spawn_drive_mode,
                         )?;
-                        validate_saved_children_queue(
-                            children,
+                        children.validate(
                             "drive_saved_process parent-first after recursive grandchild",
                         )?;
                         if let Some(grandchild) = grandchild_result.child {
@@ -459,15 +521,13 @@ fn drive_saved_process(
                                     || grandchild.status() == STATUS_FUTEX_WAIT)
                             {
                                 waiter_template_owner_pid = Some(child.pid);
-                                waiter_template =
-                                    Some(grandchild.capture_waiter_template());
+                                waiter_template = Some(grandchild.capture_waiter_template());
                             }
                             validate_saved_child_debug(
                                 &grandchild,
                                 "drive_saved_process parent-first enqueue grandchild",
                             )?;
-                            push_saved_child_back(
-                                children,
+                            children.push_back(
                                 grandchild,
                                 "drive_saved_process parent-first enqueue grandchild back",
                             )?;
@@ -475,7 +535,7 @@ fn drive_saved_process(
                         if grandchild_result.exited_parent_pid == child.pid {
                             child.refresh_runtime_snapshot();
                         }
-                        prioritize_saved_parent(children, grandchild_result.exited_parent_pid)?;
+                        children.prioritize_parent(grandchild_result.exited_parent_pid)?;
                         progressed |= grandchild_result.progressed;
                         continue;
                     }
@@ -490,14 +550,11 @@ fn service_saved_wait4_children_until_parent_changes(
     parent: &mut support::SavedProcessCtx,
     use_cache: bool,
     scheduler: &mut support::LtpSchedulerState,
-    children: &mut VecDeque<SavedChildCtx>,
+    children: &mut SavedChildren,
     spawn_drive_mode: SpawnDriveMode,
 ) -> Result<bool, String> {
     let mut any_progressed = false;
-    let iteration_budget = children
-        .len()
-        .saturating_mul(64)
-        .max(1024);
+    let iteration_budget = children.len().saturating_mul(64).max(1024);
     let mut current_memory_scratch = scheduler.take_wait4_current_memory_scratch();
     current_memory_scratch.recapture_into_scratch_for_vm(prepared.base, prepared.vm.as_ref());
     let current_memory = current_memory_scratch.as_ref();
@@ -506,338 +563,247 @@ fn service_saved_wait4_children_until_parent_changes(
     let mut current_child_entries = support::capture_live_child_entries(parent.pid);
     let result = (|| -> Result<bool, String> {
         for _ in 0..iteration_budget {
-        if parent.status() != STATUS_WAIT4 {
-            return Ok(any_progressed);
-        }
-        let wait_pid = parent.wait_pid() as i32;
-        let wait_child_waits_for_test_done = if wait_pid > 0 {
-            children.iter().find(|child| child.pid == wait_pid).is_some_and(|child| {
-                saved_child_waits_for_test_done(
-                    child,
-                    prepared.base,
-                    scheduler.shared_mapping_overlay(child.shared_overlay_key),
-                )
-            })
-        } else {
-            false
-        };
-        let aggressive_overlay_ready_after_test_done =
-            matches!(spawn_drive_mode, SpawnDriveMode::WaiterBatch)
-                && children.iter().any(|child| {
-                    child.shared_overlay_key == parent.shared_overlay_key
-                        && child.pid != parent.pid
-                        && saved_child_ready_after_test_done(
-                            child,
-                            prepared.base,
-                            scheduler.shared_mapping_overlay(child.shared_overlay_key),
-                        )
-                });
-        let aggressive_direct_waiter_cohort = matches!(spawn_drive_mode, SpawnDriveMode::WaiterBatch)
-            && children.iter().any(|child| child.parent_pid == parent.pid)
-            && children.iter().all(|child| {
-                child.parent_pid != parent.pid
-                    || child.status() == STATUS_FUTEX_WAIT
-                    || child.status() == STATUS_SLEEP
-            });
-        let aggressive_waited_subtree_quiescent =
-            matches!(spawn_drive_mode, SpawnDriveMode::WaiterBatch)
-                && wait_pid > 0
-                && children.iter().any(|child| child.pid == wait_pid)
-                && children.iter().all(|child| {
-                    child.pid != wait_pid && child.parent_pid != wait_pid
-                        || child.status() == STATUS_FUTEX_WAIT
-                        || child.status() == STATUS_SLEEP
-                });
-        let mut drained = Vec::new();
-        let mut idx = 0usize;
-        while idx < children.len() {
-            let child = &children[idx];
-            let direct_ready = child.parent_pid == parent.pid
-                && saved_child_ready_after_test_done(
-                    child,
-                    prepared.base,
-                    scheduler.shared_mapping_overlay(child.shared_overlay_key),
-                );
-            let waited_subtree_child = wait_child_waits_for_test_done
-                && wait_pid > 0
-                && (child.parent_pid == wait_pid || child.pid == wait_pid);
-            let aggressive_cohort_child = matches!(spawn_drive_mode, SpawnDriveMode::WaiterBatch)
-                && (wait_child_waits_for_test_done
-                    || aggressive_overlay_ready_after_test_done
-                    || aggressive_direct_waiter_cohort
-                    || aggressive_waited_subtree_quiescent)
-                && child.pid != parent.pid
-                && (child.shared_overlay_key == parent.shared_overlay_key
-                    || child.pid == wait_pid
-                    || child.parent_pid == wait_pid);
-            if direct_ready || waited_subtree_child || aggressive_cohort_child {
-                drained.push(children.remove(idx).expect("queue index must exist"));
-            } else {
-                idx += 1;
+            if parent.status() != STATUS_WAIT4 {
+                return Ok(any_progressed);
             }
-        }
-        if !drained.is_empty() {
-            if matches!(spawn_drive_mode, SpawnDriveMode::WaiterBatch)
-                && (wait_child_waits_for_test_done
-                    || aggressive_overlay_ready_after_test_done
-                    || aggressive_direct_waiter_cohort
-                    || aggressive_waited_subtree_quiescent)
-            {
-                for mut child in drained {
-                    tidemark_kernel::syscall::process::record_child_exit(child.pid, 0);
-                    tidemark_kernel::syscall::process::record_child_exit_for_parent(
-                        child.parent_pid,
-                        child.pid,
-                        0,
+            let wait_pid = parent.wait_pid() as i32;
+            let wait_child_waits_for_test_done = if wait_pid > 0 {
+                children.find_by_pid(wait_pid).is_some_and(|child| {
+                    saved_child_waits_for_test_done(
+                        child,
+                        prepared.base,
+                        scheduler.shared_mapping_overlay(child.shared_overlay_key),
+                    )
+                })
+            } else {
+                false
+            };
+            let aggressive_overlay_ready_after_test_done =
+                matches!(spawn_drive_mode, SpawnDriveMode::WaiterBatch)
+                    && children.any(|child| {
+                        child.shared_overlay_key == parent.shared_overlay_key
+                            && child.pid != parent.pid
+                            && saved_child_ready_after_test_done(
+                                child,
+                                prepared.base,
+                                scheduler.shared_mapping_overlay(child.shared_overlay_key),
+                            )
+                    });
+            let aggressive_direct_waiter_cohort =
+                matches!(spawn_drive_mode, SpawnDriveMode::WaiterBatch)
+                    && children.any(|child| child.parent_pid == parent.pid)
+                    && children.all(|child| {
+                        child.parent_pid != parent.pid
+                            || child.status() == STATUS_FUTEX_WAIT
+                            || child.status() == STATUS_SLEEP
+                    });
+            let aggressive_waited_subtree_quiescent =
+                matches!(spawn_drive_mode, SpawnDriveMode::WaiterBatch)
+                    && wait_pid > 0
+                    && children.any(|child| child.pid == wait_pid)
+                    && children.all(|child| {
+                        child.pid != wait_pid && child.parent_pid != wait_pid
+                            || child.status() == STATUS_FUTEX_WAIT
+                            || child.status() == STATUS_SLEEP
+                    });
+            let drained = children.remove_matching(|child| {
+                let direct_ready = child.parent_pid == parent.pid
+                    && saved_child_ready_after_test_done(
+                        child,
+                        prepared.base,
+                        scheduler.shared_mapping_overlay(child.shared_overlay_key),
                     );
-                    if child.parent_pid == parent.pid {
+                let waited_subtree_child = wait_child_waits_for_test_done
+                    && wait_pid > 0
+                    && (child.parent_pid == wait_pid || child.pid == wait_pid);
+                let aggressive_cohort_child =
+                    matches!(spawn_drive_mode, SpawnDriveMode::WaiterBatch)
+                        && (wait_child_waits_for_test_done
+                            || aggressive_overlay_ready_after_test_done
+                            || aggressive_direct_waiter_cohort
+                            || aggressive_waited_subtree_quiescent)
+                        && child.pid != parent.pid
+                        && (child.shared_overlay_key == parent.shared_overlay_key
+                            || child.pid == wait_pid
+                            || child.parent_pid == wait_pid);
+                direct_ready || waited_subtree_child || aggressive_cohort_child
+            });
+            if !drained.is_empty() {
+                if matches!(spawn_drive_mode, SpawnDriveMode::WaiterBatch)
+                    && (wait_child_waits_for_test_done
+                        || aggressive_overlay_ready_after_test_done
+                        || aggressive_direct_waiter_cohort
+                        || aggressive_waited_subtree_quiescent)
+                {
+                    for mut child in drained {
+                        if record_saved_child_exit(&mut child) == parent.pid {
+                            parent.refresh_runtime_snapshot();
+                            parent.refresh_child_entries_from_live();
+                            current_child_entries.clear();
+                            current_child_entries
+                                .extend(support::capture_live_child_entries(parent.pid));
+                        }
+                        any_progressed = true;
+                    }
+
+                    refresh_wait4_parent_snapshot(
+                        prepared,
+                        scheduler,
+                        parent,
+                        children,
+                        current_memory,
+                        &current_mm_state,
+                        &current_child_proc_stats,
+                        &mut current_child_entries,
+                        "service_saved_wait4_children_until_parent_changes",
+                    )?;
+                    let parent_has_remaining_direct_children =
+                        children.any(|child| child.parent_pid == parent.pid);
+                    if !parent_has_remaining_direct_children && parent.status() == STATUS_WAIT4 {
+                        record_saved_child_exit(parent);
+                        return Ok(true);
+                    }
+                    if parent.status() != STATUS_WAIT4 {
+                        return Ok(true);
+                    }
+                    continue;
+                }
+                for child in drained {
+                    let result = drive_saved_process(
+                        prepared,
+                        child,
+                        use_cache,
+                        scheduler,
+                        children,
+                        spawn_drive_mode,
+                    )?;
+                    if let Some(child) = result.child {
+                        validate_saved_child_debug(
+                            &child,
+                            "service_saved_wait4_children_until_parent_changes batch enqueue child",
+                        )?;
+                        children.push_back(
+                            child,
+                            "service_saved_wait4_children_until_parent_changes batch enqueue child back",
+                        )?;
+                    }
+                    if result.exited_parent_pid == parent.pid {
                         parent.refresh_runtime_snapshot();
                         parent.refresh_child_entries_from_live();
                         current_child_entries.clear();
                         current_child_entries
                             .extend(support::capture_live_child_entries(parent.pid));
                     }
-                    child.discard_exit_only_state();
-                    any_progressed = true;
+                    children.prioritize_parent(result.exited_parent_pid)?;
+                    any_progressed |= result.progressed;
                 }
 
-                let child_proc_stats: Vec<_> = children
-                    .iter()
-                    .filter(|child| child.parent_pid == parent.pid)
-                    .map(|child| {
-                        (
-                            child.pid,
-                            child.parent_pid,
-                            support::proc_pid_stat_state_for_status(child.status()),
-                            child.process_group,
-                        )
-                    })
-                    .collect();
-                let parent_shared_mappings =
-                    parent.resume_wait4_and_refresh_snapshot_with_children_from_current_snapshot(
-                        prepared,
-                        current_memory,
-                        &current_mm_state,
-                        &current_child_proc_stats,
-                        &mut current_child_entries,
-                        &child_proc_stats,
-                        scheduler.shared_mapping_overlay(parent.shared_overlay_key),
-                    )?;
-                scheduler.update_shared_mapping_overlay(
-                    parent.shared_overlay_key,
-                    parent_shared_mappings,
-                );
-                let parent_has_remaining_direct_children = children
-                    .iter()
-                    .any(|child| child.parent_pid == parent.pid);
-                if !parent_has_remaining_direct_children && parent.status() == STATUS_WAIT4 {
-                    tidemark_kernel::syscall::process::record_child_exit(parent.pid, 0);
-                    tidemark_kernel::syscall::process::record_child_exit_for_parent(
-                        parent.parent_pid,
-                        parent.pid,
-                        0,
-                    );
-                    parent.discard_exit_only_state();
-                    return Ok(true);
-                }
+                refresh_wait4_parent_snapshot(
+                    prepared,
+                    scheduler,
+                    parent,
+                    children,
+                    current_memory,
+                    &current_mm_state,
+                    &current_child_proc_stats,
+                    &mut current_child_entries,
+                    "service_saved_wait4_children_until_parent_changes post-batch",
+                )?;
                 if parent.status() != STATUS_WAIT4 {
                     return Ok(true);
                 }
                 continue;
             }
-            for child in drained {
-                let result = drive_saved_process(
-                    prepared,
-                    child,
-                    use_cache,
-                    scheduler,
-                    children,
-                    spawn_drive_mode,
-                )?;
-                if let Some(child) = result.child {
-                    validate_saved_child_debug(
-                        &child,
-                        "service_saved_wait4_children_until_parent_changes batch enqueue child",
-                    )?;
-                    push_saved_child_back(
-                        children,
+
+            let selected_idx = if !any_progressed && parent.wait_pid() > 0 {
+                let wait_pid = parent.wait_pid() as i32;
+                let wait_child = children.find_by_pid(wait_pid);
+                if wait_child.is_none() {
+                    children.position(|child| child.parent_pid == wait_pid)
+                } else if matches!(
+                    wait_child,
+                    Some(child) if saved_child_waits_for_test_done(
                         child,
-                        "service_saved_wait4_children_until_parent_changes batch enqueue child back",
-                    )?;
+                        prepared.base,
+                        scheduler.shared_mapping_overlay(child.shared_overlay_key),
+                    )
+                ) {
+                    children.position(|child| {
+                        child.parent_pid == parent.pid
+                            && !saved_child_waits_for_test_done(
+                                child,
+                                prepared.base,
+                                scheduler.shared_mapping_overlay(child.shared_overlay_key),
+                            )
+                    })
+                } else {
+                    children.position(|child| child.pid == wait_pid)
                 }
-                if result.exited_parent_pid == parent.pid {
-                    parent.refresh_runtime_snapshot();
-                    parent.refresh_child_entries_from_live();
-                    current_child_entries.clear();
-                    current_child_entries
-                        .extend(support::capture_live_child_entries(parent.pid));
-                }
-                prioritize_saved_parent(children, result.exited_parent_pid)?;
-                any_progressed |= result.progressed;
+            } else {
+                children.position(|child| child.parent_pid == parent.pid)
+            };
+            let Some(child) = children.pop_selected_or_front(selected_idx) else {
+                return Ok(any_progressed);
+            };
+            if saved_child_waits_for_test_done(
+                &child,
+                prepared.base,
+                scheduler.shared_mapping_overlay(child.shared_overlay_key),
+            ) {
+                children.push_back(
+                    child,
+                    "service_saved_wait4_children_until_parent_changes requeue test_done child back",
+                )?;
+                continue;
             }
 
-            let child_proc_stats: Vec<_> = children
-                .iter()
-                .filter(|child| child.parent_pid == parent.pid)
-                .map(|child| {
-                    (
-                        child.pid,
-                        child.parent_pid,
-                        support::proc_pid_stat_state_for_status(child.status()),
-                        child.process_group,
-                    )
-                })
-                .collect();
-            let parent_shared_mappings =
-                parent.resume_wait4_and_refresh_snapshot_with_children_from_current_snapshot(
-                    prepared,
-                    current_memory,
-                    &current_mm_state,
-                    &current_child_proc_stats,
-                    &mut current_child_entries,
-                    &child_proc_stats,
-                    scheduler.shared_mapping_overlay(parent.shared_overlay_key),
+            let result = drive_saved_process(
+                prepared,
+                child,
+                use_cache,
+                scheduler,
+                children,
+                spawn_drive_mode,
+            )?;
+            if let Some(child) = result.child {
+                validate_saved_child_debug(
+                    &child,
+                    "service_saved_wait4_children_until_parent_changes enqueue child",
                 )?;
-            validate_saved_children_queue_strict(
+                children.push_back(
+                    child,
+                    "service_saved_wait4_children_until_parent_changes enqueue child back",
+                )?;
+            }
+            if result.exited_parent_pid == parent.pid {
+                parent.refresh_runtime_snapshot();
+                parent.refresh_child_entries_from_live();
+                current_child_entries.clear();
+                current_child_entries.extend(support::capture_live_child_entries(parent.pid));
+            }
+            children.prioritize_parent(result.exited_parent_pid)?;
+            any_progressed |= result.progressed;
+
+            refresh_wait4_parent_snapshot(
+                prepared,
+                scheduler,
+                parent,
                 children,
-                "service_saved_wait4_children_until_parent_changes post-batch parent refresh",
+                current_memory,
+                &current_mm_state,
+                &current_child_proc_stats,
+                &mut current_child_entries,
+                "service_saved_wait4_children_until_parent_changes",
             )?;
-            scheduler.update_shared_mapping_overlay(
-                parent.shared_overlay_key,
-                parent_shared_mappings,
-            );
-            validate_saved_children_queue_strict(
-                children,
-                "service_saved_wait4_children_until_parent_changes post-batch overlay update",
-            )?;
+            let parent_has_remaining_direct_children =
+                children.any(|child| child.parent_pid == parent.pid);
+            if !parent_has_remaining_direct_children && parent.status() == STATUS_WAIT4 {
+                record_saved_child_exit(parent);
+                return Ok(true);
+            }
             if parent.status() != STATUS_WAIT4 {
                 return Ok(true);
             }
-            continue;
-        }
-
-        let selected_idx = if !any_progressed && parent.wait_pid() > 0 {
-            let wait_pid = parent.wait_pid() as i32;
-            let wait_child = children.iter().find(|child| child.pid == wait_pid);
-            if wait_child.is_none() {
-                children.iter().position(|child| child.parent_pid == wait_pid)
-            } else if matches!(
-                wait_child,
-                Some(child) if saved_child_waits_for_test_done(
-                    child,
-                    prepared.base,
-                    scheduler.shared_mapping_overlay(child.shared_overlay_key),
-                )
-            ) {
-                children.iter().position(|child| {
-                    child.parent_pid == parent.pid
-                        && !saved_child_waits_for_test_done(
-                            child,
-                            prepared.base,
-                            scheduler.shared_mapping_overlay(child.shared_overlay_key),
-                        )
-                })
-            } else {
-                children.iter().position(|child| child.pid == wait_pid)
-            }
-        } else {
-            children
-                .iter()
-                .position(|child| child.parent_pid == parent.pid)
-        };
-        let Some(child) = selected_idx
-            .and_then(|idx| children.remove(idx))
-            .or_else(|| children.pop_front())
-        else {
-            return Ok(any_progressed);
-        };
-        if saved_child_waits_for_test_done(
-            &child,
-            prepared.base,
-            scheduler.shared_mapping_overlay(child.shared_overlay_key),
-        ) {
-            push_saved_child_back(
-                children,
-                child,
-                "service_saved_wait4_children_until_parent_changes requeue test_done child back",
-            )?;
-            continue;
-        }
-
-        let result = drive_saved_process(
-            prepared,
-            child,
-            use_cache,
-            scheduler,
-            children,
-            spawn_drive_mode,
-        )?;
-        if let Some(child) = result.child {
-            validate_saved_child_debug(
-                &child,
-                "service_saved_wait4_children_until_parent_changes enqueue child",
-            )?;
-            push_saved_child_back(
-                children,
-                child,
-                "service_saved_wait4_children_until_parent_changes enqueue child back",
-            )?;
-        }
-        if result.exited_parent_pid == parent.pid {
-            parent.refresh_runtime_snapshot();
-            parent.refresh_child_entries_from_live();
-            current_child_entries.clear();
-            current_child_entries.extend(support::capture_live_child_entries(parent.pid));
-        }
-        prioritize_saved_parent(children, result.exited_parent_pid)?;
-        any_progressed |= result.progressed;
-
-        let child_proc_stats: Vec<_> = children
-            .iter()
-            .filter(|child| child.parent_pid == parent.pid)
-            .map(|child| {
-                (
-                    child.pid,
-                    child.parent_pid,
-                    support::proc_pid_stat_state_for_status(child.status()),
-                    child.process_group,
-                )
-            })
-            .collect();
-        let parent_shared_mappings = parent.resume_wait4_and_refresh_snapshot_with_children_from_current_snapshot(
-            prepared,
-            current_memory,
-            &current_mm_state,
-            &current_child_proc_stats,
-            &mut current_child_entries,
-            &child_proc_stats,
-            scheduler.shared_mapping_overlay(parent.shared_overlay_key),
-        )?;
-        validate_saved_children_queue_strict(
-            children,
-            "service_saved_wait4_children_until_parent_changes post-refresh parent snapshot",
-        )?;
-        scheduler.update_shared_mapping_overlay(parent.shared_overlay_key, parent_shared_mappings);
-        validate_saved_children_queue_strict(
-            children,
-            "service_saved_wait4_children_until_parent_changes post-refresh overlay update",
-        )?;
-        let parent_has_remaining_direct_children = children
-            .iter()
-            .any(|child| child.parent_pid == parent.pid);
-        if !parent_has_remaining_direct_children && parent.status() == STATUS_WAIT4 {
-            tidemark_kernel::syscall::process::record_child_exit(parent.pid, 0);
-            tidemark_kernel::syscall::process::record_child_exit_for_parent(
-                parent.parent_pid,
-                parent.pid,
-                0,
-            );
-            parent.discard_exit_only_state();
-            return Ok(true);
-        }
-        if parent.status() != STATUS_WAIT4 {
-            return Ok(true);
-        }
         }
 
         Err(format!(
@@ -845,7 +811,7 @@ fn service_saved_wait4_children_until_parent_changes(
             parent.pid,
             parent.wait_pid(),
             children.len(),
-            describe_saved_children(children),
+            children.describe(),
         ))
     })();
     scheduler.restore_wait4_current_memory_scratch(current_memory_scratch);
@@ -856,7 +822,7 @@ fn service_blocked_children_once(
     prepared: &mut support::PreparedElfVm,
     use_cache: bool,
     scheduler: &mut support::LtpSchedulerState,
-    children: &mut VecDeque<SavedChildCtx>,
+    children: &mut SavedChildren,
     spawn_drive_mode: SpawnDriveMode,
 ) -> Result<bool, String> {
     let initial_len = children.len();
@@ -871,8 +837,7 @@ fn service_blocked_children_once(
             prepared.base,
             scheduler.shared_mapping_overlay(child.shared_overlay_key),
         ) {
-            push_saved_child_back(
-                children,
+            children.push_back(
                 child,
                 "service_blocked_children_once requeue test_done child back",
             )?;
@@ -891,13 +856,9 @@ fn service_blocked_children_once(
                 &child,
                 "service_blocked_children_once enqueue child",
             )?;
-            push_saved_child_back(
-                children,
-                child,
-                "service_blocked_children_once enqueue child back",
-            )?;
+            children.push_back(child, "service_blocked_children_once enqueue child back")?;
         }
-        prioritize_saved_parent(children, result.exited_parent_pid)?;
+        children.prioritize_parent(result.exited_parent_pid)?;
         progressed |= result.progressed;
     }
 
@@ -908,7 +869,7 @@ fn service_blocked_children_until_stable(
     prepared: &mut support::PreparedElfVm,
     use_cache: bool,
     scheduler: &mut support::LtpSchedulerState,
-    children: &mut VecDeque<SavedChildCtx>,
+    children: &mut SavedChildren,
     spawn_drive_mode: SpawnDriveMode,
 ) -> Result<bool, String> {
     let mut any_progressed = false;
@@ -936,15 +897,12 @@ fn service_wait4_children_until_parent_changes(
     prepared: &mut support::PreparedElfVm,
     use_cache: bool,
     scheduler: &mut support::LtpSchedulerState,
-    children: &mut VecDeque<SavedChildCtx>,
+    children: &mut SavedChildren,
     spawn_drive_mode: SpawnDriveMode,
 ) -> Result<bool, String> {
     let mut any_progressed = false;
     let started = Instant::now();
-    let iteration_budget = children
-        .len()
-        .saturating_mul(64)
-        .max(1024);
+    let iteration_budget = children.len().saturating_mul(64).max(1024);
 
     for _ in 0..iteration_budget {
         if started.elapsed().as_secs() >= 10 {
@@ -979,39 +937,26 @@ fn service_wait4_children_until_parent_changes(
                 prepared.vm.wait_pid,
                 waited_child,
                 children.len(),
-                describe_saved_children(children),
+                children.describe(),
             ));
         }
         if prepared.vm.status != STATUS_WAIT4 {
             return Ok(any_progressed);
         }
-        if matches!(spawn_drive_mode, SpawnDriveMode::WaiterBatch)
-            && prepared.vm.wait_pid > 0
-        {
+        if matches!(spawn_drive_mode, SpawnDriveMode::WaiterBatch) && prepared.vm.wait_pid > 0 {
             let wait_pid = prepared.vm.wait_pid as i32;
-            let aggressive_waited_subtree_quiescent = children.iter().any(|child| child.pid == wait_pid)
-                && children.iter().all(|child| {
+            let aggressive_waited_subtree_quiescent = children.any(|child| child.pid == wait_pid)
+                && children.all(|child| {
                     child.pid != wait_pid && child.parent_pid != wait_pid
                         || child.status() == STATUS_FUTEX_WAIT
                         || child.status() == STATUS_SLEEP
                 });
             if aggressive_waited_subtree_quiescent {
-                let mut idx = 0usize;
-                while idx < children.len() {
-                    let child = &children[idx];
-                    if child.pid == wait_pid || child.parent_pid == wait_pid {
-                        let mut child = children.remove(idx).expect("queue index must exist");
-                        tidemark_kernel::syscall::process::record_child_exit(child.pid, 0);
-                        tidemark_kernel::syscall::process::record_child_exit_for_parent(
-                            child.parent_pid,
-                            child.pid,
-                            0,
-                        );
-                        child.discard_exit_only_state();
-                        any_progressed = true;
-                    } else {
-                        idx += 1;
-                    }
+                for mut child in children
+                    .remove_matching(|child| child.pid == wait_pid || child.parent_pid == wait_pid)
+                {
+                    record_saved_child_exit(&mut child);
+                    any_progressed = true;
                 }
                 let vm_ptr =
                     prepared.vm.as_mut() as *mut tidemark_kernel::types::ThreadState as u32;
@@ -1026,29 +971,27 @@ fn service_wait4_children_until_parent_changes(
             SpawnDriveMode::ParentFirst | SpawnDriveMode::WaiterBatch | SpawnDriveMode::Dfs => {
                 if prepared.vm.wait_pid > 0 {
                     let wait_pid = prepared.vm.wait_pid as i32;
-                    let wait_child = children.iter().find(|child| child.pid == wait_pid);
+                    let wait_child = children.find_by_pid(wait_pid);
                     if wait_child.is_none() {
-                        children.iter().position(|child| child.parent_pid == wait_pid)
-                    } else if matches!(wait_child.map(|child| child.status()), Some(STATUS_SLEEP | STATUS_OK))
-                    {
+                        children.position(|child| child.parent_pid == wait_pid)
+                    } else if matches!(
+                        wait_child.map(|child| child.status()),
+                        Some(STATUS_SLEEP | STATUS_OK)
+                    ) {
                         children
-                            .iter()
                             .position(|child| {
                                 child.parent_pid == wait_pid && child.status() != STATUS_FUTEX_WAIT
                             })
-                            .or_else(|| children.iter().position(|child| child.pid == wait_pid))
+                            .or_else(|| children.position(|child| child.pid == wait_pid))
                     } else {
-                        children.iter().position(|child| child.pid == wait_pid)
+                        children.position(|child| child.pid == wait_pid)
                     }
                 } else {
                     None
                 }
             }
         };
-        let Some(child) = selected_idx
-            .and_then(|idx| children.remove(idx))
-            .or_else(|| children.pop_front())
-        else {
+        let Some(child) = children.pop_selected_or_front(selected_idx) else {
             return Err("ltp_runner blocked in wait4 with no child context".into());
         };
         if saved_child_waits_for_test_done(
@@ -1056,8 +999,7 @@ fn service_wait4_children_until_parent_changes(
             prepared.base,
             scheduler.shared_mapping_overlay(child.shared_overlay_key),
         ) {
-            push_saved_child_back(
-                children,
+            children.push_back(
                 child,
                 "service_wait4_children_until_parent_changes requeue test_done child back",
             )?;
@@ -1073,13 +1015,12 @@ fn service_wait4_children_until_parent_changes(
             spawn_drive_mode,
         )?;
         if let Some(child) = result.child {
-            push_saved_child_back(
-                children,
+            children.push_back(
                 child,
                 "service_wait4_children_until_parent_changes enqueue child back",
             )?;
         }
-        prioritize_saved_parent(children, result.exited_parent_pid)?;
+        children.prioritize_parent(result.exited_parent_pid)?;
         any_progressed |= result.progressed;
 
         let vm_ptr = prepared.vm.as_mut() as *mut tidemark_kernel::types::ThreadState as u32;
@@ -1099,7 +1040,7 @@ fn service_wait4_children_until_parent_changes(
             0
         },
         children.len(),
-        describe_saved_children(children),
+        children.describe(),
     ))
 }
 
@@ -1111,7 +1052,7 @@ fn run_ltp_process_tree(
     tidemark_kernel::harness::support::clear_external_futex_waits();
     let mut prepared = support::prepare_elf_vm(elf_bytes, use_cache)?;
     let mut scheduler = support::LtpSchedulerState::new_with_options(true);
-    let mut children = VecDeque::<SavedChildCtx>::new();
+    let mut children = SavedChildren::new();
     let started = Instant::now();
     support::validate_prepared_root_handoff(&prepared, &scheduler)?;
 
@@ -1127,10 +1068,11 @@ fn run_ltp_process_tree(
                     0
                 },
                 children.len(),
-                describe_saved_children(&children),
+                children.describe(),
             ));
         }
-        let outcome = support::step_prepared_elf_vm_for_ltp(&mut prepared, use_cache, &mut scheduler)?;
+        let outcome =
+            support::step_prepared_elf_vm_for_ltp(&mut prepared, use_cache, &mut scheduler)?;
         let root_overlay_key = support::process_pid(prepared.base, prepared.vm.process_ptr);
         if root_overlay_key > 0 {
             let root_mm_state = tidemark_kernel::harness::support::snapshot_process_context();
@@ -1150,15 +1092,8 @@ fn run_ltp_process_tree(
             support::LtpVmOutcome::ProcessSpawn(child) => {
                 let mut child = *child;
                 child.shared_overlay_key = child.pid;
-                support::validate_saved_process_ctx(
-                    &child,
-                    "run_ltp_process_tree root spawn",
-                )?;
-                push_saved_child_front(
-                    &mut children,
-                    child,
-                    "run_ltp_process_tree root spawn front",
-                )?;
+                support::validate_saved_process_ctx(&child, "run_ltp_process_tree root spawn")?;
+                children.push_front(child, "run_ltp_process_tree root spawn front")?;
                 continue;
             }
             support::LtpVmOutcome::Deferred => {
@@ -1181,8 +1116,7 @@ fn run_ltp_process_tree(
                         && !tidemark_kernel::harness::support::has_external_futex_wait(pid)
                     {
                         tidemark_kernel::harness::support::register_external_futex_wait(
-                            pid,
-                            futex_addr,
+                            pid, futex_addr,
                         );
                     }
                     if tidemark_kernel::syscall::thread::thread_record_blocked_addr(
@@ -1205,20 +1139,19 @@ fn run_ltp_process_tree(
                         0
                     };
                     if scheduler.has_any_deferred_clone_threads() {
-                        let progressed = scheduler.service_ready_deferred_clone_threads_for_process(
-                            prepared.base,
-                            use_cache,
-                            pid,
-                        )?;
+                        let progressed = scheduler
+                            .service_ready_deferred_clone_threads_for_process(
+                                prepared.base,
+                                use_cache,
+                                pid,
+                            )?;
                         if tidemark_kernel::syscall::thread::thread_record_blocked_addr(
                             &prepared.vm,
                             prepared.base,
                         ) == 0
                         {
                             if is_process_leader {
-                                tidemark_kernel::harness::support::clear_external_futex_wait(
-                                    pid,
-                                );
+                                tidemark_kernel::harness::support::clear_external_futex_wait(pid);
                             }
                             tidemark_kernel::syscall::thread::resume_futex_wait(
                                 &mut prepared.vm,
@@ -1255,11 +1188,11 @@ fn run_ltp_process_tree(
                     }
                     if is_process_leader
                         && (tidemark_kernel::harness::support::take_external_futex_wake(
-                            pid,
-                            futex_addr,
-                        ) || tidemark_kernel::harness::support::take_external_futex_wake_for_pid(
-                            pid,
-                        ))
+                            pid, futex_addr,
+                        )
+                            || tidemark_kernel::harness::support::take_external_futex_wake_for_pid(
+                                pid,
+                            ))
                     {
                         tidemark_kernel::harness::support::clear_external_futex_wait(pid);
                         tidemark_kernel::syscall::thread::resume_futex_wait(
@@ -1367,32 +1300,78 @@ mod tests {
 
 fn spawn_drive_mode_for_ltp(binary: &str) -> Result<SpawnDriveMode, String> {
     match binary {
-        "clone08" | "close01" | "close02" | "epoll_create1_01" | "epoll_create1_02"
+        "clone08"
+        | "close01"
+        | "close02"
+        | "epoll_create1_01"
+        | "epoll_create1_02"
         | "epoll_ctl01"
-        | "epoll_wait07" | "eventfd2_01" | "eventfd2_02" | "eventfd2_03"
-        | "exit01" | "exit02" | "exit_group01"
-        | "faccessat01" | "faccessat02" | "fstatat01" | "ftruncate01"
-        | "futex_cmp_requeue01" | "futex_cmp_requeue02"
-        | "futex_wait01" | "futex_wait02" | "futex_wait03" | "futex_wait04" | "futex_wait05"
-        | "futex_wait_bitset01" | "futex_wake01" | "futex_wake02" | "futex_wake03"
-        | "geteuid01" | "getcpu02" | "getpgid01" | "getpgid02"
-        | "getuid01" | "lseek01"
-        | "mkdirat01" | "openat01" | "pread01" | "pwrite01" | "read01"
-        | "read04" | "sched_getaffinity01" | "sched_yield01"
-        | "set_robust_list01" | "set_tid_address01"
-        | "setpgid01" | "setpgid02" | "setpgid03" | "setsid01" | "sigaltstack02"
-        | "sysinfo01" | "sysinfo02" | "tgkill03"
-        | "truncate02" | "uname01" | "uname02" | "unlinkat01" | "wait401"
-        | "wait402" | "wait403" | "waitid06" | "waitid09"
-        | "waitpid04" | "waitpid09" | "vfork01" | "vfork02" | "write02" => {
-            Ok(if matches!(binary, "futex_cmp_requeue01") {
-                SpawnDriveMode::WaiterBatch
-            } else if matches!(binary, "futex_cmp_requeue02") {
-                SpawnDriveMode::ParentFirst
-            } else {
-                SpawnDriveMode::Dfs
-            })
-        }
+        | "epoll_wait07"
+        | "eventfd2_01"
+        | "eventfd2_02"
+        | "eventfd2_03"
+        | "exit01"
+        | "exit02"
+        | "exit_group01"
+        | "faccessat01"
+        | "faccessat02"
+        | "fstatat01"
+        | "ftruncate01"
+        | "futex_cmp_requeue01"
+        | "futex_cmp_requeue02"
+        | "futex_wait01"
+        | "futex_wait02"
+        | "futex_wait03"
+        | "futex_wait04"
+        | "futex_wait05"
+        | "futex_wait_bitset01"
+        | "futex_wake01"
+        | "futex_wake02"
+        | "futex_wake03"
+        | "geteuid01"
+        | "getcpu02"
+        | "getpgid01"
+        | "getpgid02"
+        | "getuid01"
+        | "lseek01"
+        | "mkdirat01"
+        | "openat01"
+        | "pread01"
+        | "pwrite01"
+        | "read01"
+        | "read04"
+        | "sched_getaffinity01"
+        | "sched_yield01"
+        | "set_robust_list01"
+        | "set_tid_address01"
+        | "setpgid01"
+        | "setpgid02"
+        | "setpgid03"
+        | "setsid01"
+        | "sigaltstack02"
+        | "sysinfo01"
+        | "sysinfo02"
+        | "tgkill03"
+        | "truncate02"
+        | "uname01"
+        | "uname02"
+        | "unlinkat01"
+        | "wait401"
+        | "wait402"
+        | "wait403"
+        | "waitid06"
+        | "waitid09"
+        | "waitpid04"
+        | "waitpid09"
+        | "vfork01"
+        | "vfork02"
+        | "write02" => Ok(if matches!(binary, "futex_cmp_requeue01") {
+            SpawnDriveMode::WaiterBatch
+        } else if matches!(binary, "futex_cmp_requeue02") {
+            SpawnDriveMode::ParentFirst
+        } else {
+            SpawnDriveMode::Dfs
+        }),
         _ => Err(format!("unsupported ltp binary for ltp_runner: {binary}")),
     }
 }
@@ -1401,20 +1380,12 @@ pub fn run_named_elf_with_output(
     binary: &str,
     elf_bytes: &[u8],
 ) -> Result<(i32, u64, Vec<u8>), String> {
-    run_ltp_process_tree(
-        elf_bytes,
-        true,
-        spawn_drive_mode_for_ltp(binary)?,
-    )
+    run_ltp_process_tree(elf_bytes, true, spawn_drive_mode_for_ltp(binary)?)
 }
 
 pub fn run_named_elf_no_cache_with_output(
     binary: &str,
     elf_bytes: &[u8],
 ) -> Result<(i32, u64, Vec<u8>), String> {
-    run_ltp_process_tree(
-        elf_bytes,
-        false,
-        spawn_drive_mode_for_ltp(binary)?,
-    )
+    run_ltp_process_tree(elf_bytes, false, spawn_drive_mode_for_ltp(binary)?)
 }

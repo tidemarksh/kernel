@@ -265,8 +265,7 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
             if !crate::syscall::memory::guest_range_permitted(vm, base, *pc, 4, abi::PROT_EXEC) {
                 let fault_addr = *pc;
                 let accerr = guest_range_in_bounds(base, *pc, 4);
-                if !unsafe { deliver_sync_sigsegv(vm, x, f, fcsr, pc, base, fault_addr, accerr) }
-                {
+                if !unsafe { deliver_sync_sigsegv(vm, x, f, fcsr, pc, base, fault_addr, accerr) } {
                     return *remaining;
                 }
                 continue;
@@ -303,30 +302,31 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
             crate::tracepoints::record_execve_pre_dispatch(
                 instr_pc,
                 raw,
-                vm.process_ptr as u64 + core::mem::offset_of!(crate::types::ProcessState, pid) as u64,
+                vm.process_ptr as u64
+                    + core::mem::offset_of!(crate::types::ProcessState, pid) as u64,
                 x[11],
             );
         }
         match unsafe {
             exec_decoded(
-            vm,
-            raw,
-            step,
-            instr_pc,
-            base,
-            x,
-            f,
-            fcsr,
-            pc,
-            remaining,
-            cache.as_deref_mut(),
-            hot_counts.as_deref_mut(),
-            jit_bitmap,
-            trace_buf.as_deref_mut(),
-            prev_sp,
-            prev_tp,
-            prev_s11,
-        )
+                vm,
+                raw,
+                step,
+                instr_pc,
+                base,
+                x,
+                f,
+                fcsr,
+                pc,
+                remaining,
+                cache.as_deref_mut(),
+                hot_counts.as_deref_mut(),
+                jit_bitmap,
+                trace_buf.as_deref_mut(),
+                prev_sp,
+                prev_tp,
+                prev_s11,
+            )
         } {
             StepOutcome::Advance => {}
             StepOutcome::Restart => continue,

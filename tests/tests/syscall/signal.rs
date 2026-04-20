@@ -3,6 +3,7 @@ use tidemark_kernel::abi::{
     STATUS_FAULT, STATUS_OK, SYS_RT_SIGRETURN, SYS_TGKILL,
 };
 use tidemark_kernel::harness::TestVm;
+use tidemark_kernel::harness::signal as signal_harness;
 use tidemark_kernel::syscall::signal;
 use tidemark_kernel::syscall::thread as thread_impl;
 use tidemark_kernel::types::{
@@ -227,21 +228,24 @@ fn clear_debug_trace_resets_last_signal_delivery_and_sigreturn_state() {
     assert!(signal::check_pending(&mut t.vm, t.base));
     signal::sys_rt_sigreturn(&mut t.vm, t.base);
 
-    assert_ne!(signal::last_signal_delivery().0, 0);
-    assert_ne!(signal::last_sigreturn().2, 0);
+    assert_ne!(signal_harness::last_signal_delivery().0, 0);
+    assert_ne!(signal_harness::last_sigreturn().2, 0);
     signal::queue_sigsegv(&mut t.vm, 0x7777, 0x8888, false);
     assert!(signal::check_pending(&mut t.vm, t.base));
-    assert_ne!(signal::last_default_signal().0, 0);
+    assert_ne!(signal_harness::last_default_signal().0, 0);
 
-    signal::clear_debug_trace();
+    signal_harness::clear_debug_trace();
 
-    assert_eq!(signal::last_signal_delivery(), (0, 0, 0, 0, 0, 0, 0, 0));
-    assert_eq!(signal::last_sigreturn(), (0, 0, 0, 0, 0, 0, 0, 0));
     assert_eq!(
-        signal::last_default_signal(),
+        signal_harness::last_signal_delivery(),
+        (0, 0, 0, 0, 0, 0, 0, 0)
+    );
+    assert_eq!(signal_harness::last_sigreturn(), (0, 0, 0, 0, 0, 0, 0, 0));
+    assert_eq!(
+        signal_harness::last_default_signal(),
         (0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
     );
-    assert_eq!(signal::last_trampoline_hit(), (0, 0, 0));
+    assert_eq!(signal_harness::last_trampoline_hit(), (0, 0, 0));
 }
 
 #[test]
@@ -674,7 +678,7 @@ fn synchronous_sigsegv_handler_entry_preserves_s11() {
     assert!(signal::check_pending(&mut t.vm, t.base));
     assert_eq!(t.vm.pc, handler);
     assert_eq!(t.vm.x[27], orig_s11);
-    assert_eq!(signal::last_signal_delivery().7, orig_s11);
+    assert_eq!(signal_harness::last_signal_delivery().7, orig_s11);
 }
 
 #[test]
@@ -714,7 +718,7 @@ fn synchronous_sigsegv_default_action_records_pre_terminate_fault_state() {
     assert!(signal::check_pending(&mut t.vm, t.base));
     assert_eq!(t.vm.status, STATUS_FAULT);
     assert_eq!(
-        signal::last_default_signal(),
+        signal_harness::last_default_signal(),
         (
             abi::SIGSEGV as u32,
             1,
@@ -753,6 +757,6 @@ fn thread_step_sync_fault_handler_entry_preserves_s11() {
     assert_eq!(t.vm.status, STATUS_OK);
     assert_eq!(t.vm.pc, handler);
     assert_eq!(t.vm.x[27], orig_s11);
-    assert_eq!(signal::last_signal_delivery().2, 0x2);
-    assert_eq!(signal::last_signal_delivery().7, orig_s11);
+    assert_eq!(signal_harness::last_signal_delivery().2, 0x2);
+    assert_eq!(signal_harness::last_signal_delivery().7, orig_s11);
 }

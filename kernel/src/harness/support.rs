@@ -9,7 +9,7 @@ use crate::abi::MAP_SHARED;
 #[cfg(any(test, feature = "harness"))]
 use crate::guest_mem;
 #[cfg(any(test, feature = "harness"))]
-use crate::syscall::memory;
+use crate::harness::{memory, resource, signal};
 
 const HARNESS_RUNTIME_SUPPORT_ENABLED: bool = cfg!(any(test, feature = "harness"));
 
@@ -34,9 +34,9 @@ struct ExternalFutexWait {
 #[cfg(any(test, feature = "harness"))]
 pub struct ProcessContextSnapshot {
     mm_state: memory::AddressSpaceSnapshot,
-    process_state: crate::syscall::process::ProcessRuntimeSnapshot,
-    signal_state: crate::syscall::signal::ProcessSignalSnapshot,
-    resource_state: crate::syscall::resource::ProcessResourceSnapshot,
+    process_state: crate::harness::process::ProcessRuntimeSnapshot,
+    signal_state: signal::ProcessSignalSnapshot,
+    resource_state: resource::ProcessResourceSnapshot,
 }
 
 #[cfg(any(test, feature = "harness"))]
@@ -44,15 +44,17 @@ impl ProcessContextSnapshot {
     fn empty() -> Self {
         Self {
             mm_state: memory::AddressSpaceSnapshot::empty(),
-            process_state: crate::syscall::process::ProcessRuntimeSnapshot::empty(),
-            signal_state: crate::syscall::signal::ProcessSignalSnapshot::empty(),
-            resource_state: crate::syscall::resource::ProcessResourceSnapshot::empty(),
+            process_state: crate::harness::process::ProcessRuntimeSnapshot::empty(),
+            signal_state: signal::ProcessSignalSnapshot::empty(),
+            resource_state: resource::ProcessResourceSnapshot::empty(),
         }
     }
 }
 
 #[cfg(any(test, feature = "harness"))]
-pub fn debug_validate_process_context_snapshot(snapshot: &ProcessContextSnapshot) -> Result<(), String> {
+pub fn debug_validate_process_context_snapshot(
+    snapshot: &ProcessContextSnapshot,
+) -> Result<(), String> {
     let (len, cap, ptr) = snapshot.mm_state.debug_vma_vec_meta();
     let elem = core::mem::size_of::<crate::types::Vma>();
     let mem_size = (core::arch::wasm32::memory_size(0) as usize).saturating_mul(65536);
@@ -110,16 +112,16 @@ pub fn snapshot_process_context_boxed() -> Box<ProcessContextSnapshot> {
 #[inline(never)]
 fn snapshot_process_context_fill(snapshot: &mut ProcessContextSnapshot) {
     memory::snapshot_process_context_into(&mut snapshot.mm_state);
-    crate::syscall::process::snapshot_process_context_into(&mut snapshot.process_state);
-    crate::syscall::signal::snapshot_process_context_into(&mut snapshot.signal_state);
-    crate::syscall::resource::snapshot_process_context_into(&mut snapshot.resource_state);
+    crate::harness::process::snapshot_process_context_into(&mut snapshot.process_state);
+    signal::snapshot_process_context_into(&mut snapshot.signal_state);
+    resource::snapshot_process_context_into(&mut snapshot.resource_state);
 }
 
 #[cfg(any(test, feature = "harness"))]
 pub fn refresh_process_context_runtime_state(snapshot: &mut ProcessContextSnapshot) {
-    crate::syscall::process::snapshot_process_context_into(&mut snapshot.process_state);
-    crate::syscall::signal::snapshot_process_context_into(&mut snapshot.signal_state);
-    crate::syscall::resource::snapshot_process_context_into(&mut snapshot.resource_state);
+    crate::harness::process::snapshot_process_context_into(&mut snapshot.process_state);
+    signal::snapshot_process_context_into(&mut snapshot.signal_state);
+    resource::snapshot_process_context_into(&mut snapshot.resource_state);
 }
 
 #[cfg(any(test, feature = "harness"))]
@@ -280,10 +282,7 @@ pub fn take_external_futex_wake_for_pid(pid: i32) -> bool {
             return false;
         };
 
-        if let Some(idx) = waits
-            .iter()
-            .position(|wait| wait.pid == pid && wait.woken)
-        {
+        if let Some(idx) = waits.iter().position(|wait| wait.pid == pid && wait.woken) {
             waits.remove(idx);
             true
         } else {
@@ -302,9 +301,9 @@ pub fn restore_process_context_parent<F, E>(
 where
     F: FnOnce() -> Result<(), E>,
 {
-    crate::syscall::process::restore_process_context(&snapshot.process_state);
-    crate::syscall::signal::restore_process_context(&snapshot.signal_state);
-    crate::syscall::resource::restore_process_context(&snapshot.resource_state);
+    crate::harness::process::restore_process_context(&snapshot.process_state);
+    signal::restore_process_context(&snapshot.signal_state);
+    resource::restore_process_context(&snapshot.resource_state);
     memory::flush_shared_mappings(base);
     let shared_mappings = snapshot_shared_mappings(base, guest_limit, &snapshot.mm_state);
     restore_guest_memory()?;
@@ -324,9 +323,9 @@ pub fn restore_process_context_parent_without_shared_snapshot<F, E>(
 where
     F: FnOnce() -> Result<(), E>,
 {
-    crate::syscall::process::restore_process_context(&snapshot.process_state);
-    crate::syscall::signal::restore_process_context(&snapshot.signal_state);
-    crate::syscall::resource::restore_process_context(&snapshot.resource_state);
+    crate::harness::process::restore_process_context(&snapshot.process_state);
+    signal::restore_process_context(&snapshot.signal_state);
+    resource::restore_process_context(&snapshot.resource_state);
     memory::flush_shared_mappings(base);
     restore_guest_memory()?;
     memory::restore_process_context(&snapshot.mm_state);

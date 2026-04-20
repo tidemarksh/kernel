@@ -28,10 +28,7 @@ fn saved_ctx_validation_enabled() -> bool {
     std::env::var_os("TIDEMARK_VALIDATE_SAVED_CTX").is_some()
 }
 
-pub(crate) fn cmp_requeue_shared_words(
-    base: u32,
-    futex_addr: u32,
-) -> Option<(u32, u32, u32, u32)> {
+pub(crate) fn cmp_requeue_shared_words(base: u32, futex_addr: u32) -> Option<(u32, u32, u32, u32)> {
     if futex_addr == 0 {
         return None;
     }
@@ -185,11 +182,13 @@ impl SavedProcessCtx {
             if *exited {
                 continue;
             }
-            let still_queued = child_proc_stats.iter().any(|(child_pid, _, _, _)| *child_pid == *pid);
+            let still_queued = child_proc_stats
+                .iter()
+                .any(|(child_pid, _, _, _)| *child_pid == *pid);
             if still_queued {
                 continue;
             }
-            if !tidemark_kernel::syscall::process::debug_process_entry_exists(*pid) {
+            if !tidemark_kernel::harness::process::debug_process_entry_exists(*pid) {
                 *exited = true;
                 *wait_status = 0;
             }
@@ -233,7 +232,7 @@ impl SavedProcessCtx {
             ensure_proc_pid_stat(pid, ppid, state, pgrp)?;
         }
         for (pid, exited, wait_status) in current_child_entries.iter().copied() {
-            tidemark_kernel::syscall::process::sync_child_entry_for_parent(
+            tidemark_kernel::harness::process::sync_child_entry_for_parent(
                 self.pid,
                 pid,
                 exited,
@@ -245,9 +244,14 @@ impl SavedProcessCtx {
         refresh_proc_pid_stat(
             &self.vm,
             base,
-            if self.status() == STATUS_WAIT4 { b'S' } else { b'R' },
+            if self.status() == STATUS_WAIT4 {
+                b'S'
+            } else {
+                b'R'
+            },
         )?;
-        self.guest_memory.recapture_into_scratch_for_vm(base, &self.vm);
+        self.guest_memory
+            .recapture_into_scratch_for_vm(base, &self.vm);
         self.mm_state = tidemark_kernel::harness::support::snapshot_process_context_boxed();
         self.child_entries = current_child_entries.to_vec();
         let saved_shared_mappings =
@@ -464,10 +468,7 @@ pub(crate) struct LtpSchedulerState {
     current_snapshot_pc: u64,
     current_snapshot_sp: u64,
     current_snapshot_wait_pid: i64,
-    shared_mapping_overlays: Vec<(
-        i32,
-        tidemark_kernel::harness::support::SharedMappingOverlay,
-    )>,
+    shared_mapping_overlays: Vec<(i32, tidemark_kernel::harness::support::SharedMappingOverlay)>,
     retain_exited_saved_children: bool,
     retired_saved_children: Vec<Box<SavedProcessCtx>>,
 }
@@ -564,8 +565,10 @@ impl LtpSchedulerState {
 
 impl Drop for LtpSchedulerState {
     fn drop(&mut self) {
-        let guest_memory_scratch =
-            core::mem::replace(&mut self.guest_memory_scratch, GuestMemorySnapshot::empty_box());
+        let guest_memory_scratch = core::mem::replace(
+            &mut self.guest_memory_scratch,
+            GuestMemorySnapshot::empty_box(),
+        );
         core::mem::forget(guest_memory_scratch);
         let parent_memory_scratch = core::mem::replace(
             &mut self.parent_memory_scratch,
@@ -715,9 +718,7 @@ impl GuestMemorySnapshot {
         for chunk in self.chunks.iter().take(required_chunks) {
             let chunk_len = (self.len - off).min(GUEST_SNAPSHOT_CHUNK);
             let guest_end = off.checked_add(chunk_len).ok_or_else(|| {
-                format!(
-                    "snapshot restore guest-range overflow: off=0x{off:x} len=0x{chunk_len:x}"
-                )
+                format!("snapshot restore guest-range overflow: off=0x{off:x} len=0x{chunk_len:x}")
             })?;
             if guest_end > guest_limit {
                 return Err(format!(
@@ -725,12 +726,12 @@ impl GuestMemorySnapshot {
                     self.len
                 ));
             }
-            let dst_off = (base as usize)
-                .checked_add(off)
-                .ok_or_else(|| format!("snapshot restore address overflow: base=0x{base:x} off=0x{off:x}"))?;
-            let dst_end = dst_off
-                .checked_add(chunk_len)
-                .ok_or_else(|| format!("snapshot restore end overflow: dst=0x{dst_off:x} len=0x{chunk_len:x}"))?;
+            let dst_off = (base as usize).checked_add(off).ok_or_else(|| {
+                format!("snapshot restore address overflow: base=0x{base:x} off=0x{off:x}")
+            })?;
+            let dst_end = dst_off.checked_add(chunk_len).ok_or_else(|| {
+                format!("snapshot restore end overflow: dst=0x{dst_off:x} len=0x{chunk_len:x}")
+            })?;
             if dst_end > mem_size {
                 return Err(format!(
                     "snapshot restore out of wasm range: base=0x{base:x} off=0x{off:x} len=0x{chunk_len:x} end=0x{dst_end:x} mem_size=0x{mem_size:x} snapshot_len=0x{:x}",
@@ -785,12 +786,12 @@ impl GuestMemorySnapshot {
         let mut buf = vec![0u8; len];
         self.copy_out(guest_addr, &mut buf)?;
         let mem_size = (core::arch::wasm32::memory_size(0) as usize).saturating_mul(65536);
-        let dst_off = (base as usize)
-            .checked_add(guest_addr)
-            .ok_or_else(|| format!("snapshot restore_range address overflow: base=0x{base:x} off=0x{guest_addr:x}"))?;
-        let dst_end = dst_off
-            .checked_add(len)
-            .ok_or_else(|| format!("snapshot restore_range end overflow: dst=0x{dst_off:x} len=0x{len:x}"))?;
+        let dst_off = (base as usize).checked_add(guest_addr).ok_or_else(|| {
+            format!("snapshot restore_range address overflow: base=0x{base:x} off=0x{guest_addr:x}")
+        })?;
+        let dst_end = dst_off.checked_add(len).ok_or_else(|| {
+            format!("snapshot restore_range end overflow: dst=0x{dst_off:x} len=0x{len:x}")
+        })?;
         if dst_end > mem_size {
             return Err(format!(
                 "snapshot restore_range out of wasm range: base=0x{base:x} off=0x{guest_addr:x} len=0x{len:x} end=0x{dst_end:x} mem_size=0x{mem_size:x} snapshot_len=0x{:x}",
@@ -1027,7 +1028,7 @@ pub(crate) fn capture_live_child_proc_stats(parent_pid: i32) -> Vec<(i32, i32, u
 }
 
 pub(crate) fn capture_live_child_entries(parent_pid: i32) -> Vec<(i32, bool, i32)> {
-    tidemark_kernel::syscall::process::debug_child_entries_for_parent(parent_pid)
+    tidemark_kernel::harness::process::debug_child_entries_for_parent(parent_pid)
 }
 
 fn remove_proc_pid_task_entry(task_ino: u32, tid: i32) {
@@ -1229,7 +1230,7 @@ fn allocate_cache(use_cache: bool) -> Option<LocalBlockCache> {
     Some(LocalBlockCache {
         cache: unsafe {
             tidemark_kernel::cpu::block_cache::BlockCache::from_ptr(
-                ptr.as_ptr() as *mut tidemark_kernel::cpu::block_cache::BlockEntry,
+                ptr.as_ptr() as *mut tidemark_kernel::cpu::block_cache::BlockEntry
             )
         },
         ptr,
@@ -1363,7 +1364,11 @@ pub(crate) fn validate_prepared_root_handoff(
             pid, vm.tid, vm.process_ptr
         ));
     }
-    if scheduler.deferred_clone_threads.iter().any(|queued| queued.owner_pid == pid) {
+    if scheduler
+        .deferred_clone_threads
+        .iter()
+        .any(|queued| queued.owner_pid == pid)
+    {
         return Err(format!(
             "root handoff already has deferred clone threads pid={} tid={} clones={}",
             pid,
@@ -1511,16 +1516,17 @@ pub(crate) fn guest_window_size(base: u32) -> usize {
 
 fn current_guest_snapshot_len(base: u32) -> usize {
     let mut high = tidemark_kernel::syscall::memory::current_brk() as usize;
-    let vma_len = tidemark_kernel::syscall::memory::debug_vma_len();
+    let vma_len = tidemark_kernel::harness::memory::debug_vma_len();
     for idx in 0..vma_len {
-        high = high.max(tidemark_kernel::syscall::memory::debug_vma_end(idx) as usize);
+        high = high.max(tidemark_kernel::harness::memory::debug_vma_end(idx) as usize);
     }
     high.min(guest_window_size(base))
 }
 
 fn current_guest_snapshot_len_with_vm_floor(base: u32, vm: &ThreadState) -> usize {
     let mut high = current_guest_snapshot_len(base);
-    let process_end = (vm.process_ptr as usize).saturating_add(core::mem::size_of::<ProcessState>());
+    let process_end =
+        (vm.process_ptr as usize).saturating_add(core::mem::size_of::<ProcessState>());
     high = high.max(process_end);
     let stack_end = (vm.x[2] as usize).saturating_add(0x20_000);
     high = high.max(stack_end);
@@ -1639,7 +1645,8 @@ fn repair_current_main_thread_record(vm: &ThreadState, base: u32) {
         let ps = &mut *ps_ptr;
         ps.threads[idx] =
             ThreadRecord::new(vm.tid, THREAD_RUNNING, vm_ptr, vm.clear_child_tid as u32, 0);
-        ps.thread_count.store(1, std::sync::atomic::Ordering::Release);
+        ps.thread_count
+            .store(1, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -1676,8 +1683,7 @@ fn run_vm_root_for_ltp(
     scheduler: &mut LtpSchedulerState,
 ) -> Result<VmRunOutcome, String> {
     let deferred_clone_threads = &mut scheduler.deferred_clone_threads;
-    let parent_memory_scratch =
-        scheduler.parent_memory_scratch.as_mut();
+    let parent_memory_scratch = scheduler.parent_memory_scratch.as_mut();
     run_vm_inner(
         vm,
         base,
@@ -2025,8 +2031,13 @@ fn prepare_process_spawn_after_flush(
 ) -> Result<PreparedProcessSpawn, String> {
     let parent_state = prepare_parent_snapshot(parent_vm, base, process_ptr)?;
 
-    let child_vm =
-        prepare_child_vm_for_spawn(parent_vm, base, process_ptr, parent_state.parent_pid, child_pid)?;
+    let child_vm = prepare_child_vm_for_spawn(
+        parent_vm,
+        base,
+        process_ptr,
+        parent_state.parent_pid,
+        child_pid,
+    )?;
 
     let child_spawn =
         finalize_process_spawn_snapshot(child_vm, child_pid, parent_state.parent_pid, base)?;
@@ -2041,10 +2052,7 @@ fn prepare_process_spawn_after_flush(
     if restored_pid != parent_state.parent_pid {
         return Err(format!(
             "process context restore corrupted parent pid: expected {}, got {}; snapshot_pid={} process_ptr=0x{:x}",
-            parent_state.parent_pid,
-            restored_pid,
-            parent_state.snapshot_parent_pid,
-            process_ptr
+            parent_state.parent_pid, restored_pid, parent_state.snapshot_parent_pid, process_ptr
         ));
     }
     refresh_proc_pid_stat(parent_vm, base, b'R')?;
@@ -2075,15 +2083,16 @@ fn prepare_process_spawn_after_flush_with_parent_memory_scratch(
     preserve_live_shared_mappings: bool,
     parent_memory_scratch: &mut GuestMemorySnapshot,
 ) -> Result<PreparedProcessSpawn, String> {
-    let parent_state = prepare_parent_snapshot_into_scratch(
+    let parent_state =
+        prepare_parent_snapshot_into_scratch(parent_vm, base, process_ptr, parent_memory_scratch)?;
+
+    let child_vm = prepare_child_vm_for_spawn(
         parent_vm,
         base,
         process_ptr,
-        parent_memory_scratch,
+        parent_state.parent_pid,
+        child_pid,
     )?;
-
-    let child_vm =
-        prepare_child_vm_for_spawn(parent_vm, base, process_ptr, parent_state.parent_pid, child_pid)?;
 
     let child_spawn =
         finalize_process_spawn_snapshot(child_vm, child_pid, parent_state.parent_pid, base)?;
@@ -2099,10 +2108,7 @@ fn prepare_process_spawn_after_flush_with_parent_memory_scratch(
     if restored_pid != parent_state.parent_pid {
         return Err(format!(
             "process context restore corrupted parent pid: expected {}, got {}; snapshot_pid={} process_ptr=0x{:x}",
-            parent_state.parent_pid,
-            restored_pid,
-            parent_state.snapshot_parent_pid,
-            process_ptr
+            parent_state.parent_pid, restored_pid, parent_state.snapshot_parent_pid, process_ptr
         ));
     }
     refresh_proc_pid_stat(parent_vm, base, b'R')?;
@@ -2143,11 +2149,8 @@ fn prepare_parent_snapshot_into_scratch(
 ) -> Result<PreparedParentScratchState, String> {
     let parent_pid = process_pid(base, process_ptr);
     parent_memory_scratch.recapture_into_scratch_for_vm(base, parent_vm);
-    let snapshot_parent_pid = prepare_parent_snapshot_validate_pid(
-        parent_memory_scratch,
-        process_ptr,
-        parent_pid,
-    )?;
+    let snapshot_parent_pid =
+        prepare_parent_snapshot_validate_pid(parent_memory_scratch, process_ptr, parent_pid)?;
     let parent_mm_state = prepare_parent_mm_snapshot();
     refresh_proc_pid_stat(parent_vm, base, b'S')?;
     Ok(PreparedParentScratchState {
@@ -2165,13 +2168,7 @@ fn prepare_parent_snapshot_after_pid(
     parent_pid: i32,
 ) -> Result<Box<PreparedParentSnapshotState>, String> {
     let parent_memory = prepare_parent_memory_snapshot(base, parent_vm)?;
-    prepare_parent_snapshot_finalize(
-        parent_vm,
-        base,
-        process_ptr,
-        parent_pid,
-        parent_memory,
-    )
+    prepare_parent_snapshot_finalize(parent_vm, base, process_ptr, parent_pid, parent_memory)
 }
 
 #[inline(never)]
@@ -2220,8 +2217,7 @@ fn prepare_parent_snapshot_validate_pid(
 }
 
 #[inline(never)]
-fn prepare_parent_mm_snapshot(
-) -> Box<tidemark_kernel::harness::support::ProcessContextSnapshot> {
+fn prepare_parent_mm_snapshot() -> Box<tidemark_kernel::harness::support::ProcessContextSnapshot> {
     tidemark_kernel::harness::support::snapshot_process_context_boxed()
 }
 
@@ -2303,10 +2299,7 @@ fn prepare_child_vm_for_spawn(
     if child_vm.process_ptr != process_ptr {
         return Err(format!(
             "prepare_child_vm_for_spawn corrupted process_ptr: expected=0x{:x} actual=0x{:x} pid={} ppid={}",
-            process_ptr,
-            child_vm.process_ptr,
-            child_pid,
-            child_ppid,
+            process_ptr, child_vm.process_ptr, child_pid, child_ppid,
         ));
     }
     refresh_proc_pid_stat(&child_vm, base, b'R')?;
@@ -2350,7 +2343,9 @@ fn restore_process_context_parent_after_snapshot(
     tidemark_kernel::harness::support::debug_validate_process_context_snapshot(
         parent_state.parent_mm_state.as_ref(),
     )
-    .map_err(|err| format!("restore_process_context_parent_after_snapshot invalid parent_mm_state: {err}"))?;
+    .map_err(|err| {
+        format!("restore_process_context_parent_after_snapshot invalid parent_mm_state: {err}")
+    })?;
     if preserve_live_shared_mappings {
         tidemark_kernel::harness::support::restore_process_context_parent(
             base,
@@ -2481,12 +2476,7 @@ fn handle_vfork_execve_spawn(
         base,
     );
 
-    let (child_exit, _child_pc) = run_vm(
-        &mut child_vm,
-        base,
-        use_cache,
-        deferred_clone_threads,
-    )?;
+    let (child_exit, _child_pc) = run_vm(&mut child_vm, base, use_cache, deferred_clone_threads)?;
     tidemark_kernel::syscall::process::record_child_exit(
         child_pid,
         child_wait_status(&child_vm, child_exit),
@@ -2758,17 +2748,10 @@ fn collect_guest_stdio(vm: &ThreadState) -> Vec<u8> {
     out
 }
 
-pub(crate) fn prepare_elf_vm(
-    elf_bytes: &[u8],
-    use_cache: bool,
-) -> Result<PreparedElfVm, String> {
+pub(crate) fn prepare_elf_vm(elf_bytes: &[u8], use_cache: bool) -> Result<PreparedElfVm, String> {
     let helper_binaries = load_ltp_helper_binaries()?;
     unsafe {
-        tidemark_kernel::guest_mem::init(
-            core::ptr::null(),
-            core::ptr::null(),
-            core::ptr::null(),
-        );
+        tidemark_kernel::guest_mem::init(core::ptr::null(), core::ptr::null(), core::ptr::null());
 
         let current_pages = core::arch::wasm32::memory_size(0);
         let current_bytes = (current_pages as u64).saturating_mul(65536);
@@ -2979,10 +2962,7 @@ pub(crate) fn prepare_elf_vm(
         let vm_ptr = &mut vm as *mut ThreadState as usize;
         let vm_size = core::mem::size_of::<ThreadState>();
         let mem_size = (core::arch::wasm32::memory_size(0) as usize).saturating_mul(65536);
-        if vm_ptr
-            .checked_add(vm_size)
-            .is_none_or(|end| end > mem_size)
-        {
+        if vm_ptr.checked_add(vm_size).is_none_or(|end| end > mem_size) {
             return Err(format!(
                 "vm ptr out of wasm range vm_ptr=0x{:x} vm_size=0x{:x} mem_size=0x{:x}",
                 vm_ptr, vm_size, mem_size
@@ -3085,7 +3065,7 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
     let base = current.base;
     let result = (|| -> Result<LtpVmOutcome, String> {
         let pre_restore_exited_children =
-            tidemark_kernel::syscall::process::debug_exited_children_for_parent(saved.pid);
+            tidemark_kernel::harness::process::debug_exited_children_for_parent(saved.pid);
         let current_child_proc_stats = capture_live_child_proc_stats(saved.pid);
         let current_pid = if current.vm.process_ptr != 0 {
             process_pid(base, current.vm.process_ptr)
@@ -3124,7 +3104,10 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
             &saved_mm_state,
             || {
                 saved_guest_memory.restore(base).map_err(|e| {
-                    format!("restore saved process pid {} guest memory: {}", saved.pid, e)
+                    format!(
+                        "restore saved process pid {} guest memory: {}",
+                        saved.pid, e
+                    )
                 })
             },
         )?;
@@ -3159,7 +3142,7 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
             ensure_proc_pid_stat(pid, ppid, state, pgrp)?;
         }
         for (pid, exited, wait_status) in saved.child_entries.iter().copied() {
-            tidemark_kernel::syscall::process::sync_child_entry_for_parent(
+            tidemark_kernel::harness::process::sync_child_entry_for_parent(
                 saved.pid,
                 pid,
                 exited,
@@ -3169,7 +3152,7 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
         refresh_proc_pid_stat(&saved.vm, base, b'R')?;
         let mut reapplied_exited_child = false;
         for (child_pid, wait_status) in pre_restore_exited_children {
-            let post_exited = tidemark_kernel::syscall::process::debug_child_entry(child_pid)
+            let post_exited = tidemark_kernel::harness::process::debug_child_entry(child_pid)
                 .map(|(_, exited, _)| exited)
                 .unwrap_or(false);
             if !post_exited {
@@ -3199,7 +3182,10 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
                     saved.vm.futex_wait_addr,
                     saved.vm.futex_wait_expected,
                     saved.vm.futex_wait_timeout,
-                    count_deferred_clone_threads_for_process(&scheduler.deferred_clone_threads, saved.pid),
+                    count_deferred_clone_threads_for_process(
+                        &scheduler.deferred_clone_threads,
+                        saved.pid
+                    ),
                 ));
             }
             match saved.vm.status {
@@ -3217,19 +3203,17 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
                         saved.last_futex_addr = futex_addr;
                     }
                     let is_process_leader = saved.pid > 0 && saved.vm.tid == saved.pid;
-                    if tidemark_kernel::syscall::thread::thread_record_blocked_addr(
-                        &saved.vm,
-                        base,
-                    ) == 0
+                    if tidemark_kernel::syscall::thread::thread_record_blocked_addr(&saved.vm, base)
+                        == 0
                     {
                         tidemark_kernel::syscall::thread::resume_futex_wait(&mut saved.vm, base);
                     } else if is_process_leader
                         && (tidemark_kernel::harness::support::take_external_futex_wake(
-                            saved.pid,
-                            futex_addr,
-                        ) || tidemark_kernel::harness::support::take_external_futex_wake_for_pid(
-                            saved.pid,
-                        ))
+                            saved.pid, futex_addr,
+                        )
+                            || tidemark_kernel::harness::support::take_external_futex_wake_for_pid(
+                                saved.pid,
+                            ))
                     {
                         tidemark_kernel::syscall::thread::resume_futex_wait(&mut saved.vm, base);
                     } else if count_deferred_clone_threads_for_process(
@@ -3245,17 +3229,21 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
                             saved.pid,
                         )?;
                         if tidemark_kernel::syscall::thread::thread_record_blocked_addr(
-                            &saved.vm,
-                            base,
+                            &saved.vm, base,
                         ) == 0
                         {
-                            tidemark_kernel::syscall::thread::resume_futex_wait(&mut saved.vm, base);
+                            tidemark_kernel::syscall::thread::resume_futex_wait(
+                                &mut saved.vm,
+                                base,
+                            );
                         } else if saved.vm.futex_wait_addr != 0
-                            && unsafe {
-                                guest_mem::read_u32(base, saved.vm.futex_wait_addr)
-                            } != saved.vm.futex_wait_expected
+                            && unsafe { guest_mem::read_u32(base, saved.vm.futex_wait_addr) }
+                                != saved.vm.futex_wait_expected
                         {
-                            tidemark_kernel::syscall::thread::resume_futex_wait(&mut saved.vm, base);
+                            tidemark_kernel::syscall::thread::resume_futex_wait(
+                                &mut saved.vm,
+                                base,
+                            );
                         } else {
                             refresh_proc_pid_stat(&saved.vm, base, b'S')?;
                             saved_guest_memory.recapture_into_scratch_for_vm(base, &saved.vm);
@@ -3266,8 +3254,7 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
                     } else {
                         if !tidemark_kernel::harness::support::has_external_futex_wait(saved.pid) {
                             tidemark_kernel::harness::support::register_external_futex_wait(
-                                saved.pid,
-                                futex_addr,
+                                saved.pid, futex_addr,
                             );
                         }
                         refresh_proc_pid_stat(&saved.vm, base, b'S')?;
@@ -3294,7 +3281,8 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
             if saved.vm.status == STATUS_WAIT4 {
                 refresh_proc_pid_stat(&saved.vm, base, b'S')?;
                 saved_guest_memory.recapture_into_scratch_for_vm(base, &saved.vm);
-                saved_mm_state = tidemark_kernel::harness::support::snapshot_process_context_boxed();
+                saved_mm_state =
+                    tidemark_kernel::harness::support::snapshot_process_context_boxed();
                 break LtpVmOutcome::Deferred;
             }
 
@@ -3395,7 +3383,9 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
             base,
             guest_window_size(base) as u64,
         );
-        validate_siblings("step_saved_process_ctx_for_ltp after refresh current shared file mappings")?;
+        validate_siblings(
+            "step_saved_process_ctx_for_ltp after refresh current shared file mappings",
+        )?;
         if let Some(shared_overlay) = scheduler.shared_mapping_overlay(saved.shared_overlay_key) {
             tidemark_kernel::harness::support::restore_live_shared_mapping_overlay(
                 base,
@@ -3459,10 +3449,7 @@ pub(crate) fn collect_prepared_elf_stdio(prepared: &PreparedElfVm) -> Vec<u8> {
     collect_guest_stdio(&prepared.vm)
 }
 
-fn run_elf_inner(
-    elf_bytes: &[u8],
-    use_cache: bool,
-) -> Result<(i32, u64, Vec<u8>), String> {
+fn run_elf_inner(elf_bytes: &[u8], use_cache: bool) -> Result<(i32, u64, Vec<u8>), String> {
     let result = (|| -> Result<(i32, u64, Vec<u8>), String> {
         let prepared = prepare_elf_vm(elf_bytes, use_cache)?;
         run_prepared_elf_vm(prepared, use_cache)
@@ -3470,9 +3457,7 @@ fn run_elf_inner(
 
     match result {
         Ok((code, pc, output)) => Ok((code, pc, output)),
-        Err(err) => {
-            Err(err)
-        }
+        Err(err) => Err(err),
     }
 }
 
@@ -3504,9 +3489,8 @@ pub fn assert_elf_pass_no_cache(name: &str, elf_bytes: &[u8]) -> Result<(), Stri
 mod tests {
     use super::*;
     use tidemark_kernel::abi::{
-        CLONE_FS, CLONE_SIGHAND, CLONE_THREAD, CLONE_VM, FUTEX_CMP_REQUEUE, FUTEX_WAIT,
-        FUTEX_WAKE, MAP_ANONYMOUS, MAP_PRIVATE, PAGE_SIZE, PROT_EXEC, PROT_READ, PROT_WRITE,
-        STATUS_FUTEX_WAIT,
+        CLONE_FS, CLONE_SIGHAND, CLONE_THREAD, CLONE_VM, FUTEX_CMP_REQUEUE, FUTEX_WAIT, FUTEX_WAKE,
+        MAP_ANONYMOUS, MAP_PRIVATE, PAGE_SIZE, PROT_EXEC, PROT_READ, PROT_WRITE, STATUS_FUTEX_WAIT,
     };
     use tidemark_kernel::fs::memfs;
     use tidemark_kernel::guest_mem;
@@ -3675,13 +3659,9 @@ mod tests {
             thread_impl::sys_futex(&mut t.vm, t.base, futex_addr, FUTEX_WAKE as u64, 1, 0, 0, 0);
         assert_eq!(wake_ret, 1);
 
-        let progressed = service_ready_deferred_clone_threads(
-            t.base,
-            false,
-            &mut deferred_clone_threads,
-            pid,
-        )
-        .expect("deferred clone wake service should succeed");
+        let progressed =
+            service_ready_deferred_clone_threads(t.base, false, &mut deferred_clone_threads, pid)
+                .expect("deferred clone wake service should succeed");
         assert_eq!(progressed, 1);
         assert!(deferred_clone_threads.is_empty());
 
@@ -3715,13 +3695,9 @@ mod tests {
         let mut deferred_clone_threads = VecDeque::new();
         enqueue_deferred_clone_thread(&mut deferred_clone_threads, pid + 1, child_ptr);
 
-        let progressed = service_ready_deferred_clone_threads(
-            t.base,
-            false,
-            &mut deferred_clone_threads,
-            pid,
-        )
-        .expect("foreign-owned clone thread should be skipped cleanly");
+        let progressed =
+            service_ready_deferred_clone_threads(t.base, false, &mut deferred_clone_threads, pid)
+                .expect("foreign-owned clone thread should be skipped cleanly");
 
         assert_eq!(progressed, 0);
         assert_eq!(deferred_clone_threads.len(), 1);
@@ -3824,5 +3800,4 @@ mod tests {
         assert_eq!(ps.threads[(tid - 1) as usize].tid, tid);
         assert_eq!(ps.threads[(tid - 1) as usize].thread_ptr, vm_ptr);
     }
-
 }

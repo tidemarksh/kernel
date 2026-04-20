@@ -17,26 +17,26 @@ use crate::types::{
 };
 use core::sync::atomic::Ordering;
 
-#[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
+#[cfg(any(test, all(target_arch = "wasm32", feature = "harness")))]
 #[inline(always)]
 fn wake_external_waiters(addr: u32, max_wake: u32) -> u32 {
-    crate::harness_support::wake_external_futex_waits(addr, max_wake)
+    crate::harness::support::wake_external_futex_waits(addr, max_wake)
 }
 
-#[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
+#[cfg(not(any(test, all(target_arch = "wasm32", feature = "harness"))))]
 #[inline(always)]
 fn wake_external_waiters(addr: u32, max_wake: u32) -> u32 {
     let _ = (addr, max_wake);
     0
 }
 
-#[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
+#[cfg(any(test, all(target_arch = "wasm32", feature = "harness")))]
 #[inline(always)]
 fn requeue_external_waiters(addr: u32, new_addr: u32, max_requeue: u32) -> u32 {
-    crate::harness_support::requeue_external_futex_waits(addr, new_addr, max_requeue)
+    crate::harness::support::requeue_external_futex_waits(addr, new_addr, max_requeue)
 }
 
-#[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
+#[cfg(not(any(test, all(target_arch = "wasm32", feature = "harness"))))]
 #[inline(always)]
 fn requeue_external_waiters(addr: u32, new_addr: u32, max_requeue: u32) -> u32 {
     let _ = (addr, new_addr, max_requeue);
@@ -1042,7 +1042,8 @@ pub fn sys_futex(
                 addr2 as u32,
                 requeue_count,
             );
-            let external_requeue = requeue_external_waiters(addr as u32, addr2 as u32, requeue_count);
+            let external_requeue =
+                requeue_external_waiters(addr as u32, addr2 as u32, requeue_count);
 
             (local_wake + external_wake + local_requeue + external_requeue) as i64
         }

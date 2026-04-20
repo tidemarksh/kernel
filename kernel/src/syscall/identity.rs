@@ -218,9 +218,7 @@ pub fn sys_riscv_hwprobe(
         let pair_addr = pairs_addr + index * 16;
         let key = unsafe { guest_mem::read_i64(base, pair_addr) };
         let value = match key {
-            RISCV_HWPROBE_KEY_MVENDORID | RISCV_HWPROBE_KEY_MARCHID | RISCV_HWPROBE_KEY_MIMPID => {
-                0
-            }
+            RISCV_HWPROBE_KEY_MVENDORID | RISCV_HWPROBE_KEY_MARCHID | RISCV_HWPROBE_KEY_MIMPID => 0,
             RISCV_HWPROBE_KEY_BASE_BEHAVIOR => RISCV_HWPROBE_BASE_BEHAVIOR_IMA,
             RISCV_HWPROBE_KEY_IMA_EXT_0 => RISCV_HWPROBE_IMA_FD | RISCV_HWPROBE_IMA_C,
             RISCV_HWPROBE_KEY_CPUPERF_0 => RISCV_HWPROBE_MISALIGNED_UNKNOWN,

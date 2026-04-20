@@ -32,12 +32,12 @@ static mut RLIMIT_SLOTS_PTR: *mut [*mut [Rlimit64; RLIMIT_NLIMITS]; MAX_PROCESSE
 
 #[cfg(any(test, feature = "harness"))]
 #[derive(Clone, Copy)]
-pub(crate) struct ProcessResourceSnapshot {
+pub(crate) struct ProcessResourceStateImage {
     slots: [u32; MAX_PROCESSES],
 }
 
 #[cfg(any(test, feature = "harness"))]
-impl ProcessResourceSnapshot {
+impl ProcessResourceStateImage {
     pub(crate) fn empty() -> Self {
         Self {
             slots: [0; MAX_PROCESSES],
@@ -130,16 +130,16 @@ fn resolve_target_pid(vm: &ThreadState, base: u32, pid: i32) -> i32 {
 }
 
 #[cfg(any(test, feature = "harness"))]
-pub(crate) fn snapshot_process_context_into(snapshot: &mut ProcessResourceSnapshot) {
+pub(crate) fn capture_process_resource_state_into(image: &mut ProcessResourceStateImage) {
     for (idx, slot) in rlimit_slots().iter().enumerate() {
-        snapshot.slots[idx] = *slot as u32;
+        image.slots[idx] = *slot as u32;
     }
 }
 
 #[cfg(any(test, feature = "harness"))]
-pub(crate) fn restore_process_context(snapshot: &ProcessResourceSnapshot) {
+pub(crate) fn restore_process_resource_state_from(image: &ProcessResourceStateImage) {
     for (idx, slot) in rlimit_slots().iter_mut().enumerate() {
-        *slot = snapshot.slots[idx] as *mut [Rlimit64; RLIMIT_NLIMITS];
+        *slot = image.slots[idx] as *mut [Rlimit64; RLIMIT_NLIMITS];
     }
 }
 

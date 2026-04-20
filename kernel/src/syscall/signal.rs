@@ -63,13 +63,13 @@ static mut PROCESS_PENDING_PTR: *mut [u64; MAX_PROCESSES] = core::ptr::null_mut(
 
 #[cfg(any(test, feature = "harness"))]
 #[derive(Clone, Copy)]
-pub(crate) struct ProcessSignalSnapshot {
+pub(crate) struct ProcessSignalStateImage {
     sig_slots: [u32; MAX_PROCESSES],
     process_pending: [u64; MAX_PROCESSES],
 }
 
 #[cfg(any(test, feature = "harness"))]
-impl ProcessSignalSnapshot {
+impl ProcessSignalStateImage {
     pub(crate) fn empty() -> Self {
         Self {
             sig_slots: [0; MAX_PROCESSES],
@@ -79,6 +79,7 @@ impl ProcessSignalSnapshot {
 }
 
 #[derive(Clone, Copy)]
+#[cfg_attr(not(any(test, feature = "harness")), allow(dead_code))]
 struct SignalTrace {
     vm_ptr: u32,
     sig: u32,
@@ -92,8 +93,8 @@ struct SignalTrace {
 }
 
 #[derive(Clone, Copy)]
+#[cfg_attr(not(any(test, feature = "harness")), allow(dead_code))]
 struct DefaultSignalTrace {
-    vm_ptr: u32,
     sig: u32,
     sig_info_code: i32,
     pc: u64,
@@ -129,7 +130,6 @@ static mut LAST_SIGRETURN: SignalTrace = SignalTrace {
     s11: 0,
 };
 static mut LAST_DEFAULT_SIGNAL: DefaultSignalTrace = DefaultSignalTrace {
-    vm_ptr: 0,
     sig: 0,
     sig_info_code: 0,
     pc: 0,
@@ -160,7 +160,6 @@ static mut SIGNAL_DELIVERY_RING: [SignalTrace; SIGNAL_TRACE_RING_CAP] = [SignalT
 static mut SIGNAL_DELIVERY_RING_LEN: u32 = 0;
 static mut SIGNAL_DELIVERY_RING_NEXT: u32 = 0;
 static mut DEFAULT_SIGNAL_RING: [DefaultSignalTrace; SIGNAL_TRACE_RING_CAP] = [DefaultSignalTrace {
-    vm_ptr: 0,
     sig: 0,
     sig_info_code: 0,
     pc: 0,
@@ -213,14 +212,18 @@ pub fn process_pending_bytes() -> u32 {
     core::mem::size_of::<[u64; MAX_PROCESSES]>() as u32
 }
 
-pub fn last_signal_delivery() -> (u32, u64, u64, u64, u64, u64, u64, u64) {
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn signal_delivery_trace() -> (u32, u64, u64, u64, u64, u64, u64, u64) {
     unsafe {
         let t = LAST_SIGNAL_DELIVERY;
         (t.sig, t.frame_base, t.pc, t.ra, t.sp, t.gp, t.tp, t.s11)
     }
 }
 
-pub fn last_signal_delivery_for_vm(vm_ptr: u32) -> (u32, u64, u64, u64, u64, u64, u64, u64) {
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn signal_delivery_trace_for_vm(
+    vm_ptr: u32,
+) -> (u32, u64, u64, u64, u64, u64, u64, u64) {
     unsafe {
         let len = SIGNAL_DELIVERY_RING_LEN.min(SIGNAL_TRACE_RING_CAP as u32);
         for offset in 0..len {
@@ -244,14 +247,16 @@ pub fn last_signal_delivery_for_vm(vm_ptr: u32) -> (u32, u64, u64, u64, u64, u64
     }
 }
 
-pub fn last_sigreturn() -> (u32, u64, u64, u64, u64, u64, u64, u64) {
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn sigreturn_trace() -> (u32, u64, u64, u64, u64, u64, u64, u64) {
     unsafe {
         let t = LAST_SIGRETURN;
         (t.sig, t.frame_base, t.pc, t.ra, t.sp, t.gp, t.tp, t.s11)
     }
 }
 
-pub fn last_default_signal() -> (u32, i32, u64, u64, u64, u64, u64, u64, u64, u64) {
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn default_signal_trace() -> (u32, i32, u64, u64, u64, u64, u64, u64, u64, u64) {
     unsafe {
         let t = LAST_DEFAULT_SIGNAL;
         (
@@ -269,35 +274,8 @@ pub fn last_default_signal() -> (u32, i32, u64, u64, u64, u64, u64, u64, u64, u6
     }
 }
 
-pub fn last_default_signal_for_vm(
-    vm_ptr: u32,
-) -> (u32, i32, u64, u64, u64, u64, u64, u64, u64, u64) {
-    unsafe {
-        let len = DEFAULT_SIGNAL_RING_LEN.min(SIGNAL_TRACE_RING_CAP as u32);
-        for offset in 0..len {
-            let index = ((DEFAULT_SIGNAL_RING_NEXT + SIGNAL_TRACE_RING_CAP as u32 - 1 - offset)
-                % SIGNAL_TRACE_RING_CAP as u32) as usize;
-            let trace = DEFAULT_SIGNAL_RING[index];
-            if trace.vm_ptr == vm_ptr {
-                return (
-                    trace.sig,
-                    trace.sig_info_code,
-                    trace.pc,
-                    trace.ra,
-                    trace.sp,
-                    trace.gp,
-                    trace.tp,
-                    trace.s11,
-                    trace.fault_pc,
-                    trace.fault_addr,
-                );
-            }
-        }
-        (0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-    }
-}
-
-pub fn last_trampoline_hit() -> (i32, u64, u32) {
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn trampoline_trace_state() -> (i32, u64, u32) {
     unsafe {
         (
             LAST_TRAMPOLINE_HIT_TID,
@@ -307,7 +285,8 @@ pub fn last_trampoline_hit() -> (i32, u64, u32) {
     }
 }
 
-pub fn clear_debug_trace() {
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn reset_trace_state() {
     unsafe {
         LAST_SIGNAL_DELIVERY = SignalTrace {
             vm_ptr: 0,
@@ -332,7 +311,6 @@ pub fn clear_debug_trace() {
             s11: 0,
         };
         LAST_DEFAULT_SIGNAL = DefaultSignalTrace {
-            vm_ptr: 0,
             sig: 0,
             sig_info_code: 0,
             pc: 0,
@@ -357,7 +335,6 @@ pub fn clear_debug_trace() {
 
 fn record_default_signal(vm: &ThreadState, sig: usize) {
     let trace = DefaultSignalTrace {
-        vm_ptr: vm as *const ThreadState as u32,
         sig: sig as u32,
         sig_info_code: vm.sig_info_code,
         pc: vm.pc,
@@ -412,19 +389,19 @@ pub fn attach_process_signal_state(sig_slots_ptr: u32, process_pending_ptr: u32)
 }
 
 #[cfg(any(test, feature = "harness"))]
-pub(crate) fn snapshot_process_context_into(snapshot: &mut ProcessSignalSnapshot) {
+pub(crate) fn capture_process_signal_state_into(image: &mut ProcessSignalStateImage) {
     for (idx, slot) in sig_slots().iter().enumerate() {
-        snapshot.sig_slots[idx] = *slot as u32;
+        image.sig_slots[idx] = *slot as u32;
     }
-    snapshot.process_pending = *process_pending();
+    image.process_pending = *process_pending();
 }
 
 #[cfg(any(test, feature = "harness"))]
-pub(crate) fn restore_process_context(snapshot: &ProcessSignalSnapshot) {
+pub(crate) fn restore_process_signal_state_from(image: &ProcessSignalStateImage) {
     for (idx, slot) in sig_slots().iter_mut().enumerate() {
-        *slot = snapshot.sig_slots[idx] as *mut [SigAction; MAX_SIGNALS];
+        *slot = image.sig_slots[idx] as *mut [SigAction; MAX_SIGNALS];
     }
-    *process_pending() = snapshot.process_pending;
+    *process_pending() = image.process_pending;
 }
 
 #[inline(always)]

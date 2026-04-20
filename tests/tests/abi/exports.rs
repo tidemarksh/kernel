@@ -900,7 +900,7 @@ fn process_create_rebases_user_brk_after_hidden_process_state() {
         (hidden_end + tidemark_kernel::abi::PAGE_SIZE - 1) & !(tidemark_kernel::abi::PAGE_SIZE - 1);
     assert_eq!(tidemark_kernel::syscall::memory::current_brk(), public_brk);
     assert_eq!(
-        tidemark_kernel::syscall::memory::debug_brk_base(),
+        tidemark_kernel::harness::memory::debug_brk_base(),
         public_brk
     );
 }

@@ -55,10 +55,10 @@ struct ProcMapsEntry {
     label: ProcMapsLabel,
 }
 
-/// Internal snapshot of address space state used by process handoff support.
+/// Internal address-space image used by process handoff support.
 #[derive(Clone)]
 #[allow(dead_code)]
-pub(crate) struct AddressSpaceSnapshot {
+pub(crate) struct AddressSpaceStateImage {
     vmas: Vec<Vma>,
     brk_base: u64,
     brk_current: u64,
@@ -66,7 +66,7 @@ pub(crate) struct AddressSpaceSnapshot {
     has_prot_none: u32,
 }
 
-impl AddressSpaceSnapshot {
+impl AddressSpaceStateImage {
     #[allow(dead_code)]
     pub(crate) fn vmas(&self) -> &[Vma] {
         &self.vmas
@@ -83,8 +83,13 @@ impl AddressSpaceSnapshot {
         }
     }
 
+    #[cfg(any(test, feature = "harness"))]
     pub(crate) fn debug_vma_vec_meta(&self) -> (usize, usize, usize) {
-        (self.vmas.len(), self.vmas.capacity(), self.vmas.as_ptr() as usize)
+        (
+            self.vmas.len(),
+            self.vmas.capacity(),
+            self.vmas.as_ptr() as usize,
+        )
     }
 }
 
@@ -154,72 +159,74 @@ pub fn has_prot_none() -> bool {
 }
 
 #[allow(dead_code)]
-pub(crate) fn snapshot_process_context() -> AddressSpaceSnapshot {
-    let mut snapshot = AddressSpaceSnapshot::empty();
-    snapshot_process_context_into(&mut snapshot);
-    snapshot
-}
-
-#[allow(dead_code)]
-pub(crate) fn snapshot_process_context_into(snapshot: &mut AddressSpaceSnapshot) {
+pub(crate) fn capture_state_image_into(image: &mut AddressSpaceStateImage) {
     let s = ms();
-    validate_vma_vec_for_snapshot(&s.vmas);
-    let vmas = snapshot_process_context_clone_vmas(&s.vmas);
-    snapshot.vmas = vmas;
-    snapshot.brk_base = s.brk_base;
-    snapshot.brk_current = s.brk_current;
-    snapshot.mmap_next = s.mmap_next;
-    snapshot.has_prot_none = s.has_prot_none;
+    validate_vma_vec_for_image(&s.vmas);
+    let vmas = clone_vmas_for_state_image(&s.vmas);
+    image.vmas = vmas;
+    image.brk_base = s.brk_base;
+    image.brk_current = s.brk_current;
+    image.mmap_next = s.mmap_next;
+    image.has_prot_none = s.has_prot_none;
 }
 
 #[inline(never)]
-fn snapshot_process_context_clone_vmas(vmas: &Vec<Vma>) -> Vec<Vma> {
+fn clone_vmas_for_state_image(vmas: &Vec<Vma>) -> Vec<Vma> {
     vmas.clone()
 }
 
 #[allow(dead_code)]
-fn validate_vma_vec_for_snapshot(vmas: &Vec<Vma>) {
+fn validate_vma_vec_for_image(vmas: &Vec<Vma>) {
     let len = vmas.len();
     let cap = vmas.capacity();
     let ptr = vmas.as_ptr() as usize;
     let elem = core::mem::size_of::<Vma>();
     let mem_size = (core::arch::wasm32::memory_size(0) as usize).saturating_mul(65536);
     if len > cap {
-        panic!("snapshot_process_context: len {} > cap {}", len, cap);
+        panic!("address_space_state_image: len {} > cap {}", len, cap);
     }
     if cap == 0 {
         return;
     }
     if ptr == 0 {
-        panic!("snapshot_process_context: non-empty vma vec with null ptr len={} cap={}", len, cap);
+        panic!(
+            "address_space_state_image: non-empty vma vec with null ptr len={} cap={}",
+            len, cap
+        );
     }
-    let bytes = cap
-        .checked_mul(elem)
-        .unwrap_or_else(|| panic!("snapshot_process_context: cap overflow cap={} elem={}", cap, elem));
-    let end = ptr
-        .checked_add(bytes)
-        .unwrap_or_else(|| panic!("snapshot_process_context: ptr overflow ptr=0x{:x} bytes={}", ptr, bytes));
+    let bytes = cap.checked_mul(elem).unwrap_or_else(|| {
+        panic!(
+            "address_space_state_image: cap overflow cap={} elem={}",
+            cap, elem
+        )
+    });
+    let end = ptr.checked_add(bytes).unwrap_or_else(|| {
+        panic!(
+            "address_space_state_image: ptr overflow ptr=0x{:x} bytes={}",
+            ptr, bytes
+        )
+    });
     if end > mem_size {
         panic!(
-            "snapshot_process_context: vma vec out of linear memory ptr=0x{:x} len={} cap={} bytes={} mem_size=0x{:x}",
+            "address_space_state_image: vma vec out of linear memory ptr=0x{:x} len={} cap={} bytes={} mem_size=0x{:x}",
             ptr, len, cap, bytes, mem_size
         );
     }
 }
 
-fn validate_snapshot_for_restore(snapshot: &AddressSpaceSnapshot) {
-    validate_vma_vec_for_snapshot(&snapshot.vmas);
+fn validate_state_image_for_restore(image: &AddressSpaceStateImage) {
+    validate_vma_vec_for_image(&image.vmas);
 }
 
 #[allow(dead_code)]
-pub(crate) fn restore_process_context(snapshot: &AddressSpaceSnapshot) {
-    validate_snapshot_for_restore(snapshot);
+pub(crate) fn restore_state_from_image(image: &AddressSpaceStateImage) {
+    validate_state_image_for_restore(image);
     let s = ms();
-    s.vmas.clone_from(&snapshot.vmas);
-    s.brk_base = snapshot.brk_base;
-    s.brk_current = snapshot.brk_current;
-    s.mmap_next = snapshot.mmap_next;
-    s.has_prot_none = snapshot.has_prot_none;
+    s.vmas.clone_from(&image.vmas);
+    s.brk_base = image.brk_base;
+    s.brk_current = image.brk_current;
+    s.mmap_next = image.mmap_next;
+    s.has_prot_none = image.has_prot_none;
 }
 
 pub fn reset_for_execve_with_flush(base: u32, brk_start: u64, flush_shared: bool) {
@@ -448,37 +455,37 @@ pub fn rebase_brk_after_hidden_prefix(hidden_end: u64) {
 }
 
 #[cfg(any(test, feature = "harness"))]
-pub fn debug_brk_base() -> u64 {
+pub(crate) fn address_space_brk_base() -> u64 {
     ms().brk_base
 }
 
 #[cfg(any(test, feature = "harness"))]
-pub fn debug_mmap_next() -> u64 {
+pub(crate) fn address_space_mmap_next() -> u64 {
     ms().mmap_next
 }
 
 #[cfg(any(test, feature = "harness"))]
-pub fn debug_vma_len() -> u32 {
+pub(crate) fn address_space_vma_len() -> u32 {
     ms().vmas.len() as u32
 }
 
 #[cfg(any(test, feature = "harness"))]
-pub fn debug_vma_start(index: u32) -> u64 {
+pub(crate) fn address_space_vma_start(index: u32) -> u64 {
     ms().vmas.get(index as usize).map(|v| v.start).unwrap_or(0)
 }
 
 #[cfg(any(test, feature = "harness"))]
-pub fn debug_vma_end(index: u32) -> u64 {
+pub(crate) fn address_space_vma_end(index: u32) -> u64 {
     ms().vmas.get(index as usize).map(|v| v.end).unwrap_or(0)
 }
 
 #[cfg(any(test, feature = "harness"))]
-pub fn debug_vma_prot(index: u32) -> i32 {
+pub(crate) fn address_space_vma_prot(index: u32) -> i32 {
     ms().vmas.get(index as usize).map(|v| v.prot).unwrap_or(0)
 }
 
 #[cfg(any(test, feature = "harness"))]
-pub fn debug_vma_flags(index: u32) -> i32 {
+pub(crate) fn address_space_vma_flags(index: u32) -> i32 {
     ms().vmas.get(index as usize).map(|v| v.flags).unwrap_or(0)
 }
 
@@ -789,7 +796,8 @@ pub fn sys_mmap(
     let is_fixed_noreplace = (flags & MAP_FIXED_NOREPLACE) != 0;
     let is_fixed = (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) != 0;
     let is_anon = (flags & MAP_ANONYMOUS) != 0;
-    let is_prot_none_reservation = is_anon && prot as i32 == PROT_NONE && (flags & MAP_NORESERVE) != 0;
+    let is_prot_none_reservation =
+        is_anon && prot as i32 == PROT_NONE && (flags & MAP_NORESERVE) != 0;
 
     // Validate fd for file-backed mmap
     // https://man7.org/linux/man-pages/man2/mmap.2.html
