@@ -2,7 +2,7 @@ use tidemark_kernel::abi::*;
 use tidemark_kernel::fs::fd_table;
 use tidemark_kernel::harness::TestVm;
 use tidemark_kernel::syscall::socket;
-use tidemark_kernel::syscall::{epoll, fs, pipe};
+use tidemark_kernel::syscall::{epoll, fs, pipe, time};
 use tidemark_kernel::types::ProcessState;
 
 const EPOLL_CTL_ADD: u64 = 1;
@@ -472,6 +472,65 @@ fn epoll_pwait_reports_ready_eventfd() {
     assert_eq!(
         unsafe { tidemark_kernel::guest_mem::read_u64(t.base, out_addr + 8) },
         0x9876
+    );
+}
+
+#[test]
+fn epoll_pwait_reports_ready_timerfd() {
+    let mut t = TestVm::new();
+    let tfd = time::sys_timerfd_create(&mut t.vm, t.base, 1, O_NONBLOCK as u64);
+    assert!(tfd >= 3);
+
+    let spec_addr = t.scratch + 0x3400;
+    let event_addr = t.scratch + 0x3440;
+    let out_addr = t.scratch + 0x3460;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, spec_addr, 0);
+        tidemark_kernel::guest_mem::write_u64(t.base, spec_addr + 8, 0);
+        tidemark_kernel::guest_mem::write_u64(t.base, spec_addr + 16, 1);
+        tidemark_kernel::guest_mem::write_u64(t.base, spec_addr + 24, 0);
+        tidemark_kernel::guest_mem::write_u32(t.base, event_addr, EPOLLIN);
+        tidemark_kernel::guest_mem::write_u64(t.base, event_addr + 8, 0xfeed);
+    }
+    assert_eq!(
+        time::sys_timerfd_settime(&t.vm, t.base, tfd as u64, 0, spec_addr, 0),
+        0
+    );
+
+    let epfd = epoll::sys_epoll_create1(&mut t.vm, t.base, 0);
+    assert!(epfd >= 3);
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            tfd as u64,
+            event_addr,
+        ),
+        0
+    );
+    assert_eq!(
+        epoll::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 1, 0, 0),
+        0
+    );
+
+    time::advance_monotonic_duration(core::time::Duration::from_secs(1));
+    let timerfd_idx = fd_table::get_ofd(t.base, &t.vm, tfd as u64)
+        .expect("timerfd OFD should exist")
+        .ino;
+    assert!(time::timerfd_is_readable(timerfd_idx));
+    assert_eq!(
+        epoll::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 1, 0, 0),
+        1
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
+        EPOLLIN
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, out_addr + 8) },
+        0xfeed
     );
 }
 

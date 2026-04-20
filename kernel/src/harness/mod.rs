@@ -144,6 +144,8 @@ impl TestVm {
             let fs_ring_base =
                 crate::alloc::alloc_zeroed(crate::fs::ring_buffer::RING_BUFFER_SIZE as u32, 16);
             crate::guest_mem::write_u32(base, ps_addr + fs_ring_off, fs_ring_base);
+            let umask_off = core::mem::offset_of!(ProcessState, umask) as u64;
+            crate::guest_mem::write_u32(base, ps_addr + umask_off, 0o022);
 
             syscall::signal::init_for_process(42);
             syscall::resource::init_for_process(42);

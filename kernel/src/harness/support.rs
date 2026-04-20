@@ -27,8 +27,9 @@ pub struct SharedMappingOverlay {
 struct ExternalFutexWait {
     #[cfg_attr(not(any(test, feature = "harness")), allow(dead_code))]
     pid: i32,
-    addr: u32,
+    addrs: Vec<u32>,
     woken: bool,
+    woken_addr: u32,
 }
 
 #[cfg(any(test, feature = "harness"))]
@@ -139,6 +140,11 @@ pub fn clear_external_futex_waits() {
 
 #[cfg(any(test, feature = "harness"))]
 pub fn register_external_futex_wait(pid: i32, addr: u32) {
+    register_external_futex_waitv(pid, &[addr]);
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn register_external_futex_waitv(pid: i32, addrs: &[u32]) {
     if !HARNESS_RUNTIME_SUPPORT_ENABLED {
         return;
     }
@@ -149,14 +155,17 @@ pub fn register_external_futex_wait(pid: i32, addr: u32) {
         }
         if let Some(waits) = slot.as_mut() {
             if let Some(wait) = waits.iter_mut().find(|wait| wait.pid == pid) {
-                wait.addr = addr;
+                wait.addrs.clear();
+                wait.addrs.extend_from_slice(addrs);
                 wait.woken = false;
+                wait.woken_addr = 0;
                 return;
             }
             waits.push(ExternalFutexWait {
                 pid,
-                addr,
+                addrs: addrs.to_vec(),
                 woken: false,
+                woken_addr: 0,
             });
         }
     }
@@ -191,10 +200,11 @@ pub fn wake_external_futex_waits(addr: u32, max_wake: u32) -> u32 {
 
         let mut woken = 0;
         for wait in waits.iter_mut() {
-            if wait.addr != addr || wait.woken {
+            if wait.woken || !wait.addrs.contains(&addr) {
                 continue;
             }
             wait.woken = true;
+            wait.woken_addr = addr;
             woken += 1;
             if woken == max_wake {
                 break;
@@ -220,10 +230,14 @@ pub fn requeue_external_futex_waits(addr: u32, new_addr: u32, max_requeue: u32) 
 
         let mut requeued = 0;
         for wait in waits.iter_mut() {
-            if wait.addr != addr || wait.woken {
+            if wait.woken || !wait.addrs.contains(&addr) {
                 continue;
             }
-            wait.addr = new_addr;
+            for futex_addr in wait.addrs.iter_mut() {
+                if *futex_addr == addr {
+                    *futex_addr = new_addr;
+                }
+            }
             requeued += 1;
             if requeued == max_requeue {
                 break;
@@ -244,10 +258,9 @@ pub fn take_external_futex_wake(pid: i32, addr: u32) -> bool {
             return false;
         };
 
-        if let Some(idx) = waits
-            .iter()
-            .position(|wait| wait.pid == pid && wait.addr == addr && wait.woken)
-        {
+        if let Some(idx) = waits.iter().position(|wait| {
+            wait.pid == pid && wait.woken && wait.woken_addr == addr && wait.addrs.contains(&addr)
+        }) {
             waits.remove(idx);
             true
         } else {
@@ -273,20 +286,24 @@ pub fn has_external_futex_wait(pid: i32) -> bool {
 
 #[cfg(any(test, feature = "harness"))]
 pub fn take_external_futex_wake_for_pid(pid: i32) -> bool {
+    take_external_futex_wake_addr_for_pid(pid).is_some()
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn take_external_futex_wake_addr_for_pid(pid: i32) -> Option<u32> {
     if !HARNESS_RUNTIME_SUPPORT_ENABLED {
-        return false;
+        return None;
     }
     unsafe {
         let slot = &mut *core::ptr::addr_of_mut!(EXTERNAL_FUTEX_WAITS);
         let Some(waits) = slot.as_mut() else {
-            return false;
+            return None;
         };
 
         if let Some(idx) = waits.iter().position(|wait| wait.pid == pid && wait.woken) {
-            waits.remove(idx);
-            true
+            Some(waits.remove(idx).woken_addr)
         } else {
-            false
+            None
         }
     }
 }

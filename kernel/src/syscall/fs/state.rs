@@ -1,5 +1,7 @@
 use crate::types::{ProcessState, ThreadState};
 
+const DEFAULT_UMASK: u32 = 0o022;
+
 fn process_state(base: u32, vm: &ThreadState) -> Option<&'static mut ProcessState> {
     let ptr = (base as u64 + vm.process_ptr as u64) as *mut ProcessState;
     if ptr.is_null() {
@@ -26,4 +28,23 @@ pub(super) fn set_current_dir_ino(base: u32, vm: &ThreadState, ino: u32) {
     if let Some(ps) = process_state(base, vm) {
         ps.cwd_ino = ino;
     }
+}
+
+pub(super) fn current_umask(base: u32, vm: &ThreadState) -> u32 {
+    process_state(base, vm)
+        .map(|ps| ps.umask & 0o777)
+        .unwrap_or(DEFAULT_UMASK)
+}
+
+pub(super) fn apply_umask(base: u32, vm: &ThreadState, mode: u32) -> u32 {
+    mode & !current_umask(base, vm)
+}
+
+pub(crate) fn sys_umask(vm: &mut ThreadState, base: u32, mask: u64) -> i64 {
+    let Some(ps) = process_state(base, vm) else {
+        return crate::abi::ESRCH;
+    };
+    let previous = ps.umask & 0o777;
+    ps.umask = (mask as u32) & 0o777;
+    previous as i64
 }

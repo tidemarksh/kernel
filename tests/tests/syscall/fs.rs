@@ -49,6 +49,40 @@ fn fs_syscalls() {
 }
 
 #[test]
+fn umask_updates_process_mask_and_filters_create_modes() {
+    let mut t = TestVm::new();
+
+    t.vm.x[10] = 0o027;
+    t.vm.x[17] = SYS_UMASK;
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        STATUS_OK
+    );
+    assert_eq!(t.vm.x[10] as i64, 0o022);
+
+    let file_path = t.write_path(0x5000, b"/umask-file");
+    let fd = fs::sys_openat(
+        &mut t.vm,
+        t.base,
+        AT_FDCWD,
+        file_path,
+        (O_CREAT | O_RDONLY) as u64,
+        0o666,
+    );
+    assert!(fd >= 3);
+    let file_stat = memfs::stat(memfs::resolve_path(b"/umask-file")).unwrap();
+    assert_eq!(file_stat.mode & 0o777, 0o640);
+
+    let dir_path = t.write_path(0x5100, b"/umask-dir");
+    assert_eq!(
+        fs::sys_mkdirat(&mut t.vm, t.base, AT_FDCWD, dir_path, 0o777,),
+        0
+    );
+    let dir_stat = memfs::stat(memfs::resolve_path(b"/umask-dir")).unwrap();
+    assert_eq!(dir_stat.mode & 0o777, 0o750);
+}
+
+#[test]
 fn status_fs_round_trip_for_open_write_and_lseek() {
     let mut t = TestVm::new();
     let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
@@ -777,6 +811,61 @@ fn stdio_pty_slave_writev_reaches_master_output() {
     let n = tidemark_kernel::syscall::pty::master_read(pty_idx, &mut out);
     assert_eq!(n, 5);
     assert_eq!(&out[..5], b"pwd\r\n");
+}
+
+#[test]
+fn readv_reads_regular_file_into_multiple_iovecs() {
+    let mut t = TestVm::new();
+    let fd = t.sys_openat(b"/readv.txt", O_CREAT | O_RDWR);
+    assert!(fd >= 3);
+    assert_eq!(t.sys_write_data(fd, b"readv-data"), 10);
+    assert_eq!(t.sys_lseek(fd, 0, 0), 0);
+
+    let buf_a = t.scratch + 0x7300;
+    let buf_b = t.scratch + 0x7400;
+    let iov_addr = t.scratch + 0x7500;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, iov_addr, buf_a);
+        tidemark_kernel::guest_mem::write_u64(t.base, iov_addr + 8, 5);
+        tidemark_kernel::guest_mem::write_u64(t.base, iov_addr + 16, buf_b);
+        tidemark_kernel::guest_mem::write_u64(t.base, iov_addr + 24, 5);
+    }
+
+    let read = fs::sys_readv(&mut t.vm, t.base, fd as u64, iov_addr, 2);
+    assert_eq!(read, 10);
+    assert_eq!(t.guest_mem(buf_a, 5), b"readv".to_vec());
+    assert_eq!(t.guest_mem(buf_b, 5), b"-data".to_vec());
+}
+
+#[test]
+fn syscall_dispatch_routes_readv() {
+    let mut t = TestVm::new();
+    let fd = t.sys_openat(b"/dispatch-readv.txt", O_CREAT | O_RDWR);
+    assert!(fd >= 3);
+    assert_eq!(t.sys_write_data(fd, b"dispatch"), 8);
+    assert_eq!(t.sys_lseek(fd, 0, 0), 0);
+
+    let buf_a = t.scratch + 0x7600;
+    let buf_b = t.scratch + 0x7700;
+    let iov_addr = t.scratch + 0x7800;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, iov_addr, buf_a);
+        tidemark_kernel::guest_mem::write_u64(t.base, iov_addr + 8, 3);
+        tidemark_kernel::guest_mem::write_u64(t.base, iov_addr + 16, buf_b);
+        tidemark_kernel::guest_mem::write_u64(t.base, iov_addr + 24, 5);
+    }
+
+    t.vm.x[10] = fd as u64;
+    t.vm.x[11] = iov_addr;
+    t.vm.x[12] = 2;
+    t.vm.x[17] = SYS_READV;
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        STATUS_OK
+    );
+    assert_eq!(t.vm.x[10] as i64, 8);
+    assert_eq!(t.guest_mem(buf_a, 3), b"dis".to_vec());
+    assert_eq!(t.guest_mem(buf_b, 5), b"patch".to_vec());
 }
 
 #[test]

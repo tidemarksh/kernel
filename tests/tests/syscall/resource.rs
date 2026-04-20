@@ -119,6 +119,19 @@ fn prlimit64_updates_current_process_limits() {
 }
 
 #[test]
+fn syscall_dispatch_reports_enosys_for_prctl() {
+    let mut t = TestVm::new();
+    t.vm.x[10] = 0;
+    t.vm.x[11] = 0;
+    t.vm.x[12] = 0;
+    t.vm.x[13] = 0;
+    t.vm.x[14] = 0;
+    t.vm.x[17] = tidemark_kernel::abi::SYS_PRCTL;
+    assert_eq!(tidemark_kernel::syscall::dispatch(&mut t.vm, t.base), 0);
+    assert_eq!(t.vm.x[10] as i64, tidemark_kernel::abi::ENOSYS);
+}
+
+#[test]
 fn prlimit64_rejects_invalid_requests() {
     let t = TestVm::new();
     let limit_addr = t.scratch;

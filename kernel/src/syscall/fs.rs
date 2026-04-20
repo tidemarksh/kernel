@@ -79,6 +79,7 @@ pub use pending::{
     pending_request_path_len, pending_request_path_ptr, pending_request_secondary_absolute_path,
     pending_request_target_ino, process_pending_requests, resume_from_fs,
 };
+pub(crate) use state::sys_umask;
 use state::{current_dir_ino, set_current_dir_ino};
 
 // =========================================================================
@@ -209,6 +210,26 @@ pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) 
         return 8;
     }
 
+    if ofd.fd_type == FD_TYPE_TIMERFD {
+        let n = crate::syscall::time::timerfd_read(base, buf, count, ofd.ino);
+        if n == EAGAIN && ofd.status_flags & O_NONBLOCK == 0 {
+            fd_table::pin_blocked_fd(base, vm, fd);
+            vm.status = STATUS_PIPE_WAIT;
+            return 0;
+        }
+        return n;
+    }
+
+    if ofd.fd_type == FD_TYPE_SIGNALFD {
+        let n = crate::syscall::signal::signalfd_read(vm, base, buf, count, ofd.ino);
+        if n == EAGAIN && ofd.status_flags & O_NONBLOCK == 0 {
+            fd_table::pin_blocked_fd(base, vm, fd);
+            vm.status = STATUS_PIPE_WAIT;
+            return 0;
+        }
+        return n;
+    }
+
     if ofd.fd_type == FD_TYPE_SOCKET {
         let n = super::socket::socket_read(vm, base, fd, buf, count);
         if n == EAGAIN && ofd.status_flags & O_NONBLOCK == 0 {
@@ -221,6 +242,43 @@ pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) 
     }
 
     read_regular_file_to_guest(vm, base, fd, buf, count, None)
+}
+
+/// readv: scatter read into multiple guest buffers.
+pub fn sys_readv(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u64) -> i64 {
+    let mut total = 0i64;
+
+    for i in 0..iovcnt {
+        let iov_base = unsafe { guest_mem::read_u64(base, iov_addr + i * 16) };
+        let iov_len = unsafe { guest_mem::read_u64(base, iov_addr + i * 16 + 8) };
+        if iov_len == 0 {
+            continue;
+        }
+
+        let n = sys_read(vm, base, fd, iov_base, iov_len);
+        if vm.status == STATUS_PIPE_WAIT || vm.status == STATUS_SOCKET_RECV {
+            if total > 0 {
+                fd_table::clear_blocked_ofd_pin(vm);
+                vm.socket_timeout_ms = -1;
+                vm.status = STATUS_OK;
+                return total;
+            }
+            return 0;
+        }
+        if n < 0 {
+            return if total > 0 { total } else { n };
+        }
+        if n == 0 {
+            break;
+        }
+
+        total += n;
+        if (n as u64) < iov_len {
+            break;
+        }
+    }
+
+    total
 }
 
 /// pread64: read at specified offset without changing OFD offset.
@@ -694,6 +752,40 @@ pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64,
             buf,
             count,
             8,
+            ofd_id,
+            ofd.fd_type,
+            ofd.ino,
+            ofd.status_flags,
+            0,
+            0,
+            None,
+        );
+    }
+
+    if ofd.fd_type == FD_TYPE_TIMERFD {
+        return trace_write_attempt(
+            fd,
+            nr,
+            buf,
+            count,
+            EINVAL,
+            ofd_id,
+            ofd.fd_type,
+            ofd.ino,
+            ofd.status_flags,
+            0,
+            0,
+            None,
+        );
+    }
+
+    if ofd.fd_type == FD_TYPE_SIGNALFD {
+        return trace_write_attempt(
+            fd,
+            nr,
+            buf,
+            count,
+            EINVAL,
             ofd_id,
             ofd.fd_type,
             ofd.ino,

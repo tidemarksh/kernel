@@ -10,6 +10,7 @@ const FUTEX_WAITERS: u32 = 0x8000_0000;
 const FUTEX_OWNER_DIED: u32 = 0x4000_0000;
 const SIGFRAME_SIZE: u64 = 1136;
 const SIGFRAME_OFF_TRAMPOLINE: u64 = SIGFRAME_SIZE - 8;
+const FUTEX_WAITV_STRUCT_SIZE: u64 = 24;
 
 fn write_sigaction(base: u32, addr: u64, handler: u64, flags: u64, mask: u64) {
     unsafe {
@@ -30,6 +31,24 @@ fn install_current_thread_record(t: &mut TestVm) {
     }
 }
 
+fn write_futex_waitv(
+    base: u32,
+    addr: u64,
+    index: u64,
+    val: u64,
+    uaddr: u64,
+    flags: u32,
+    reserved: u32,
+) {
+    let entry = addr + index * FUTEX_WAITV_STRUCT_SIZE;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(base, entry, val);
+        tidemark_kernel::guest_mem::write_u64(base, entry + 8, uaddr);
+        tidemark_kernel::guest_mem::write_u32(base, entry + 16, flags);
+        tidemark_kernel::guest_mem::write_u32(base, entry + 20, reserved);
+    }
+}
+
 #[test]
 fn contract_exit_decrements_thread_count() {
     let mut t = TestVm::new();
@@ -43,6 +62,167 @@ fn contract_exit_decrements_thread_count() {
 
     let tc = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, ps_ptr + tc_off) };
     assert_eq!(tc, 1);
+}
+
+#[test]
+fn contract_get_robust_list_reports_current_registration() {
+    let mut t = TestVm::new();
+    let head = t.scratch + 0x200;
+    let head_ptr = t.scratch + 0x240;
+    let len_ptr = t.scratch + 0x248;
+
+    assert_eq!(thread_impl::sys_set_robust_list(&mut t.vm, head, 24), 0);
+    assert_eq!(
+        thread_impl::sys_get_robust_list(&t.vm, t.base, 0, head_ptr, len_ptr),
+        0
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, head_ptr) },
+        head
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, len_ptr) },
+        24
+    );
+}
+
+#[test]
+fn contract_get_robust_list_reports_esrch_for_missing_tid() {
+    let t = TestVm::new();
+    assert_eq!(
+        thread_impl::sys_get_robust_list(&t.vm, t.base, 99, t.scratch, t.scratch + 8),
+        ESRCH
+    );
+}
+
+#[test]
+fn contract_get_robust_list_reports_eperm_for_other_live_thread() {
+    let t = TestVm::new();
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, 0x1000, 0, 0);
+
+    assert_eq!(
+        thread_impl::sys_get_robust_list(&t.vm, t.base, 2, t.scratch, t.scratch + 8),
+        EPERM
+    );
+}
+
+#[test]
+fn contract_get_robust_list_reports_efault_for_invalid_output_ptrs() {
+    let t = TestVm::new();
+    assert_eq!(
+        thread_impl::sys_get_robust_list(&t.vm, t.base, 0, 0, t.scratch),
+        EFAULT
+    );
+    assert_eq!(
+        thread_impl::sys_get_robust_list(&t.vm, t.base, 0, t.scratch, 0),
+        EFAULT
+    );
+}
+
+#[test]
+fn contract_futex_waitv_wake_returns_matching_index() {
+    let mut t = TestVm::new();
+    install_current_thread_record(&mut t);
+    let waitv_addr = t.scratch + 0x300;
+    let futex0 = t.scratch + 0x380;
+    let futex1 = t.scratch + 0x384;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, futex0, 7);
+        tidemark_kernel::guest_mem::write_u32(t.base, futex1, 11);
+    }
+    write_futex_waitv(t.base, waitv_addr, 0, 7, futex0, FUTEX_32, 0);
+    write_futex_waitv(t.base, waitv_addr, 1, 11, futex1, FUTEX_32, 0);
+
+    let ret = thread_impl::sys_futex_waitv(&mut t.vm, t.base, waitv_addr, 2, 0, 0, 1);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_FUTEX_WAIT);
+
+    let wake = thread_impl::sys_futex(&mut t.vm, t.base, futex1, FUTEX_WAKE as u64, 1, 0, 0, 0);
+    assert_eq!(wake, 1);
+    thread_impl::resume_futex_wait(&mut t.vm, t.base);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.x[10], 1);
+}
+
+#[test]
+fn contract_futex_waitv_returns_eagain_on_any_initial_mismatch() {
+    let mut t = TestVm::new();
+    let waitv_addr = t.scratch + 0x400;
+    let futex0 = t.scratch + 0x480;
+    let futex1 = t.scratch + 0x484;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, futex0, 7);
+        tidemark_kernel::guest_mem::write_u32(t.base, futex1, 12);
+    }
+    write_futex_waitv(t.base, waitv_addr, 0, 7, futex0, FUTEX_32, 0);
+    write_futex_waitv(t.base, waitv_addr, 1, 11, futex1, FUTEX_32, 0);
+
+    assert_eq!(
+        thread_impl::sys_futex_waitv(&mut t.vm, t.base, waitv_addr, 2, 0, 0, 1),
+        EAGAIN
+    );
+}
+
+#[test]
+fn contract_futex_waitv_rejects_invalid_shape() {
+    let mut t = TestVm::new();
+    let waitv_addr = t.scratch + 0x500;
+    let futex0 = t.scratch + 0x580;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, futex0, 7);
+    }
+    write_futex_waitv(t.base, waitv_addr, 0, 7, futex0, FUTEX_32, 1);
+    assert_eq!(
+        thread_impl::sys_futex_waitv(&mut t.vm, t.base, waitv_addr, 1, 0, 0, 1),
+        EINVAL
+    );
+
+    write_futex_waitv(t.base, waitv_addr, 0, 7, futex0, 0, 0);
+    assert_eq!(
+        thread_impl::sys_futex_waitv(&mut t.vm, t.base, waitv_addr, 1, 0, 0, 1),
+        EINVAL
+    );
+
+    write_futex_waitv(t.base, waitv_addr, 0, 7, futex0, FUTEX_32, 0);
+    assert_eq!(
+        thread_impl::sys_futex_waitv(&mut t.vm, t.base, waitv_addr, 0, 0, 0, 1),
+        EINVAL
+    );
+    assert_eq!(
+        thread_impl::sys_futex_waitv(&mut t.vm, t.base, waitv_addr, 1, 1, 0, 1),
+        EINVAL
+    );
+}
+
+#[test]
+fn contract_futex_waitv_dispatch_blocks_and_timeout_result_is_preserved() {
+    let mut t = TestVm::new();
+    install_current_thread_record(&mut t);
+    let waitv_addr = t.scratch + 0x600;
+    let futex0 = t.scratch + 0x680;
+    let timeout = t.scratch + 0x700;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, futex0, 7);
+        tidemark_kernel::guest_mem::write_u64(t.base, timeout, 1);
+        tidemark_kernel::guest_mem::write_u64(t.base, timeout + 8, 0);
+    }
+    write_futex_waitv(t.base, waitv_addr, 0, 7, futex0, FUTEX_32, 0);
+
+    t.vm.x[10] = waitv_addr;
+    t.vm.x[11] = 1;
+    t.vm.x[12] = 0;
+    t.vm.x[13] = timeout;
+    t.vm.x[14] = 1;
+    t.vm.x[17] = SYS_FUTEX_WAITV;
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        STATUS_FUTEX_WAIT
+    );
+
+    thread_impl::resume_futex_wait_result(&mut t.vm, t.base, ETIMEDOUT);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.x[10] as i64, ETIMEDOUT);
 }
 
 #[test]

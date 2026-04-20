@@ -2565,11 +2565,12 @@ fn service_ready_deferred_clone_threads(
                 {
                     tidemark_kernel::syscall::thread::resume_futex_wait(child_vm, base);
                     true
-                } else if child_vm.futex_wait_addr != 0
-                    && unsafe { guest_mem::read_u32(base, child_vm.futex_wait_addr) }
-                        != child_vm.futex_wait_expected
+                } else if let Some(result) =
+                    tidemark_kernel::syscall::thread::futex_wait_mismatch_result(child_vm, base)
                 {
-                    tidemark_kernel::syscall::thread::resume_futex_wait(child_vm, base);
+                    tidemark_kernel::syscall::thread::resume_futex_wait_result(
+                        child_vm, base, result,
+                    );
                     true
                 } else {
                     false
@@ -2956,6 +2957,8 @@ pub(crate) fn prepare_elf_vm(elf_bytes: &[u8], use_cache: bool) -> Result<Prepar
             16,
         );
         tidemark_kernel::guest_mem::write_u32(base, ps_addr + fs_ring_off, fs_ring_base);
+        let umask_off = core::mem::offset_of!(ProcessState, umask) as u64;
+        tidemark_kernel::guest_mem::write_u32(base, ps_addr + umask_off, 0o022);
         tidemark_kernel::syscall::signal::init_for_process(INITIAL_PID);
 
         tidemark_kernel::fs::fd_table::init_stdio(base, &mut vm);
@@ -3208,12 +3211,19 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
                     {
                         tidemark_kernel::syscall::thread::resume_futex_wait(&mut saved.vm, base);
                     } else if is_process_leader
-                        && (tidemark_kernel::harness::support::take_external_futex_wake(
-                            saved.pid, futex_addr,
-                        )
-                            || tidemark_kernel::harness::support::take_external_futex_wake_for_pid(
+                        && if let Some(woken_addr) =
+                            tidemark_kernel::harness::support::take_external_futex_wake_addr_for_pid(
                                 saved.pid,
-                            ))
+                            )
+                        {
+                            tidemark_kernel::syscall::thread::mark_futex_wait_wake(
+                                &saved.vm as *const ThreadState as u32,
+                                woken_addr,
+                            );
+                            true
+                        } else {
+                            false
+                        }
                     {
                         tidemark_kernel::syscall::thread::resume_futex_wait(&mut saved.vm, base);
                     } else if count_deferred_clone_threads_for_process(
@@ -3236,13 +3246,15 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
                                 &mut saved.vm,
                                 base,
                             );
-                        } else if saved.vm.futex_wait_addr != 0
-                            && unsafe { guest_mem::read_u32(base, saved.vm.futex_wait_addr) }
-                                != saved.vm.futex_wait_expected
+                        } else if let Some(result) =
+                            tidemark_kernel::syscall::thread::futex_wait_mismatch_result(
+                                &saved.vm, base,
+                            )
                         {
-                            tidemark_kernel::syscall::thread::resume_futex_wait(
+                            tidemark_kernel::syscall::thread::resume_futex_wait_result(
                                 &mut saved.vm,
                                 base,
+                                result,
                             );
                         } else {
                             refresh_proc_pid_stat(&saved.vm, base, b'S')?;
@@ -3253,8 +3265,14 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
                         }
                     } else {
                         if !tidemark_kernel::harness::support::has_external_futex_wait(saved.pid) {
-                            tidemark_kernel::harness::support::register_external_futex_wait(
-                                saved.pid, futex_addr,
+                            let mut targets = [0u32; FUTEX_WAITV_MAX];
+                            let count = tidemark_kernel::syscall::thread::futex_wait_targets(
+                                &saved.vm,
+                                &mut targets,
+                            );
+                            tidemark_kernel::harness::support::register_external_futex_waitv(
+                                saved.pid,
+                                &targets[..count],
                             );
                         }
                         refresh_proc_pid_stat(&saved.vm, base, b'S')?;
@@ -3329,9 +3347,14 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
                     if saved.vm.status == STATUS_FUTEX_WAIT
                         && !tidemark_kernel::harness::support::has_external_futex_wait(saved.pid)
                     {
-                        tidemark_kernel::harness::support::register_external_futex_wait(
+                        let mut targets = [0u32; FUTEX_WAITV_MAX];
+                        let count = tidemark_kernel::syscall::thread::futex_wait_targets(
+                            &saved.vm,
+                            &mut targets,
+                        );
+                        tidemark_kernel::harness::support::register_external_futex_waitv(
                             saved.pid,
-                            saved.vm.x[10] as u32,
+                            &targets[..count],
                         );
                     }
                     refresh_proc_pid_stat(&saved.vm, base, b'S')?;

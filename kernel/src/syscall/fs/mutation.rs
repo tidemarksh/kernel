@@ -3,6 +3,7 @@ use super::path::{
     dirfd_base_ino, resolve_parent_and_name, split_parent_name, split_relative_parent_name,
     trim_trailing_slashes,
 };
+use super::state::apply_umask;
 use crate::abi::*;
 use crate::fs::memfs;
 use crate::guest_mem;
@@ -22,7 +23,8 @@ pub fn sys_mkdirat(vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, 
         if parent_ino == 0 || name.is_empty() {
             return ENOENT;
         }
-        let ino = memfs::create_dir(parent_ino, name, mode as u32 & 0o7777);
+        let create_mode = apply_umask(base, vm, mode as u32 & 0o7777);
+        let ino = memfs::create_dir(parent_ino, name, create_mode);
         if ino == 0 {
             return EEXIST;
         }
@@ -46,7 +48,8 @@ pub fn sys_mkdirat(vm: &mut ThreadState, base: u32, dirfd: u64, path_addr: u64, 
         if parent_ino == 0 {
             return ENOENT;
         }
-        let ino = memfs::create_dir(parent_ino, name, mode as u32 & 0o7777);
+        let create_mode = apply_umask(base, vm, mode as u32 & 0o7777);
+        let ino = memfs::create_dir(parent_ino, name, create_mode);
         if ino == 0 {
             return EEXIST;
         }

@@ -3,7 +3,7 @@ testcases/kernel/syscalls/abort/abort01.c not yet enabled in current syscall-con
 testcases/kernel/syscalls/accept/accept01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/accept/accept02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/accept/accept03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/accept4/accept4_01.c accept4 currently returns ENOSYS
+testcases/kernel/syscalls/accept4/accept4_01.c accept4 is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
 testcases/kernel/syscalls/access/access01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/access/access02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/access/access03.c not yet enabled in current syscall-conformance profile
@@ -93,10 +93,10 @@ testcases/kernel/syscalls/clone/clone07.c clone currently supports only the CLON
 testcases/kernel/syscalls/clone/clone09.c clone currently supports only the CLONE_VM | CLONE_THREAD thread-worker subset; the broader LTP clone matrix is not yet audited
 testcases/kernel/syscalls/clone/clone10.c clone currently supports only the CLONE_VM | CLONE_THREAD thread-worker subset; the broader LTP clone matrix is not yet audited
 testcases/kernel/syscalls/clone/clone11.c clone currently supports only the CLONE_VM | CLONE_THREAD thread-worker subset; the broader LTP clone matrix is not yet audited
-testcases/kernel/syscalls/clone3/clone301.c clone3 is not yet implemented in syscall dispatch
-testcases/kernel/syscalls/clone3/clone302.c clone3 is not yet implemented in syscall dispatch
-testcases/kernel/syscalls/clone3/clone303.c clone3 is not yet implemented in syscall dispatch
-testcases/kernel/syscalls/clone3/clone304.c clone3 is not yet implemented in syscall dispatch
+testcases/kernel/syscalls/clone3/clone301.c clone3 thread-subset handoff is implemented, but the broader clone3 LTP matrix is not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/clone3/clone302.c clone3 thread-subset handoff is implemented, but the broader clone3 LTP matrix is not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/clone3/clone303.c clone3 thread-subset handoff is implemented, but the broader clone3 LTP matrix is not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/clone3/clone304.c clone3 thread-subset handoff is implemented, but the broader clone3 LTP matrix is not yet enabled in the current syscall-conformance profile
 testcases/kernel/syscalls/close_range/close_range01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/close_range/close_range02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/cma/process_vm01.c not yet enabled in current syscall-conformance profile
@@ -342,14 +342,14 @@ testcases/kernel/syscalls/fsync/fsync03.c not yet enabled in current syscall-con
 testcases/kernel/syscalls/fsync/fsync04.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/ftruncate/ftruncate03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/ftruncate/ftruncate04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/futex/futex_waitv01.c futex_waitv syscall dispatch is not yet implemented
-testcases/kernel/syscalls/futex/futex_waitv02.c futex_waitv syscall dispatch is not yet implemented
-testcases/kernel/syscalls/futex/futex_waitv03.c futex_waitv syscall dispatch is not yet implemented
+testcases/kernel/syscalls/futex/futex_waitv01.c futex_waitv dispatch, validation, timeout, and wake-index subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/futex/futex_waitv02.c futex_waitv dispatch, validation, timeout, and wake-index subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/futex/futex_waitv03.c futex_waitv dispatch, validation, timeout, and wake-index subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
 testcases/kernel/syscalls/futex/futex_wake04.c hugepage-backed futex key separation is not yet modeled in the current focused suite
 testcases/kernel/syscalls/futimesat/futimesat01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/get_mempolicy/get_mempolicy01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/get_mempolicy/get_mempolicy02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/get_robust_list/get_robust_list01.c get_robust_list is not yet implemented in syscall dispatch
+testcases/kernel/syscalls/get_robust_list/get_robust_list01.c get_robust_list is implemented for self lookup and basic errno cases, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
 testcases/kernel/syscalls/getcontext/getcontext01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getcpu/getcpu01.c getcpu01 depends on sched_setaffinity(2) and /sys NUMA/cpu topology enumeration; keep it unsupported until that affinity/topology surface is promoted
 testcases/kernel/syscalls/getcwd/getcwd01.c not yet enabled in current syscall-conformance profile
@@ -441,44 +441,44 @@ testcases/kernel/syscalls/io_submit/io_submit02.c not yet enabled in current sys
 testcases/kernel/syscalls/io_submit/io_submit03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/io_uring/io_uring01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/io_uring/io_uring02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/ioctl/ioctl01.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl02.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl03.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl04.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl05.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl06.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl07.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl08.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl09.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl10.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_ficlone01.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_ficlone02.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_ficlone03.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_ficlone04.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_ficlonerange01.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_ficlonerange02.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_fiemap01.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_loop01.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_loop02.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_loop03.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_loop04.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_loop05.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_loop06.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_loop07.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_ns01.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_ns02.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_ns03.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_ns04.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_ns05.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_ns06.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_ns07.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_pidfd01.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_pidfd02.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_pidfd03.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_pidfd04.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_pidfd05.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_pidfd06.c ioctl currently returns stub success
-testcases/kernel/syscalls/ioctl/ioctl_sg01.c ioctl currently returns stub success
+testcases/kernel/syscalls/ioctl/ioctl01.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl02.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl03.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl04.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl05.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl06.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl07.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl08.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl09.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl10.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_ficlone01.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_ficlone02.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_ficlone03.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_ficlone04.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_ficlonerange01.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_ficlonerange02.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_fiemap01.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_loop01.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_loop02.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_loop03.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_loop04.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_loop05.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_loop06.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_loop07.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_ns01.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_ns02.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_ns03.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_ns04.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_ns05.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_ns06.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_ns07.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_pidfd01.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_pidfd02.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_pidfd03.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_pidfd04.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_pidfd05.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_pidfd06.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
+testcases/kernel/syscalls/ioctl/ioctl_sg01.c ioctl currently implements only the PTY/FIONREAD subset; generic requests used by this LTP return ENOTTY
 testcases/kernel/syscalls/ioperm/ioperm01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/ioperm/ioperm02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/iopl/iopl01.c not yet enabled in current syscall-conformance profile
@@ -617,17 +617,17 @@ testcases/kernel/syscalls/lsm/lsm_set_self_attr01.c not yet enabled in current s
 testcases/kernel/syscalls/lstat/lstat01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/lstat/lstat02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/lstat/lstat03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/madvise/madvise01.c madvise currently returns advisory no-op success without Linux hint effects
-testcases/kernel/syscalls/madvise/madvise02.c madvise currently returns advisory no-op success without Linux hint effects
-testcases/kernel/syscalls/madvise/madvise03.c madvise currently returns advisory no-op success without Linux hint effects
-testcases/kernel/syscalls/madvise/madvise05.c madvise currently returns advisory no-op success without Linux hint effects
-testcases/kernel/syscalls/madvise/madvise06.c madvise currently returns advisory no-op success without Linux hint effects
-testcases/kernel/syscalls/madvise/madvise07.c madvise currently returns advisory no-op success without Linux hint effects
-testcases/kernel/syscalls/madvise/madvise08.c madvise currently returns advisory no-op success without Linux hint effects
-testcases/kernel/syscalls/madvise/madvise09.c madvise currently returns advisory no-op success without Linux hint effects
-testcases/kernel/syscalls/madvise/madvise10.c madvise currently returns advisory no-op success without Linux hint effects
-testcases/kernel/syscalls/madvise/madvise11.c madvise currently returns advisory no-op success without Linux hint effects
-testcases/kernel/syscalls/madvise/madvise12.c madvise currently returns advisory no-op success without Linux hint effects
+testcases/kernel/syscalls/madvise/madvise01.c madvise currently returns ENOSYS
+testcases/kernel/syscalls/madvise/madvise02.c madvise currently returns ENOSYS
+testcases/kernel/syscalls/madvise/madvise03.c madvise currently returns ENOSYS
+testcases/kernel/syscalls/madvise/madvise05.c madvise currently returns ENOSYS
+testcases/kernel/syscalls/madvise/madvise06.c madvise currently returns ENOSYS
+testcases/kernel/syscalls/madvise/madvise07.c madvise currently returns ENOSYS
+testcases/kernel/syscalls/madvise/madvise08.c madvise currently returns ENOSYS
+testcases/kernel/syscalls/madvise/madvise09.c madvise currently returns ENOSYS
+testcases/kernel/syscalls/madvise/madvise10.c madvise currently returns ENOSYS
+testcases/kernel/syscalls/madvise/madvise11.c madvise currently returns ENOSYS
+testcases/kernel/syscalls/madvise/madvise12.c madvise currently returns ENOSYS
 testcases/kernel/syscalls/mallinfo/mallinfo01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/mallinfo/mallinfo02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/mallinfo2/mallinfo2_01.c not yet enabled in current syscall-conformance profile
@@ -852,16 +852,16 @@ testcases/kernel/syscalls/poll/poll02.c not yet enabled in current syscall-confo
 testcases/kernel/syscalls/poll/poll03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/poll/poll04.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/ppoll/ppoll01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/prctl/prctl01.c prctl currently returns stub success
-testcases/kernel/syscalls/prctl/prctl02.c prctl currently returns stub success
-testcases/kernel/syscalls/prctl/prctl03.c prctl currently returns stub success
-testcases/kernel/syscalls/prctl/prctl05.c prctl currently returns stub success
-testcases/kernel/syscalls/prctl/prctl06.c prctl currently returns stub success
-testcases/kernel/syscalls/prctl/prctl06_execve.c prctl currently returns stub success
-testcases/kernel/syscalls/prctl/prctl07.c prctl currently returns stub success
-testcases/kernel/syscalls/prctl/prctl08.c prctl currently returns stub success
-testcases/kernel/syscalls/prctl/prctl09.c prctl currently returns stub success
-testcases/kernel/syscalls/prctl/prctl10.c prctl currently returns stub success
+testcases/kernel/syscalls/prctl/prctl01.c prctl currently returns ENOSYS
+testcases/kernel/syscalls/prctl/prctl02.c prctl currently returns ENOSYS
+testcases/kernel/syscalls/prctl/prctl03.c prctl currently returns ENOSYS
+testcases/kernel/syscalls/prctl/prctl05.c prctl currently returns ENOSYS
+testcases/kernel/syscalls/prctl/prctl06.c prctl currently returns ENOSYS
+testcases/kernel/syscalls/prctl/prctl06_execve.c prctl currently returns ENOSYS
+testcases/kernel/syscalls/prctl/prctl07.c prctl currently returns ENOSYS
+testcases/kernel/syscalls/prctl/prctl08.c prctl currently returns ENOSYS
+testcases/kernel/syscalls/prctl/prctl09.c prctl currently returns ENOSYS
+testcases/kernel/syscalls/prctl/prctl10.c prctl currently returns ENOSYS
 testcases/kernel/syscalls/pread/pread02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/preadv/preadv01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/preadv/preadv02.c not yet enabled in current syscall-conformance profile
@@ -912,8 +912,8 @@ testcases/kernel/syscalls/readlink/readlink01.c not yet enabled in current sysca
 testcases/kernel/syscalls/readlink/readlink03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/readlinkat/readlinkat01.c readlinkat LTP setup depends on symlink(2), which is outside the current Phase4 syscall surface
 testcases/kernel/syscalls/readlinkat/readlinkat02.c readlinkat LTP setup depends on symlink(2), which is outside the current Phase4 syscall surface
-testcases/kernel/syscalls/readv/readv01.c readv currently returns 0 stub
-testcases/kernel/syscalls/readv/readv02.c readv currently returns 0 stub
+testcases/kernel/syscalls/readv/readv01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/readv/readv02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/realpath/realpath01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/reboot/reboot01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/reboot/reboot02.c not yet enabled in current syscall-conformance profile
@@ -1104,10 +1104,10 @@ testcases/kernel/syscalls/signal/signal03.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/signal/signal04.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/signal/signal05.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/signal/signal06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/signalfd/signalfd01.c signalfd/signalfd4 are not yet implemented in syscall dispatch
-testcases/kernel/syscalls/signalfd/signalfd02.c signalfd/signalfd4 are not yet implemented in syscall dispatch
-testcases/kernel/syscalls/signalfd4/signalfd4_01.c signalfd/signalfd4 are not yet implemented in syscall dispatch
-testcases/kernel/syscalls/signalfd4/signalfd4_02.c signalfd/signalfd4 are not yet implemented in syscall dispatch
+testcases/kernel/syscalls/signalfd/signalfd01.c signalfd4 create/update/read and epoll-readiness subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/signalfd/signalfd02.c signalfd4 create/update/read and epoll-readiness subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/signalfd4/signalfd4_01.c signalfd4 create/update/read and epoll-readiness subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/signalfd4/signalfd4_02.c signalfd4 create/update/read and epoll-readiness subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
 testcases/kernel/syscalls/sigpending/sigpending02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/sigprocmask/sigprocmask01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/sigrelse/sigrelse01.c not yet enabled in current syscall-conformance profile
@@ -1208,20 +1208,20 @@ testcases/kernel/syscalls/timer_gettime/timer_gettime01.c not yet enabled in cur
 testcases/kernel/syscalls/timer_settime/timer_settime01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/timer_settime/timer_settime02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/timer_settime/timer_settime03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/timerfd/timerfd01.c timerfd syscalls have ABI constants but are not yet implemented in syscall dispatch
-testcases/kernel/syscalls/timerfd/timerfd02.c timerfd syscalls have ABI constants but are not yet implemented in syscall dispatch
-testcases/kernel/syscalls/timerfd/timerfd04.c timerfd syscalls have ABI constants but are not yet implemented in syscall dispatch
-testcases/kernel/syscalls/timerfd/timerfd_create01.c timerfd syscalls have ABI constants but are not yet implemented in syscall dispatch
-testcases/kernel/syscalls/timerfd/timerfd_gettime01.c timerfd syscalls have ABI constants but are not yet implemented in syscall dispatch
-testcases/kernel/syscalls/timerfd/timerfd_settime01.c timerfd syscalls have ABI constants but are not yet implemented in syscall dispatch
-testcases/kernel/syscalls/timerfd/timerfd_settime02.c timerfd syscalls have ABI constants but are not yet implemented in syscall dispatch
-testcases/kernel/syscalls/times/times01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/times/times03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/timerfd/timerfd01.c timerfd create/settime/gettime/read subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/timerfd/timerfd02.c timerfd create/settime/gettime/read subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/timerfd/timerfd04.c timerfd create/settime/gettime/read subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/timerfd/timerfd_create01.c timerfd create/settime/gettime/read subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/timerfd/timerfd_gettime01.c timerfd create/settime/gettime/read subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/timerfd/timerfd_settime01.c timerfd create/settime/gettime/read subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/timerfd/timerfd_settime02.c timerfd create/settime/gettime/read subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/times/times01.c times currently returns ENOSYS
+testcases/kernel/syscalls/times/times03.c times currently returns ENOSYS
 testcases/kernel/syscalls/tkill/tkill01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/tkill/tkill02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/truncate/truncate03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/ulimit/ulimit01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/umask/umask01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/umask/umask01.c umask is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
 testcases/kernel/syscalls/umount/umount01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/umount/umount02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/umount/umount03.c not yet enabled in current syscall-conformance profile

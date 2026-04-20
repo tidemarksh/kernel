@@ -3,6 +3,7 @@ use super::path::{
     dirfd_base_ino, path_has_trailing_slash, resolve_path_with_symlink_policy, split_parent_name,
     split_relative_parent_name, trim_trailing_slashes,
 };
+use super::state::apply_umask;
 use crate::abi::*;
 use crate::fs::{fd_table, memfs};
 use crate::guest_mem;
@@ -185,7 +186,8 @@ fn openat_with_parent(
 
     if ino == 0 {
         if oflags & O_CREAT != 0 {
-            ino = memfs::create_file(parent_ino, name, mode as u32 & 0o7777);
+            let create_mode = apply_umask(base, vm, mode as u32 & 0o7777);
+            ino = memfs::create_file(parent_ino, name, create_mode);
             if ino == 0 {
                 return ENOSPC;
             }

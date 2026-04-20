@@ -619,6 +619,12 @@ fn complete_execve_in_place_inner(
             ps_addr + core::mem::offset_of!(ProcessState, fs_ring_base) as u64,
         )
     };
+    let old_umask = unsafe {
+        guest_mem::read_u32(
+            base,
+            ps_addr + core::mem::offset_of!(ProcessState, umask) as u64,
+        )
+    };
     let mut old_fd_table = [FdEntry {
         ofd_id: 0,
         fd_flags: 0,
@@ -811,6 +817,7 @@ fn complete_execve_in_place_inner(
     let stderr_pipe_off = core::mem::offset_of!(ProcessState, stderr_pipe_slot) as u64;
     let tty_pty_off = core::mem::offset_of!(ProcessState, tty_pty_slot) as u64;
     let fs_ring_off = core::mem::offset_of!(ProcessState, fs_ring_base) as u64;
+    let umask_off = core::mem::offset_of!(ProcessState, umask) as u64;
     unsafe {
         guest_mem::write_u32(base, ps_addr + pid_off, target_pid as u32);
         guest_mem::write_u32(base, ps_addr + ppid_off, target_ppid as u32);
@@ -820,6 +827,7 @@ fn complete_execve_in_place_inner(
         guest_mem::write_u32(base, ps_addr + stderr_pipe_off, old_stderr_pipe_slot);
         guest_mem::write_u32(base, ps_addr + tty_pty_off, old_tty_pty_slot);
         guest_mem::write_u32(base, ps_addr + fs_ring_off, old_fs_ring_base);
+        guest_mem::write_u32(base, ps_addr + umask_off, old_umask);
     }
     crate::tracepoints::record_execve_dispatch(vm_ptr, 133);
     crate::tracepoints::record_execve_stage(64, ps_addr + pid_off, ps_addr + fs_ring_off);

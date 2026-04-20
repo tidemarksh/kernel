@@ -154,6 +154,20 @@ fn map_fixed_noreplace_maps_exact_addr_without_clobbering_existing_vma() {
 }
 
 #[test]
+fn syscall_dispatch_reports_enosys_for_madvise() {
+    let mut t = TestVm::new();
+    t.vm.x[10] = 0;
+    t.vm.x[11] = PAGE_SIZE;
+    t.vm.x[12] = 0;
+    t.vm.x[17] = SYS_MADVISE;
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        STATUS_OK
+    );
+    assert_eq!(t.vm.x[10] as i64, ENOSYS);
+}
+
+#[test]
 fn fixed_high_commit_within_sparse_prot_none_reservation_can_skip_linear_materialization() {
     let mut t = TestVm::new();
     let fake_base = 0x23e0_0000u32;

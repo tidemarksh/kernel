@@ -1,10 +1,27 @@
 use tidemark_kernel::abi;
 use tidemark_kernel::harness::TestVm;
+use tidemark_kernel::syscall::time;
 
 const CLOCK_REALTIME: u64 = 0;
 const CLOCK_MONOTONIC: u64 = 1;
 const ITIMER_REAL: u64 = 0;
 const TIMER_ABSTIME: u64 = 1;
+
+fn write_itimerspec(
+    base: u32,
+    addr: u64,
+    interval_sec: u64,
+    interval_nsec: u64,
+    value_sec: u64,
+    value_nsec: u64,
+) {
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(base, addr, interval_sec);
+        tidemark_kernel::guest_mem::write_u64(base, addr + 8, interval_nsec);
+        tidemark_kernel::guest_mem::write_u64(base, addr + 16, value_sec);
+        tidemark_kernel::guest_mem::write_u64(base, addr + 24, value_nsec);
+    }
+}
 
 #[test]
 fn clock_gettime_realtime_uses_base_plus_monotonic() {
@@ -127,6 +144,18 @@ fn clock_getres_validates_clk_id() {
 }
 
 #[test]
+fn syscall_dispatch_reports_enosys_for_times() {
+    let mut t = TestVm::new();
+    t.vm.x[10] = t.scratch;
+    t.vm.x[17] = abi::SYS_TIMES;
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        abi::STATUS_OK
+    );
+    assert_eq!(t.vm.x[10] as i64, abi::ENOSYS);
+}
+
+#[test]
 fn setitimer_and_getitimer_round_trip() {
     let t = TestVm::new();
     let new_value = t.scratch + 0x100;
@@ -245,6 +274,110 @@ fn getcpu_accepts_null_output_pointers_and_faults_bad_addresses() {
         tidemark_kernel::syscall::time::sys_getcpu(&t.vm, t.base, 0, u64::MAX, 0),
         abi::EFAULT
     );
+}
+
+#[test]
+fn timerfd_create_settime_gettime_and_read_expiration() {
+    let mut t = TestVm::new();
+    let fd = time::sys_timerfd_create(&mut t.vm, t.base, CLOCK_MONOTONIC, abi::O_NONBLOCK as u64);
+    assert!(fd >= 3);
+
+    let new_value = t.scratch + 0x600;
+    let curr_value = t.scratch + 0x640;
+    write_itimerspec(t.base, new_value, 0, 0, 1, 0);
+
+    assert_eq!(
+        time::sys_timerfd_settime(&t.vm, t.base, fd as u64, 0, new_value, 0),
+        0
+    );
+    assert_eq!(
+        time::sys_timerfd_gettime(&t.vm, t.base, fd as u64, curr_value),
+        0
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, curr_value) },
+        0
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, curr_value + 16) },
+        1
+    );
+
+    time::advance_monotonic_duration(core::time::Duration::from_secs(1));
+    let mut buf = [0u8; 8];
+    assert_eq!(t.sys_read(fd, &mut buf), 8);
+    assert_eq!(u64::from_le_bytes(buf), 1);
+}
+
+#[test]
+fn timerfd_periodic_timer_coalesces_expirations() {
+    let mut t = TestVm::new();
+    let fd = time::sys_timerfd_create(&mut t.vm, t.base, CLOCK_MONOTONIC, abi::O_NONBLOCK as u64);
+    assert!(fd >= 3);
+
+    let new_value = t.scratch + 0x700;
+    write_itimerspec(t.base, new_value, 1, 0, 1, 0);
+    assert_eq!(
+        time::sys_timerfd_settime(&t.vm, t.base, fd as u64, 0, new_value, 0),
+        0
+    );
+
+    time::advance_monotonic_duration(core::time::Duration::from_secs(3));
+    let mut buf = [0u8; 8];
+    assert_eq!(t.sys_read(fd, &mut buf), 8);
+    assert_eq!(u64::from_le_bytes(buf), 3);
+}
+
+#[test]
+fn timerfd_settime_supports_absolute_deadlines() {
+    let mut t = TestVm::new();
+    let fd = time::sys_timerfd_create(&mut t.vm, t.base, CLOCK_MONOTONIC, abi::O_NONBLOCK as u64);
+    assert!(fd >= 3);
+
+    let now = time::current_timespec(CLOCK_MONOTONIC).unwrap();
+    let new_value = t.scratch + 0x780;
+    write_itimerspec(t.base, new_value, 0, 0, now.0 + 2, now.1);
+    assert_eq!(
+        time::sys_timerfd_settime(
+            &t.vm,
+            t.base,
+            fd as u64,
+            abi::TFD_TIMER_ABSTIME,
+            new_value,
+            0,
+        ),
+        0
+    );
+
+    let mut buf = [0u8; 8];
+    assert_eq!(t.sys_read(fd, &mut buf), abi::EAGAIN);
+    time::advance_monotonic_duration(core::time::Duration::from_secs(2));
+    assert_eq!(t.sys_read(fd, &mut buf), 8);
+    assert_eq!(u64::from_le_bytes(buf), 1);
+}
+
+#[test]
+fn timerfd_dispatch_routes_create_and_gettime() {
+    let mut t = TestVm::new();
+    t.vm.x[10] = CLOCK_MONOTONIC;
+    t.vm.x[11] = abi::O_NONBLOCK as u64;
+    t.vm.x[17] = abi::SYS_TIMERFD_CREATE;
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        abi::STATUS_OK
+    );
+    let fd = t.vm.x[10] as i64;
+    assert!(fd >= 3);
+
+    let curr_value = t.scratch + 0x7c0;
+    t.vm.x[10] = fd as u64;
+    t.vm.x[11] = curr_value;
+    t.vm.x[17] = abi::SYS_TIMERFD_GETTIME;
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        abi::STATUS_OK
+    );
+    assert_eq!(t.vm.x[10], 0);
 }
 
 #[test]

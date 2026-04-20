@@ -112,6 +112,9 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_GETCPU => time::sys_getcpu(vm, base, a0, a1, a2),
         SYS_GETITIMER => time::sys_getitimer(vm, base, a0, a1),
         SYS_SETITIMER => time::sys_setitimer(vm, base, a0, a1, a2),
+        SYS_TIMERFD_CREATE => time::sys_timerfd_create(vm, base, a0, a1),
+        SYS_TIMERFD_SETTIME => time::sys_timerfd_settime(vm, base, a0, a1, a2, a3),
+        SYS_TIMERFD_GETTIME => time::sys_timerfd_gettime(vm, base, a0, a1),
         114 => time::sys_clock_getres(vm, base, a0, a1), // clock_getres
         SYS_CLOCK_NANOSLEEP => {
             let status = time::sys_clock_nanosleep(vm, base, a0, a1, a2, a3);
@@ -140,7 +143,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             }
             ret as i64
         }
-        SYS_TIMES => 0, // stub: return 0 clock ticks
+        SYS_TIMES => ENOSYS,
 
         // memory
         SYS_BRK => memory::sys_brk(vm, base, a0),
@@ -149,7 +152,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_MSYNC => memory::sys_msync(vm, base, a0, a1, a2),
         SYS_MREMAP => memory::sys_mremap(vm, base, a0, a1, a2, a3, a4),
         SYS_MPROTECT => memory::sys_mprotect(vm, base, a0, a1, a2),
-        SYS_MADVISE => 0, // no-op, return success
+        SYS_MADVISE => ENOSYS,
 
         // signal
         SYS_RT_SIGACTION => signal::sys_rt_sigaction(vm, base, a0, a1, a2, a3),
@@ -200,7 +203,16 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             }
             r
         }
-        SYS_READV => 0, // TODO
+        SYS_READV => {
+            let r = fs::sys_readv(vm, base, a0, a1, a2);
+            if vm.status == abi::STATUS_PIPE_WAIT {
+                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_PIPE_WAIT);
+            }
+            if vm.status == abi::STATUS_SOCKET_RECV {
+                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_SOCKET_RECV);
+            }
+            r
+        }
         SYS_NEWFSTATAT => fs::sys_newfstatat(vm, base, a0, a1, a2, a3),
         SYS_FSTAT => {
             let r = fs::dispatch_fstat(vm, base, a0, a1);
@@ -265,6 +277,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             r
         }
         SYS_IOCTL => pty::sys_ioctl(vm, base, a0, a1, a2),
+        SYS_SIGNALFD4 => signal::sys_signalfd4(vm, base, a0 as i64, a1, a2, a3),
         SYS_GETCWD => fs::sys_getcwd(vm, base, a0, a1),
 
         // fd table
@@ -370,6 +383,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
 
         // thread lifecycle
         SYS_SET_TID_ADDRESS => thread::sys_set_tid_address(vm, a0),
+        SYS_GET_ROBUST_LIST => thread::sys_get_robust_list(vm, base, a0 as i64, a1, a2),
         SYS_SET_ROBUST_LIST => thread::sys_set_robust_list(vm, a0, a1),
         SYS_SETPGID => process::sys_setpgid(vm, base, a0 as i64, a1 as i64),
         SYS_GETPGID => process::sys_getpgid(vm, base, a0 as i64),
@@ -465,6 +479,13 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             }
             ret
         }
+        SYS_FUTEX_WAITV => {
+            let ret = thread::sys_futex_waitv(vm, base, a0, a1, a2, a3, a4 as i32);
+            if vm.status == abi::STATUS_FUTEX_WAIT {
+                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, ret, abi::STATUS_FUTEX_WAIT);
+            }
+            ret
+        }
         SYS_EXIT => {
             let status = thread::sys_exit(vm, base, a0);
             return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, vm.exit_code as i64, status);
@@ -475,8 +496,8 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         }
         SYS_GETRLIMIT => resource::sys_getrlimit(vm, base, a0, a1),
         SYS_SETRLIMIT => resource::sys_setrlimit(vm, base, a0, a1),
-        SYS_PRCTL => 0,
-        SYS_UMASK => 0o022, // return previous umask
+        SYS_PRCTL => ENOSYS,
+        SYS_UMASK => fs::sys_umask(vm, base, a0),
         SYS_RISCV_HWPROBE => identity::sys_riscv_hwprobe(vm, base, a0, a1, a2, a3, a4),
         SYS_RISCV_FLUSH_ICACHE => identity::sys_riscv_flush_icache(vm, base, a0, a1, a2),
         SYS_RSEQ => ENOSYS,

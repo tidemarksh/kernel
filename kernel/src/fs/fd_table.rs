@@ -68,6 +68,12 @@ pub enum BackendCleanup {
     Socket {
         socket_idx: u32,
     },
+    Timerfd {
+        timerfd_idx: u32,
+    },
+    Signalfd {
+        signalfd_idx: u32,
+    },
     Pty {
         pty_idx: u32,
         is_master: bool,
@@ -238,6 +244,14 @@ fn backend_cleanup_for_ofd(ofd_id: u32, ofd: &OpenFileDesc) -> Option<BackendCle
         Some(BackendCleanup::Socket {
             socket_idx: ofd.ino,
         })
+    } else if ofd.fd_type == FD_TYPE_TIMERFD {
+        Some(BackendCleanup::Timerfd {
+            timerfd_idx: ofd.ino,
+        })
+    } else if ofd.fd_type == FD_TYPE_SIGNALFD {
+        Some(BackendCleanup::Signalfd {
+            signalfd_idx: ofd.ino,
+        })
     } else if ofd.fd_type == FD_TYPE_PTY_MASTER {
         Some(BackendCleanup::Pty {
             pty_idx: ofd.ino,
@@ -284,6 +298,12 @@ pub fn run_backend_cleanup(cleanup: BackendCleanup) {
         }
         BackendCleanup::Socket { socket_idx } => {
             crate::syscall::socket::socket_close(socket_idx);
+        }
+        BackendCleanup::Timerfd { timerfd_idx } => {
+            crate::syscall::time::close_timerfd(timerfd_idx);
+        }
+        BackendCleanup::Signalfd { signalfd_idx } => {
+            crate::syscall::signal::close_signalfd(signalfd_idx);
         }
         BackendCleanup::Pty { pty_idx, is_master } => {
             crate::syscall::pty::pty_close(pty_idx, is_master);
@@ -563,6 +583,66 @@ pub fn open_eventfd(vm: &mut ThreadState, base: u32, initval: u64, flags: i32) -
         }
         ofd_table()[ofd_id as usize].host_fd = if flags & EFD_SEMAPHORE != 0 { 1 } else { 0 };
         ofd_table()[ofd_id as usize].offset = initval as i64;
+
+        let cloexec = if flags & O_CLOEXEC != 0 {
+            FD_CLOEXEC
+        } else {
+            0
+        };
+        let newfd = match find_free_fd(base, vm, 0) {
+            Some(fd) => fd,
+            None => return EMFILE,
+        };
+        let ps = get_process_state(base, vm);
+        store_fd_entry_ptr(
+            core::ptr::addr_of_mut!((*ps).fd_table[newfd]),
+            FdEntry {
+                ofd_id,
+                fd_flags: cloexec,
+            },
+        );
+        newfd as i64
+    }
+}
+
+/// Open a timerfd FD backed by the shared timerfd table.
+pub fn open_timerfd(vm: &mut ThreadState, base: u32, timerfd_idx: u32, flags: i32) -> i64 {
+    unsafe {
+        let ofd_id = alloc_ofd(FD_TYPE_TIMERFD, O_RDONLY | (flags & O_NONBLOCK));
+        if ofd_id == 0 {
+            return EMFILE;
+        }
+        ofd_table()[ofd_id as usize].ino = timerfd_idx;
+
+        let cloexec = if flags & O_CLOEXEC != 0 {
+            FD_CLOEXEC
+        } else {
+            0
+        };
+        let newfd = match find_free_fd(base, vm, 0) {
+            Some(fd) => fd,
+            None => return EMFILE,
+        };
+        let ps = get_process_state(base, vm);
+        store_fd_entry_ptr(
+            core::ptr::addr_of_mut!((*ps).fd_table[newfd]),
+            FdEntry {
+                ofd_id,
+                fd_flags: cloexec,
+            },
+        );
+        newfd as i64
+    }
+}
+
+/// Open a signalfd FD backed by the shared signalfd table.
+pub fn open_signalfd(vm: &mut ThreadState, base: u32, signalfd_idx: u32, flags: i32) -> i64 {
+    unsafe {
+        let ofd_id = alloc_ofd(FD_TYPE_SIGNALFD, O_RDONLY | (flags & O_NONBLOCK));
+        if ofd_id == 0 {
+            return EMFILE;
+        }
+        ofd_table()[ofd_id as usize].ino = signalfd_idx;
 
         let cloexec = if flags & O_CLOEXEC != 0 {
             FD_CLOEXEC

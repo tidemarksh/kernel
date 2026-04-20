@@ -44,6 +44,25 @@ struct ItimerState {
     value_usec: u64,
 }
 
+#[derive(Clone, Copy)]
+struct TimerFdState {
+    used: u32,
+    _pad: u32,
+    clock_id: u64,
+    next_expiration_ticks: u64,
+    interval_ticks: u64,
+    expirations: u64,
+}
+
+const EMPTY_TIMERFD_STATE: TimerFdState = TimerFdState {
+    used: 0,
+    _pad: 0,
+    clock_id: 0,
+    next_expiration_ticks: 0,
+    interval_ticks: 0,
+    expirations: 0,
+};
+
 #[repr(C)]
 struct TimeState {
     base_time_sec: u64,
@@ -52,6 +71,7 @@ struct TimeState {
     _pad: u32,
     monotonic_ticks: u64,
     itimers: [[ItimerState; 3]; abi::MAX_PROCESSES],
+    timerfds: [TimerFdState; abi::MAX_TIMERFDS + 1],
 }
 
 static mut TIME_STATE: *mut TimeState = core::ptr::null_mut();
@@ -88,6 +108,7 @@ pub fn init() {
                     value_sec: 0,
                     value_usec: 0,
                 }; 3]; abi::MAX_PROCESSES],
+                timerfds: [EMPTY_TIMERFD_STATE; abi::MAX_TIMERFDS + 1],
             },
         );
         core::ptr::write(core::ptr::addr_of_mut!(TIME_STATE), ptr as *mut TimeState);
@@ -141,6 +162,22 @@ fn monotonic_ticks() -> u64 {
     ts().monotonic_ticks
 }
 
+fn timespec_to_ticks_floor(sec: u64, nsec: u64) -> u64 {
+    sec.saturating_mul(TICKS_PER_SEC)
+        .saturating_add(nsec.saturating_mul(TICKS_PER_SEC) / 1_000_000_000)
+}
+
+fn timespec_to_ticks_ceil(sec: u64, nsec: u64) -> u64 {
+    let base = sec.saturating_mul(TICKS_PER_SEC);
+    let sub = nsec.saturating_mul(TICKS_PER_SEC);
+    let rounded = if sub == 0 {
+        0
+    } else {
+        sub.div_ceil(1_000_000_000)
+    };
+    base.saturating_add(rounded)
+}
+
 fn base_time() -> (u64, u64) {
     let state = ts();
     if state.base_time_set != 0 {
@@ -148,6 +185,132 @@ fn base_time() -> (u64, u64) {
     } else {
         (1700000000, 0) // fallback: ~2023-11-14 if runtime didn't set base time
     }
+}
+
+fn timerfd_clock_supported(clock_id: u64) -> bool {
+    matches!(clock_id, CLOCK_REALTIME | CLOCK_MONOTONIC | CLOCK_BOOTTIME)
+}
+
+fn current_ticks_for_clock(clock_id: u64) -> Option<u64> {
+    match clock_id {
+        CLOCK_MONOTONIC | CLOCK_BOOTTIME => Some(monotonic_ticks()),
+        CLOCK_REALTIME => {
+            let (sec, nsec) = current_timespec(CLOCK_REALTIME)?;
+            Some(timespec_to_ticks_floor(sec, nsec))
+        }
+        _ => None,
+    }
+}
+
+fn timerfd_slot(idx: u32) -> Option<&'static mut TimerFdState> {
+    if idx == 0 || idx as usize > abi::MAX_TIMERFDS {
+        return None;
+    }
+    Some(&mut ts().timerfds[idx as usize])
+}
+
+fn update_timerfd(slot: &mut TimerFdState) {
+    if slot.used == 0 || slot.next_expiration_ticks == 0 {
+        return;
+    }
+    let Some(now) = current_ticks_for_clock(slot.clock_id) else {
+        return;
+    };
+    if now < slot.next_expiration_ticks {
+        return;
+    }
+
+    if slot.interval_ticks == 0 {
+        slot.expirations = slot.expirations.saturating_add(1);
+        slot.next_expiration_ticks = 0;
+        return;
+    }
+
+    let elapsed = now.saturating_sub(slot.next_expiration_ticks);
+    let fired = elapsed / slot.interval_ticks + 1;
+    slot.expirations = slot.expirations.saturating_add(fired);
+    slot.next_expiration_ticks = slot
+        .next_expiration_ticks
+        .saturating_add(slot.interval_ticks.saturating_mul(fired));
+}
+
+fn timerfd_remaining_ticks(slot: &TimerFdState) -> u64 {
+    if slot.used == 0 || slot.next_expiration_ticks == 0 {
+        return 0;
+    }
+    let Some(now) = current_ticks_for_clock(slot.clock_id) else {
+        return 0;
+    };
+    slot.next_expiration_ticks.saturating_sub(now)
+}
+
+fn write_timespec(base: u32, addr: u64, sec: u64, nsec: u64) {
+    unsafe {
+        guest_mem::write_u64(base, addr, sec);
+        guest_mem::write_u64(base, addr + 8, nsec);
+    }
+}
+
+fn read_kernel_timespec(base: u32, addr: u64) -> Result<(u64, u64), i64> {
+    let sec = unsafe { guest_mem::read_i64(base, addr) };
+    let nsec = unsafe { guest_mem::read_i64(base, addr + 8) };
+    if sec < 0 || !(0..1_000_000_000).contains(&nsec) {
+        return Err(abi::EINVAL);
+    }
+    Ok((sec as u64, nsec as u64))
+}
+
+fn write_timerfd_spec(base: u32, addr: u64, interval_ticks: u64, value_ticks: u64) {
+    let (interval_sec, interval_nsec) = ticks_to_timespec(interval_ticks);
+    let (value_sec, value_nsec) = ticks_to_timespec(value_ticks);
+    write_timespec(base, addr, interval_sec, interval_nsec);
+    write_timespec(base, addr + 16, value_sec, value_nsec);
+}
+
+fn alloc_timerfd_slot(clock_id: u64) -> Option<u32> {
+    if !timerfd_clock_supported(clock_id) {
+        return None;
+    }
+    let state = ts();
+    for idx in 1..=abi::MAX_TIMERFDS {
+        let slot = &mut state.timerfds[idx];
+        if slot.used == 0 {
+            *slot = TimerFdState {
+                used: 1,
+                _pad: 0,
+                clock_id,
+                next_expiration_ticks: 0,
+                interval_ticks: 0,
+                expirations: 0,
+            };
+            return Some(idx as u32);
+        }
+    }
+    None
+}
+
+pub fn close_timerfd(timerfd_idx: u32) {
+    if let Some(slot) = timerfd_slot(timerfd_idx) {
+        *slot = EMPTY_TIMERFD_STATE;
+    }
+}
+
+pub fn timerfd_is_readable(timerfd_idx: u32) -> bool {
+    let Some(slot) = timerfd_slot(timerfd_idx) else {
+        return false;
+    };
+    update_timerfd(slot);
+    slot.expirations != 0
+}
+
+fn timerfd_take_expirations(timerfd_idx: u32) -> u64 {
+    let Some(slot) = timerfd_slot(timerfd_idx) else {
+        return 0;
+    };
+    update_timerfd(slot);
+    let expirations = slot.expirations;
+    slot.expirations = 0;
+    expirations
 }
 
 pub fn current_timespec(clk_id: u64) -> Option<(u64, u64)> {
@@ -316,6 +479,145 @@ pub fn sys_setitimer(
     };
     *timer = next;
     0
+}
+
+/// timerfd_create: create a timerfd backed by the shared timerfd table.
+pub fn sys_timerfd_create(vm: &mut ThreadState, base: u32, clock_id: u64, flags: u64) -> i64 {
+    let allowed_flags = (abi::O_CLOEXEC | abi::O_NONBLOCK) as u64;
+    if flags & !allowed_flags != 0 {
+        return abi::EINVAL;
+    }
+    let Some(timerfd_idx) = alloc_timerfd_slot(clock_id) else {
+        return if timerfd_clock_supported(clock_id) {
+            abi::EMFILE
+        } else {
+            abi::EINVAL
+        };
+    };
+
+    let fd = crate::fs::fd_table::open_timerfd(vm, base, timerfd_idx, flags as i32);
+    if fd < 0 {
+        close_timerfd(timerfd_idx);
+    }
+    fd
+}
+
+/// timerfd_settime: arm/disarm a timerfd and optionally report the previous spec.
+pub fn sys_timerfd_settime(
+    vm: &ThreadState,
+    base: u32,
+    fd: u64,
+    flags: u64,
+    new_value: u64,
+    old_value: u64,
+) -> i64 {
+    let allowed_flags = abi::TFD_TIMER_ABSTIME | abi::TFD_TIMER_CANCEL_ON_SET;
+    if flags & !allowed_flags != 0 {
+        return abi::EINVAL;
+    }
+    if (flags & abi::TFD_TIMER_CANCEL_ON_SET) != 0 {
+        return abi::EINVAL;
+    }
+    if new_value == 0 {
+        return abi::EFAULT;
+    }
+    if !crate::syscall::memory::guest_range_accessible(base, new_value, 32) {
+        return abi::EFAULT;
+    }
+    if old_value != 0 && !crate::syscall::memory::guest_range_accessible(base, old_value, 32) {
+        return abi::EFAULT;
+    }
+
+    let Some(ofd) = crate::fs::fd_table::get_ofd(base, vm, fd) else {
+        return abi::EBADF;
+    };
+    if ofd.fd_type != abi::FD_TYPE_TIMERFD {
+        return abi::EINVAL;
+    }
+    let Some(slot) = timerfd_slot(ofd.ino) else {
+        return abi::EINVAL;
+    };
+
+    update_timerfd(slot);
+    if old_value != 0 {
+        write_timerfd_spec(
+            base,
+            old_value,
+            slot.interval_ticks,
+            timerfd_remaining_ticks(slot),
+        );
+    }
+
+    let (interval_sec, interval_nsec) = match read_kernel_timespec(base, new_value) {
+        Ok(spec) => spec,
+        Err(errno) => return errno,
+    };
+    let (value_sec, value_nsec) = match read_kernel_timespec(base, new_value + 16) {
+        Ok(spec) => spec,
+        Err(errno) => return errno,
+    };
+
+    let interval_ticks = timespec_to_ticks_ceil(interval_sec, interval_nsec);
+    let value_ticks = timespec_to_ticks_ceil(value_sec, value_nsec);
+    slot.expirations = 0;
+    slot.interval_ticks = interval_ticks;
+    if value_ticks == 0 {
+        slot.next_expiration_ticks = 0;
+        return 0;
+    }
+
+    let Some(now) = current_ticks_for_clock(slot.clock_id) else {
+        return abi::EINVAL;
+    };
+    slot.next_expiration_ticks = if (flags & abi::TFD_TIMER_ABSTIME) != 0 {
+        timespec_to_ticks_floor(value_sec, value_nsec)
+    } else {
+        now.saturating_add(value_ticks)
+    };
+    0
+}
+
+/// timerfd_gettime: report the current timer spec.
+pub fn sys_timerfd_gettime(vm: &ThreadState, base: u32, fd: u64, curr_value: u64) -> i64 {
+    if curr_value == 0 || !crate::syscall::memory::guest_range_accessible(base, curr_value, 32) {
+        return abi::EFAULT;
+    }
+
+    let Some(ofd) = crate::fs::fd_table::get_ofd(base, vm, fd) else {
+        return abi::EBADF;
+    };
+    if ofd.fd_type != abi::FD_TYPE_TIMERFD {
+        return abi::EINVAL;
+    }
+    let Some(slot) = timerfd_slot(ofd.ino) else {
+        return abi::EINVAL;
+    };
+
+    update_timerfd(slot);
+    write_timerfd_spec(
+        base,
+        curr_value,
+        slot.interval_ticks,
+        timerfd_remaining_ticks(slot),
+    );
+    0
+}
+
+pub fn timerfd_read(base: u32, buf: u64, count: u64, timerfd_idx: u32) -> i64 {
+    if count < 8 {
+        return abi::EINVAL;
+    }
+    let expirations = timerfd_take_expirations(timerfd_idx);
+    if expirations == 0 {
+        return abi::EAGAIN;
+    }
+    if !crate::syscall::memory::guest_range_accessible(base, buf, 8) {
+        return abi::EFAULT;
+    }
+    unsafe {
+        guest_mem::write_u64(base, buf, expirations);
+    }
+    8
 }
 
 /// nanosleep: return STATUS_SLEEP so JS can setTimeout.

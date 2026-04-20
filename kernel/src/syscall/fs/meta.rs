@@ -82,7 +82,7 @@ pub fn sys_fstat(vm: &mut ThreadState, base: u32, fd: u64, stat_buf: u64) -> i64
             );
             return 0;
         }
-        FD_TYPE_EVENTFD | FD_TYPE_EPOLL => {
+        FD_TYPE_EVENTFD | FD_TYPE_EPOLL | FD_TYPE_TIMERFD | FD_TYPE_SIGNALFD => {
             write_synthetic_stat(base, stat_buf, fd, S_IFIFO | 0o600, vm.uid, vm.gid, 0);
             return 0;
         }

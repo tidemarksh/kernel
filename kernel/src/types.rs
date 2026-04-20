@@ -194,6 +194,8 @@ pub struct ProcessState {
     pub tty_pty_slot: u32,
     /// Per-process FS request/completion ring in shared WebAssembly.Memory.
     pub fs_ring_base: u32,
+    /// File mode creation mask.
+    pub umask: u32,
     /// Thread registry
     pub threads: [ThreadRecord; MAX_THREADS],
 }

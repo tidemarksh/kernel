@@ -140,7 +140,10 @@ fn remove_entry(inst: &mut EpollInstance, idx: usize) {
 }
 
 fn epoll_supports_fd_type(fd_type: i32) -> bool {
-    matches!(fd_type, FD_TYPE_PIPE | FD_TYPE_SOCKET | FD_TYPE_EVENTFD)
+    matches!(
+        fd_type,
+        FD_TYPE_PIPE | FD_TYPE_SOCKET | FD_TYPE_EVENTFD | FD_TYPE_TIMERFD | FD_TYPE_SIGNALFD
+    )
 }
 
 pub fn release_interest_for_ofd(ofd_id: u32) {
@@ -373,7 +376,7 @@ pub fn sys_epoll_pwait(
         let Some(ofd) = fd_table::get_ofd_by_id(entry.ofd_id) else {
             continue;
         };
-        let polled_revents = poll_ofd(&ofd, entry.events);
+        let polled_revents = poll_ofd(vm, base, &ofd, entry.events);
         let revents = if entry.events & EPOLLET != 0 {
             polled_revents & !entry.last_revents
         } else {
@@ -459,7 +462,7 @@ pub fn resume_wait(vm: &mut ThreadState, base: u32) -> i64 {
 }
 
 /// Poll a single watched object for readiness using its OFD snapshot.
-fn poll_ofd(ofd: &OpenFileDesc, interest: u32) -> u32 {
+fn poll_ofd(vm: &ThreadState, base: u32, ofd: &OpenFileDesc, interest: u32) -> u32 {
     let mut revents = 0u32;
 
     if ofd.fd_type == FD_TYPE_PIPE {
@@ -499,6 +502,14 @@ fn poll_ofd(ofd: &OpenFileDesc, interest: u32) -> u32 {
         }
         if counter < u64::MAX - 1 && interest & EPOLLOUT != 0 {
             revents |= EPOLLOUT;
+        }
+    } else if ofd.fd_type == FD_TYPE_TIMERFD {
+        if super::time::timerfd_is_readable(ofd.ino) && interest & EPOLLIN != 0 {
+            revents |= EPOLLIN;
+        }
+    } else if ofd.fd_type == FD_TYPE_SIGNALFD {
+        if super::signal::signalfd_is_readable(vm, base, ofd.ino) && interest & EPOLLIN != 0 {
+            revents |= EPOLLIN;
         }
     } else if ofd.fd_type == FD_TYPE_SOCKET {
         revents |= super::socket::poll_revents_ofd(ofd, interest);

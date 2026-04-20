@@ -46,6 +46,7 @@ pub const FD_TYPE_TIMERFD: i32 = 10;
 pub const FD_TYPE_PTY_MASTER: i32 = 11;
 pub const FD_TYPE_PTY_SLAVE: i32 = 12;
 pub const FD_TYPE_INOTIFY: i32 = 13;
+pub const FD_TYPE_SIGNALFD: i32 = 14;
 
 // =============================================================================
 // Syscall numbers (asm-generic, used by RISC-V)
@@ -96,9 +97,11 @@ pub const SYS_EXIT: u64 = 93;
 pub const SYS_EXIT_GROUP: u64 = 94;
 pub const SYS_WAITID: u64 = 95;
 pub const SYS_SET_TID_ADDRESS: u64 = 96;
+pub const SYS_GET_ROBUST_LIST: u64 = 100;
 pub const SYS_SET_ROBUST_LIST: u64 = 99;
 pub const SYS_FUTEX: u64 = 98;
 pub const SYS_FUTEX_TIME64: u64 = 422;
+pub const SYS_FUTEX_WAITV: u64 = 449;
 pub const SYS_NANOSLEEP: u64 = 101;
 pub const SYS_CLOCK_NANOSLEEP: u64 = 115;
 pub const SYS_GETITIMER: u64 = 102;
@@ -166,8 +169,10 @@ pub const SYS_SHUTDOWN: u64 = 210;
 pub const SYS_GETSOCKNAME: u64 = 204;
 pub const SYS_GETPEERNAME: u64 = 205;
 pub const SYS_PPOLL: u64 = 73;
+pub const SYS_SIGNALFD4: u64 = 74;
 pub const SYS_TIMERFD_CREATE: u64 = 85;
 pub const SYS_TIMERFD_SETTIME: u64 = 86;
+pub const SYS_TIMERFD_GETTIME: u64 = 87;
 pub const SYS_UNAME: u64 = 160;
 pub const SYS_MADVISE: u64 = 233;
 pub const SYS_FLOCK: u64 = 32;
@@ -219,6 +224,8 @@ pub const O_TRUNC: i32 = 0x200;
 pub const O_APPEND: i32 = 0x400;
 pub const O_NONBLOCK: i32 = 0x800;
 pub const O_CLOEXEC: i32 = 0x80000;
+pub const TFD_TIMER_ABSTIME: u64 = 0x1;
+pub const TFD_TIMER_CANCEL_ON_SET: u64 = 0x2;
 pub const O_DIRECTORY: i32 = 0x10000;
 pub const O_NOFOLLOW: i32 = 0x20000;
 pub const SHUT_RD: i32 = 0;
@@ -258,6 +265,7 @@ pub const MAX_SOCKETS: usize = 32;
 pub const MAX_EPOLL_ENTRIES: usize = 64;
 pub const MAX_EVENTFDS: usize = 16;
 pub const MAX_TIMERFDS: usize = 8;
+pub const MAX_SIGNALFDS: usize = 8;
 pub const MAX_PIPES: usize = 64;
 pub const MAX_PROCESSES: usize = 2048;
 
@@ -270,6 +278,9 @@ pub const FUTEX_WAKE_BITSET: u32 = 10;
 pub const FUTEX_PRIVATE_FLAG: u32 = 128;
 pub const FUTEX_CLOCK_REALTIME: u32 = 256;
 pub const FUTEX_BITSET_MATCH_ANY: u32 = 0xffff_ffff;
+pub const FUTEX2_SIZE_U32: u32 = 0x02;
+pub const FUTEX_32: u32 = FUTEX2_SIZE_U32;
+pub const FUTEX_WAITV_MAX: usize = 128;
 pub const PAGE_SIZE: u64 = 4096;
 
 // =============================================================================
@@ -384,6 +395,7 @@ export_const!(abi_fd_type_timerfd, FD_TYPE_TIMERFD);
 export_const!(abi_fd_type_pty_master, FD_TYPE_PTY_MASTER);
 export_const!(abi_fd_type_pty_slave, FD_TYPE_PTY_SLAVE);
 export_const!(abi_fd_type_inotify, FD_TYPE_INOTIFY);
+export_const!(abi_fd_type_signalfd, FD_TYPE_SIGNALFD);
 
 // Syscall numbers
 macro_rules! export_const_u64 {
@@ -458,7 +470,9 @@ export_const_u64!(abi_sys_truncate, SYS_TRUNCATE);
 export_const_u64!(abi_sys_ftruncate, SYS_FTRUNCATE);
 export_const_u64!(abi_sys_utimensat, SYS_UTIMENSAT);
 export_const_u64!(abi_sys_set_tid_address, SYS_SET_TID_ADDRESS);
+export_const_u64!(abi_sys_get_robust_list, SYS_GET_ROBUST_LIST);
 export_const_u64!(abi_sys_set_robust_list, SYS_SET_ROBUST_LIST);
+export_const_u64!(abi_sys_futex_waitv, SYS_FUTEX_WAITV);
 export_const_u64!(abi_sys_sched_yield, SYS_SCHED_YIELD);
 export_const_u64!(abi_sys_kill, SYS_KILL);
 export_const_u64!(abi_sys_tkill, SYS_TKILL);
@@ -500,8 +514,10 @@ export_const_u64!(abi_sys_getsockopt, SYS_GETSOCKOPT);
 export_const_u64!(abi_sys_getsockname, SYS_GETSOCKNAME);
 export_const_u64!(abi_sys_getpeername, SYS_GETPEERNAME);
 export_const_u64!(abi_sys_ppoll, SYS_PPOLL);
+export_const_u64!(abi_sys_signalfd4, SYS_SIGNALFD4);
 export_const_u64!(abi_sys_timerfd_create, SYS_TIMERFD_CREATE);
 export_const_u64!(abi_sys_timerfd_settime, SYS_TIMERFD_SETTIME);
+export_const_u64!(abi_sys_timerfd_gettime, SYS_TIMERFD_GETTIME);
 export_const_u64!(abi_sys_uname, SYS_UNAME);
 export_const_u64!(abi_sys_madvise, SYS_MADVISE);
 export_const_u64!(abi_sys_flock, SYS_FLOCK);
@@ -562,6 +578,8 @@ export_const!(abi_o_cloexec, O_CLOEXEC);
 export_const!(abi_o_nonblock, O_NONBLOCK);
 export_const!(abi_o_directory, O_DIRECTORY);
 export_const!(abi_o_nofollow, O_NOFOLLOW);
+export_const_u64!(abi_tfd_timer_abstime, TFD_TIMER_ABSTIME);
+export_const_u64!(abi_tfd_timer_cancel_on_set, TFD_TIMER_CANCEL_ON_SET);
 
 // Error codes
 export_const!(abi_enoent, ENOENT as i32);
@@ -608,6 +626,9 @@ export_const!(abi_max_sockets, MAX_SOCKETS as i32);
 export_const!(abi_max_epoll_entries, MAX_EPOLL_ENTRIES as i32);
 export_const!(abi_max_eventfds, MAX_EVENTFDS as i32);
 export_const!(abi_max_timerfds, MAX_TIMERFDS as i32);
+export_const!(abi_max_signalfds, MAX_SIGNALFDS as i32);
+export_const!(abi_futex_32, FUTEX_32 as i32);
+export_const!(abi_futex_waitv_max, FUTEX_WAITV_MAX as i32);
 
 pub use crate::exports::kernel::*;
 pub use crate::exports::memfs::*;
@@ -987,6 +1008,7 @@ pub extern "C" fn process_create(
         ps.cwd_ino = 1;
         ps.fs_ring_base =
             crate::alloc::alloc_zeroed(crate::fs::ring_buffer::RING_BUFFER_SIZE as u32, 16);
+        ps.umask = 0o022;
         if ps.fs_ring_base == 0 {
             set_process_create_last_error(16);
             return 0;
