@@ -101,7 +101,6 @@ pub const SYS_GET_ROBUST_LIST: u64 = 100;
 pub const SYS_SET_ROBUST_LIST: u64 = 99;
 pub const SYS_FUTEX: u64 = 98;
 pub const SYS_FUTEX_TIME64: u64 = 422;
-pub const SYS_FUTEX_WAITV: u64 = 449;
 pub const SYS_NANOSLEEP: u64 = 101;
 pub const SYS_CLOCK_NANOSLEEP: u64 = 115;
 pub const SYS_GETITIMER: u64 = 102;
@@ -278,9 +277,6 @@ pub const FUTEX_WAKE_BITSET: u32 = 10;
 pub const FUTEX_PRIVATE_FLAG: u32 = 128;
 pub const FUTEX_CLOCK_REALTIME: u32 = 256;
 pub const FUTEX_BITSET_MATCH_ANY: u32 = 0xffff_ffff;
-pub const FUTEX2_SIZE_U32: u32 = 0x02;
-pub const FUTEX_32: u32 = FUTEX2_SIZE_U32;
-pub const FUTEX_WAITV_MAX: usize = 128;
 pub const PAGE_SIZE: u64 = 4096;
 
 // =============================================================================
@@ -472,7 +468,6 @@ export_const_u64!(abi_sys_utimensat, SYS_UTIMENSAT);
 export_const_u64!(abi_sys_set_tid_address, SYS_SET_TID_ADDRESS);
 export_const_u64!(abi_sys_get_robust_list, SYS_GET_ROBUST_LIST);
 export_const_u64!(abi_sys_set_robust_list, SYS_SET_ROBUST_LIST);
-export_const_u64!(abi_sys_futex_waitv, SYS_FUTEX_WAITV);
 export_const_u64!(abi_sys_sched_yield, SYS_SCHED_YIELD);
 export_const_u64!(abi_sys_kill, SYS_KILL);
 export_const_u64!(abi_sys_tkill, SYS_TKILL);
@@ -627,8 +622,6 @@ export_const!(abi_max_epoll_entries, MAX_EPOLL_ENTRIES as i32);
 export_const!(abi_max_eventfds, MAX_EVENTFDS as i32);
 export_const!(abi_max_timerfds, MAX_TIMERFDS as i32);
 export_const!(abi_max_signalfds, MAX_SIGNALFDS as i32);
-export_const!(abi_futex_32, FUTEX_32 as i32);
-export_const!(abi_futex_waitv_max, FUTEX_WAITV_MAX as i32);
 
 pub use crate::exports::kernel::*;
 pub use crate::exports::memfs::*;

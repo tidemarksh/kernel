@@ -1187,20 +1187,12 @@ fn run_ltp_process_tree(
                         }
                     }
                     if is_process_leader
-                        && if let Some(woken_addr) =
-                            tidemark_kernel::harness::support::take_external_futex_wake_addr_for_pid(
+                        && (tidemark_kernel::harness::support::take_external_futex_wake(
+                            pid, futex_addr,
+                        )
+                            || tidemark_kernel::harness::support::take_external_futex_wake_for_pid(
                                 pid,
-                            )
-                        {
-                            tidemark_kernel::syscall::thread::mark_futex_wait_wake(
-                                prepared.vm.as_ref() as *const tidemark_kernel::types::ThreadState
-                                    as u32,
-                                woken_addr,
-                            );
-                            true
-                        } else {
-                            false
-                        }
+                            ))
                     {
                         tidemark_kernel::harness::support::clear_external_futex_wait(pid);
                         tidemark_kernel::syscall::thread::resume_futex_wait(

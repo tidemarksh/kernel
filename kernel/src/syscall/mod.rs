@@ -479,13 +479,6 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             }
             ret
         }
-        SYS_FUTEX_WAITV => {
-            let ret = thread::sys_futex_waitv(vm, base, a0, a1, a2, a3, a4 as i32);
-            if vm.status == abi::STATUS_FUTEX_WAIT {
-                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, ret, abi::STATUS_FUTEX_WAIT);
-            }
-            ret
-        }
         SYS_EXIT => {
             let status = thread::sys_exit(vm, base, a0);
             return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, vm.exit_code as i64, status);

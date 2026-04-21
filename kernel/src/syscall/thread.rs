@@ -49,36 +49,6 @@ const FUTEX_WAITERS: u32 = 0x8000_0000;
 const FUTEX_OWNER_DIED: u32 = 0x4000_0000;
 const FUTEX_TID_MASK: u32 = 0x3fff_ffff;
 const ROBUST_LIST_LIMIT: u32 = 2048;
-const FUTEX_WAITV_STRUCT_SIZE: u64 = 24;
-const BLOCKED_ADDR_WAITV_SENTINEL: u32 = u32::MAX;
-
-#[derive(Clone, Copy)]
-struct FutexWaitvEntry {
-    addr: u32,
-    expected: u32,
-}
-
-#[derive(Clone, Copy)]
-struct FutexWaitvState {
-    active: u32,
-    vm_ptr: u32,
-    count: u32,
-    awakened_index: i32,
-    waiters: [FutexWaitvEntry; FUTEX_WAITV_MAX],
-}
-
-const EMPTY_FUTEX_WAITV_ENTRY: FutexWaitvEntry = FutexWaitvEntry {
-    addr: 0,
-    expected: 0,
-};
-
-const EMPTY_FUTEX_WAITV_STATE: FutexWaitvState = FutexWaitvState {
-    active: 0,
-    vm_ptr: 0,
-    count: 0,
-    awakened_index: -1,
-    waiters: [EMPTY_FUTEX_WAITV_ENTRY; FUTEX_WAITV_MAX],
-};
 
 #[derive(Clone, Copy)]
 struct CloneSpawnTrace {
@@ -108,8 +78,6 @@ static mut LAST_CLONE_SPAWN: CloneSpawnTrace = CloneSpawnTrace {
 };
 
 static mut NEXT_TID_HINTS: [i32; MAX_PROCESSES] = [0; MAX_PROCESSES];
-static mut FUTEX_WAITV_STATES: [FutexWaitvState; MAX_THREADS] =
-    [EMPTY_FUTEX_WAITV_STATE; MAX_THREADS];
 
 const THREAD_COUNT_TRACE_INIT_MAIN: u32 = 1;
 const THREAD_COUNT_TRACE_CLONE_INC: u32 = 2;
@@ -142,166 +110,6 @@ pub fn last_clone_spawn() -> (i32, u64, u64, u64, u64, u64, u64, u64, u64, u64) 
 pub fn init() {
     unsafe {
         core::ptr::write(core::ptr::addr_of_mut!(NEXT_TID_HINTS), [0; MAX_PROCESSES]);
-        core::ptr::write(
-            core::ptr::addr_of_mut!(FUTEX_WAITV_STATES),
-            [EMPTY_FUTEX_WAITV_STATE; MAX_THREADS],
-        );
-    }
-}
-
-fn futex_waitv_state_mut(vm_ptr: u32) -> Option<&'static mut FutexWaitvState> {
-    if vm_ptr == 0 {
-        return None;
-    }
-    unsafe {
-        let states = core::ptr::addr_of_mut!(FUTEX_WAITV_STATES) as *mut FutexWaitvState;
-        for idx in 0..MAX_THREADS {
-            let slot = &mut *states.add(idx);
-            if slot.active != 0 && slot.vm_ptr == vm_ptr {
-                return Some(slot);
-            }
-        }
-        for idx in 0..MAX_THREADS {
-            let slot = &mut *states.add(idx);
-            if slot.active == 0 {
-                slot.active = 1;
-                slot.vm_ptr = vm_ptr;
-                slot.count = 0;
-                slot.awakened_index = -1;
-                slot.waiters = [EMPTY_FUTEX_WAITV_ENTRY; FUTEX_WAITV_MAX];
-                return Some(slot);
-            }
-        }
-    }
-    None
-}
-
-fn clear_futex_waitv_state(vm_ptr: u32) {
-    if vm_ptr == 0 {
-        return;
-    }
-    unsafe {
-        let states = core::ptr::addr_of_mut!(FUTEX_WAITV_STATES) as *mut FutexWaitvState;
-        for idx in 0..MAX_THREADS {
-            let slot = &mut *states.add(idx);
-            if slot.active != 0 && slot.vm_ptr == vm_ptr {
-                *slot = EMPTY_FUTEX_WAITV_STATE;
-                return;
-            }
-        }
-    }
-}
-
-fn take_futex_waitv_result(vm_ptr: u32) -> Option<i64> {
-    if vm_ptr == 0 {
-        return None;
-    }
-    unsafe {
-        let states = core::ptr::addr_of_mut!(FUTEX_WAITV_STATES) as *mut FutexWaitvState;
-        for idx in 0..MAX_THREADS {
-            let slot = &mut *states.add(idx);
-            if slot.active == 0 || slot.vm_ptr != vm_ptr {
-                continue;
-            }
-            let result = slot.awakened_index as i64;
-            *slot = EMPTY_FUTEX_WAITV_STATE;
-            return Some(result);
-        }
-    }
-    None
-}
-
-fn record_futex_waitv(vm_ptr: u32, waiters: &[FutexWaitvEntry]) -> Result<(), i64> {
-    let Some(slot) = futex_waitv_state_mut(vm_ptr) else {
-        return Err(ENOMEM);
-    };
-    slot.count = waiters.len() as u32;
-    slot.awakened_index = -1;
-    for (idx, waiter) in waiters.iter().enumerate() {
-        slot.waiters[idx] = *waiter;
-    }
-    Ok(())
-}
-
-fn mark_futex_waitv_wake(vm_ptr: u32, addr: u32) -> Option<u32> {
-    if vm_ptr == 0 {
-        return None;
-    }
-    unsafe {
-        let states = core::ptr::addr_of_mut!(FUTEX_WAITV_STATES) as *mut FutexWaitvState;
-        for idx in 0..MAX_THREADS {
-            let slot = &mut *states.add(idx);
-            if slot.active == 0 || slot.vm_ptr != vm_ptr {
-                continue;
-            }
-            for idx in 0..slot.count as usize {
-                if slot.waiters[idx].addr != addr {
-                    continue;
-                }
-                if slot.awakened_index < 0 {
-                    slot.awakened_index = idx as i32;
-                }
-                return Some(idx as u32);
-            }
-            return None;
-        }
-    }
-    None
-}
-
-pub fn mark_futex_wait_wake(vm_ptr: u32, addr: u32) -> bool {
-    mark_futex_waitv_wake(vm_ptr, addr).is_some()
-}
-
-pub fn futex_wait_targets(vm: &ThreadState, out: &mut [u32]) -> usize {
-    let vm_ptr = vm as *const ThreadState as u32;
-    unsafe {
-        let states = core::ptr::addr_of!(FUTEX_WAITV_STATES) as *const FutexWaitvState;
-        for idx in 0..MAX_THREADS {
-            let slot = &*states.add(idx);
-            if slot.active == 0 || slot.vm_ptr != vm_ptr {
-                continue;
-            }
-            let count = (slot.count as usize).min(out.len());
-            for wait_idx in 0..count {
-                out[wait_idx] = slot.waiters[wait_idx].addr;
-            }
-            return count;
-        }
-    }
-    if !out.is_empty() && vm.futex_wait_addr != 0 {
-        out[0] = vm.futex_wait_addr as u32;
-        1
-    } else {
-        0
-    }
-}
-
-pub fn futex_wait_mismatch_result(vm: &ThreadState, base: u32) -> Option<i64> {
-    let vm_ptr = vm as *const ThreadState as u32;
-    unsafe {
-        let states = core::ptr::addr_of!(FUTEX_WAITV_STATES) as *const FutexWaitvState;
-        for idx in 0..MAX_THREADS {
-            let slot = &*states.add(idx);
-            if slot.active == 0 || slot.vm_ptr != vm_ptr {
-                continue;
-            }
-            for wait_idx in 0..slot.count as usize {
-                let waiter = slot.waiters[wait_idx];
-                if guest_mem::read_u32(base, waiter.addr as u64) != waiter.expected {
-                    return Some(wait_idx as i64);
-                }
-            }
-            return None;
-        }
-    }
-
-    if vm.futex_wait_addr != 0
-        && unsafe { guest_mem::read_u32(base, vm.futex_wait_addr) } != vm.futex_wait_expected
-    {
-        Some(0)
-    } else {
-        None
     }
 }
 
@@ -408,21 +216,14 @@ fn wake_futex_waiters_by_process_ptr(
             if woken >= max_wake {
                 break;
             }
-            if record.state != THREAD_BLOCKED_FUTEX {
+            if record.state != THREAD_BLOCKED_FUTEX || record.blocked_addr != addr {
                 continue;
             }
-
-            let matched_waitv = mark_futex_waitv_wake(record.thread_ptr, addr).is_some();
-            if !matched_waitv {
-                if record.blocked_addr != addr {
-                    continue;
-                }
-                let waiter_bitset = thread_state_from_record_ptr(record.thread_ptr)
-                    .map(|thread_ptr| (*thread_ptr).futex_wait_bitset)
-                    .unwrap_or(FUTEX_BITSET_MATCH_ANY);
-                if (waiter_bitset & wake_bitset) == 0 {
-                    continue;
-                }
+            let waiter_bitset = thread_state_from_record_ptr(record.thread_ptr)
+                .map(|thread_ptr| (*thread_ptr).futex_wait_bitset)
+                .unwrap_or(FUTEX_BITSET_MATCH_ANY);
+            if (waiter_bitset & wake_bitset) == 0 {
+                continue;
             }
             record.state = THREAD_RUNNING;
             record.blocked_addr = 0;
@@ -729,7 +530,6 @@ pub fn sys_get_robust_list(
 /// Returns STATUS_FAULT to stop execution.
 /// https://man7.org/linux/man-pages/man2/exit.2.html
 pub fn sys_exit(vm: &mut ThreadState, base: u32, exit_code: u64) -> i32 {
-    clear_futex_waitv_state(vm as *mut ThreadState as u32);
     vm.exit_code = exit_code as i32;
     vm.term_signal = 0;
 
@@ -1177,99 +977,6 @@ fn allocate_tid(vm: &ThreadState, base: u32) -> i32 {
 }
 
 /// futex: fast userspace mutex.
-/// FUTEX_WAIT: if *addr == val, block (return STATUS_FUTEX_WAIT for TS to Atomics.wait)
-/// FUTEX_WAKE: wake up to `val` waiters on addr (return count woken)
-/// https://man7.org/linux/man-pages/man2/futex.2.html
-pub fn sys_futex_waitv(
-    vm: &mut ThreadState,
-    base: u32,
-    waiters_addr: u64,
-    nr_futexes: u64,
-    flags: u64,
-    timeout_addr: u64,
-    clockid: i32,
-) -> i64 {
-    if !(1..=FUTEX_WAITV_MAX as u64).contains(&nr_futexes) {
-        return EINVAL;
-    }
-    if flags != 0 {
-        return EINVAL;
-    }
-    if timeout_addr != 0 && clockid != 0 && clockid != 1 {
-        return EINVAL;
-    }
-    if timeout_addr != 0 && !crate::syscall::memory::guest_range_accessible(base, timeout_addr, 16)
-    {
-        return EFAULT;
-    }
-
-    let mut parsed = [EMPTY_FUTEX_WAITV_ENTRY; FUTEX_WAITV_MAX];
-    for idx in 0..nr_futexes as usize {
-        let entry_addr = waiters_addr + (idx as u64) * FUTEX_WAITV_STRUCT_SIZE;
-        if !crate::syscall::memory::guest_range_accessible(
-            base,
-            entry_addr,
-            FUTEX_WAITV_STRUCT_SIZE,
-        ) {
-            return EFAULT;
-        }
-
-        let val = unsafe { guest_mem::read_u64(base, entry_addr) };
-        let uaddr = unsafe { guest_mem::read_u64(base, entry_addr + 8) };
-        let waiter_flags = unsafe { guest_mem::read_u32(base, entry_addr + 16) };
-        let reserved = unsafe { guest_mem::read_u32(base, entry_addr + 20) };
-
-        if reserved != 0 {
-            return EINVAL;
-        }
-        if waiter_flags & !((FUTEX_32 | FUTEX_PRIVATE_FLAG) as u32) != 0
-            || (waiter_flags & FUTEX_32) == 0
-        {
-            return EINVAL;
-        }
-        if !crate::syscall::memory::guest_range_accessible(base, uaddr, 4) {
-            return EFAULT;
-        }
-        if unsafe { guest_mem::read_u32(base, uaddr) } != val as u32 {
-            return EAGAIN;
-        }
-
-        parsed[idx] = FutexWaitvEntry {
-            addr: uaddr as u32,
-            expected: val as u32,
-        };
-    }
-
-    let vm_ptr = vm as *mut ThreadState as u32;
-    if let Err(errno) = record_futex_waitv(vm_ptr, &parsed[..nr_futexes as usize]) {
-        return errno;
-    }
-
-    unsafe {
-        if let Some(record) = thread_record_ptr(base, vm.process_ptr, vm.tid) {
-            let mut updated = read_thread_record(record);
-            updated.state = THREAD_BLOCKED_FUTEX;
-            updated.blocked_addr = BLOCKED_ADDR_WAITV_SENTINEL;
-            updated.clear_child_tid = vm.clear_child_tid as u32;
-            write_thread_record(record, updated);
-        }
-    }
-
-    vm.futex_wait_addr = parsed[0].addr as u64;
-    vm.futex_wait_timeout = timeout_addr;
-    vm.futex_wait_expected = parsed[0].expected;
-    vm.futex_wait_bitset = FUTEX_BITSET_MATCH_ANY;
-    vm.futex_wait_absolute = if timeout_addr != 0 { 1 } else { 0 };
-    vm.futex_wait_flags = if timeout_addr != 0 && clockid == 0 {
-        FUTEX_CLOCK_REALTIME
-    } else {
-        0
-    };
-    vm.x[10] = parsed[0].addr as u64;
-    vm.status = STATUS_FUTEX_WAIT;
-    0
-}
-
 #[allow(clippy::too_many_arguments)]
 pub fn sys_futex(
     vm: &mut ThreadState,
@@ -1385,7 +1092,6 @@ pub fn resume_futex_wait(vm: &mut ThreadState, base: u32) {
 }
 
 pub fn resume_futex_wait_result(vm: &mut ThreadState, base: u32, result: i64) {
-    let vm_ptr = vm as *mut ThreadState as u32;
     unsafe {
         if let Some(record) = thread_record_ptr(base, vm.process_ptr, vm.tid) {
             let mut updated = read_thread_record(record);
@@ -1404,21 +1110,7 @@ pub fn resume_futex_wait_result(vm: &mut ThreadState, base: u32, result: i64) {
     vm.futex_wait_absolute = 0;
     vm.futex_wait_flags = 0;
     vm.status = STATUS_OK;
-    let waitv_result = take_futex_waitv_result(vm_ptr);
-    vm.x[10] = if result < 0 {
-        result as u64
-    } else if let Some(waitv_index) = waitv_result {
-        if waitv_index >= 0 {
-            waitv_index as u64
-        } else {
-            result as u64
-        }
-    } else {
-        result as u64
-    };
-    if waitv_result.is_none() {
-        clear_futex_waitv_state(vm_ptr);
-    }
+    vm.x[10] = result as u64;
     crate::tracepoints::record_futex_resume_trace(vm, 1);
     crate::syscall::signal::check_pending(vm, base);
     crate::tracepoints::record_futex_resume_trace(vm, 2);
