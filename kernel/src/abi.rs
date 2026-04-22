@@ -644,6 +644,12 @@ pub extern "C" fn sync_monotonic_ticks_floor(ticks: u64) {
     crate::syscall::time::sync_monotonic_ticks_floor(ticks);
 }
 
+/// Read the current guest CLOCK_MONOTONIC tick counter.
+#[unsafe(no_mangle)]
+pub extern "C" fn monotonic_ticks_current() -> u64 {
+    crate::syscall::time::monotonic_ticks_current()
+}
+
 // =========================================================================
 // Staged argv/envp sources for process_create
 // =========================================================================

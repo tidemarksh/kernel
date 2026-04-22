@@ -162,6 +162,10 @@ fn monotonic_ticks() -> u64 {
     ts().monotonic_ticks
 }
 
+pub fn monotonic_ticks_current() -> u64 {
+    monotonic_ticks()
+}
+
 fn timespec_to_ticks_floor(sec: u64, nsec: u64) -> u64 {
     sec.saturating_mul(TICKS_PER_SEC)
         .saturating_add(nsec.saturating_mul(TICKS_PER_SEC) / 1_000_000_000)
@@ -176,6 +180,10 @@ fn timespec_to_ticks_ceil(sec: u64, nsec: u64) -> u64 {
         sub.div_ceil(1_000_000_000)
     };
     base.saturating_add(rounded)
+}
+
+pub fn sleep_deadline_ticks(sec: u64, nsec: u64) -> u64 {
+    monotonic_ticks().saturating_add(timespec_to_ticks_ceil(sec, nsec))
 }
 
 fn base_time() -> (u64, u64) {
@@ -620,7 +628,8 @@ pub fn timerfd_read(base: u32, buf: u64, count: u64, timerfd_idx: u32) -> i64 {
     8
 }
 
-/// nanosleep: return STATUS_SLEEP so JS can setTimeout.
+/// nanosleep: return STATUS_SLEEP so the owner scheduler can block until the
+/// guest deadline expires.
 /// https://man7.org/linux/man-pages/man2/nanosleep.2.html
 pub fn sys_nanosleep(vm: &mut ThreadState, base: u32, req: u64, _rem: u64) -> i32 {
     if req != 0 {
@@ -695,7 +704,7 @@ pub fn sys_clock_nanosleep(
     abi::STATUS_SLEEP
 }
 
-/// sched_yield: cooperative yield point for the runtime/test harness.
+/// sched_yield: cooperative yield point for the runtime scheduler.
 /// Returns STATUS_SLEEP so the outer scheduler can run another runnable thread
 /// before resuming this one; guest-visible return value remains 0.
 /// https://man7.org/linux/man-pages/man2/sched_yield.2.html

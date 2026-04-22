@@ -1099,7 +1099,8 @@ pub fn sys_sendto(
         return EDESTADDRREQ;
     }
 
-    // If dest_addr is provided for DGRAM, record it temporarily as peer
+    // Cache the explicit DGRAM destination so recvfrom/getpeername can
+    // surface the last peer address until a different destination is used.
     if dest_addr != 0 && dest_addrlen > 0 {
         let len = (dest_addrlen as usize).min(SOCKADDR_STORAGE_LEN);
         if len >= 2 {

@@ -11,6 +11,7 @@ use alloc_crate::{vec, vec::Vec};
 pub const EXECVE_RAM_LIMIT: u64 = 0x8000_0000;
 const EXECVE_PATH_MAX: usize = 4096;
 const EXECVE_NAME_MAX: usize = 255;
+pub(super) const PROC_SELF_EXE_SNAPSHOT_MAX: usize = 512;
 
 struct ExecveImage {
     path_bytes: Vec<u8>,
@@ -406,26 +407,31 @@ fn load_execve_image(
     })
 }
 
-fn install_proc_self_exe(target: &[u8]) {
-    crate::tracepoints::record_execve_stage(711, target.len() as u64, 0);
+fn proc_self_dir_ino(create_missing: bool) -> u32 {
     let proc_ino = memfs::resolve_path(b"/proc");
-    let proc_ino = if proc_ino == 0 {
+    let proc_ino = if proc_ino == 0 && create_missing {
         memfs::create_dir(1, b"proc", 0o555)
     } else {
         proc_ino
     };
     crate::tracepoints::record_execve_stage(712, proc_ino as u64, 0);
     if proc_ino == 0 {
-        return;
+        return 0;
     }
 
     let self_ino = memfs::resolve_path(b"/proc/self");
-    let self_ino = if self_ino == 0 {
+    let self_ino = if self_ino == 0 && create_missing {
         memfs::create_dir(proc_ino, b"self", 0o555)
     } else {
         self_ino
     };
     crate::tracepoints::record_execve_stage(713, self_ino as u64, 0);
+    self_ino
+}
+
+fn replace_proc_self_exe(target: Option<&[u8]>) {
+    crate::tracepoints::record_execve_stage(711, target.map_or(0, |bytes| bytes.len()) as u64, 0);
+    let self_ino = proc_self_dir_ino(target.is_some());
     if self_ino == 0 {
         return;
     }
@@ -435,9 +441,30 @@ fn install_proc_self_exe(target: &[u8]) {
     if existing_exe != 0 {
         let _ = memfs::unlink(self_ino, b"exe");
     }
-    crate::tracepoints::record_execve_stage(715, self_ino as u64, target.len() as u64);
-    let exe_ino = memfs::create_symlink(self_ino, b"exe", target);
-    crate::tracepoints::record_execve_stage(716, exe_ino as u64, 0);
+
+    if let Some(target) = target {
+        crate::tracepoints::record_execve_stage(715, self_ino as u64, target.len() as u64);
+        let exe_ino = memfs::create_symlink(self_ino, b"exe", target);
+        crate::tracepoints::record_execve_stage(716, exe_ino as u64, 0);
+    }
+}
+
+fn install_proc_self_exe(target: &[u8]) {
+    replace_proc_self_exe(Some(target));
+}
+
+pub(super) fn snapshot_proc_self_exe_target(
+    out: &mut [u8; PROC_SELF_EXE_SNAPSHOT_MAX],
+) -> usize {
+    let ino = memfs::resolve_path(b"/proc/self/exe");
+    if ino == 0 {
+        return 0;
+    }
+    memfs::read_link(ino, out).min(PROC_SELF_EXE_SNAPSHOT_MAX)
+}
+
+pub(super) fn restore_proc_self_exe_target(target: Option<&[u8]>) {
+    replace_proc_self_exe(target);
 }
 
 const PROC_STAT_BYTES: &[u8] = b"cpu  1 1 1 1 0 0 0 0 0 0\ncpu0 1 1 1 1 0 0 0 0 0 0\n";
@@ -490,6 +517,64 @@ fn align_down(value: u64, align: u64) -> u64 {
     value & !(align - 1)
 }
 
+fn validate_execve_initial_stack(
+    base: u32,
+    sp: u64,
+    argv: &[Vec<u8>],
+    envp: &[Vec<u8>],
+) -> Result<(), i64> {
+    let argc = unsafe { guest_mem::read_u64(base, sp) };
+    if argc != argv.len() as u64 {
+        crate::tracepoints::record_execve_stage(901, argc, argv.len() as u64);
+        return Err(EINVAL);
+    }
+
+    for (index, expected) in argv.iter().enumerate() {
+        let ptr = unsafe { guest_mem::read_u64(base, sp + 8 + index as u64 * 8) };
+        if ptr == 0 {
+            crate::tracepoints::record_execve_stage(902, index as u64, 0);
+            return Err(EINVAL);
+        }
+        let mut actual = read_guest_cstr_bytes(base, ptr)?;
+        actual.push(0);
+        if actual != *expected {
+            crate::tracepoints::record_execve_stage(903, index as u64, ptr);
+            crate::tracepoints::record_execve_stage(904, expected.len() as u64, actual.len() as u64);
+            return Err(EINVAL);
+        }
+    }
+
+    let argv_null = unsafe { guest_mem::read_u64(base, sp + 8 + argv.len() as u64 * 8) };
+    if argv_null != 0 {
+        crate::tracepoints::record_execve_stage(905, argv.len() as u64, argv_null);
+        return Err(EINVAL);
+    }
+
+    let env_base = sp + 8 + (argv.len() as u64 + 1) * 8;
+    for (index, expected) in envp.iter().enumerate() {
+        let ptr = unsafe { guest_mem::read_u64(base, env_base + index as u64 * 8) };
+        if ptr == 0 {
+            crate::tracepoints::record_execve_stage(906, index as u64, 0);
+            return Err(EINVAL);
+        }
+        let mut actual = read_guest_cstr_bytes(base, ptr)?;
+        actual.push(0);
+        if actual != *expected {
+            crate::tracepoints::record_execve_stage(907, index as u64, ptr);
+            crate::tracepoints::record_execve_stage(908, expected.len() as u64, actual.len() as u64);
+            return Err(EINVAL);
+        }
+    }
+
+    let env_null = unsafe { guest_mem::read_u64(base, env_base + envp.len() as u64 * 8) };
+    if env_null != 0 {
+        crate::tracepoints::record_execve_stage(909, envp.len() as u64, env_null);
+        return Err(EINVAL);
+    }
+
+    Ok(())
+}
+
 fn ensure_guest_memory_capacity(base: u32, guest_end: u64) -> bool {
     let needed = base as u64 + guest_end;
     let mem_size = (core::arch::wasm32::memory_size(0) as u64) * 65536;
@@ -511,9 +596,13 @@ fn current_guest_memory_limit(base: u32) -> u64 {
     limit.min(max_execve_ram_limit(base))
 }
 
-fn execve_guest_limit(base: u32, brk_start: u64, stack_size: u64) -> u64 {
+fn execve_guest_limit(base: u32, brk_start: u64, stack_size: u64, ram_limit: u64) -> u64 {
     const EXECVE_STACK_HEADROOM: u64 = 64 * 1024 * 1024;
-    let current_limit = current_guest_memory_limit(base);
+    let current_limit = if ram_limit != 0 {
+        ram_limit.min(max_execve_ram_limit(base))
+    } else {
+        current_guest_memory_limit(base)
+    };
     let usable_stack = ((stack_size.max(64 * 1024) + 4095) & !4095).saturating_add(4096);
     let required_limit = brk_start
         .saturating_add(usable_stack)
@@ -672,6 +761,7 @@ fn complete_execve_in_place_inner(
         base,
         load_brk_start,
         crate::syscall::memory::DEFAULT_STACK_SIZE,
+        ram_size,
     );
 
     let ps_size = core::mem::size_of::<ProcessState>() as u64;
@@ -774,6 +864,15 @@ fn complete_execve_in_place_inner(
     crate::tracepoints::record_execve_dispatch(vm_ptr, 1229);
     crate::syscall::memory::rebase_brk_after_hidden_prefix(hidden_end);
     crate::tracepoints::record_execve_stage(62, ps_addr, ps_size);
+    let ps = unsafe { &mut *((base as u64 + ps_addr) as *mut ProcessState) };
+    let gen_ptr =
+        core::ptr::addr_of!(ps.reservation_gen) as *const core::sync::atomic::AtomicU32;
+    let lock_ptr =
+        core::ptr::addr_of!(ps.reservation_lock) as *const core::sync::atomic::AtomicU32;
+    let tc_ptr = core::ptr::addr_of!(ps.thread_count);
+    unsafe {
+        guest_mem::init(gen_ptr, lock_ptr, tc_ptr);
+    }
 
     let mut released_cloexec_ofds = [false; MAX_FDS];
     for entry in old_fd_table.iter().copied() {
@@ -873,6 +972,9 @@ fn complete_execve_in_place_inner(
         )
     };
     crate::tracepoints::record_execve_stage(68, sp, stack_setup_top);
+    if let Err(errno) = validate_execve_initial_stack(base, sp, &argv, &envp) {
+        return errno;
+    }
 
     vm.x = [0; 32];
     vm.pc = elf_result.entry;
@@ -890,7 +992,15 @@ fn complete_execve_in_place_inner(
     vm.clear_child_tid = 0;
     vm.robust_list_head = 0;
     vm.robust_list_len = 0;
+    vm.sig_info_code = 0;
     vm.term_signal = 0;
+    vm.lr_addr = u64::MAX;
+    vm.lr_val = 0;
+    vm.lr_gen = 0;
+    vm.lr_gen_end = 0;
+    vm.insn_budget = 0;
+    vm.fault_pc = 0;
+    vm.fault_addr = 0;
     vm.clone_flags = 0;
     vm.clone_child_stack = 0;
     vm.clone_tls = 0;
@@ -919,7 +1029,7 @@ fn complete_execve_in_place_inner(
     crate::tracepoints::record_execve_dispatch(vm_ptr, 135);
     crate::tracepoints::record_execve_stage(71, target_pid as u64, 0);
     if flush_shared_mappings {
-        install_proc_self_exe(&path_bytes);
+        install_procfs_snapshot(&path_bytes);
         crate::tracepoints::record_execve_stage(72, path_bytes.len() as u64, 0);
     }
     if let Some(slot) = ensure_process(target_pid, target_ppid) {
@@ -948,7 +1058,7 @@ pub fn complete_execve_in_place_from_handoff(
     base: u32,
     ram_size: u64,
 ) -> i64 {
-    complete_execve_in_place_inner(vm, base, ram_size, false)
+    complete_execve_in_place_inner(vm, base, ram_size, true)
 }
 
 /// execve: replace process image.

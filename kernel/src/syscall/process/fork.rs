@@ -1,6 +1,9 @@
 use super::common::ESRCH;
 use super::handoff::set_spawn_handoff;
-use super::lifecycle::{alloc_pid, ensure_current_process, inherit_process, record_child};
+use super::lifecycle::{
+    alloc_pid_avoiding_live_threads, ensure_current_process, inherit_process, record_child,
+};
+use super::runtime::{capture_thread_snapshot, prs};
 use crate::abi::*;
 use crate::guest_mem;
 use crate::types::ThreadState;
@@ -28,7 +31,7 @@ pub fn sys_fork(
     } else {
         parent_pid
     };
-    let child_pid = alloc_pid();
+    let child_pid = alloc_pid_avoiding_live_threads(vm, base);
     record_child(child_ppid, child_pid);
     inherit_process(parent_pid, child_ppid, child_pid, false);
     crate::syscall::signal::fork_from_parent(parent_pid, child_pid);
@@ -44,6 +47,8 @@ pub fn sys_fork(
     vm.clone_pending = 0;
     vm.clone_child_stack = child_stack;
     vm.clone_tls = tls;
+    prs().fork_snapshot = capture_thread_snapshot(vm, child_pid);
+    prs().fork_active = 1;
     set_spawn_handoff(vm, SPAWN_KIND_FORK, child_pid, 0, 0, 0);
     vm.x[10] = child_pid as u64;
     vm.status = STATUS_EXECVE_SPAWN;

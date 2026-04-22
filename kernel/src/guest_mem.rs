@@ -34,10 +34,6 @@ static mut RESERVATION_GEN: *const AtomicU32 = core::ptr::null();
 static mut RESERVATION_LOCK: *const AtomicU32 = core::ptr::null();
 /// Pointer to thread_count in ProcessState. null = single-thread (skip seqlock).
 static mut THREAD_COUNT: *const AtomicU32 = core::ptr::null();
-static mut LAST_ACCESS_ADDR: u64 = 0;
-static mut LAST_ACCESS_LEN: u32 = 0;
-static mut LAST_ACCESS_KIND: u32 = 0;
-
 const ACCESS_READ: u32 = 1;
 const ACCESS_WRITE: u32 = 2;
 const ACCESS_ZERO: u32 = 3;
@@ -47,6 +43,14 @@ const WRITE_OP_U32: u32 = 3;
 const WRITE_OP_U64: u32 = 4;
 const WRITE_OP_BYTES: u32 = 5;
 const WRITE_OP_ZERO: u32 = 6;
+
+#[inline(always)]
+fn sample_u64(bytes: &[u8]) -> (u64, u32) {
+    let sample_len = bytes.len().min(core::mem::size_of::<u64>());
+    let mut sample = [0u8; core::mem::size_of::<u64>()];
+    sample[..sample_len].copy_from_slice(&bytes[..sample_len]);
+    (u64::from_le_bytes(sample), sample_len as u32)
+}
 
 #[inline(always)]
 fn check_range(base: u32, addr: u64, len: usize, op: &str) {
@@ -72,31 +76,7 @@ fn check_range(base: u32, addr: u64, len: usize, op: &str) {
 
 #[inline(always)]
 fn record_access(addr: u64, len: u32, kind: u32) {
-    unsafe {
-        LAST_ACCESS_ADDR = addr;
-        LAST_ACCESS_LEN = len;
-        LAST_ACCESS_KIND = kind;
-    }
-}
-
-#[inline(always)]
-fn sample_u64(bytes: &[u8]) -> (u64, u32) {
-    let sample_len = bytes.len().min(8) as u32;
-    let mut sample = [0u8; 8];
-    sample[..sample_len as usize].copy_from_slice(&bytes[..sample_len as usize]);
-    (u64::from_le_bytes(sample), sample_len)
-}
-
-pub fn last_access_addr() -> u64 {
-    unsafe { LAST_ACCESS_ADDR }
-}
-
-pub fn last_access_len() -> u32 {
-    unsafe { LAST_ACCESS_LEN }
-}
-
-pub fn last_access_kind() -> u32 {
-    unsafe { LAST_ACCESS_KIND }
+    let _ = (addr, len, kind);
 }
 
 /// Initialize reservation table pointers.

@@ -16,6 +16,8 @@ rustflags = [
   "-C",
   "link-arg=--export-memory",
   "-C",
+  "link-arg=--export=__stack_pointer",
+  "-C",
   "link-arg=--global-base=50331648",
 ]
 

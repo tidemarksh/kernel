@@ -63,7 +63,7 @@ pub const S_IFREG: u32 = 0o100000;
 pub const S_IFLNK: u32 = 0o120000;
 pub const S_IFCHR: u32 = 0o020000;
 
-const MAX_INODES: usize = 16384;
+const MAX_INODES: usize = 65536;
 const MAX_NAME_LEN: usize = 255;
 const INITIAL_DATA_SIZE: u32 = 256 * 1024;
 

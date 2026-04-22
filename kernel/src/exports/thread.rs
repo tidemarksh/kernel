@@ -305,6 +305,16 @@ pub extern "C" fn thread_resume_blocked_syscall(vm_ptr: u32) -> i64 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn thread_resume_sleep(vm_ptr: u32) {
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut ThreadState);
+        vm.fault_addr = 0;
+        vm.fault_pc = 0;
+        vm.status = STATUS_OK;
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn thread_resume_connect_result(vm_ptr: u32, result: i64) {
     unsafe {
         let vm = &mut *(vm_ptr as *mut ThreadState);
@@ -450,6 +460,25 @@ pub extern "C" fn thread_prepare_fork_child(vm_ptr: u32, pid: i32) {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn thread_restore_fork_parent(
+    vm_ptr: u32,
+    process_ptr: u32,
+    pid: i32,
+    ppid: i32,
+) {
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut ThreadState);
+        crate::syscall::process::restore_fork_parent_after_handoff(
+            vm,
+            vm.guest_base,
+            process_ptr,
+            pid,
+            ppid,
+        );
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn thread_futex_wait_addr(vm_ptr: u32) -> u64 {
     unsafe { (*(vm_ptr as *const ThreadState)).futex_wait_addr }
 }
@@ -488,6 +517,14 @@ pub extern "C" fn thread_sleep_seconds(vm_ptr: u32) -> u64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn thread_sleep_nanoseconds(vm_ptr: u32) -> u64 {
     unsafe { (*(vm_ptr as *const ThreadState)).fault_pc }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_sleep_deadline_ticks(vm_ptr: u32) -> u64 {
+    unsafe {
+        let vm = &*(vm_ptr as *const ThreadState);
+        crate::syscall::time::sleep_deadline_ticks(vm.fault_addr, vm.fault_pc)
+    }
 }
 
 #[unsafe(no_mangle)]

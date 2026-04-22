@@ -2,7 +2,12 @@ use super::common::{
     CLD_EXITED, CLD_KILLED, ESRCH, P_ALL, P_PGID, P_PID, SIGINFO_OFF_SI_CODE, SIGINFO_OFF_SI_ERRNO,
     SIGINFO_OFF_SI_PID, SIGINFO_OFF_SI_SIGNO, SIGINFO_OFF_SI_STATUS, SIGINFO_OFF_SI_UID,
 };
-use super::runtime::{children, empty_vfork_snapshot, processes, prs, seeded_process_table};
+use super::handoff::clear_spawn_handoff;
+use super::runtime::{
+    children, clear_vfork_runtime_snapshot, processes, prs, restore_thread_snapshot,
+    rewrite_snapshot_child_pid, seeded_process_table, take_fork_snapshot,
+};
+use super::vfork::reattach_guest_thread_count;
 use crate::abi::*;
 use crate::fs::fd_table;
 use crate::guest_mem;
@@ -132,21 +137,51 @@ fn reserve_pid(pid: i32) {
     }
 }
 
-pub(super) fn alloc_pid() -> i32 {
+fn find_available_pid(skip: impl Fn(i32) -> bool) -> Option<i32> {
     let next_pid = prs().next_pid.max(3);
     for pid in next_pid..=(MAX_PROCESSES as i32) {
-        if process_entry(pid).is_none() && !children().iter().any(|child| child.pid == pid) {
+        if !skip(pid) {
             reserve_pid(pid);
-            return pid;
+            return Some(pid);
         }
     }
     for pid in 3..next_pid {
-        if process_entry(pid).is_none() && !children().iter().any(|child| child.pid == pid) {
+        if !skip(pid) {
             reserve_pid(pid);
-            return pid;
+            return Some(pid);
         }
     }
-    let pid = prs().next_pid;
+    None
+}
+
+fn pid_in_use(pid: i32) -> bool {
+    process_entry(pid).is_some() || children().iter().any(|child| child.pid == pid)
+}
+
+fn pid_conflicts_with_live_thread(vm: &ThreadState, base: u32, pid: i32) -> bool {
+    let Some(ps) = current_process_state_mut(vm, base) else {
+        return false;
+    };
+    ps.threads.iter().any(|record| {
+        record.tid == pid
+            && record.thread_ptr != 0
+            && !matches!(
+                record.state,
+                crate::types::THREAD_NONE | crate::types::THREAD_DEAD
+            )
+    })
+}
+
+pub(super) fn alloc_pid_avoiding_live_threads(vm: &ThreadState, base: u32) -> i32 {
+    if let Some(pid) =
+        find_available_pid(|pid| pid_in_use(pid) || pid_conflicts_with_live_thread(vm, base, pid))
+    {
+        return pid;
+    }
+    let mut pid = prs().next_pid.max(3);
+    while pid_conflicts_with_live_thread(vm, base, pid) {
+        pid += 1;
+    }
     prs().next_pid = pid + 1;
     pid
 }
@@ -248,9 +283,8 @@ pub fn rewrite_child_pid(
             }
         }
 
-        if prs().vfork_snapshot.child_pid == old_pid {
-            prs().vfork_snapshot.child_pid = new_pid;
-        }
+        rewrite_snapshot_child_pid(&mut prs().vfork_snapshot, old_pid, new_pid);
+        rewrite_snapshot_child_pid(&mut prs().fork_snapshot, old_pid, new_pid);
 
         if let Some(ps) = current_process_state_mut(vm, base) {
             if ps.pid == old_pid {
@@ -293,8 +327,7 @@ pub fn reset_process_lifecycle(
 
     prs().children = [empty_child_entry(); MAX_PROCESSES];
     prs().next_pid = next_pid.max(pid + 1).max(3);
-    prs().vfork_active = 0;
-    prs().vfork_snapshot = empty_vfork_snapshot();
+    clear_vfork_runtime_snapshot();
     prs().process_table = seeded_process_table();
 
     if let Some(slot) = process_idx(pid).map(|idx| &mut processes()[idx]) {
@@ -307,6 +340,7 @@ pub fn reset_process_lifecycle(
         };
     }
 
+    vm.tid = pid;
     if let Some(ps) = current_process_state_mut(vm, base) {
         ps.pid = pid;
         ps.ppid = ppid;
@@ -372,6 +406,35 @@ pub fn prepare_fork_child_after_handoff(vm: &mut ThreadState, base: u32, pid: i3
     vm.fault_pc = 0;
     vm.fault_addr = 0;
     fd_table::clear_blocked_ofd_pin(vm);
+}
+
+pub fn restore_fork_parent_after_handoff(
+    vm: &mut ThreadState,
+    base: u32,
+    process_ptr: u32,
+    pid: i32,
+    ppid: i32,
+) {
+    if process_ptr == 0 || pid <= 0 {
+        return;
+    }
+
+    if let Some(snap) = take_fork_snapshot() {
+        restore_thread_snapshot(vm, snap);
+        vm.x[10] = snap.child_pid as u64;
+        clear_spawn_handoff(vm);
+        vm.status = STATUS_OK;
+    }
+
+    vm.process_ptr = process_ptr;
+    vm.tid = pid;
+
+    if let Some(ps) = current_process_state_mut(vm, base) {
+        ps.pid = pid;
+        ps.ppid = ppid;
+    }
+
+    reattach_guest_thread_count(vm, base);
 }
 
 pub(super) fn empty_child_entry() -> super::runtime::ChildEntry {

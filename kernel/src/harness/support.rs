@@ -1,6 +1,10 @@
 #[cfg(any(test, feature = "harness"))]
 use alloc_crate::boxed::Box;
 #[cfg(any(test, feature = "harness"))]
+use alloc_crate::format;
+#[cfg(any(test, feature = "harness"))]
+use alloc_crate::string::String;
+#[cfg(any(test, feature = "harness"))]
 use alloc_crate::vec;
 use alloc_crate::vec::Vec;
 

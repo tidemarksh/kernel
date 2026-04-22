@@ -31,7 +31,16 @@ fn submit_fs_request(
     }
 
     let idx = ring_buffer::submit_request(
-        ring_base, opcode, fd, offset, len, buf_ptr, path_ptr, flags, mode,
+        ring_base,
+        opcode,
+        fd,
+        offset,
+        len,
+        buf_ptr,
+        path_ptr,
+        flags,
+        mode,
+        vm as *mut ThreadState as u32,
     );
     if idx < 0 {
         return EAGAIN;
@@ -48,6 +57,25 @@ pub fn process_pending_requests(vm_ptr: u32, base: u32) {
         if ring_base != 0 {
             ring_buffer::process_requests(ring_base, vm_ptr, base);
         }
+    }
+}
+
+fn with_pending_request<T>(
+    vm_ptr: u32,
+    base: u32,
+    default: T,
+    f: impl FnOnce(&ThreadState, &ring_buffer::FsRequestInfo) -> T,
+) -> T {
+    unsafe {
+        let vm = &*(vm_ptr as *const ThreadState);
+        let ring_base = process_fs_ring_base(base, vm);
+        if ring_base == 0 {
+            return default;
+        }
+        let Some(request) = ring_buffer::peek_request_info_for_vm(ring_base, vm_ptr) else {
+            return default;
+        };
+        f(vm, &request)
     }
 }
 
@@ -80,18 +108,15 @@ fn classify_pending_request_effects(request: &ring_buffer::FsRequestInfo) -> u32
     }
 }
 
+fn openat_can_run_locally(flags: u32) -> bool {
+    let access_mode = (flags as i32) & fd_table::OPEN_ACCESS_MODE_MASK;
+    access_mode == O_RDONLY && flags & ((O_CREAT | O_TRUNC) as u32) == 0
+}
+
 pub fn pending_request_effects(vm_ptr: u32, base: u32) -> u32 {
-    unsafe {
-        let vm = &*(vm_ptr as *const ThreadState);
-        let ring_base = process_fs_ring_base(base, vm);
-        if ring_base == 0 {
-            return 0;
-        }
-        match ring_buffer::peek_request_info(ring_base) {
-            Some(request) => classify_pending_request_effects(&request),
-            None => 0,
-        }
-    }
+    with_pending_request(vm_ptr, base, 0, |_, request| {
+        classify_pending_request_effects(request)
+    })
 }
 
 fn pending_request_target_ino_inner(
@@ -130,31 +155,13 @@ fn pending_request_target_ino_inner(
 }
 
 pub fn pending_request_target_ino(vm_ptr: u32, base: u32) -> u32 {
-    unsafe {
-        let vm = &*(vm_ptr as *const ThreadState);
-        let ring_base = process_fs_ring_base(base, vm);
-        if ring_base == 0 {
-            return 0;
-        }
-        match ring_buffer::peek_request_info(ring_base) {
-            Some(request) => pending_request_target_ino_inner(vm, base, &request),
-            None => 0,
-        }
-    }
+    with_pending_request(vm_ptr, base, 0, |vm, request| {
+        pending_request_target_ino_inner(vm, base, request)
+    })
 }
 
 pub fn pending_request_opcode(vm_ptr: u32, base: u32) -> u32 {
-    unsafe {
-        let vm = &*(vm_ptr as *const ThreadState);
-        let ring_base = process_fs_ring_base(base, vm);
-        if ring_base == 0 {
-            return 0;
-        }
-        match ring_buffer::peek_request_info(ring_base) {
-            Some(request) => request.opcode,
-            None => 0,
-        }
-    }
+    with_pending_request(vm_ptr, base, 0, |_, request| request.opcode)
 }
 
 fn pending_request_path_ptr_inner(request: &ring_buffer::FsRequestInfo) -> u64 {
@@ -175,58 +182,53 @@ fn pending_request_secondary_path_ptr_inner(request: &ring_buffer::FsRequestInfo
     }
 }
 
-pub fn pending_request_path_ptr(vm_ptr: u32, base: u32) -> u64 {
-    unsafe {
-        let vm = &*(vm_ptr as *const ThreadState);
-        let ring_base = process_fs_ring_base(base, vm);
-        if ring_base == 0 {
-            return 0;
-        }
-        match ring_buffer::peek_request_info(ring_base) {
-            Some(request) => pending_request_path_ptr_inner(&request),
-            None => 0,
-        }
+fn pending_request_selected_path_ptr(request: &ring_buffer::FsRequestInfo, secondary: bool) -> u64 {
+    if secondary {
+        pending_request_secondary_path_ptr_inner(request)
+    } else {
+        pending_request_path_ptr_inner(request)
     }
 }
 
-pub fn pending_request_path_len(vm_ptr: u32, base: u32) -> u32 {
-    unsafe {
-        let vm = &*(vm_ptr as *const ThreadState);
-        let ring_base = process_fs_ring_base(base, vm);
-        if ring_base == 0 {
-            return 0;
-        }
-        let Some(request) = ring_buffer::peek_request_info(ring_base) else {
+fn pending_request_path_len_inner(base: u32, path_ptr: u64) -> u32 {
+    let guest_limit =
+        ((core::arch::wasm32::memory_size(0) as u64) * 65536).saturating_sub(base as u64);
+    if path_ptr >= guest_limit || path_ptr > u32::MAX as u64 {
+        return 0;
+    }
+    let mut len = 0u32;
+    while (len as usize) < PENDING_FS_PATH_MAX {
+        let Some(cur) = path_ptr.checked_add(len as u64) else {
             return 0;
         };
-        let path_ptr = pending_request_path_ptr_inner(&request);
+        if cur >= guest_limit || cur > u32::MAX as u64 {
+            return 0;
+        }
+        if crate::syscall::memory::range_has_prot_none(cur, 1) {
+            return 0;
+        }
+        if unsafe { guest_mem::read_u8(base, cur) } == 0 {
+            return len;
+        }
+        len += 1;
+    }
+    len
+}
+
+pub fn pending_request_path_ptr(vm_ptr: u32, base: u32) -> u64 {
+    with_pending_request(vm_ptr, base, 0, |_, request| {
+        pending_request_path_ptr_inner(request)
+    })
+}
+
+pub fn pending_request_path_len(vm_ptr: u32, base: u32) -> u32 {
+    with_pending_request(vm_ptr, base, 0, |_, request| {
+        let path_ptr = pending_request_path_ptr_inner(request);
         if path_ptr == 0 {
             return 0;
         }
-        let guest_limit =
-            ((core::arch::wasm32::memory_size(0) as u64) * 65536).saturating_sub(base as u64);
-        if path_ptr >= guest_limit || path_ptr > u32::MAX as u64 {
-            return 0;
-        }
-        let mut len = 0u32;
-        while (len as usize) < PENDING_FS_PATH_MAX {
-            let Some(cur) = path_ptr.checked_add(len as u64) else {
-                return 0;
-            };
-            if cur >= guest_limit || cur > u32::MAX as u64 {
-                return 0;
-            }
-            if crate::syscall::memory::range_has_prot_none(cur, 1) {
-                return 0;
-            }
-            let byte = guest_mem::read_u8(base, cur);
-            if byte == 0 {
-                return len;
-            }
-            len += 1;
-        }
-        len
-    }
+        pending_request_path_len_inner(base, path_ptr)
+    })
 }
 
 pub fn pending_request_absolute_path(vm_ptr: u32, base: u32, out_ptr: u32, out_len: u32) -> i64 {
@@ -249,26 +251,17 @@ fn pending_request_absolute_path_impl(
     out_len: u32,
     secondary: bool,
 ) -> i64 {
-    unsafe {
-        let vm = &*(vm_ptr as *const ThreadState);
-        let ring_base = process_fs_ring_base(base, vm);
-        if ring_base == 0 || out_ptr == 0 || out_len == 0 {
-            return 0;
-        }
-        let Some(request) = ring_buffer::peek_request_info(ring_base) else {
-            return 0;
-        };
-        let path_ptr = if secondary {
-            pending_request_secondary_path_ptr_inner(&request)
-        } else {
-            pending_request_path_ptr_inner(&request)
-        };
+    if out_ptr == 0 || out_len == 0 {
+        return 0;
+    }
+    with_pending_request(vm_ptr, base, 0, |vm, request| {
+        let path_ptr = pending_request_selected_path_ptr(request, secondary);
         if path_ptr == 0 {
             return 0;
         }
 
         let mut path_buf = [0u8; 513];
-        let len = guest_mem::read_cstr(base, path_ptr, &mut path_buf[1..]);
+        let len = unsafe { guest_mem::read_cstr(base, path_ptr, &mut path_buf[1..]) };
         let raw_path = &path_buf[1..1 + len];
         let path = trim_trailing_slashes(raw_path);
         if path.is_empty() {
@@ -344,10 +337,10 @@ fn pending_request_absolute_path_impl(
         if absolute_len > out_len as usize {
             return ENOSPC;
         }
-        let out = core::slice::from_raw_parts_mut(out_ptr as *mut u8, out_len as usize);
+        let out = unsafe { core::slice::from_raw_parts_mut(out_ptr as *mut u8, out_len as usize) };
         out[..absolute_len].copy_from_slice(&absolute[..absolute_len]);
         absolute_len as i64
-    }
+    })
 }
 
 pub fn resume_from_fs(vm_ptr: u32, base: u32) -> i64 {
@@ -360,7 +353,7 @@ pub fn resume_from_fs(vm_ptr: u32, base: u32) -> i64 {
             return ENOMEM;
         }
 
-        let result = ring_buffer::read_completion(ring_base);
+        let result = ring_buffer::read_completion_for_vm(ring_base, vm_ptr);
         vm.x[10] = result as u64;
         vm.status = STATUS_OK;
         result
@@ -375,6 +368,10 @@ pub fn dispatch_openat(
     flags: u64,
     mode: u64,
 ) -> i64 {
+    if openat_can_run_locally(flags as u32) {
+        return crate::syscall::fs::sys_openat(vm, base, dirfd, path_addr, flags, mode);
+    }
+
     submit_fs_request(
         vm,
         base,
@@ -387,6 +384,92 @@ pub fn dispatch_openat(
         flags as u32,
         mode as u32,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{dispatch_lseek, dispatch_openat, dispatch_write};
+    use crate::abi::{O_CREAT, O_RDONLY, O_WRONLY, STATUS_FS, STATUS_OK, SYS_WRITE};
+    use crate::harness::TestVm;
+
+    #[test]
+    fn dispatch_openat_runs_read_only_existing_files_locally() {
+        let mut vm = TestVm::new();
+        vm.memfs.create_file(b"hello.txt", b"hello");
+        let path_addr = vm.write_path(0x400, b"/hello.txt");
+
+        let fd = dispatch_openat(
+            &mut vm.vm,
+            vm.base,
+            (-100i64) as u64,
+            path_addr,
+            O_RDONLY as u64,
+            0,
+        );
+
+        assert!(fd >= 3);
+        assert_eq!(vm.vm.status, STATUS_OK);
+
+        let mut buf = [0u8; 5];
+        assert_eq!(vm.sys_read(fd, &mut buf), 5);
+        assert_eq!(&buf, b"hello");
+    }
+
+    #[test]
+    fn dispatch_openat_keeps_creating_opens_on_fs_ring() {
+        let mut vm = TestVm::new();
+        let path_addr = vm.write_path(0x400, b"/created.txt");
+
+        let result = dispatch_openat(
+            &mut vm.vm,
+            vm.base,
+            (-100i64) as u64,
+            path_addr,
+            (O_RDONLY | O_CREAT) as u64,
+            0o644,
+        );
+
+        assert_eq!(result, 0);
+        assert_eq!(vm.vm.status, STATUS_FS);
+    }
+
+    #[test]
+    fn dispatch_write_runs_regular_files_locally() {
+        let mut vm = TestVm::new();
+        vm.memfs.create_file(b"write.txt", b"seed");
+        let fd = vm.sys_openat(b"/write.txt", O_WRONLY);
+        assert!(fd >= 3);
+
+        let data_addr = vm.scratch + 0x800;
+        vm.write_mem(data_addr, b"hello");
+        let written = dispatch_write(&mut vm.vm, vm.base, fd as u64, data_addr, 5, SYS_WRITE);
+
+        assert_eq!(written, 5);
+        assert_eq!(vm.vm.status, STATUS_OK);
+
+        let read_fd = vm.sys_openat(b"/write.txt", O_RDONLY);
+        assert!(read_fd >= 3);
+        let mut buf = [0u8; 5];
+        assert_eq!(vm.sys_read(read_fd, &mut buf), 5);
+        assert_eq!(&buf, b"hello");
+    }
+
+    #[test]
+    fn dispatch_lseek_runs_locally() {
+        let mut vm = TestVm::new();
+        vm.memfs.create_file(b"seek.txt", b"abcdef");
+        let fd = vm.sys_openat(b"/seek.txt", O_RDONLY);
+        assert!(fd >= 3);
+
+        let seeked = dispatch_lseek(&mut vm.vm, vm.base, fd as u64, 2, 0);
+
+        assert_eq!(seeked, 2);
+        assert_eq!(vm.vm.status, STATUS_OK);
+
+        let mut buf = [0u8; 4];
+        assert_eq!(vm.sys_read(fd, &mut buf), 4);
+        assert_eq!(&buf, b"cdef");
+    }
 }
 
 pub fn dispatch_pwrite64(
@@ -439,6 +522,7 @@ pub fn dispatch_write(
         || ofd.fd_type == FD_TYPE_EVENTFD
         || ofd.fd_type == FD_TYPE_PTY_MASTER
         || ofd.fd_type == FD_TYPE_PTY_SLAVE
+        || ofd.fd_type == FD_TYPE_FILE
     {
         return sys_write(vm, base, fd, buf, count, nr);
     }
@@ -576,18 +660,7 @@ pub fn dispatch_getdents64(
 }
 
 pub fn dispatch_lseek(vm: &mut ThreadState, base: u32, fd: u64, offset: i64, whence: u64) -> i64 {
-    submit_fs_request(
-        vm,
-        base,
-        ring_buffer::FS_OP_LSEEK,
-        fd as i32,
-        offset as u64,
-        0,
-        0,
-        0,
-        whence as u32,
-        0,
-    )
+    crate::syscall::fs::sys_lseek(vm, base, fd, offset, whence)
 }
 
 pub fn dispatch_ftruncate(vm: &mut ThreadState, base: u32, fd: u64, length: u64) -> i64 {

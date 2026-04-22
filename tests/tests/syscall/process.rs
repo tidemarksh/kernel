@@ -50,6 +50,15 @@ fn read_file_bytes(path: &[u8]) -> Vec<u8> {
     buf
 }
 
+fn read_link_bytes(path: &[u8]) -> Vec<u8> {
+    let ino = memfs::resolve_path(path);
+    assert_ne!(ino, 0, "missing symlink path: {:?}", path);
+    let mut buf = vec![0u8; 512];
+    let n = memfs::read_link(ino, &mut buf);
+    buf.truncate(n);
+    buf
+}
+
 fn build_test_elf(code: &[u8]) -> Vec<u8> {
     fn put_u16(buf: &mut [u8], off: usize, value: u16) {
         buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
@@ -769,10 +778,49 @@ fn contract_vfork_exit_preserves_parent_thread_state() {
 }
 
 #[test]
+fn contract_vfork_from_secondary_thread_detaches_parent_thread_record_until_resume() {
+    let mut t = TestVm::new();
+    t.vm.tid = 3;
+    let caller_ptr = &t.vm as *const _ as u32;
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    ps.thread_count
+        .store(3, core::sync::atomic::Ordering::Release);
+    ps.threads[0] = ThreadRecord::new(1, THREAD_RUNNING, 0xFEED_BEEFu32, 0, 0);
+    ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, 0xCAFE_BABEu32, 0, 0);
+    ps.threads[2] = ThreadRecord::new(3, THREAD_RUNNING, caller_ptr, 0, 0);
+
+    let parent_process_ptr = t.vm.process_ptr;
+    let status = process_impl::sys_vfork(&mut t.vm, t.base);
+    assert_eq!(status, STATUS_VFORK_WAIT);
+
+    let parent_ps = unsafe { &*((t.base as u64 + parent_process_ptr as u64) as *const ProcessState) };
+    assert_eq!(
+        parent_ps.thread_count.load(core::sync::atomic::Ordering::Acquire),
+        2
+    );
+    assert_eq!(parent_ps.threads[2].state, THREAD_NONE);
+    assert_eq!(parent_ps.threads[2].thread_ptr, 0);
+
+    let child_pid = process_impl::vfork_child_pid();
+    process_impl::vfork_parent_resume(&mut t.vm, child_pid);
+
+    let parent_ps = unsafe { &*((t.base as u64 + parent_process_ptr as u64) as *const ProcessState) };
+    assert_eq!(
+        parent_ps.thread_count.load(core::sync::atomic::Ordering::Acquire),
+        3
+    );
+    assert_eq!(parent_ps.threads[2].tid, 3);
+    assert_eq!(parent_ps.threads[2].state, THREAD_RUNNING);
+    assert_eq!(parent_ps.threads[2].thread_ptr, caller_ptr);
+}
+
+#[test]
 fn contract_execve_completes_in_place_without_spawn() {
     let mut t = TestVm::new();
     let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
     let path_addr = install_exec_file(&t, b"test", &elf);
+    assert_ne!(memfs::resolve_path(b"/bin/test"), 0);
+    assert_eq!(t.guest_mem(path_addr, 10), b"/bin/test\0");
 
     let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
     assert_eq!(ret, 0);
@@ -1903,6 +1951,84 @@ fn semantics_vfork_parent_restore_without_cleanup_preserves_distinct_capture_pip
     assert_eq!(stdout_pipe_after.fd_type, FD_TYPE_PIPE);
     assert_eq!(stderr_pipe_after.fd_type, FD_TYPE_PIPE);
     assert_ne!(stdout_pipe_after.ino, stderr_pipe_after.ino);
+}
+
+#[test]
+fn semantics_vfork_parent_resume_restores_proc_self_exe_target() {
+    let mut t = TestVm::new();
+    let parent_path_addr = install_exec_file(&t, b"parent", &build_test_elf(&[0x13]));
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, parent_path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(read_link_bytes(b"/proc/self/exe"), b"/bin/parent");
+
+    let status = process_impl::sys_vfork(&mut t.vm, t.base);
+    assert_eq!(status, STATUS_VFORK_WAIT);
+
+    let child_path_addr = install_exec_file(&t, b"child", &build_test_elf(&[0x13]));
+    let child_pid = process_impl::sys_execve(&mut t.vm, t.base, child_path_addr, 0, 0);
+    assert_eq!(t.vm.status, STATUS_EXECVE_SPAWN);
+    assert_eq!(read_link_bytes(b"/proc/self/exe"), b"/bin/child");
+
+    process_impl::vfork_parent_resume(&mut t.vm, child_pid as i32);
+    assert_eq!(read_link_bytes(b"/proc/self/exe"), b"/bin/parent");
+}
+
+#[test]
+fn semantics_vfork_preserves_memfs_paths_before_execve() {
+    let mut t = TestVm::new();
+    let parent_elf = build_test_elf(&[0x13]);
+    let parent_path_addr = install_exec_file(&t, b"parent", &parent_elf);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, parent_path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(read_link_bytes(b"/proc/self/exe"), b"/bin/parent");
+
+    let tool_path = b"/usr/local/go/bin/go";
+    let tool_elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    let tool_path_addr = install_exec_file_at(&t, tool_path, &tool_elf);
+    assert_eq!(read_file_bytes(tool_path), tool_elf);
+
+    let status = process_impl::sys_vfork(&mut t.vm, t.base);
+    assert_eq!(status, STATUS_VFORK_WAIT);
+
+    assert_eq!(read_link_bytes(b"/proc/self/exe"), b"/bin/parent");
+    assert_eq!(read_file_bytes(tool_path), tool_elf);
+    assert_ne!(memfs::resolve_path(tool_path), 0, "tool path should remain resolvable during vfork child view");
+    assert_ne!(process_impl::vfork_child_pid(), 0);
+
+    let child_ret = process_impl::sys_execve(&mut t.vm, t.base, tool_path_addr, 0, 0);
+    assert!(child_ret > 0);
+    assert_eq!(t.vm.status, STATUS_EXECVE_SPAWN);
+}
+
+#[test]
+fn semantics_vfork_from_secondary_thread_preserves_memfs_paths_before_execve() {
+    let mut t = TestVm::new();
+    t.vm.tid = 3;
+    let caller_ptr = &t.vm as *const _ as u32;
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    ps.thread_count
+        .store(3, core::sync::atomic::Ordering::Release);
+    ps.threads[0] = ThreadRecord::new(1, THREAD_RUNNING, 0xFEED_BEEFu32, 0, 0);
+    ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, 0xCAFE_BABEu32, 0, 0);
+    ps.threads[2] = ThreadRecord::new(3, THREAD_RUNNING, caller_ptr, 0, 0);
+
+    let tool_path = b"/usr/local/go/bin/go";
+    let tool_elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    let tool_path_addr = install_exec_file_at(&t, tool_path, &tool_elf);
+    assert_eq!(read_file_bytes(tool_path), tool_elf);
+
+    let status = process_impl::sys_vfork(&mut t.vm, t.base);
+    assert_eq!(status, STATUS_VFORK_WAIT);
+
+    assert_eq!(read_file_bytes(tool_path), tool_elf);
+    assert_ne!(memfs::resolve_path(tool_path), 0);
+    assert_ne!(process_impl::vfork_child_pid(), 0);
+
+    let child_ret = process_impl::sys_execve(&mut t.vm, t.base, tool_path_addr, 0, 0);
+    assert!(child_ret > 0);
+    assert_eq!(t.vm.status, STATUS_EXECVE_SPAWN);
 }
 
 #[test]

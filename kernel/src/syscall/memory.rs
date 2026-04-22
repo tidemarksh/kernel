@@ -37,6 +37,38 @@ struct AddressSpaceState {
 }
 
 #[derive(Clone, Copy)]
+struct DebugMemorySyscallEntry {
+    nr: u64,
+    arg0: u64,
+    arg1: u64,
+    arg2: u64,
+    arg3: u64,
+    arg4: u64,
+    arg5: u64,
+    result: i64,
+    pid: i32,
+    process_ptr: u32,
+}
+
+const DEBUG_MEMORY_SYSCALL_TRACE_CAPACITY: usize = 32;
+
+static mut DEBUG_MEMORY_SYSCALL_TRACE: [DebugMemorySyscallEntry;
+    DEBUG_MEMORY_SYSCALL_TRACE_CAPACITY] = [DebugMemorySyscallEntry {
+    nr: 0,
+    arg0: 0,
+    arg1: 0,
+    arg2: 0,
+    arg3: 0,
+    arg4: 0,
+    arg5: 0,
+    result: 0,
+    pid: 0,
+    process_ptr: 0,
+}; DEBUG_MEMORY_SYSCALL_TRACE_CAPACITY];
+static mut DEBUG_MEMORY_SYSCALL_TRACE_LEN: u32 = 0;
+static mut DEBUG_MEMORY_SYSCALL_TRACE_NEXT: u32 = 0;
+
+#[derive(Clone, Copy)]
 enum ProcMapsLabel {
     None,
     Heap,
@@ -117,6 +149,118 @@ pub fn attach_mem_state_ptr(ptr: u32) {
             ptr as *mut AddressSpaceState,
         );
     }
+}
+
+pub(crate) fn record_debug_syscall(
+    vm: &ThreadState,
+    nr: u64,
+    arg0: u64,
+    arg1: u64,
+    arg2: u64,
+    arg3: u64,
+    arg4: u64,
+    arg5: u64,
+    result: i64,
+) {
+    unsafe {
+        let next = DEBUG_MEMORY_SYSCALL_TRACE_NEXT as usize % DEBUG_MEMORY_SYSCALL_TRACE_CAPACITY;
+        DEBUG_MEMORY_SYSCALL_TRACE[next] = DebugMemorySyscallEntry {
+            nr,
+            arg0,
+            arg1,
+            arg2,
+            arg3,
+            arg4,
+            arg5,
+            result,
+            pid: vm.tid,
+            process_ptr: vm.process_ptr,
+        };
+        DEBUG_MEMORY_SYSCALL_TRACE_NEXT =
+            (DEBUG_MEMORY_SYSCALL_TRACE_NEXT + 1) % DEBUG_MEMORY_SYSCALL_TRACE_CAPACITY as u32;
+        if DEBUG_MEMORY_SYSCALL_TRACE_LEN < DEBUG_MEMORY_SYSCALL_TRACE_CAPACITY as u32 {
+            DEBUG_MEMORY_SYSCALL_TRACE_LEN += 1;
+        }
+    }
+}
+
+pub(crate) fn debug_syscall_trace_len() -> u32 {
+    unsafe { DEBUG_MEMORY_SYSCALL_TRACE_LEN }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn debug_clear_syscall_trace() {
+    unsafe {
+        DEBUG_MEMORY_SYSCALL_TRACE_LEN = 0;
+        DEBUG_MEMORY_SYSCALL_TRACE_NEXT = 0;
+    }
+}
+
+fn debug_syscall_trace_entry(index: u32) -> DebugMemorySyscallEntry {
+    unsafe {
+        if index >= DEBUG_MEMORY_SYSCALL_TRACE_LEN {
+            return DebugMemorySyscallEntry {
+                nr: 0,
+                arg0: 0,
+                arg1: 0,
+                arg2: 0,
+                arg3: 0,
+                arg4: 0,
+                arg5: 0,
+                result: 0,
+                pid: 0,
+                process_ptr: 0,
+            };
+        }
+        let len = DEBUG_MEMORY_SYSCALL_TRACE_LEN as usize;
+        let start = if len < DEBUG_MEMORY_SYSCALL_TRACE_CAPACITY {
+            0
+        } else {
+            DEBUG_MEMORY_SYSCALL_TRACE_NEXT as usize
+        };
+        let ring_index = (start + index as usize) % DEBUG_MEMORY_SYSCALL_TRACE_CAPACITY;
+        DEBUG_MEMORY_SYSCALL_TRACE[ring_index]
+    }
+}
+
+pub(crate) fn debug_syscall_trace_entry_nr(index: u32) -> u64 {
+    debug_syscall_trace_entry(index).nr
+}
+
+pub(crate) fn debug_syscall_trace_entry_arg0(index: u32) -> u64 {
+    debug_syscall_trace_entry(index).arg0
+}
+
+pub(crate) fn debug_syscall_trace_entry_arg1(index: u32) -> u64 {
+    debug_syscall_trace_entry(index).arg1
+}
+
+pub(crate) fn debug_syscall_trace_entry_arg2(index: u32) -> u64 {
+    debug_syscall_trace_entry(index).arg2
+}
+
+pub(crate) fn debug_syscall_trace_entry_arg3(index: u32) -> u64 {
+    debug_syscall_trace_entry(index).arg3
+}
+
+pub(crate) fn debug_syscall_trace_entry_arg4(index: u32) -> u64 {
+    debug_syscall_trace_entry(index).arg4
+}
+
+pub(crate) fn debug_syscall_trace_entry_arg5(index: u32) -> u64 {
+    debug_syscall_trace_entry(index).arg5
+}
+
+pub(crate) fn debug_syscall_trace_entry_result(index: u32) -> i64 {
+    debug_syscall_trace_entry(index).result
+}
+
+pub(crate) fn debug_syscall_trace_entry_pid(index: u32) -> i32 {
+    debug_syscall_trace_entry(index).pid
+}
+
+pub(crate) fn debug_syscall_trace_entry_process_ptr(index: u32) -> u32 {
+    debug_syscall_trace_entry(index).process_ptr
 }
 
 /// Initialize memory state. Allocates AddressSpaceState via alloc.rs.
@@ -352,11 +496,7 @@ fn range_cover_end_with_sparse_anon_reservation(s: &AddressSpaceState, addr: u64
         if addr < v.start || addr >= v.end {
             continue;
         }
-        if v.prot != PROT_NONE
-            || v.fd >= 0
-            || (v.flags as u64 & MAP_ANONYMOUS) == 0
-            || (v.flags as u64 & MAP_NORESERVE) == 0
-        {
+        if v.prot != PROT_NONE || v.fd >= 0 || (v.flags as u64 & MAP_ANONYMOUS) == 0 {
             continue;
         }
         cover_end = cover_end.max(v.end);
@@ -454,37 +594,30 @@ pub fn rebase_brk_after_hidden_prefix(hidden_end: u64) {
     }
 }
 
-#[cfg(any(test, feature = "harness"))]
 pub(crate) fn address_space_brk_base() -> u64 {
     ms().brk_base
 }
 
-#[cfg(any(test, feature = "harness"))]
 pub(crate) fn address_space_mmap_next() -> u64 {
     ms().mmap_next
 }
 
-#[cfg(any(test, feature = "harness"))]
 pub(crate) fn address_space_vma_len() -> u32 {
     ms().vmas.len() as u32
 }
 
-#[cfg(any(test, feature = "harness"))]
 pub(crate) fn address_space_vma_start(index: u32) -> u64 {
     ms().vmas.get(index as usize).map(|v| v.start).unwrap_or(0)
 }
 
-#[cfg(any(test, feature = "harness"))]
 pub(crate) fn address_space_vma_end(index: u32) -> u64 {
     ms().vmas.get(index as usize).map(|v| v.end).unwrap_or(0)
 }
 
-#[cfg(any(test, feature = "harness"))]
 pub(crate) fn address_space_vma_prot(index: u32) -> i32 {
     ms().vmas.get(index as usize).map(|v| v.prot).unwrap_or(0)
 }
 
-#[cfg(any(test, feature = "harness"))]
 pub(crate) fn address_space_vma_flags(index: u32) -> i32 {
     ms().vmas.get(index as usize).map(|v| v.flags).unwrap_or(0)
 }
@@ -796,8 +929,7 @@ pub fn sys_mmap(
     let is_fixed_noreplace = (flags & MAP_FIXED_NOREPLACE) != 0;
     let is_fixed = (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) != 0;
     let is_anon = (flags & MAP_ANONYMOUS) != 0;
-    let is_prot_none_reservation =
-        is_anon && prot as i32 == PROT_NONE && (flags & MAP_NORESERVE) != 0;
+    let is_sparse_anon_reservation = is_anon && prot as i32 == PROT_NONE;
 
     // Validate fd for file-backed mmap
     // https://man7.org/linux/man-pages/man2/mmap.2.html
@@ -813,6 +945,7 @@ pub fn sys_mmap(
     };
 
     let mut sparse_fixed_upgrade = false;
+    let mut remove_fixed_overlap_after_validation = false;
     let start = if is_fixed {
         if addr & (PAGE_SIZE - 1) != 0 {
             return EINVAL;
@@ -824,7 +957,7 @@ pub fn sys_mmap(
             && prot as i32 != PROT_NONE
             && needs_sparse_linear_backing(base, end)
             && range_fully_covered_by_sparse_anon_reservation(s, addr, end);
-        let fixed_limit = if is_prot_none_reservation || sparse_fixed_upgrade_candidate {
+        let fixed_limit = if is_sparse_anon_reservation || sparse_fixed_upgrade_candidate {
             prot_none_reservation_limit()
         } else {
             guest_limit
@@ -838,7 +971,7 @@ pub fn sys_mmap(
             }
         } else {
             sparse_fixed_upgrade = sparse_fixed_upgrade_candidate;
-            remove_overlap(s, addr, end);
+            remove_fixed_overlap_after_validation = true;
         }
         addr
     } else if addr != 0
@@ -909,6 +1042,10 @@ pub fn sys_mmap(
                 }
             }
         }
+    }
+
+    if remove_fixed_overlap_after_validation {
+        remove_overlap(s, start, start + len);
     }
 
     s.vmas.push(Vma {

@@ -210,6 +210,109 @@ pub extern "C" fn kernel_time_state_bytes() -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_syscall_trace_len() -> u32 {
+    crate::syscall::memory::debug_syscall_trace_len()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_syscall_trace_entry_nr(index: u32) -> u64 {
+    crate::syscall::memory::debug_syscall_trace_entry_nr(index)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_syscall_trace_entry_arg0(index: u32) -> u64 {
+    crate::syscall::memory::debug_syscall_trace_entry_arg0(index)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_syscall_trace_entry_arg1(index: u32) -> u64 {
+    crate::syscall::memory::debug_syscall_trace_entry_arg1(index)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_syscall_trace_entry_arg2(index: u32) -> u64 {
+    crate::syscall::memory::debug_syscall_trace_entry_arg2(index)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_syscall_trace_entry_arg3(index: u32) -> u64 {
+    crate::syscall::memory::debug_syscall_trace_entry_arg3(index)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_syscall_trace_entry_arg4(index: u32) -> u64 {
+    crate::syscall::memory::debug_syscall_trace_entry_arg4(index)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_syscall_trace_entry_arg5(index: u32) -> u64 {
+    crate::syscall::memory::debug_syscall_trace_entry_arg5(index)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_syscall_trace_entry_result(index: u32) -> i64 {
+    crate::syscall::memory::debug_syscall_trace_entry_result(index)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_syscall_trace_entry_pid(index: u32) -> i32 {
+    crate::syscall::memory::debug_syscall_trace_entry_pid(index)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_syscall_trace_entry_process_ptr(index: u32) -> u32 {
+    crate::syscall::memory::debug_syscall_trace_entry_process_ptr(index)
+}
+
+#[cfg(not(any(test, feature = "harness")))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_brk_base() -> u64 {
+    crate::syscall::memory::address_space_brk_base()
+}
+
+#[cfg(not(any(test, feature = "harness")))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_brk_current() -> u64 {
+    crate::syscall::memory::current_brk()
+}
+
+#[cfg(not(any(test, feature = "harness")))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_mmap_next() -> u64 {
+    crate::syscall::memory::address_space_mmap_next()
+}
+
+#[cfg(not(any(test, feature = "harness")))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_vma_len() -> u32 {
+    crate::syscall::memory::address_space_vma_len()
+}
+
+#[cfg(not(any(test, feature = "harness")))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_vma_start(index: u32) -> u64 {
+    crate::syscall::memory::address_space_vma_start(index)
+}
+
+#[cfg(not(any(test, feature = "harness")))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_vma_end(index: u32) -> u64 {
+    crate::syscall::memory::address_space_vma_end(index)
+}
+
+#[cfg(not(any(test, feature = "harness")))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_vma_prot(index: u32) -> i32 {
+    crate::syscall::memory::address_space_vma_prot(index)
+}
+
+#[cfg(not(any(test, feature = "harness")))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_vma_flags(index: u32) -> i32 {
+    crate::syscall::memory::address_space_vma_flags(index)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn kernel_reset_memfs() {
     crate::fs::memfs::reset();
 }

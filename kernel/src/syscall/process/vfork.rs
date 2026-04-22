@@ -1,12 +1,17 @@
 use super::handoff::clear_spawn_handoff;
 use super::lifecycle::{
-    alloc_pid, current_process_state_mut, ensure_current_process, inherit_process, record_child,
+    alloc_pid_avoiding_live_threads, current_process_state_mut, ensure_current_process,
+    inherit_process, record_child,
 };
-use super::runtime::{empty_vfork_snapshot, prs};
+use super::runtime::{
+    capture_thread_snapshot, clear_vfork_proc_self_exe_snapshot, clear_vfork_runtime_snapshot,
+    prs, restore_thread_snapshot,
+};
 use crate::abi::*;
 use crate::fs::fd_table;
 use crate::guest_mem;
-use crate::types::{ProcessState, THREAD_RUNNING, ThreadRecord, ThreadState};
+use crate::types::{ProcessState, THREAD_NONE, THREAD_RUNNING, ThreadRecord, ThreadState};
+use core::sync::atomic::Ordering;
 
 pub(super) fn reattach_guest_thread_count(vm: &mut ThreadState, base: u32) {
     if let Some(ps) = current_process_state_mut(vm, base) {
@@ -18,6 +23,42 @@ pub(super) fn reattach_guest_thread_count(vm: &mut ThreadState, base: u32) {
         unsafe {
             guest_mem::init(gen_ptr, lock_ptr, tc_ptr);
         }
+    }
+}
+
+fn detach_parent_thread_for_vfork(base: u32, process_ptr: u32, tid: i32) {
+    if process_ptr == 0 || tid <= 0 || tid as usize > MAX_THREADS {
+        return;
+    }
+    let ps = unsafe { &mut *((base as u64 + process_ptr as u64) as *mut ProcessState) };
+    let record = &mut ps.threads[(tid - 1) as usize];
+    if record.thread_ptr == 0 && record.state == THREAD_NONE {
+        return;
+    }
+    *record = ThreadRecord::empty();
+    ps.thread_count
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            Some(count.saturating_sub(1))
+        })
+        .ok();
+}
+
+fn restore_parent_thread_after_vfork(vm: &ThreadState, base: u32) {
+    if vm.process_ptr == 0 || vm.tid <= 0 || vm.tid as usize > MAX_THREADS {
+        return;
+    }
+    let ps = unsafe { &mut *((base as u64 + vm.process_ptr as u64) as *mut ProcessState) };
+    let record = &mut ps.threads[(vm.tid - 1) as usize];
+    let needs_count_restore = record.thread_ptr == 0 || record.state == THREAD_NONE;
+    *record = ThreadRecord::new(
+        vm.tid,
+        THREAD_RUNNING,
+        vm as *const ThreadState as u32,
+        vm.clear_child_tid as u32,
+        0,
+    );
+    if needs_count_restore {
+        ps.thread_count.fetch_add(1, Ordering::AcqRel);
     }
 }
 
@@ -71,12 +112,12 @@ fn clone_process_state_for_vfork(
     for record in child_ps.threads.iter_mut() {
         *record = ThreadRecord::empty();
     }
-    if vm.tid > 0 && vm.tid as usize <= MAX_THREADS {
-        child_ps.threads[(vm.tid - 1) as usize] = ThreadRecord::new(
-            vm.tid,
+    if child_pid > 0 && child_pid as usize <= MAX_THREADS {
+        child_ps.threads[(child_pid - 1) as usize] = ThreadRecord::new(
+            child_pid,
             THREAD_RUNNING,
             vm as *const ThreadState as u32,
-            vm.clear_child_tid as u32,
+            0,
             0,
         );
     }
@@ -85,13 +126,26 @@ fn clone_process_state_for_vfork(
     Some(child_ps_addr as u32)
 }
 
+fn retire_vfork_child_process(base: u32, child_process_ptr: u32) {
+    if child_process_ptr == 0 {
+        return;
+    }
+
+    let absolute = base as u64 + child_process_ptr as u64;
+    unsafe {
+        core::ptr::write_bytes(absolute as *mut u8, 0, core::mem::size_of::<ProcessState>());
+    }
+}
+
 pub fn sys_vfork(vm: &mut ThreadState, base: u32) -> i32 {
     clear_spawn_handoff(vm);
+    let parent_process_ptr = vm.process_ptr;
+    let parent_tid = vm.tid;
     let parent_pid = ensure_current_process(vm, base)
         .map(|slot| slot.pid)
         .unwrap_or(0);
     let child_pid = if parent_pid > 0 {
-        let pid = alloc_pid();
+        let pid = alloc_pid_avoiding_live_threads(vm, base);
         record_child(parent_pid, pid);
         inherit_process(parent_pid, parent_pid, pid, false);
         crate::syscall::signal::fork_from_parent(parent_pid, pid);
@@ -108,72 +162,20 @@ pub fn sys_vfork(vm: &mut ThreadState, base: u32) -> i32 {
     } else {
         vm.process_ptr
     };
-    prs().vfork_snapshot = super::runtime::VforkSnapshot {
-        x: vm.x,
-        pc: vm.pc,
-        f: vm.f,
-        fcsr: vm.fcsr,
-        status: vm.status,
-        exit_code: vm.exit_code,
-        term_signal: vm.term_signal,
-        tid: vm.tid,
-        uid: vm.uid,
-        euid: vm.euid,
-        gid: vm.gid,
-        egid: vm.egid,
-        tls_base: vm.tls_base,
-        clear_child_tid: vm.clear_child_tid,
-        robust_list_head: vm.robust_list_head,
-        robust_list_len: vm.robust_list_len,
-        sig_mask: vm.sig_mask,
-        sig_pending: vm.sig_pending,
-        sig_info_code: vm.sig_info_code,
-        sigaltstack_sp: vm.sigaltstack_sp,
-        sigaltstack_size: vm.sigaltstack_size,
-        sigaltstack_flags: vm.sigaltstack_flags,
-        lr_addr: vm.lr_addr,
-        lr_val: vm.lr_val,
-        lr_gen: vm.lr_gen,
-        lr_gen_end: vm.lr_gen_end,
-        insn_budget: vm.insn_budget,
-        fault_pc: vm.fault_pc,
-        fault_addr: vm.fault_addr,
-        guest_base: vm.guest_base,
-        guest_ram_limit: vm.guest_ram_limit,
-        process_ptr: vm.process_ptr,
-        clone_flags: vm.clone_flags,
-        clone_child_stack: vm.clone_child_stack,
-        clone_tls: vm.clone_tls,
-        clone_child_tidptr: vm.clone_child_tidptr,
-        clone_child_tid: vm.clone_child_tid,
-        clone_pending: vm.clone_pending,
-        spawn_kind: vm.spawn_kind,
-        spawn_ram_size: vm.spawn_ram_size,
-        spawn_child_pid: vm.spawn_child_pid,
-        spawn_path: vm.spawn_path,
-        spawn_argv: vm.spawn_argv,
-        spawn_envp: vm.spawn_envp,
-        wait_pid: vm.wait_pid,
-        wait_kind: vm.wait_kind,
-        wait_idtype: vm.wait_idtype,
-        wait_wstatus_addr: vm.wait_wstatus_addr,
-        wait_options: vm.wait_options,
-        wait_rusage_addr: vm.wait_rusage_addr,
-        futex_wait_addr: vm.futex_wait_addr,
-        futex_wait_timeout: vm.futex_wait_timeout,
-        futex_wait_expected: vm.futex_wait_expected,
-        futex_wait_bitset: vm.futex_wait_bitset,
-        futex_wait_absolute: vm.futex_wait_absolute,
-        futex_wait_flags: vm.futex_wait_flags,
-        epoll_timeout_ms: vm.epoll_timeout_ms,
-        socket_timeout_ms: vm.socket_timeout_ms,
-        epoll_maxevents: vm.epoll_maxevents,
-        blocked_fd: vm.blocked_fd,
-        blocked_ofd_id: vm.blocked_ofd_id,
-        child_pid,
-    };
+    let mut proc_self_exe_target = [0u8; super::execve::PROC_SELF_EXE_SNAPSHOT_MAX];
+    let proc_self_exe_len = super::execve::snapshot_proc_self_exe_target(&mut proc_self_exe_target);
+    if proc_self_exe_len == 0 {
+        clear_vfork_proc_self_exe_snapshot();
+    } else {
+        super::runtime::store_vfork_proc_self_exe_snapshot(
+            &proc_self_exe_target[..proc_self_exe_len],
+        );
+    }
+    prs().vfork_snapshot = capture_thread_snapshot(vm, child_pid);
     prs().vfork_active = 1;
+    detach_parent_thread_for_vfork(base, parent_process_ptr, parent_tid);
     vm.sig_pending = 0;
+    vm.tid = child_pid;
     vm.process_ptr = child_process_ptr;
     reattach_guest_thread_count(vm, base);
     vm.x[10] = 0;
@@ -187,70 +189,24 @@ fn vfork_parent_resume_inner(vm: &mut ThreadState, child_pid: i32, cleanup_child
     }
     let snap = prs().vfork_snapshot;
     prs().vfork_active = 0;
-    if cleanup_child_fds && vm.process_ptr != 0 && vm.process_ptr != snap.process_ptr {
+    let child_process_ptr = if vm.process_ptr != 0 && vm.process_ptr != snap.process_ptr {
+        vm.process_ptr
+    } else {
+        0
+    };
+    if cleanup_child_fds && child_process_ptr != 0 {
         crate::fs::fd_table::close_all_for_process(vm.guest_base, vm);
     }
-    vm.x = snap.x;
-    vm.pc = snap.pc;
-    vm.f = snap.f;
-    vm.fcsr = snap.fcsr;
-    vm.status = snap.status;
-    vm.exit_code = snap.exit_code;
-    vm.term_signal = snap.term_signal;
-    vm.tid = snap.tid;
-    vm.uid = snap.uid;
-    vm.euid = snap.euid;
-    vm.gid = snap.gid;
-    vm.egid = snap.egid;
-    vm.tls_base = snap.tls_base;
-    vm.clear_child_tid = snap.clear_child_tid;
-    vm.robust_list_head = snap.robust_list_head;
-    vm.robust_list_len = snap.robust_list_len;
-    vm.sig_mask = snap.sig_mask;
-    vm.sig_pending = snap.sig_pending;
-    vm.sig_info_code = snap.sig_info_code;
-    vm.sigaltstack_sp = snap.sigaltstack_sp;
-    vm.sigaltstack_size = snap.sigaltstack_size;
-    vm.sigaltstack_flags = snap.sigaltstack_flags;
-    vm.lr_addr = snap.lr_addr;
-    vm.lr_val = snap.lr_val;
-    vm.lr_gen = snap.lr_gen;
-    vm.lr_gen_end = snap.lr_gen_end;
-    vm.insn_budget = snap.insn_budget;
-    vm.fault_pc = snap.fault_pc;
-    vm.fault_addr = snap.fault_addr;
-    vm.guest_base = snap.guest_base;
-    vm.guest_ram_limit = snap.guest_ram_limit;
-    vm.process_ptr = snap.process_ptr;
-    vm.clone_flags = snap.clone_flags;
-    vm.clone_child_stack = snap.clone_child_stack;
-    vm.clone_tls = snap.clone_tls;
-    vm.clone_child_tidptr = snap.clone_child_tidptr;
-    vm.clone_child_tid = snap.clone_child_tid;
-    vm.clone_pending = snap.clone_pending;
-    vm.spawn_kind = snap.spawn_kind;
-    vm.spawn_ram_size = snap.spawn_ram_size;
-    vm.spawn_child_pid = snap.spawn_child_pid;
-    vm.spawn_path = snap.spawn_path;
-    vm.spawn_argv = snap.spawn_argv;
-    vm.spawn_envp = snap.spawn_envp;
-    vm.wait_pid = snap.wait_pid;
-    vm.wait_kind = snap.wait_kind;
-    vm.wait_idtype = snap.wait_idtype;
-    vm.wait_wstatus_addr = snap.wait_wstatus_addr;
-    vm.wait_options = snap.wait_options;
-    vm.wait_rusage_addr = snap.wait_rusage_addr;
-    vm.futex_wait_addr = snap.futex_wait_addr;
-    vm.futex_wait_timeout = snap.futex_wait_timeout;
-    vm.futex_wait_expected = snap.futex_wait_expected;
-    vm.futex_wait_bitset = snap.futex_wait_bitset;
-    vm.futex_wait_absolute = snap.futex_wait_absolute;
-    vm.futex_wait_flags = snap.futex_wait_flags;
-    vm.epoll_timeout_ms = snap.epoll_timeout_ms;
-    vm.socket_timeout_ms = snap.socket_timeout_ms;
-    vm.epoll_maxevents = snap.epoll_maxevents;
-    vm.blocked_fd = snap.blocked_fd;
-    vm.blocked_ofd_id = snap.blocked_ofd_id;
+    restore_thread_snapshot(vm, snap);
+    let proc_self_exe = super::runtime::vfork_proc_self_exe_snapshot();
+    super::execve::restore_proc_self_exe_target(
+        (!proc_self_exe.is_empty()).then_some(proc_self_exe),
+    );
+    clear_vfork_proc_self_exe_snapshot();
+    if child_process_ptr != 0 {
+        retire_vfork_child_process(vm.guest_base, child_process_ptr);
+    }
+    restore_parent_thread_after_vfork(vm, vm.guest_base);
     reattach_guest_thread_count(vm, vm.guest_base);
     vm.x[10] = child_pid as u64;
     clear_spawn_handoff(vm);
@@ -273,6 +229,5 @@ pub fn vfork_parent_restore_without_cleanup(vm: &mut ThreadState, child_pid: i32
 }
 
 pub fn clear_vfork_runtime_state() {
-    prs().vfork_active = 0;
-    prs().vfork_snapshot = empty_vfork_snapshot();
+    clear_vfork_runtime_snapshot();
 }

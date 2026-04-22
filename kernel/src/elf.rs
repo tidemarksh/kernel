@@ -451,11 +451,15 @@ pub unsafe fn load_elf_at(
             crate::tracepoints::record_execve_stage(344, i as u64, p_filesz);
             crate::tracepoints::record_execve_stage(348, i as u64, p_vaddr + p_filesz);
 
-            // Zero BSS (memsz > filesz)
-            if p_memsz > p_filesz {
-                let bss_start = p_vaddr + p_filesz;
-                let bss_len = (p_memsz - p_filesz) as usize;
-                guest_mem::zero_mem(ram_base, bss_start, bss_len);
+            // ELF PT_LOAD mappings expose zero-filled bytes from the end of the
+            // file-backed data through the end of the mapped segment pages.
+            // Fresh process memory masked this before, but execve reuses guest
+            // memory, so we must actively clear the tail to avoid stale bytes
+            // corrupting post-exec runtime metadata.
+            let zero_start = p_vaddr.saturating_add(p_filesz);
+            let zero_end = align_up(p_vaddr.saturating_add(p_memsz), 4096).min(ram_size);
+            if zero_end > zero_start {
+                guest_mem::zero_mem(ram_base, zero_start, (zero_end - zero_start) as usize);
             }
             crate::tracepoints::record_execve_stage(345, i as u64, p_memsz);
             crate::tracepoints::record_execve_stage(349, i as u64, p_vaddr + p_memsz);
@@ -514,8 +518,8 @@ pub unsafe fn setup_stack(
         let argc = argv.len();
         let envc = envp.len();
 
-        // Auxiliary vector entries
-        // Match the legacy/core loader posture for rv64gc userland startup.
+        // Auxiliary vector entries required by the current rv64gc userland
+        // startup path.
         let auxv: [(u64, u64); 10] = [
             (AT_PAGESZ, 4096),
             (AT_PHDR, elf_result.aux_phdr_addr),

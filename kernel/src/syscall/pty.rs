@@ -1,10 +1,10 @@
 //! Pseudo-terminal control plane.
 //!
 //! Primary sources:
-//! - docs/specs/man/ioctl.2.html
-//! - /usr/include/asm-generic/ioctls.h
-//! - /usr/include/asm-generic/termbits.h
-//! - /usr/include/asm-generic/termios.h
+//! - https://man7.org/linux/man-pages/man2/ioctl.2.html
+//! - https://codebrowser.dev/linux/linux/include/uapi/asm-generic/ioctls.h.html
+//! - https://codebrowser.dev/linux/linux/include/uapi/asm-generic/termbits.h.html
+//! - https://codebrowser.dev/linux/linux/include/uapi/asm-generic/termios.h.html
 
 use crate::abi::*;
 use crate::alloc;

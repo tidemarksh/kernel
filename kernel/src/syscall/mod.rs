@@ -60,6 +60,26 @@ fn record_memory_trace(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64, result: i64)
 }
 
 #[inline(always)]
+fn record_memory_syscall_debug(
+    vm: &ThreadState,
+    nr: u64,
+    a0: u64,
+    a1: u64,
+    a2: u64,
+    a3: u64,
+    a4: u64,
+    a5: u64,
+    result: i64,
+) {
+    match nr {
+        SYS_BRK | SYS_MMAP | SYS_MUNMAP | SYS_MSYNC | SYS_MREMAP | SYS_MPROTECT => {
+            crate::syscall::memory::record_debug_syscall(vm, nr, a0, a1, a2, a3, a4, a5, result);
+        }
+        _ => {}
+    }
+}
+
+#[inline(always)]
 fn trace_fd_snapshot(base: u32, vm: &ThreadState, fd: u64) -> (u32, i32) {
     let Some(ofd_id) = fd_table::get_ofd_id(base, vm, fd) else {
         return (0, 0);
@@ -501,6 +521,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
     };
 
     record_memory_trace(nr, a0, a1, a2, a3, result);
+    record_memory_syscall_debug(vm, nr, a0, a1, a2, a3, a4, a5, result);
     if nr != SYS_RT_SIGRETURN {
         vm.x[10] = result as u64;
     }

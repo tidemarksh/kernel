@@ -119,6 +119,31 @@ fn identity_syscalls() {
         tidemark_kernel::guest_mem::read_bytes(t.base, buf3, &mut bytes);
     }
     assert!(bytes.iter().any(|&b| b != 0));
+
+    let buf4 = buf3 + 0x40;
+    unsafe {
+        tidemark_kernel::guest_mem::zero_mem(t.base, buf4, 16);
+    }
+    let ret2 = tidemark_kernel::syscall::identity::sys_getrandom(&t.vm, t.base, buf4, 16, 0);
+    assert_eq!(ret2, 16);
+    let mut bytes2 = [0u8; 16];
+    unsafe {
+        tidemark_kernel::guest_mem::read_bytes(t.base, buf4, &mut bytes2);
+    }
+    assert_ne!(bytes, bytes2);
+
+    assert_eq!(
+        tidemark_kernel::syscall::identity::sys_getrandom(&t.vm, t.base, buf4, 0, 0),
+        0
+    );
+    assert_eq!(
+        tidemark_kernel::syscall::identity::sys_getrandom(&t.vm, t.base, u64::MAX, 16, 0),
+        tidemark_kernel::abi::EFAULT
+    );
+    assert_eq!(
+        tidemark_kernel::syscall::identity::sys_getrandom(&t.vm, t.base, buf4, 16, 0x8000),
+        tidemark_kernel::abi::EINVAL
+    );
 }
 
 #[test]

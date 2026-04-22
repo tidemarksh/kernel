@@ -51,10 +51,32 @@ const RISCV_HWPROBE_IMA_FD: u64 = 1 << 0;
 const RISCV_HWPROBE_IMA_C: u64 = 1 << 1;
 const RISCV_HWPROBE_MISALIGNED_UNKNOWN: u64 = 0;
 const RISCV_HWPROBE_WHICH_CPUS: u64 = 1 << 0;
+const GRND_NONBLOCK: u64 = 0x0001;
+const GRND_RANDOM: u64 = 0x0002;
+
+static mut GETRANDOM_STATE: u64 = 0;
 
 fn guest_range_valid(addr: u64, len: usize) -> bool {
     let len = len as u64;
     addr != 0 && addr <= u32::MAX as u64 && len <= (u32::MAX as u64 + 1).saturating_sub(addr)
+}
+
+fn splitmix64_next(state: &mut u64) -> u64 {
+    *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
+}
+
+fn getrandom_seed(vm: &ThreadState, buf: u64, len: u64) -> u64 {
+    let (sec, nsec) = crate::syscall::time::current_timespec(0).unwrap_or((0, 0));
+    sec.rotate_left(7)
+        ^ nsec.rotate_left(29)
+        ^ (vm.tid as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        ^ vm.pc.rotate_left(17)
+        ^ buf.rotate_left(31)
+        ^ len.rotate_left(47)
 }
 
 fn parse_cred_arg(raw: i64) -> Result<Option<u32>, i64> {
@@ -163,23 +185,50 @@ pub fn sys_sysinfo(_vm: &ThreadState, base: u32, buf_addr: u64) -> i64 {
     0
 }
 
-/// getrandom: fill buffer with pseudo-random bytes.
-/// Simple xorshift64 seeded from tid + pc for reproducibility.
-pub fn sys_getrandom(vm: &ThreadState, base: u32, buf: u64, len: u64, _flags: u64) -> i64 {
-    let mut state = (vm.tid as u64)
-        .wrapping_mul(6364136223846793005)
-        .wrapping_add(vm.pc);
-    if state == 0 {
-        state = 1;
+/// getrandom: fill the caller's buffer with bytes from a kernel-managed PRNG.
+/// https://man7.org/linux/man-pages/man2/getrandom.2.html requires
+/// Linux-shaped flag validation, and repeated calls must not hand back the same
+/// byte stream for the same call site.
+pub fn sys_getrandom(vm: &ThreadState, base: u32, buf: u64, len: u64, flags: u64) -> i64 {
+    let allowed_flags = GRND_NONBLOCK | GRND_RANDOM;
+    if flags & !allowed_flags != 0 {
+        return EINVAL;
     }
-    let count = len as usize;
-    for i in 0..count {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        unsafe {
-            guest_mem::write_u8(base, buf + i as u64, state as u8);
+    if len == 0 {
+        return 0;
+    }
+    let count = match usize::try_from(len) {
+        Ok(count) => count,
+        Err(_) => return EFAULT,
+    };
+    if !guest_range_valid(buf, count) || crate::syscall::memory::range_has_prot_none(buf, len) {
+        return EFAULT;
+    }
+
+    let mut state = unsafe { core::ptr::read(core::ptr::addr_of!(GETRANDOM_STATE)) };
+    if state == 0 {
+        state = getrandom_seed(vm, buf, len);
+        if state == 0 {
+            state = 1;
         }
+    }
+
+    let mut remaining_word = 0u64;
+    let mut remaining_bytes = 0usize;
+    for i in 0..count {
+        if remaining_bytes == 0 {
+            remaining_word = splitmix64_next(&mut state);
+            remaining_bytes = 8;
+        }
+        unsafe {
+            guest_mem::write_u8(base, buf + i as u64, remaining_word as u8);
+        }
+        remaining_word >>= 8;
+        remaining_bytes -= 1;
+    }
+
+    unsafe {
+        core::ptr::write(core::ptr::addr_of_mut!(GETRANDOM_STATE), state);
     }
     count as i64
 }

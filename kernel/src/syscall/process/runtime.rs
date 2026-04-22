@@ -1,10 +1,12 @@
 use crate::abi::*;
 use crate::alloc;
+use crate::types::ThreadState;
 #[cfg(any(test, feature = "harness"))]
 use alloc_crate::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 const MAX_CHILDREN: usize = MAX_PROCESSES;
+const VFORK_PROC_SELF_EXE_MAX: usize = super::execve::PROC_SELF_EXE_SNAPSHOT_MAX;
 
 #[derive(Clone, Copy)]
 pub(super) struct ChildEntry {
@@ -95,8 +97,10 @@ pub(super) struct ProcessRuntimeState {
     pub(super) heap_ptr: AtomicU32,
     pub(super) children: [ChildEntry; MAX_CHILDREN],
     pub(super) next_pid: i32,
+    pub(super) fork_active: u32,
     pub(super) vfork_active: u32,
     pub(super) process_table: [ProcessEntry; MAX_PROCESSES],
+    pub(super) fork_snapshot: VforkSnapshot,
     pub(super) vfork_snapshot: VforkSnapshot,
 }
 
@@ -106,9 +110,13 @@ pub(crate) struct ProcessRuntimeStateImage {
     heap_ptr: u32,
     children: [ChildEntry; MAX_CHILDREN],
     next_pid: i32,
+    fork_active: u32,
     vfork_active: u32,
     process_table: [ProcessEntry; MAX_PROCESSES],
+    fork_snapshot: VforkSnapshot,
     vfork_snapshot: VforkSnapshot,
+    vfork_proc_self_exe_len: u32,
+    vfork_proc_self_exe_target: [u8; VFORK_PROC_SELF_EXE_MAX],
 }
 
 #[cfg(any(test, feature = "harness"))]
@@ -119,6 +127,87 @@ impl ProcessRuntimeStateImage {
 }
 
 static mut PROCESS_RUNTIME_STATE: *mut ProcessRuntimeState = core::ptr::null_mut();
+static mut VFORK_PROC_SELF_EXE_LEN: u32 = 0;
+static mut VFORK_PROC_SELF_EXE_TARGET: [u8; VFORK_PROC_SELF_EXE_MAX] = [0; VFORK_PROC_SELF_EXE_MAX];
+
+macro_rules! for_each_vfork_snapshot_field {
+    ($callback:ident, $target:ident, $source:ident) => {
+        $callback!($target, $source, x);
+        $callback!($target, $source, pc);
+        $callback!($target, $source, f);
+        $callback!($target, $source, fcsr);
+        $callback!($target, $source, status);
+        $callback!($target, $source, exit_code);
+        $callback!($target, $source, term_signal);
+        $callback!($target, $source, tid);
+        $callback!($target, $source, uid);
+        $callback!($target, $source, euid);
+        $callback!($target, $source, gid);
+        $callback!($target, $source, egid);
+        $callback!($target, $source, tls_base);
+        $callback!($target, $source, clear_child_tid);
+        $callback!($target, $source, robust_list_head);
+        $callback!($target, $source, robust_list_len);
+        $callback!($target, $source, sig_mask);
+        $callback!($target, $source, sig_pending);
+        $callback!($target, $source, sig_info_code);
+        $callback!($target, $source, sigaltstack_sp);
+        $callback!($target, $source, sigaltstack_size);
+        $callback!($target, $source, sigaltstack_flags);
+        $callback!($target, $source, lr_addr);
+        $callback!($target, $source, lr_val);
+        $callback!($target, $source, lr_gen);
+        $callback!($target, $source, lr_gen_end);
+        $callback!($target, $source, insn_budget);
+        $callback!($target, $source, fault_pc);
+        $callback!($target, $source, fault_addr);
+        $callback!($target, $source, guest_base);
+        $callback!($target, $source, guest_ram_limit);
+        $callback!($target, $source, process_ptr);
+        $callback!($target, $source, clone_flags);
+        $callback!($target, $source, clone_child_stack);
+        $callback!($target, $source, clone_tls);
+        $callback!($target, $source, clone_child_tidptr);
+        $callback!($target, $source, clone_child_tid);
+        $callback!($target, $source, clone_pending);
+        $callback!($target, $source, spawn_kind);
+        $callback!($target, $source, spawn_ram_size);
+        $callback!($target, $source, spawn_child_pid);
+        $callback!($target, $source, spawn_path);
+        $callback!($target, $source, spawn_argv);
+        $callback!($target, $source, spawn_envp);
+        $callback!($target, $source, wait_pid);
+        $callback!($target, $source, wait_kind);
+        $callback!($target, $source, wait_idtype);
+        $callback!($target, $source, wait_wstatus_addr);
+        $callback!($target, $source, wait_options);
+        $callback!($target, $source, wait_rusage_addr);
+        $callback!($target, $source, futex_wait_addr);
+        $callback!($target, $source, futex_wait_timeout);
+        $callback!($target, $source, futex_wait_expected);
+        $callback!($target, $source, futex_wait_bitset);
+        $callback!($target, $source, futex_wait_absolute);
+        $callback!($target, $source, futex_wait_flags);
+        $callback!($target, $source, epoll_timeout_ms);
+        $callback!($target, $source, socket_timeout_ms);
+        $callback!($target, $source, epoll_maxevents);
+        $callback!($target, $source, blocked_fd);
+        $callback!($target, $source, blocked_ofd_id);
+    };
+}
+
+#[cfg(any(test, feature = "harness"))]
+macro_rules! for_each_runtime_state_image_field {
+    ($callback:ident, $target:ident, $source:ident) => {
+        $callback!($target, $source, children);
+        $callback!($target, $source, next_pid);
+        $callback!($target, $source, fork_active);
+        $callback!($target, $source, vfork_active);
+        $callback!($target, $source, process_table);
+        $callback!($target, $source, fork_snapshot);
+        $callback!($target, $source, vfork_snapshot);
+    };
+}
 
 fn checked_process_runtime_state_ptr() -> *mut ProcessRuntimeState {
     let ptr = unsafe { core::ptr::read(core::ptr::addr_of!(PROCESS_RUNTIME_STATE)) };
@@ -208,6 +297,50 @@ pub(super) fn empty_vfork_snapshot() -> VforkSnapshot {
     }
 }
 
+pub(super) fn capture_thread_snapshot(vm: &ThreadState, child_pid: i32) -> VforkSnapshot {
+    macro_rules! capture_snapshot_field {
+        ($target:ident, $source:ident, $field:ident) => {
+            $target.$field = $source.$field;
+        };
+    }
+
+    let mut snapshot = empty_vfork_snapshot();
+    for_each_vfork_snapshot_field!(capture_snapshot_field, snapshot, vm);
+    snapshot.child_pid = child_pid;
+    snapshot
+}
+
+pub(super) fn restore_thread_snapshot(vm: &mut ThreadState, snap: VforkSnapshot) {
+    macro_rules! restore_snapshot_field {
+        ($target:ident, $source:ident, $field:ident) => {
+            $target.$field = $source.$field;
+        };
+    }
+
+    for_each_vfork_snapshot_field!(restore_snapshot_field, vm, snap);
+}
+
+pub(super) fn rewrite_snapshot_child_pid(snapshot: &mut VforkSnapshot, old_pid: i32, new_pid: i32) {
+    if snapshot.child_pid == old_pid {
+        snapshot.child_pid = new_pid;
+    }
+}
+
+pub(super) fn clear_vfork_runtime_snapshot() {
+    prs().vfork_active = 0;
+    prs().vfork_snapshot = empty_vfork_snapshot();
+}
+
+pub(super) fn take_fork_snapshot() -> Option<VforkSnapshot> {
+    if prs().fork_active == 0 {
+        return None;
+    }
+    let snapshot = prs().fork_snapshot;
+    prs().fork_active = 0;
+    prs().fork_snapshot = empty_vfork_snapshot();
+    Some(snapshot)
+}
+
 pub(super) fn seeded_process_table() -> [ProcessEntry; MAX_PROCESSES] {
     let mut table = [ProcessEntry {
         pid: 0,
@@ -231,6 +364,32 @@ pub(super) fn prs() -> &'static mut ProcessRuntimeState {
         let p = checked_process_runtime_state_ptr();
         &mut *p
     }
+}
+
+pub(super) fn store_vfork_proc_self_exe_snapshot(target: &[u8]) {
+    let len = target.len().min(VFORK_PROC_SELF_EXE_MAX);
+    unsafe {
+        VFORK_PROC_SELF_EXE_TARGET[..len].copy_from_slice(&target[..len]);
+        if len < VFORK_PROC_SELF_EXE_MAX {
+            VFORK_PROC_SELF_EXE_TARGET[len..].fill(0);
+        }
+        VFORK_PROC_SELF_EXE_LEN = len as u32;
+    }
+}
+
+pub(super) fn clear_vfork_proc_self_exe_snapshot() {
+    unsafe {
+        VFORK_PROC_SELF_EXE_LEN = 0;
+        core::ptr::write_bytes(
+            core::ptr::addr_of_mut!(VFORK_PROC_SELF_EXE_TARGET) as *mut u8,
+            0,
+            VFORK_PROC_SELF_EXE_MAX,
+        );
+    }
+}
+
+pub(super) fn vfork_proc_self_exe_snapshot() -> &'static [u8] {
+    unsafe { &VFORK_PROC_SELF_EXE_TARGET[..VFORK_PROC_SELF_EXE_LEN as usize] }
 }
 
 pub(super) fn children() -> &'static mut [ChildEntry; MAX_CHILDREN] {
@@ -325,12 +484,20 @@ pub fn init() {
                     wait_status: 0,
                 }; MAX_CHILDREN],
                 next_pid: 3,
+                fork_active: 0,
                 vfork_active: 0,
                 process_table: seeded_process_table(),
+                fork_snapshot: empty_vfork_snapshot(),
                 vfork_snapshot: empty_vfork_snapshot(),
             },
         );
         core::ptr::write(core::ptr::addr_of_mut!(PROCESS_RUNTIME_STATE), state);
+        VFORK_PROC_SELF_EXE_LEN = 0;
+        core::ptr::write_bytes(
+            core::ptr::addr_of_mut!(VFORK_PROC_SELF_EXE_TARGET) as *mut u8,
+            0,
+            VFORK_PROC_SELF_EXE_MAX,
+        );
     }
 }
 
@@ -428,24 +595,36 @@ pub fn shared_heap_alloc(size: u32, align: u32) -> Option<u32> {
 
 #[cfg(any(test, feature = "harness"))]
 pub(crate) fn snapshot_runtime_state_into(snapshot: &mut ProcessRuntimeStateImage) {
+    macro_rules! copy_runtime_state_field_to_image {
+        ($target:ident, $source:ident, $field:ident) => {
+            $target.$field = $source.$field;
+        };
+    }
+
     let state = prs();
     snapshot.heap_ptr = state.heap_ptr.load(Ordering::Acquire);
-    snapshot.children = state.children;
-    snapshot.next_pid = state.next_pid;
-    snapshot.vfork_active = state.vfork_active;
-    snapshot.process_table = state.process_table;
-    snapshot.vfork_snapshot = state.vfork_snapshot;
+    for_each_runtime_state_image_field!(copy_runtime_state_field_to_image, snapshot, state);
+    unsafe {
+        snapshot.vfork_proc_self_exe_len = VFORK_PROC_SELF_EXE_LEN;
+        snapshot.vfork_proc_self_exe_target = VFORK_PROC_SELF_EXE_TARGET;
+    }
 }
 
 #[cfg(any(test, feature = "harness"))]
 pub(crate) fn restore_runtime_state_from(snapshot: &ProcessRuntimeStateImage) {
+    macro_rules! restore_runtime_state_field_from_image {
+        ($target:ident, $source:ident, $field:ident) => {
+            $target.$field = $source.$field;
+        };
+    }
+
     let state = prs();
     state.heap_ptr.store(snapshot.heap_ptr, Ordering::Release);
-    state.children = snapshot.children;
-    state.next_pid = snapshot.next_pid;
-    state.vfork_active = snapshot.vfork_active;
-    state.process_table = snapshot.process_table;
-    state.vfork_snapshot = snapshot.vfork_snapshot;
+    for_each_runtime_state_image_field!(restore_runtime_state_field_from_image, state, snapshot);
+    unsafe {
+        VFORK_PROC_SELF_EXE_LEN = snapshot.vfork_proc_self_exe_len;
+        VFORK_PROC_SELF_EXE_TARGET = snapshot.vfork_proc_self_exe_target;
+    }
 }
 
 #[cfg(any(test, feature = "harness"))]

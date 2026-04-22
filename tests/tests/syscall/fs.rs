@@ -235,6 +235,45 @@ fn getdents64_zero_fills_record_padding_after_names() {
 }
 
 #[test]
+fn fs_ring_routes_mkdir_completions_to_the_owning_thread() {
+    let t = TestVm::new();
+
+    let mut vm1: tidemark_kernel::types::ThreadState = unsafe { core::mem::zeroed() };
+    vm1.guest_base = t.base;
+    vm1.process_ptr = t.vm.process_ptr;
+    vm1.status = STATUS_OK;
+
+    let mut vm2: tidemark_kernel::types::ThreadState = unsafe { core::mem::zeroed() };
+    vm2.guest_base = t.base;
+    vm2.process_ptr = t.vm.process_ptr;
+    vm2.status = STATUS_OK;
+
+    let path1 = t.write_path(0x9000, b"/thread-one");
+    let path2 = t.write_path(0x9100, b"/thread-two");
+
+    assert_eq!(fs::dispatch_mkdirat(&mut vm1, t.base, AT_FDCWD, path1, 0o755), 0);
+    assert_eq!(vm1.status, STATUS_FS);
+    assert_eq!(fs::dispatch_mkdirat(&mut vm2, t.base, AT_FDCWD, path2, 0o755), 0);
+    assert_eq!(vm2.status, STATUS_FS);
+
+    fs::process_pending_requests((&mut vm1 as *mut tidemark_kernel::types::ThreadState) as u32, t.base);
+
+    assert_eq!(
+        fs::resume_from_fs((&mut vm2 as *mut tidemark_kernel::types::ThreadState) as u32, t.base),
+        0
+    );
+    assert_eq!(vm2.status, STATUS_OK);
+    assert_eq!(
+        fs::resume_from_fs((&mut vm1 as *mut tidemark_kernel::types::ThreadState) as u32, t.base),
+        0
+    );
+    assert_eq!(vm1.status, STATUS_OK);
+
+    assert!(memfs::resolve_path(b"/thread-one") > 0);
+    assert!(memfs::resolve_path(b"/thread-two") > 0);
+}
+
+#[test]
 fn openat_with_o_directory_rejects_regular_files() {
     let mut t = TestVm::new();
     let fd = t.sys_openat(b"/plain", O_CREAT | O_RDWR);

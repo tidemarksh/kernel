@@ -31,8 +31,9 @@ pub(crate) use lifecycle::has_process_entry;
 pub use lifecycle::{
     current_process_did_exec, current_process_pgid, current_process_pid, current_process_ppid,
     current_process_sid, prepare_fork_child_after_handoff, process_pgid, record_child_exit,
-    record_child_exit_for_parent, remove_process_entry, reset_process_lifecycle, rewrite_child_pid,
-    sys_getpgid, sys_setpgid, sys_setsid, upsert_process_entry,
+    record_child_exit_for_parent, remove_process_entry, reset_process_lifecycle,
+    restore_fork_parent_after_handoff, rewrite_child_pid, sys_getpgid, sys_setpgid, sys_setsid,
+    upsert_process_entry,
 };
 #[cfg(any(test, feature = "harness"))]
 pub(crate) use runtime::{
