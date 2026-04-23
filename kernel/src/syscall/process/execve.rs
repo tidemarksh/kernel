@@ -100,6 +100,11 @@ fn read_guest_cstr_bytes(base: u32, addr: u64) -> Result<Vec<u8>, i64> {
         offset += 1;
     }
 
+    Ok(out)
+}
+
+fn read_guest_nonempty_cstr_bytes(base: u32, addr: u64) -> Result<Vec<u8>, i64> {
+    let out = read_guest_cstr_bytes(base, addr)?;
     if out.is_empty() {
         return Err(ENOENT);
     }
@@ -111,7 +116,7 @@ fn resolve_execve_inode(
     base: u32,
     path_addr: u64,
 ) -> Result<(u32, Vec<u8>), i64> {
-    let path = read_guest_cstr_bytes(base, path_addr)?;
+    let path = read_guest_nonempty_cstr_bytes(base, path_addr)?;
     let mut ino = if path.first() == Some(&b'/') {
         1
     } else {
@@ -309,10 +314,7 @@ fn load_execve_image(
     let (path_bytes, main_bytes, mut argv) =
         match parse_interpreter_script_header(file_bytes.as_slice())? {
             Some((interp_path, optional_arg)) => {
-                let interp_ino = memfs::resolve_path(&interp_path);
-                if interp_ino == 0 {
-                    return Err(ENOENT);
-                }
+                let interp_ino = memfs::resolve_path_following_symlinks_with_errno(&interp_path)?;
                 let interp_st = memfs::stat(interp_ino).ok_or(ENOENT)?;
                 if interp_st.mode & memfs::S_IFMT != memfs::S_IFREG {
                     return Err(EACCES);
@@ -366,10 +368,7 @@ fn load_execve_image(
     crate::tracepoints::record_execve_dispatch(vm_ptr, 129);
     let (interp_bytes, interp_bias, interp_elf) = match interp_path {
         Some(interp_path) => {
-            let interp_ino = memfs::resolve_path(&interp_path);
-            if interp_ino == 0 {
-                return Err(ENOENT);
-            }
+            let interp_ino = memfs::resolve_path_following_symlinks_with_errno(&interp_path)?;
             let interp_st = memfs::stat(interp_ino).ok_or(ENOENT)?;
             if interp_st.mode & memfs::S_IFMT != memfs::S_IFREG {
                 return Err(EACCES);

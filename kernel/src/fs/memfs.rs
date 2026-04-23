@@ -65,6 +65,7 @@ pub const S_IFCHR: u32 = 0o020000;
 
 const MAX_INODES: usize = 65536;
 const MAX_NAME_LEN: usize = 255;
+const MAX_SYMLINK_FOLLOWS: u32 = 40;
 const INITIAL_DATA_SIZE: u32 = 256 * 1024;
 
 #[repr(C)]
@@ -457,6 +458,110 @@ pub fn resolve_path(path: &[u8]) -> u32 {
         }
     }
     ino
+}
+
+fn concat_symlink_target_and_rest<'a>(
+    target: &[u8],
+    rest: &[u8],
+    buf: &'a mut [u8; 4096],
+) -> Result<&'a [u8], i64> {
+    let total = target.len().checked_add(rest.len()).ok_or(ENAMETOOLONG)?;
+    if total > buf.len() {
+        return Err(ENAMETOOLONG);
+    }
+    buf[..target.len()].copy_from_slice(target);
+    buf[target.len()..total].copy_from_slice(rest);
+    Ok(&buf[..total])
+}
+
+pub fn resolve_path_following_symlinks(path: &[u8]) -> u32 {
+    resolve_path_following_symlinks_with_errno(path).unwrap_or(0)
+}
+
+pub fn resolve_path_following_symlinks_with_errno(path: &[u8]) -> Result<u32, i64> {
+    resolve_path_following_symlinks_from_with_errno(1, path, MAX_SYMLINK_FOLLOWS)
+}
+
+fn resolve_path_following_symlinks_from_with_errno(
+    start_ino: u32,
+    path: &[u8],
+    depth_left: u32,
+) -> Result<u32, i64> {
+    // execve(2) requires resolving script and ELF interpreters through normal
+    // path lookup and reporting ELOOP/ENOENT for symlink loops or missing
+    // interpreters: https://man7.org/linux/man-pages/man2/execve.2.html
+    if depth_left == 0 {
+        return Err(ELOOP);
+    }
+    if path.is_empty() {
+        return Err(ENOENT);
+    }
+
+    let mut ino = start_ino;
+    let mut cursor = 0usize;
+    if path.first() == Some(&b'/') {
+        ino = 1;
+        cursor = 1;
+    }
+
+    while cursor < path.len() {
+        while cursor < path.len() && path[cursor] == b'/' {
+            cursor += 1;
+        }
+        if cursor >= path.len() {
+            break;
+        }
+
+        let component_start = cursor;
+        while cursor < path.len() && path[cursor] != b'/' {
+            cursor += 1;
+        }
+        let component = &path[component_start..cursor];
+        if component.is_empty() || component == b"." {
+            continue;
+        }
+        if component == b".." {
+            ino = parent_ino(ino);
+            continue;
+        }
+
+        let st = stat(ino).ok_or(ENOENT)?;
+        if st.mode & S_IFMT != S_IFDIR {
+            return Err(ENOTDIR);
+        }
+
+        let next_ino = lookup(ino, component);
+        if next_ino == 0 {
+            return Err(ENOENT);
+        }
+
+        let next_st = stat(next_ino).ok_or(ENOENT)?;
+        if next_st.mode & S_IFMT == S_IFLNK {
+            let mut target_buf = [0u8; 4096];
+            let target_len = read_link(next_ino, &mut target_buf);
+            if target_len == 0 {
+                return Err(ENOENT);
+            }
+            let target = &target_buf[..target_len];
+            let rest = &path[cursor..];
+            let mut combined = [0u8; 4096];
+            let combined_path = concat_symlink_target_and_rest(target, rest, &mut combined)?;
+            let restart_ino = if target.first() == Some(&b'/') {
+                1
+            } else {
+                ino
+            };
+            return resolve_path_following_symlinks_from_with_errno(
+                restart_ino,
+                combined_path,
+                depth_left - 1,
+            );
+        }
+
+        ino = next_ino;
+    }
+
+    Ok(ino)
 }
 
 /// Resolve a relative path starting from a given directory inode.

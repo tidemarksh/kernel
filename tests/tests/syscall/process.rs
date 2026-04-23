@@ -1140,6 +1140,20 @@ fn contract_execve_with_pt_interp_enters_interpreter_and_sets_auxv() {
 }
 
 #[test]
+fn contract_execve_with_pt_interp_follows_symlink_path() {
+    let mut t = TestVm::new();
+    let main_elf = build_test_elf_with_interp(&[0x13, 0x05, 0x70, 0x00], b"/lib/ld-test.so");
+    let interp_elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    install_exec_file_at(&t, b"/usr/lib/ld-test.so", &interp_elf);
+    assert_ne!(memfs::create_symlink(1, b"lib", b"usr/lib"), 0);
+    let path_addr = install_exec_file_at(&t, b"/bin/test_interp_symlink", &main_elf);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.pc, 0x3000);
+}
+
+#[test]
 fn contract_execve_with_pt_interp_preserves_executable_tls_base() {
     let mut t = TestVm::new();
     let main_elf = build_test_elf_with_interp_and_tls(

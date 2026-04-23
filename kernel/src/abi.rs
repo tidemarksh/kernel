@@ -877,7 +877,7 @@ pub extern "C" fn process_create(
         let mut interp_load: Option<(u32, u32, u64, crate::elf::ElfLoadResult)> = None;
         let load_brk_start = match interp_path {
             Some(interp_path) => {
-                let interp_ino = crate::fs::memfs::resolve_path(&interp_path);
+                let interp_ino = crate::fs::memfs::resolve_path_following_symlinks(&interp_path);
                 if interp_ino == 0 {
                     set_process_create_last_error(4);
                     return 0;

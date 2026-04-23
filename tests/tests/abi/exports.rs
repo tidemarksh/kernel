@@ -973,6 +973,31 @@ fn process_create_with_pt_interp_preserves_executable_entry_in_auxv() {
 }
 
 #[test]
+fn process_create_with_pt_interp_follows_symlink_path() {
+    let _t = TestVm::new();
+    let ram_size = 64 * 1024 * 1024;
+    let elf = build_test_elf_with_interp(&[0x13, 0x05, 0x70, 0x00], b"/lib/ld-test.so");
+    let interp = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    install_file_at(b"/usr/lib/ld-test.so", &interp, 0o755);
+    assert_ne!(memfs::create_symlink(1, b"lib", b"usr/lib"), 0);
+
+    let elf_ptr = unsafe { tidemark_kernel::alloc::alloc_zeroed(0x1000, 16) };
+    assert_ne!(elf_ptr, 0);
+    unsafe {
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64, &elf);
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64 + 0x400, b"/bin/test-interp\0");
+    }
+
+    process_clear_args();
+    process_push_arg(elf_ptr + 0x400);
+
+    let vm_ptr = process_create(elf_ptr, elf.len() as u32, ram_size, 1024 * 1024);
+    assert_ne!(vm_ptr, 0);
+    let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
+    assert_eq!(vm.pc, 0x3000);
+}
+
+#[test]
 fn process_create_with_pt_interp_preserves_executable_tls_base() {
     let _t = TestVm::new();
     let ram_size = 64 * 1024 * 1024;
