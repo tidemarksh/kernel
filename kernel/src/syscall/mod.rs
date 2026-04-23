@@ -52,7 +52,7 @@ fn debug_return(
 #[inline(always)]
 fn record_memory_trace(nr: u64, a0: u64, a1: u64, a2: u64, a3: u64, result: i64) {
     match nr {
-        SYS_BRK | SYS_MMAP | SYS_MUNMAP | SYS_MSYNC | SYS_MREMAP | SYS_MPROTECT => {
+        SYS_BRK | SYS_MMAP | SYS_MUNMAP | SYS_MSYNC | SYS_MREMAP | SYS_MPROTECT | SYS_MADVISE => {
             crate::tracepoints::record_memory_syscall(nr, a0, a1, a2, a3, result);
         }
         _ => {}
@@ -72,7 +72,7 @@ fn record_memory_syscall_debug(
     result: i64,
 ) {
     match nr {
-        SYS_BRK | SYS_MMAP | SYS_MUNMAP | SYS_MSYNC | SYS_MREMAP | SYS_MPROTECT => {
+        SYS_BRK | SYS_MMAP | SYS_MUNMAP | SYS_MSYNC | SYS_MREMAP | SYS_MPROTECT | SYS_MADVISE => {
             crate::syscall::memory::record_debug_syscall(vm, nr, a0, a1, a2, a3, a4, a5, result);
         }
         _ => {}
@@ -172,7 +172,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_MSYNC => memory::sys_msync(vm, base, a0, a1, a2),
         SYS_MREMAP => memory::sys_mremap(vm, base, a0, a1, a2, a3, a4),
         SYS_MPROTECT => memory::sys_mprotect(vm, base, a0, a1, a2),
-        SYS_MADVISE => ENOSYS,
+        SYS_MADVISE => memory::sys_madvise(vm, base, a0, a1, a2),
 
         // signal
         SYS_RT_SIGACTION => signal::sys_rt_sigaction(vm, base, a0, a1, a2, a3),

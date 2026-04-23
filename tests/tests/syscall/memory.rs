@@ -154,17 +154,79 @@ fn map_fixed_noreplace_maps_exact_addr_without_clobbering_existing_vma() {
 }
 
 #[test]
-fn syscall_dispatch_reports_enosys_for_madvise() {
+fn syscall_dispatch_discards_private_anonymous_pages_for_madvise_dontneed() {
     let mut t = TestVm::new();
-    t.vm.x[10] = 0;
+    let mapped = t.sys_mmap(
+        0,
+        PAGE_SIZE,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    );
+    assert!(mapped > 0);
+
+    t.write_mem(mapped as u64, b"madvise-keeps-mapping");
+    t.vm.x[10] = mapped as u64;
     t.vm.x[11] = PAGE_SIZE;
-    t.vm.x[12] = 0;
+    t.vm.x[12] = MADV_DONTNEED as u64;
     t.vm.x[17] = SYS_MADVISE;
     assert_eq!(
         tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
         STATUS_OK
     );
-    assert_eq!(t.vm.x[10] as i64, ENOSYS);
+    assert_eq!(t.vm.x[10] as i64, 0);
+    assert!(t.guest_mem(mapped as u64, 32).iter().all(|byte| *byte == 0));
+}
+
+#[test]
+fn madvise_dontneed_reloads_file_backed_mapping_from_memfs() {
+    let mut t = TestVm::new();
+    let data = b"0123456789abcdef";
+    t.memfs.create_file(b"madvise.bin", data);
+    let fd = t.sys_openat(b"/madvise.bin", O_RDONLY);
+    assert!(fd >= 3);
+
+    let mapped = t.sys_mmap(0, PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+    assert!(mapped > 0);
+    t.write_mem(mapped as u64, b"XXXXXXXXXXXXXXXX");
+
+    assert_eq!(t.sys_madvise(mapped as u64, PAGE_SIZE, MADV_DONTNEED), 0);
+    assert_eq!(&t.guest_mem(mapped as u64, data.len())[..], data);
+}
+
+#[test]
+fn madvise_free_rejects_file_backed_ranges() {
+    let mut t = TestVm::new();
+    t.memfs.create_file(b"madvise-free.bin", b"payload");
+    let fd = t.sys_openat(b"/madvise-free.bin", O_RDONLY);
+    assert!(fd >= 3);
+
+    let mapped = t.sys_mmap(0, PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+    assert!(mapped > 0);
+    assert_eq!(
+        t.sys_madvise(mapped as u64, PAGE_SIZE, MADV_FREE),
+        EINVAL as i64
+    );
+}
+
+#[test]
+fn madvise_dontfork_and_dofork_are_accepted_as_advisory_noops() {
+    let mut t = TestVm::new();
+    let mapped = t.sys_mmap(
+        0,
+        PAGE_SIZE,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    );
+    assert!(mapped > 0);
+
+    t.write_mem(mapped as u64, b"fork-advice");
+    assert_eq!(t.sys_madvise(mapped as u64, PAGE_SIZE, MADV_DONTFORK), 0);
+    assert_eq!(t.sys_madvise(mapped as u64, PAGE_SIZE, MADV_DOFORK), 0);
+    assert_eq!(&t.guest_mem(mapped as u64, 11)[..], b"fork-advice");
 }
 
 #[test]

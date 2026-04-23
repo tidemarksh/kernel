@@ -1094,6 +1094,70 @@ pub fn sys_msync(_vm: &mut ThreadState, _base: u32, _addr: u64, _length: u64, _f
 }
 
 // =========================================================================
+// madvise
+// =========================================================================
+
+/// https://man7.org/linux/man-pages/man2/madvise.2.html
+///
+/// Minimal current support:
+/// - `MADV_NORMAL`, `MADV_RANDOM`, `MADV_SEQUENTIAL`, `MADV_WILLNEED`: no-op success
+/// - `MADV_DONTNEED`: preserve mapping shape and discard contents where our
+///   memory model can represent that cheaply
+/// - `MADV_FREE`: accepted for private anonymous memory and treated as an
+///   immediate discard
+/// - `MADV_DONTFORK`, `MADV_DOFORK`: accepted as advisory no-ops until the
+///   current process model gains observable per-VMA fork inheritance semantics
+pub fn sys_madvise(_vm: &mut ThreadState, base: u32, addr: u64, length: u64, advice: u64) -> i64 {
+    if addr & (PAGE_SIZE - 1) != 0 {
+        return EINVAL;
+    }
+
+    let advice = advice as i32;
+    if !is_supported_madvise_advice(advice) {
+        return EINVAL;
+    }
+    if length == 0 {
+        return 0;
+    }
+
+    let len = page_align_up(length);
+    let Some(end) = addr.checked_add(len) else {
+        return ENOMEM;
+    };
+
+    let s = ms();
+    if !range_fully_mapped(s, addr, end) {
+        return ENOMEM;
+    }
+    if advice == MADV_FREE && !range_all_private_anonymous_or_brk(s, addr, end) {
+        return EINVAL;
+    }
+
+    let brk_start = addr.max(s.brk_base);
+    let brk_end = end.min(s.brk_current);
+    if brk_start < brk_end {
+        let ret = apply_madvise_to_brk_range(base, brk_start, brk_end, advice);
+        if ret != 0 {
+            return ret;
+        }
+    }
+
+    for vma in s.vmas.iter() {
+        let overlap_start = addr.max(vma.start);
+        let overlap_end = end.min(vma.end);
+        if overlap_start >= overlap_end {
+            continue;
+        }
+        let ret = apply_madvise_to_vma_range(base, vma, overlap_start, overlap_end, advice);
+        if ret != 0 {
+            return ret;
+        }
+    }
+
+    0
+}
+
+// =========================================================================
 // mremap
 // =========================================================================
 
@@ -1303,6 +1367,64 @@ fn brk_growth_overlaps_vma(s: &AddressSpaceState, current_brk: u64, new_brk: u64
     grow_start < grow_end && overlaps(s, grow_start, grow_end)
 }
 
+fn range_cover_end_any_mapping(s: &AddressSpaceState, addr: u64) -> u64 {
+    let mut cover_end = 0u64;
+
+    if addr >= s.brk_base && addr < s.brk_current {
+        cover_end = s.brk_current;
+    }
+
+    for v in s.vmas.iter() {
+        if addr >= v.start && addr < v.end {
+            cover_end = cover_end.max(v.end);
+        }
+    }
+
+    cover_end
+}
+
+fn range_fully_mapped(s: &AddressSpaceState, start: u64, end: u64) -> bool {
+    let mut cur = start;
+    while cur < end {
+        let cover_end = range_cover_end_any_mapping(s, cur);
+        if cover_end <= cur {
+            return false;
+        }
+        cur = cover_end.min(end);
+    }
+    true
+}
+
+fn range_all_private_anonymous_or_brk(s: &AddressSpaceState, start: u64, end: u64) -> bool {
+    let mut cur = start;
+    while cur < end {
+        if cur >= s.brk_base && cur < s.brk_current {
+            cur = s.brk_current.min(end);
+            continue;
+        }
+
+        let mut covered = false;
+        for v in s.vmas.iter() {
+            if cur < v.start || cur >= v.end {
+                continue;
+            }
+            if v.fd >= 0
+                || (v.flags as u64 & MAP_ANONYMOUS) == 0
+                || (v.flags as u64 & MAP_SHARED) != 0
+            {
+                return false;
+            }
+            cur = v.end.min(end);
+            covered = true;
+            break;
+        }
+        if !covered {
+            return false;
+        }
+    }
+    true
+}
+
 fn overlaps_except(s: &AddressSpaceState, start: u64, end: u64, except: usize) -> bool {
     for (i, v) in s.vmas.iter().enumerate() {
         if i == except {
@@ -1313,6 +1435,76 @@ fn overlaps_except(s: &AddressSpaceState, start: u64, end: u64, except: usize) -
         }
     }
     false
+}
+
+fn is_supported_madvise_advice(advice: i32) -> bool {
+    matches!(
+        advice,
+        MADV_NORMAL
+            | MADV_RANDOM
+            | MADV_SEQUENTIAL
+            | MADV_WILLNEED
+            | MADV_DONTNEED
+            | MADV_FREE
+            | MADV_DONTFORK
+            | MADV_DOFORK
+    )
+}
+
+fn apply_madvise_to_brk_range(base: u32, start: u64, end: u64, advice: i32) -> i64 {
+    match advice {
+        MADV_NORMAL | MADV_RANDOM | MADV_SEQUENTIAL | MADV_WILLNEED | MADV_DONTFORK
+        | MADV_DOFORK => 0,
+        MADV_DONTNEED | MADV_FREE => {
+            unsafe {
+                guest_mem::zero_mem(base, start, (end - start) as usize);
+            }
+            0
+        }
+        _ => EINVAL,
+    }
+}
+
+fn apply_madvise_to_vma_range(base: u32, vma: &Vma, start: u64, end: u64, advice: i32) -> i64 {
+    match advice {
+        MADV_NORMAL | MADV_RANDOM | MADV_SEQUENTIAL | MADV_WILLNEED | MADV_DONTFORK
+        | MADV_DOFORK => 0,
+        MADV_DONTNEED => {
+            if vma.prot == PROT_NONE {
+                return 0;
+            }
+            if vma.fd >= 0 {
+                if (vma.flags as u64 & MAP_SHARED) != 0 {
+                    flush_shared_vma_range(base, vma, start, end);
+                }
+                repopulate_file_vma_range(base, vma, start, end);
+                return 0;
+            }
+            if (vma.flags as u64 & MAP_SHARED) != 0 {
+                return 0;
+            }
+            unsafe {
+                guest_mem::zero_mem(base, start, (end - start) as usize);
+            }
+            0
+        }
+        MADV_FREE => {
+            if vma.prot == PROT_NONE {
+                return 0;
+            }
+            if vma.fd >= 0
+                || (vma.flags as u64 & MAP_ANONYMOUS) == 0
+                || (vma.flags as u64 & MAP_SHARED) != 0
+            {
+                return EINVAL;
+            }
+            unsafe {
+                guest_mem::zero_mem(base, start, (end - start) as usize);
+            }
+            0
+        }
+        _ => EINVAL,
+    }
 }
 
 fn remove_overlap(s: &mut AddressSpaceState, start: u64, end: u64) {
@@ -1404,17 +1596,7 @@ fn flush_shared_vma_range(base: u32, vma: &Vma, flush_start: u64, flush_end: u64
     }
 }
 
-fn refresh_shared_file_vma(base: u32, vma: &Vma, guest_limit: u64) {
-    if (vma.flags as u64 & MAP_SHARED) == 0 || vma.fd < 0 {
-        return;
-    }
-
-    let start = vma.start.min(guest_limit);
-    let end = vma.end.min(guest_limit);
-    if start >= end {
-        return;
-    }
-
+fn repopulate_file_vma_range(base: u32, vma: &Vma, start: u64, end: u64) {
     unsafe {
         guest_mem::zero_mem(base, start, (end - start) as usize);
     }
@@ -1424,8 +1606,8 @@ fn refresh_shared_file_vma(base: u32, vma: &Vma, guest_limit: u64) {
         return;
     };
     let file_size = st.size;
-    let copy_start = vma.offset.min(file_size);
-    let copy_end = (vma.offset + (end - start)).min(file_size);
+    let copy_start = (vma.offset + (start - vma.start)).min(file_size);
+    let copy_end = (vma.offset + (end - vma.start)).min(file_size);
     if copy_end <= copy_start {
         return;
     }
@@ -1444,4 +1626,18 @@ fn refresh_shared_file_vma(base: u32, vma: &Vma, guest_limit: u64) {
         }
         off += n as usize;
     }
+}
+
+fn refresh_shared_file_vma(base: u32, vma: &Vma, guest_limit: u64) {
+    if (vma.flags as u64 & MAP_SHARED) == 0 || vma.fd < 0 {
+        return;
+    }
+
+    let start = vma.start.min(guest_limit);
+    let end = vma.end.min(guest_limit);
+    if start >= end {
+        return;
+    }
+
+    repopulate_file_vma_range(base, vma, start, end);
 }

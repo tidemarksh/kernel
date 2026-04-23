@@ -288,6 +288,10 @@ impl TestVm {
         syscall::memory::sys_mprotect(&mut self.vm, self.base, addr, len, prot as u64)
     }
 
+    pub fn sys_madvise(&mut self, addr: u64, len: u64, advice: i32) -> i64 {
+        syscall::memory::sys_madvise(&mut self.vm, self.base, addr, len, advice as u64)
+    }
+
     pub fn sys_dup(&mut self, fd: u64) -> i64 {
         fs::fd_table::sys_dup(&mut self.vm, self.base, fd)
     }

@@ -210,6 +210,16 @@ pub const MAP_SHARED: u64 = 0x01;
 pub const MAP_NORESERVE: u64 = 0x4000;
 pub const MAP_FIXED_NOREPLACE: u64 = 0x100000;
 
+// https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/mman-common.h
+pub const MADV_NORMAL: i32 = 0;
+pub const MADV_RANDOM: i32 = 1;
+pub const MADV_SEQUENTIAL: i32 = 2;
+pub const MADV_WILLNEED: i32 = 3;
+pub const MADV_DONTNEED: i32 = 4;
+pub const MADV_FREE: i32 = 8;
+pub const MADV_DONTFORK: i32 = 10;
+pub const MADV_DOFORK: i32 = 11;
+
 // =============================================================================
 // open flags
 // https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/fcntl.h
@@ -560,6 +570,14 @@ export_const_u64!(abi_map_private, MAP_PRIVATE);
 export_const_u64!(abi_map_anonymous, MAP_ANONYMOUS);
 export_const_u64!(abi_map_fixed, MAP_FIXED);
 export_const_u64!(abi_map_shared, MAP_SHARED);
+export_const!(abi_madv_normal, MADV_NORMAL);
+export_const!(abi_madv_random, MADV_RANDOM);
+export_const!(abi_madv_sequential, MADV_SEQUENTIAL);
+export_const!(abi_madv_willneed, MADV_WILLNEED);
+export_const!(abi_madv_dontneed, MADV_DONTNEED);
+export_const!(abi_madv_free, MADV_FREE);
+export_const!(abi_madv_dontfork, MADV_DONTFORK);
+export_const!(abi_madv_dofork, MADV_DOFORK);
 
 // Open flags
 export_const!(abi_o_rdonly, O_RDONLY);
