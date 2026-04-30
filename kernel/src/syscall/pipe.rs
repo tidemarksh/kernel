@@ -10,14 +10,14 @@
 //!
 //! Struct layout (RV64):
 //!
-//! struct PipeSlot {                     // 4128 bytes total
+//! struct PipeSlot {                     // 65568 bytes total
 //!     head:       AtomicU32,            // offset 0   — reader updates
 //!     tail:       AtomicU32,            // offset 4   — writer updates
 //!     read_open:  AtomicI32,            // offset 8   — kernel Worker only
 //!     write_open: AtomicI32,            // offset 12  — kernel Worker only
 //!     notify:     AtomicI32,            // offset 16  — Atomics.wait/notify target
 //!     _pad:       [u8; 12],             // offset 20
-//!     data:       [u8; 4096],           // offset 32  — circular buffer
+//!     data:       [u8; 65536],          // offset 32  — circular buffer
 //! };
 
 use crate::abi::*;
@@ -27,8 +27,8 @@ use crate::guest_mem;
 use crate::types::ThreadState;
 use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 
-const PIPE_BUF_SIZE: u32 = 4096;
-const PIPE_SLOT_SIZE: u32 = 32 + PIPE_BUF_SIZE; // 4128 bytes
+pub const PIPE_BUF_SIZE: usize = 65_536;
+const PIPE_SLOT_SIZE: u32 = 32 + PIPE_BUF_SIZE as u32; // 65568 bytes
 const EFD_SEMAPHORE: u64 = 0x1;
 
 // Field offsets within a pipe slot
@@ -194,7 +194,7 @@ pub fn pipe_read(pipe_idx: u32, buf: &mut [u8]) -> i64 {
         return EAGAIN;
     }
 
-    let cap = PIPE_BUF_SIZE as usize;
+    let cap = PIPE_BUF_SIZE;
     let available = if tail >= head {
         (tail - head) as usize
     } else {
@@ -212,6 +212,17 @@ pub fn pipe_read(pipe_idx: u32, buf: &mut [u8]) -> i64 {
     to_read as i64
 }
 
+pub fn pipe_buffered_len(pipe_idx: u32) -> u32 {
+    let addr = slot_addr(pipe_idx);
+    let head = head_ptr(addr).load(Ordering::Acquire);
+    let tail = tail_ptr(addr).load(Ordering::Acquire);
+    if tail >= head {
+        tail - head
+    } else {
+        PIPE_BUF_SIZE as u32 - head + tail
+    }
+}
+
 /// Write to pipe's circular buffer via Atomics. Returns bytes written, EPIPE, or EAGAIN.
 pub fn pipe_write(pipe_idx: u32, data: &[u8]) -> i64 {
     let addr = slot_addr(pipe_idx);
@@ -222,7 +233,7 @@ pub fn pipe_write(pipe_idx: u32, data: &[u8]) -> i64 {
 
     let head = head_ptr(addr).load(Ordering::Acquire) as usize;
     let tail = tail_ptr(addr).load(Ordering::Acquire) as usize;
-    let cap = PIPE_BUF_SIZE as usize;
+    let cap = PIPE_BUF_SIZE;
 
     let used = if tail >= head {
         tail - head
@@ -263,7 +274,7 @@ pub fn pipe_peek(pipe_idx: u32) -> i64 {
         return EAGAIN;
     }
 
-    let cap = PIPE_BUF_SIZE as usize;
+    let cap = PIPE_BUF_SIZE;
     let available = if tail >= head {
         (tail - head) as usize
     } else {
@@ -284,7 +295,7 @@ pub fn pipe_writable(pipe_idx: u32, edge_triggered: bool) -> bool {
     }
     let head = head_ptr(addr).load(Ordering::Acquire) as usize;
     let tail = tail_ptr(addr).load(Ordering::Acquire) as usize;
-    let cap = PIPE_BUF_SIZE as usize;
+    let cap = PIPE_BUF_SIZE;
     let used = if tail >= head {
         tail - head
     } else {

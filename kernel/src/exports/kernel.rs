@@ -360,6 +360,25 @@ pub extern "C" fn kernel_release_ofd(ofd_id: u32) {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn kernel_reserve_ofd(ofd_id: u32) {
+    crate::fs::fd_table::reserve_ofd_id(ofd_id);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_unreserve_ofd(ofd_id: u32) {
+    crate::fs::fd_table::unreserve_ofd_id(ofd_id);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_ofd_reserved(ofd_id: u32) -> i32 {
+    if crate::fs::fd_table::is_ofd_reserved(ofd_id) {
+        1
+    } else {
+        0
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn kernel_ofd_fd_type(ofd_id: u32) -> i32 {
     crate::fs::fd_table::get_ofd_by_id(ofd_id).map_or(0, |ofd| ofd.fd_type)
 }

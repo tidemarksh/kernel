@@ -22,6 +22,7 @@ mod system;
 pub mod trace;
 
 use self::block_cache::BlockCache;
+use self::block_exec::{BlockOutcome, exec_block};
 use self::dispatch::{StepOutcome, exec_decoded};
 use self::fault::{deliver_sync_sigsegv, guest_range_in_bounds};
 use self::trace::{HotCounts, JitBitmap, TraceBuffer};
@@ -229,6 +230,24 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
                 return *remaining;
             }
             continue;
+        }
+        if trace_buf.is_none()
+            && hot_counts.is_none()
+            && jit_bitmap.is_none()
+            && let Some(ref mut bc) = cache
+            && let Some(blk) = unsafe { bc.get_or_build_checked(vm, *pc, base) }
+        {
+            let cost = blk.total_budget as i32;
+            if cost > 0 && remaining.saturating_add(1) >= cost {
+                match unsafe { exec_block(blk, vm, x, f, fcsr, pc, base, remaining, true) } {
+                    BlockOutcome::Restart => {
+                        x[0] = 0;
+                        continue;
+                    }
+                    BlockOutcome::Return => return *remaining,
+                    BlockOutcome::Unsupported => {}
+                }
+            }
         }
         let raw16 = unsafe { guest_mem::read_u16_seqlock(base, *pc) };
         let (raw, step): (u32, u64) = if (raw16 & 3) != 3 {

@@ -100,6 +100,8 @@ pub struct FdSyscallTraceEntry {
     pub arg3: u64,
     pub result: i64,
     pub status: i32,
+    pub pid_sample0: u64,
+    pub pid_sample1: u64,
 }
 
 static mut FD_SYSCALL_TRACE: [FdSyscallTraceEntry; FD_SYSCALL_TRACE_CAP] = [FdSyscallTraceEntry {
@@ -115,6 +117,8 @@ static mut FD_SYSCALL_TRACE: [FdSyscallTraceEntry; FD_SYSCALL_TRACE_CAP] = [FdSy
     arg3: 0,
     result: 0,
     status: 0,
+    pid_sample0: 0,
+    pid_sample1: 0,
 }; FD_SYSCALL_TRACE_CAP];
 static mut FD_SYSCALL_TRACE_LEN: u32 = 0;
 static mut FD_SYSCALL_TRACE_NEXT: u32 = 0;
@@ -614,6 +618,7 @@ pub(crate) fn record_syscall(
                 | crate::abi::SYS_READV
                 | crate::abi::SYS_WRITEV
                 | crate::abi::SYS_CLOSE
+                | crate::abi::SYS_CLOSE_RANGE
                 | crate::abi::SYS_DUP
                 | crate::abi::SYS_DUP3
                 | crate::abi::SYS_FCNTL => {
@@ -632,7 +637,12 @@ pub(crate) fn record_syscall(
                 | crate::abi::SYS_SOCKETPAIR
                 | crate::abi::SYS_BIND
                 | crate::abi::SYS_LISTEN
-                | crate::abi::SYS_ACCEPT4 => {
+                | crate::abi::SYS_CONNECT
+                | crate::abi::SYS_ACCEPT4
+                | crate::abi::SYS_SENDTO
+                | crate::abi::SYS_RECVFROM
+                | crate::abi::SYS_SETSOCKOPT
+                | crate::abi::SYS_SHUTDOWN => {
                     SYNC_EFFECT_SOCKET_STATE
                         | SYNC_EFFECT_EPOLL_STATE
                         | SYNC_EFFECT_FORK_SHARED_OFD_STATE
@@ -646,9 +656,15 @@ pub(crate) fn record_syscall(
                     SYNC_EFFECT_EPOLL_STATE | SYNC_EFFECT_FORK_SHARED_OFD_STATE
                 }
                 crate::abi::SYS_EPOLL_CTL => SYNC_EFFECT_EPOLL_STATE,
-                crate::abi::SYS_EXECVE | crate::abi::SYS_SETPGID | crate::abi::SYS_SETSID => {
-                    SYNC_EFFECT_PROCESS_LIFECYCLE
+                crate::abi::SYS_EXECVE => {
+                    SYNC_EFFECT_PIPE_STATE
+                        | SYNC_EFFECT_SOCKET_STATE
+                        | SYNC_EFFECT_EPOLL_STATE
+                        | SYNC_EFFECT_EPOLL_DEPENDENT_OFD_STATE
+                        | SYNC_EFFECT_FORK_SHARED_OFD_STATE
+                        | SYNC_EFFECT_PROCESS_LIFECYCLE
                 }
+                crate::abi::SYS_SETPGID | crate::abi::SYS_SETSID => SYNC_EFFECT_PROCESS_LIFECYCLE,
                 crate::abi::SYS_KILL | crate::abi::SYS_TKILL | crate::abi::SYS_TGKILL => {
                     SYNC_EFFECT_SIGNAL_WAITERS
                 }
@@ -722,15 +738,34 @@ pub(crate) fn record_fd_syscall(
             | crate::abi::SYS_EPOLL_CTL
             | crate::abi::SYS_EPOLL_PWAIT
             | crate::abi::SYS_CLOSE
+            | crate::abi::SYS_CLOSE_RANGE
             | crate::abi::SYS_DUP
             | crate::abi::SYS_DUP3
             | crate::abi::SYS_PIPE2
             | crate::abi::SYS_FCNTL
+            | crate::abi::SYS_SOCKET
+            | crate::abi::SYS_SOCKETPAIR
+            | crate::abi::SYS_BIND
+            | crate::abi::SYS_LISTEN
+            | crate::abi::SYS_CONNECT
+            | crate::abi::SYS_ACCEPT4
+            | crate::abi::SYS_SENDTO
+            | crate::abi::SYS_RECVFROM
+            | crate::abi::SYS_SENDMSG
+            | crate::abi::SYS_RECVMSG
+            | crate::abi::SYS_SHUTDOWN
+            | crate::abi::SYS_SETSOCKOPT
+            | crate::abi::SYS_GETSOCKOPT
+            | crate::abi::SYS_GETSOCKNAME
+            | crate::abi::SYS_GETPEERNAME
+            | crate::abi::SYS_PPOLL
+            | crate::abi::SYS_PSELECT6
     );
     if !should_record {
         return;
     }
 
+    let (pid_sample0, pid_sample1) = sample_process_pid_bytes(vm_ptr);
     unsafe {
         let idx = (FD_SYSCALL_TRACE_NEXT as usize) % FD_SYSCALL_TRACE_CAP;
         FD_SYSCALL_TRACE[idx] = FdSyscallTraceEntry {
@@ -746,6 +781,8 @@ pub(crate) fn record_fd_syscall(
             arg3,
             result,
             status,
+            pid_sample0,
+            pid_sample1,
         };
         FD_SYSCALL_TRACE_NEXT = ((idx + 1) % FD_SYSCALL_TRACE_CAP) as u32;
         if FD_SYSCALL_TRACE_LEN < FD_SYSCALL_TRACE_CAP as u32 {
@@ -779,6 +816,8 @@ pub(crate) fn fd_syscall_trace_entry(index: u32) -> FdSyscallTraceEntry {
             arg3: 0,
             result: 0,
             status: 0,
+            pid_sample0: 0,
+            pid_sample1: 0,
         };
     }
     unsafe {
@@ -797,6 +836,8 @@ pub(crate) fn fd_syscall_trace_entry(index: u32) -> FdSyscallTraceEntry {
                 arg3: 0,
                 result: 0,
                 status: 0,
+                pid_sample0: 0,
+                pid_sample1: 0,
             };
         }
         let start = if len < FD_SYSCALL_TRACE_CAP as u32 {

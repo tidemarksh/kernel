@@ -462,7 +462,7 @@ pub fn resume_wait(vm: &mut ThreadState, base: u32) -> i64 {
 }
 
 /// Poll a single watched object for readiness using its OFD snapshot.
-fn poll_ofd(vm: &ThreadState, base: u32, ofd: &OpenFileDesc, interest: u32) -> u32 {
+pub(crate) fn poll_ofd(vm: &ThreadState, base: u32, ofd: &OpenFileDesc, interest: u32) -> u32 {
     let mut revents = 0u32;
 
     if ofd.fd_type == FD_TYPE_PIPE {
@@ -470,13 +470,13 @@ fn poll_ofd(vm: &ThreadState, base: u32, ofd: &OpenFileDesc, interest: u32) -> u
         let is_read = fd_table::is_pipe_read(ofd);
 
         if is_read {
-            let peek = super::pipe::pipe_peek(pipe_idx);
-            if peek == 0 {
-                revents |= EPOLLHUP; // EOF: write end closed, no data
-            } else if peek > 0 {
+            let buffered = super::pipe::pipe_buffered_len(pipe_idx);
+            if buffered > 0 {
                 revents |= EPOLLIN; // data available
+            } else if super::pipe::pipe_peek(pipe_idx) == 0 {
+                revents |= EPOLLHUP; // EOF: write end closed, no data
             }
-            // peek == EAGAIN: empty, write end open → not ready
+            // Empty pipe with write end open is not ready.
         } else {
             if super::pipe::pipe_writable(pipe_idx, interest & EPOLLET != 0) {
                 revents |= EPOLLOUT;
@@ -495,6 +495,8 @@ fn poll_ofd(vm: &ThreadState, base: u32, ofd: &OpenFileDesc, interest: u32) -> u
         if interest & EPOLLOUT != 0 {
             revents |= EPOLLOUT;
         }
+    } else if ofd.fd_type == FD_TYPE_SOCKET {
+        revents |= super::socket::poll_revents_ofd(ofd, interest);
     } else if ofd.fd_type == FD_TYPE_EVENTFD {
         let counter = ofd.offset as u64;
         if counter > 0 && interest & EPOLLIN != 0 {

@@ -4,6 +4,7 @@ use tidemark_kernel::abi::*;
 use tidemark_kernel::fs::{fd_table, memfs};
 use tidemark_kernel::harness::TestVm;
 use tidemark_kernel::syscall::fs;
+use tidemark_kernel::syscall::process as process_impl;
 
 const AT_FDCWD: u64 = (-100i64) as u64;
 const AT_REMOVEDIR: u64 = 0x200;
@@ -235,6 +236,61 @@ fn getdents64_zero_fills_record_padding_after_names() {
 }
 
 #[test]
+fn proc_self_fd_getdents_lists_open_descriptors() {
+    let mut t = TestVm::new();
+    process_impl::install_procfs_snapshot(b"/bin/test");
+
+    let file_fd = t.sys_openat(b"/visible-fd", O_CREAT | O_RDWR);
+    assert!(file_fd >= 3);
+    let proc_fd = t.sys_openat(b"/proc/self/fd", O_RDONLY | O_DIRECTORY);
+    assert!(proc_fd >= 3);
+
+    let dents_buf = t.scratch + 0x5A00;
+    let n = t.sys_getdents64(proc_fd, dents_buf, 256);
+    assert!(n > 0);
+
+    let bytes = t.guest_mem(dents_buf, n as usize);
+    let mut offset = 0usize;
+    let mut names = Vec::new();
+    while offset < bytes.len() {
+        let reclen = u16::from_le_bytes([bytes[offset + 16], bytes[offset + 17]]) as usize;
+        let d_type = bytes[offset + 18];
+        let name_field = &bytes[offset + 19..offset + reclen];
+        let nul = name_field
+            .iter()
+            .position(|byte| *byte == 0)
+            .expect("dirent name must be NUL-terminated");
+        names.push(String::from_utf8_lossy(&name_field[..nul]).into_owned());
+        assert_eq!(d_type, 10);
+        offset += reclen;
+    }
+
+    assert!(names.contains(&String::from("0")));
+    assert!(names.contains(&String::from("1")));
+    assert!(names.contains(&String::from("2")));
+    assert!(names.contains(&file_fd.to_string()));
+    assert!(names.contains(&proc_fd.to_string()));
+
+    assert_eq!(t.sys_close(file_fd), 0);
+    assert_eq!(t.sys_lseek(proc_fd, 0, 0), 0);
+    let n = t.sys_getdents64(proc_fd, dents_buf, 256);
+    let bytes = t.guest_mem(dents_buf, n as usize);
+    let mut offset = 0usize;
+    let mut names_after_close = Vec::new();
+    while offset < bytes.len() {
+        let reclen = u16::from_le_bytes([bytes[offset + 16], bytes[offset + 17]]) as usize;
+        let name_field = &bytes[offset + 19..offset + reclen];
+        let nul = name_field
+            .iter()
+            .position(|byte| *byte == 0)
+            .expect("dirent name must be NUL-terminated");
+        names_after_close.push(String::from_utf8_lossy(&name_field[..nul]).into_owned());
+        offset += reclen;
+    }
+    assert!(!names_after_close.contains(&file_fd.to_string()));
+}
+
+#[test]
 fn fs_ring_routes_mkdir_completions_to_the_owning_thread() {
     let t = TestVm::new();
 
@@ -251,20 +307,35 @@ fn fs_ring_routes_mkdir_completions_to_the_owning_thread() {
     let path1 = t.write_path(0x9000, b"/thread-one");
     let path2 = t.write_path(0x9100, b"/thread-two");
 
-    assert_eq!(fs::dispatch_mkdirat(&mut vm1, t.base, AT_FDCWD, path1, 0o755), 0);
+    assert_eq!(
+        fs::dispatch_mkdirat(&mut vm1, t.base, AT_FDCWD, path1, 0o755),
+        0
+    );
     assert_eq!(vm1.status, STATUS_FS);
-    assert_eq!(fs::dispatch_mkdirat(&mut vm2, t.base, AT_FDCWD, path2, 0o755), 0);
+    assert_eq!(
+        fs::dispatch_mkdirat(&mut vm2, t.base, AT_FDCWD, path2, 0o755),
+        0
+    );
     assert_eq!(vm2.status, STATUS_FS);
 
-    fs::process_pending_requests((&mut vm1 as *mut tidemark_kernel::types::ThreadState) as u32, t.base);
+    fs::process_pending_requests(
+        (&mut vm1 as *mut tidemark_kernel::types::ThreadState) as u32,
+        t.base,
+    );
 
     assert_eq!(
-        fs::resume_from_fs((&mut vm2 as *mut tidemark_kernel::types::ThreadState) as u32, t.base),
+        fs::resume_from_fs(
+            (&mut vm2 as *mut tidemark_kernel::types::ThreadState) as u32,
+            t.base
+        ),
         0
     );
     assert_eq!(vm2.status, STATUS_OK);
     assert_eq!(
-        fs::resume_from_fs((&mut vm1 as *mut tidemark_kernel::types::ThreadState) as u32, t.base),
+        fs::resume_from_fs(
+            (&mut vm1 as *mut tidemark_kernel::types::ThreadState) as u32,
+            t.base
+        ),
         0
     );
     assert_eq!(vm1.status, STATUS_OK);

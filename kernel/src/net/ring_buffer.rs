@@ -16,14 +16,15 @@
 //!     tail:     u32,                       // offset 4   — producer updates
 //!     capacity: u32,                       // offset 8   — always BUF_SIZE
 //!     _pad:     u32,                       // offset 12  — alignment padding
-//!     data:     [u8; 8192],                // offset 16  — circular buffer
+//!     data:     [u8; 262144],              // offset 16  — circular buffer
 //! };
 
 use crate::abi::MAX_SOCKETS;
 use crate::alloc;
 
-/// Per-buffer data area size (8 KiB, larger than pipe's 4 KiB for network data).
-const BUF_SIZE: u32 = 8192;
+/// Per-buffer data area size. Linux socket receive/send buffers are sized for
+/// streaming I/O rather than tiny packet slots; see https://man7.org/linux/man-pages/man7/socket.7.html.
+const BUF_SIZE: u32 = 256 * 1024;
 
 /// Total size of one NetBuffer in memory.
 const NET_BUF_SIZE: u32 = 16 + BUF_SIZE; // header (16) + data

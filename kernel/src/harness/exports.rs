@@ -367,6 +367,18 @@ pub extern "C" fn debug_fd_syscall_trace_status(index: u32) -> i32 {
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
+pub extern "C" fn debug_fd_syscall_trace_pid_sample0(index: u32) -> u64 {
+    crate::harness::debug::fd_syscall_trace_entry(index).pid_sample0
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_fd_syscall_trace_pid_sample1(index: u32) -> u64 {
+    crate::harness::debug::fd_syscall_trace_entry(index).pid_sample1
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
 pub extern "C" fn debug_path_syscall_trace_len() -> u32 {
     crate::harness::debug::path_syscall_trace_len()
 }

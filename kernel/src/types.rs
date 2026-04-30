@@ -143,6 +143,9 @@ pub struct ThreadState {
     pub blocked_fd: u32,
     /// Retained OFD id captured for a blocked syscall resume. 0 = inactive.
     pub blocked_ofd_id: u32,
+    /// Thread-local decoded block cache pointer. 0 = inactive/unallocated.
+    pub block_cache_ptr: u32,
+    _pad2: u32,
 }
 
 // =============================================================================

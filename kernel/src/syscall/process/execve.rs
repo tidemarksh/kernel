@@ -448,13 +448,18 @@ fn replace_proc_self_exe(target: Option<&[u8]>) {
     }
 }
 
+fn ensure_proc_self_fd_dir(self_ino: u32) {
+    if self_ino == 0 || memfs::lookup(self_ino, b"fd") != 0 {
+        return;
+    }
+    let _ = memfs::create_dir(self_ino, b"fd", 0o555);
+}
+
 fn install_proc_self_exe(target: &[u8]) {
     replace_proc_self_exe(Some(target));
 }
 
-pub(super) fn snapshot_proc_self_exe_target(
-    out: &mut [u8; PROC_SELF_EXE_SNAPSHOT_MAX],
-) -> usize {
+pub(super) fn snapshot_proc_self_exe_target(out: &mut [u8; PROC_SELF_EXE_SNAPSHOT_MAX]) -> usize {
     let ino = memfs::resolve_path(b"/proc/self/exe");
     if ino == 0 {
         return 0;
@@ -468,6 +473,18 @@ pub(super) fn restore_proc_self_exe_target(target: Option<&[u8]>) {
 
 const PROC_STAT_BYTES: &[u8] = b"cpu  1 1 1 1 0 0 0 0 0 0\ncpu0 1 1 1 1 0 0 0 0 0 0\n";
 const PROC_CPUINFO_BYTES: &[u8] = b"processor\t: 0\nmodel name\t: tidemark-riscv64\n\n";
+const PROC_SYS_KERNEL_NGROUPS_MAX_BYTES: &[u8] = b"65536\n";
+
+fn ensure_proc_child_dir(parent_ino: u32, name: &[u8], mode: u32) -> u32 {
+    if parent_ino == 0 {
+        return 0;
+    }
+    let existing = memfs::lookup(parent_ino, name);
+    if existing != 0 {
+        return existing;
+    }
+    memfs::create_dir(parent_ino, name, mode)
+}
 
 fn replace_proc_file(proc_ino: u32, name: &[u8], data: &[u8]) {
     let existing = memfs::lookup(proc_ino, name);
@@ -488,8 +505,16 @@ pub fn install_procfs_snapshot(exe_target: &[u8]) {
     if self_ino == 0 {
         return;
     }
+    ensure_proc_self_fd_dir(self_ino);
     replace_proc_file(proc_ino, b"stat", PROC_STAT_BYTES);
     replace_proc_file(proc_ino, b"cpuinfo", PROC_CPUINFO_BYTES);
+    let sys_ino = ensure_proc_child_dir(proc_ino, b"sys", 0o555);
+    let kernel_ino = ensure_proc_child_dir(sys_ino, b"kernel", 0o555);
+    replace_proc_file(
+        kernel_ino,
+        b"ngroups_max",
+        PROC_SYS_KERNEL_NGROUPS_MAX_BYTES,
+    );
     replace_proc_file(
         self_ino,
         b"maps",
@@ -538,7 +563,11 @@ fn validate_execve_initial_stack(
         actual.push(0);
         if actual != *expected {
             crate::tracepoints::record_execve_stage(903, index as u64, ptr);
-            crate::tracepoints::record_execve_stage(904, expected.len() as u64, actual.len() as u64);
+            crate::tracepoints::record_execve_stage(
+                904,
+                expected.len() as u64,
+                actual.len() as u64,
+            );
             return Err(EINVAL);
         }
     }
@@ -560,7 +589,11 @@ fn validate_execve_initial_stack(
         actual.push(0);
         if actual != *expected {
             crate::tracepoints::record_execve_stage(907, index as u64, ptr);
-            crate::tracepoints::record_execve_stage(908, expected.len() as u64, actual.len() as u64);
+            crate::tracepoints::record_execve_stage(
+                908,
+                expected.len() as u64,
+                actual.len() as u64,
+            );
             return Err(EINVAL);
         }
     }
@@ -718,9 +751,7 @@ fn complete_execve_in_place_inner(
         fd_flags: 0,
     }; MAX_FDS];
     for (idx, entry) in old_fd_table.iter_mut().enumerate() {
-        let entry_off = ps_addr + (idx * core::mem::size_of::<FdEntry>()) as u64;
-        entry.ofd_id = unsafe { guest_mem::read_u32(base, entry_off) };
-        entry.fd_flags = unsafe { guest_mem::read_u32(base, entry_off + 4) };
+        *entry = fd_table::load_process_fd_entry(base, ps_addr as u32, idx);
     }
     fd_table::clear_blocked_ofd_pin(vm);
     let target_pid = if vm.spawn_child_pid != 0 {
@@ -737,7 +768,6 @@ fn complete_execve_in_place_inner(
         old_ppid
     };
     crate::tracepoints::record_execve_dispatch(vm_ptr, 1221);
-    let defer_backend_cleanup = target_pid != old_pid;
 
     let mut inherited_fds = [FdEntry {
         ofd_id: 0,
@@ -864,16 +894,13 @@ fn complete_execve_in_place_inner(
     crate::syscall::memory::rebase_brk_after_hidden_prefix(hidden_end);
     crate::tracepoints::record_execve_stage(62, ps_addr, ps_size);
     let ps = unsafe { &mut *((base as u64 + ps_addr) as *mut ProcessState) };
-    let gen_ptr =
-        core::ptr::addr_of!(ps.reservation_gen) as *const core::sync::atomic::AtomicU32;
-    let lock_ptr =
-        core::ptr::addr_of!(ps.reservation_lock) as *const core::sync::atomic::AtomicU32;
+    let gen_ptr = core::ptr::addr_of!(ps.reservation_gen) as *const core::sync::atomic::AtomicU32;
+    let lock_ptr = core::ptr::addr_of!(ps.reservation_lock) as *const core::sync::atomic::AtomicU32;
     let tc_ptr = core::ptr::addr_of!(ps.thread_count);
     unsafe {
         guest_mem::init(gen_ptr, lock_ptr, tc_ptr);
     }
 
-    let mut released_cloexec_ofds = [false; MAX_FDS];
     for entry in old_fd_table.iter().copied() {
         if entry.ofd_id == 0
             || entry.ofd_id as usize >= MAX_FDS
@@ -881,18 +908,10 @@ fn complete_execve_in_place_inner(
         {
             continue;
         }
-        if inherited_fds.iter().any(|fd| fd.ofd_id == entry.ofd_id) {
-            continue;
-        }
-        if released_cloexec_ofds[entry.ofd_id as usize] {
-            continue;
-        }
-        released_cloexec_ofds[entry.ofd_id as usize] = true;
-        if defer_backend_cleanup {
-            let _ = fd_table::release_ofd_id_deferred(entry.ofd_id);
-        } else {
-            fd_table::release_ofd_id(entry.ofd_id);
-        }
+        // https://man7.org/linux/man-pages/man2/execve.2.html closes
+        // FD_CLOEXEC descriptors as part of a successful exec. The backend
+        // endpoint must be released too so pipes observe EOF/EPIPE correctly.
+        fd_table::release_ofd_id(entry.ofd_id);
     }
 
     let vm = unsafe { &mut *(vm_ptr as *mut ThreadState) };
@@ -900,11 +919,7 @@ fn complete_execve_in_place_inner(
     vm.process_ptr = ps_addr as u32;
     crate::tracepoints::record_execve_dispatch(vm_ptr, 132);
     for (idx, entry) in inherited_fds.iter().enumerate() {
-        let entry_off = ps_addr + (idx * core::mem::size_of::<FdEntry>()) as u64;
-        unsafe {
-            guest_mem::write_u32(base, entry_off, entry.ofd_id);
-            guest_mem::write_u32(base, entry_off + 4, entry.fd_flags);
-        }
+        fd_table::store_process_fd_entry(base, ps_addr as u32, idx, *entry);
     }
     crate::tracepoints::record_execve_stage(63, ps_addr, inherited_fds.len() as u64);
     let pid_off = core::mem::offset_of!(ProcessState, pid) as u64;
@@ -1017,6 +1032,7 @@ fn complete_execve_in_place_inner(
     vm.epoll_maxevents = 0;
     vm.blocked_fd = 0;
     vm.blocked_ofd_id = 0;
+    vm.block_cache_ptr = 0;
     clear_wait4_state(vm);
     clear_spawn_handoff(vm);
     crate::tracepoints::record_execve_stage(69, vm.pc, vm.x[2]);

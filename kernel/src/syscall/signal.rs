@@ -28,6 +28,7 @@ use crate::types::{
 
 // SA flags (https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/signal-defs.h)
 const SA_ONSTACK: u64 = 0x08000000;
+const SA_RESTART: u64 = 0x10000000;
 const SA_NODEFER: u64 = 0x40000000;
 const SA_RESETHAND: u64 = 0x80000000;
 
@@ -603,6 +604,41 @@ fn signalfd_pending_mask(vm: &ThreadState, base: u32, mask: u64) -> u64 {
         }
     }
     pending & signalfd_mask_sanitized(mask)
+}
+
+pub fn pending_signal_interrupts_blocked_syscall(vm: &ThreadState, base: u32) -> bool {
+    let pid = pid_from_vm(vm, base);
+    let mut pending = vm.sig_pending | peek_thread_pending_signals(vm, base);
+    if pid > 0 {
+        let idx = (pid - 1) as usize;
+        if idx < MAX_PROCESSES {
+            pending |= process_pending()[idx];
+        }
+    }
+
+    let deliverable = pending & !vm.sig_mask;
+    if deliverable == 0 {
+        return false;
+    }
+
+    let sig = deliverable.trailing_zeros() as usize + 1;
+    if sig >= MAX_SIGNALS {
+        return false;
+    }
+
+    let action = sigactions_for(pid)
+        .map(|table| table[sig])
+        .unwrap_or(SigAction {
+            handler: SIG_DFL,
+            flags: 0,
+            mask: 0,
+        });
+
+    match action.handler {
+        SIG_IGN => false,
+        SIG_DFL => !matches!(sig as i32, SIGCHLD | SIGURG | SIGWINCH | SIGCONT),
+        _ => (action.flags & SA_RESTART) == 0,
+    }
 }
 
 fn consume_signalfd_signal(vm: &mut ThreadState, base: u32, mask: u64) -> Option<(usize, i32)> {
@@ -1325,6 +1361,17 @@ pub fn send_signal_with_code(vm: &mut ThreadState, sig: i32, code: i32) {
     vm.sig_info_code = code;
 }
 
+pub fn queue_process_signal(pid: i32, sig: i32) {
+    if pid <= 0 || sig <= 0 || sig as usize >= MAX_SIGNALS {
+        return;
+    }
+    let idx = (pid - 1) as usize;
+    if idx >= MAX_PROCESSES || sig_slots()[idx].is_null() {
+        return;
+    }
+    process_pending()[idx] |= 1u64 << (sig - 1);
+}
+
 /// Queue a process-directed signal. Delivery happens when the target process
 /// next reaches a signal check boundary.
 pub fn send_signal_to_pid(vm: &mut ThreadState, base: u32, pid: i32, sig: i32) -> i64 {
@@ -1335,7 +1382,7 @@ pub fn send_signal_to_pid(vm: &mut ThreadState, base: u32, pid: i32, sig: i32) -
     if idx >= MAX_PROCESSES || sig_slots()[idx].is_null() {
         return ESRCH;
     }
-    process_pending()[idx] |= 1u64 << (sig - 1);
+    queue_process_signal(pid, sig);
     if pid == pid_from_vm(vm, base) {
         vm.sig_info_code = SI_USER;
         if let Some(ps) = process_state_from_vm(vm, base) {

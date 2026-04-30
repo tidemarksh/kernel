@@ -8,10 +8,48 @@
 //! direct-mapped block cache.
 
 use super::block_cache::BlockEntry;
+use super::fault::{AccessOutcome, ensure_guest_access};
 use super::integer::{div_i64, divu_64, mulh, mulhsu, mulhu, rem_i64, remu_64};
 use crate::guest_mem;
+use crate::types::ThreadState;
 
 const REG_WRITE_SOURCE_BLOCK: u32 = 3;
+
+pub(super) enum BlockOutcome {
+    Restart,
+    Return,
+    Unsupported,
+}
+
+#[inline(always)]
+fn charge_block_op(remaining: &mut i32, index: usize, first_consumed: bool) {
+    if !(first_consumed && index == 0) {
+        *remaining -= 1;
+    }
+}
+
+#[inline(always)]
+fn record_block_transition(
+    vm_ptr: u32,
+    tid: i32,
+    op_pc: u64,
+    prev_sp: u64,
+    prev_tp: u64,
+    prev_s11: u64,
+    x: &[u64; 32],
+) {
+    crate::tracepoints::record_special_reg_transitions(
+        vm_ptr,
+        tid,
+        op_pc,
+        0,
+        REG_WRITE_SOURCE_BLOCK,
+        prev_sp,
+        prev_tp,
+        prev_s11,
+        x,
+    );
+}
 
 // =============================================================================
 // Cached block execution
@@ -19,22 +57,28 @@ const REG_WRITE_SOURCE_BLOCK: u32 = 3;
 
 /// Execute a cached basic block.
 ///
-/// Returns the number of operations consumed from the budget. If the block
-/// encounters an unsupported cached op, execution bails out to the interpreter
-/// at the current PC.
+/// The caller owns instruction-budget accounting for the instruction that
+/// dispatched into this helper when `first_consumed` is true. Data accesses are
+/// still validated through the same fault path used by the interpreter.
+#[allow(clippy::too_many_arguments)]
 pub(super) unsafe fn exec_block(
     blk: &BlockEntry,
+    vm: &mut ThreadState,
     x: &mut [u64; 32],
+    f: &mut [u64; 32],
+    fcsr: &mut u32,
     pc: &mut u64,
     base: u32,
-    vm_ptr: u32,
-    tid: i32,
-) -> i32 {
+    remaining: &mut i32,
+    first_consumed: bool,
+) -> BlockOutcome {
     let len = blk.len as usize;
     let mut cur_pc = blk.start_pc;
+    let vm_ptr = vm as *const ThreadState as u32;
+    let tid = vm.tid;
 
-    for i in 0..len {
-        let op = blk.ops[i];
+    for index in 0..len {
+        let op = blk.ops[index];
         let prev_sp = x[2];
         let prev_tp = x[4];
         let prev_s11 = x[27];
@@ -46,6 +90,14 @@ pub(super) unsafe fn exec_block(
         let f3 = op.f3();
         let step = op.step();
         let imm = op.imm() as i64;
+
+        match op.op_id() {
+            1..=11 | 13 | 22 | 23 => charge_block_op(remaining, index, first_consumed),
+            _ => {
+                *pc = cur_pc;
+                return BlockOutcome::Unsupported;
+            }
+        }
 
         match op.op_id() {
             1 => {
@@ -203,17 +255,27 @@ pub(super) unsafe fn exec_block(
             }
             5 => {
                 let addr = (x[r1] as i64 + imm) as u64;
-                let val: u64 = unsafe {
-                    match f3 {
-                        0 => guest_mem::read_i8(base, addr) as u64,
-                        1 => guest_mem::read_i16(base, addr) as u64,
-                        2 => guest_mem::read_i32(base, addr) as u64,
-                        3 => guest_mem::read_u64(base, addr),
-                        4 => guest_mem::read_u8(base, addr) as u64,
-                        5 => guest_mem::read_u16(base, addr) as u64,
-                        6 => guest_mem::read_u32(base, addr) as u64,
-                        _ => 0,
-                    }
+                let width = match f3 {
+                    0 | 4 => 1,
+                    1 | 5 => 2,
+                    2 | 6 => 4,
+                    3 => 8,
+                    _ => 0,
+                };
+                match unsafe { ensure_guest_access(vm, x, f, fcsr, pc, base, addr, width) } {
+                    AccessOutcome::Ok => {}
+                    AccessOutcome::Restart => return BlockOutcome::Restart,
+                    AccessOutcome::Return => return BlockOutcome::Return,
+                }
+                let val: u64 = match f3 {
+                    0 => unsafe { guest_mem::read_i8(base, addr) as u64 },
+                    1 => unsafe { guest_mem::read_i16(base, addr) as u64 },
+                    2 => unsafe { guest_mem::read_i32(base, addr) as u64 },
+                    3 => unsafe { guest_mem::read_u64(base, addr) },
+                    4 => unsafe { guest_mem::read_u8(base, addr) as u64 },
+                    5 => unsafe { guest_mem::read_u16(base, addr) as u64 },
+                    6 => unsafe { guest_mem::read_u32(base, addr) as u64 },
+                    _ => 0,
                 };
                 if rd != 0 {
                     x[rd] = val;
@@ -221,14 +283,24 @@ pub(super) unsafe fn exec_block(
             }
             6 => {
                 let addr = (x[r1] as i64 + imm) as u64;
-                unsafe {
-                    match f3 {
-                        0 => guest_mem::write_u8(base, addr, x[r2] as u8),
-                        1 => guest_mem::write_u16(base, addr, x[r2] as u16),
-                        2 => guest_mem::write_u32(base, addr, x[r2] as u32),
-                        3 => guest_mem::write_u64(base, addr, x[r2]),
-                        _ => {}
-                    }
+                let width = match f3 {
+                    0 => 1,
+                    1 => 2,
+                    2 => 4,
+                    3 => 8,
+                    _ => 0,
+                };
+                match unsafe { ensure_guest_access(vm, x, f, fcsr, pc, base, addr, width) } {
+                    AccessOutcome::Ok => {}
+                    AccessOutcome::Restart => return BlockOutcome::Restart,
+                    AccessOutcome::Return => return BlockOutcome::Return,
+                }
+                match f3 {
+                    0 => unsafe { guest_mem::write_u8(base, addr, x[r2] as u8) },
+                    1 => unsafe { guest_mem::write_u16(base, addr, x[r2] as u16) },
+                    2 => unsafe { guest_mem::write_u32(base, addr, x[r2] as u32) },
+                    3 => unsafe { guest_mem::write_u64(base, addr, x[r2]) },
+                    _ => {}
                 }
             }
             7 => {
@@ -257,18 +329,8 @@ pub(super) unsafe fn exec_block(
                     cur_pc + step
                 };
                 x[0] = 0;
-                crate::tracepoints::record_special_reg_transitions(
-                    vm_ptr,
-                    tid,
-                    op_pc,
-                    0,
-                    REG_WRITE_SOURCE_BLOCK,
-                    prev_sp,
-                    prev_tp,
-                    prev_s11,
-                    x,
-                );
-                return blk.total_budget as i32;
+                record_block_transition(vm_ptr, tid, op_pc, prev_sp, prev_tp, prev_s11, x);
+                return BlockOutcome::Restart;
             }
             10 => {
                 if rd != 0 {
@@ -276,18 +338,8 @@ pub(super) unsafe fn exec_block(
                 }
                 *pc = (cur_pc as i64 + imm) as u64;
                 x[0] = 0;
-                crate::tracepoints::record_special_reg_transitions(
-                    vm_ptr,
-                    tid,
-                    op_pc,
-                    0,
-                    REG_WRITE_SOURCE_BLOCK,
-                    prev_sp,
-                    prev_tp,
-                    prev_s11,
-                    x,
-                );
-                return blk.total_budget as i32;
+                record_block_transition(vm_ptr, tid, op_pc, prev_sp, prev_tp, prev_s11, x);
+                return BlockOutcome::Restart;
             }
             11 => {
                 let target = ((x[r1] as i64 + imm) as u64) & !1;
@@ -297,53 +349,21 @@ pub(super) unsafe fn exec_block(
                 }
                 *pc = target;
                 x[0] = 0;
-                crate::tracepoints::record_special_reg_transitions(
-                    vm_ptr,
-                    tid,
-                    op_pc,
-                    0,
-                    REG_WRITE_SOURCE_BLOCK,
-                    prev_sp,
-                    prev_tp,
-                    prev_s11,
-                    x,
-                );
-                return blk.total_budget as i32;
+                record_block_transition(vm_ptr, tid, op_pc, prev_sp, prev_tp, prev_s11, x);
+                return BlockOutcome::Restart;
             }
             13 => {}
             _ => {
                 *pc = cur_pc;
-                x[0] = 0;
-                crate::tracepoints::record_special_reg_transitions(
-                    vm_ptr,
-                    tid,
-                    op_pc,
-                    0,
-                    REG_WRITE_SOURCE_BLOCK,
-                    prev_sp,
-                    prev_tp,
-                    prev_s11,
-                    x,
-                );
-                return i as i32;
+                return BlockOutcome::Unsupported;
             }
         }
 
         x[0] = 0;
-        crate::tracepoints::record_special_reg_transitions(
-            vm_ptr,
-            tid,
-            op_pc,
-            0,
-            REG_WRITE_SOURCE_BLOCK,
-            prev_sp,
-            prev_tp,
-            prev_s11,
-            x,
-        );
+        record_block_transition(vm_ptr, tid, op_pc, prev_sp, prev_tp, prev_s11, x);
         cur_pc += step;
     }
 
     *pc = cur_pc;
-    blk.total_budget as i32
+    BlockOutcome::Restart
 }

@@ -233,6 +233,17 @@ pub fn sys_fchmodat(
     memfs::set_mode(ino, mode as u32)
 }
 
+pub fn sys_fchmod(vm: &mut ThreadState, base: u32, fd: u64, mode: u64) -> i64 {
+    let ofd = match fd_table::get_ofd(base, vm, fd) {
+        Some(ofd) => ofd,
+        None => return EBADF,
+    };
+    match ofd.fd_type {
+        FD_TYPE_FILE | FD_TYPE_DIR => memfs::set_mode(ofd.ino, mode as u32),
+        _ => EINVAL,
+    }
+}
+
 pub fn sys_fchownat(
     vm: &mut ThreadState,
     base: u32,

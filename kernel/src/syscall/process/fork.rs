@@ -5,6 +5,7 @@ use super::lifecycle::{
 };
 use super::runtime::{capture_thread_snapshot, prs};
 use crate::abi::*;
+use crate::fs::fd_table;
 use crate::guest_mem;
 use crate::types::ThreadState;
 
@@ -36,6 +37,7 @@ pub fn sys_fork(
     inherit_process(parent_pid, child_ppid, child_pid, false);
     crate::syscall::signal::fork_from_parent(parent_pid, child_pid);
     crate::syscall::resource::fork_from_parent(parent_pid, child_pid);
+    fd_table::retain_fds_for_fork(base, vm);
 
     if flags & CLONE_PARENT_SETTID != 0 && parent_tidptr != 0 {
         unsafe { guest_mem::write_u32(base, parent_tidptr, child_pid as u32) };

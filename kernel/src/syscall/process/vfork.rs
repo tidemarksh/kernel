@@ -4,8 +4,8 @@ use super::lifecycle::{
     inherit_process, record_child,
 };
 use super::runtime::{
-    capture_thread_snapshot, clear_vfork_proc_self_exe_snapshot, clear_vfork_runtime_snapshot,
-    prs, restore_thread_snapshot,
+    capture_thread_snapshot, clear_vfork_proc_self_exe_snapshot, clear_vfork_runtime_snapshot, prs,
+    restore_thread_snapshot,
 };
 use crate::abi::*;
 use crate::fs::fd_table;
@@ -64,12 +64,10 @@ fn restore_parent_thread_after_vfork(vm: &ThreadState, base: u32) {
 
 fn retain_process_ofds(base: u32, process_ptr: u32) {
     let ps = unsafe { &*((base as u64 + process_ptr as u64) as *const ProcessState) };
-    let mut seen = [false; MAX_FDS];
     for entry in ps.fd_table.iter() {
-        if entry.ofd_id == 0 || entry.ofd_id as usize >= MAX_FDS || seen[entry.ofd_id as usize] {
+        if entry.ofd_id == 0 || entry.ofd_id as usize >= MAX_FDS {
             continue;
         }
-        seen[entry.ofd_id as usize] = true;
         fd_table::retain_ofd_id(entry.ofd_id);
     }
 }

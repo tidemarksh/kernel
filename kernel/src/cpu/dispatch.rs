@@ -9,7 +9,7 @@
 
 use super::atomic::exec_amo;
 use super::block_cache::BlockCache;
-use super::block_exec::exec_block;
+use super::block_exec::{BlockOutcome, exec_block};
 use super::decode;
 use super::fault::{AccessOutcome, ensure_guest_access};
 use super::fp::{exec_fma, exec_load_fp, exec_op_fp, exec_store_fp};
@@ -168,16 +168,17 @@ pub(super) unsafe fn exec_decoded(
 
                 if rs1v == 1
                     && let Some(bc) = cache
-                    && let Some(blk) = bc.get(target)
+                    && let Some(blk) = bc.get_or_build_checked(vm, target, base)
                 {
                     let cost = blk.total_budget as i32;
                     if *remaining >= cost {
-                        let executed =
-                            exec_block(blk, x, pc, base, vm as *const ThreadState as u32, vm.tid);
-                        if executed > 0 {
-                            *remaining -= executed;
-                            x[0] = 0;
-                            return StepOutcome::Restart;
+                        match exec_block(blk, vm, x, f, fcsr, pc, base, remaining, false) {
+                            BlockOutcome::Restart => {
+                                x[0] = 0;
+                                return StepOutcome::Restart;
+                            }
+                            BlockOutcome::Return => return StepOutcome::Return(*remaining),
+                            BlockOutcome::Unsupported => {}
                         }
                     }
                 }

@@ -233,6 +233,12 @@ pub fn sys_getrandom(vm: &ThreadState, base: u32, buf: u64, len: u64, flags: u64
     count as i64
 }
 
+/// riscv_hwprobe reports RISC-V hardware capabilities to userspace.
+/// https://docs.kernel.org/arch/riscv/hwprobe.html
+/// https://github.com/torvalds/linux/blob/v6.12/arch/riscv/include/uapi/asm/hwprobe.h
+///
+/// Tidemark exposes the minimum stable capabilities needed by the guest ABI
+/// and marks unknown keys as unsupported, matching the Linux key/value shape.
 pub fn sys_riscv_hwprobe(
     _vm: &ThreadState,
     base: u32,
@@ -296,6 +302,9 @@ pub fn sys_riscv_hwprobe(
 }
 
 /// riscv_flush_icache: synchronize instruction visibility for the current process.
+/// https://github.com/torvalds/linux/blob/v6.12/arch/riscv/include/uapi/asm/unistd.h
+/// https://man7.org/linux/man-pages/man2/cacheflush.2.html
+///
 /// Tidemark does not model per-core I-cache state, so this is a Linux-shaped no-op.
 /// The address range and flags are accepted and ignored.
 pub fn sys_riscv_flush_icache(
@@ -439,4 +448,47 @@ pub fn sys_setresuid(vm: &mut ThreadState, ruid: i64, euid: i64, _suid: i64) -> 
 
 pub fn sys_setresgid(vm: &mut ThreadState, rgid: i64, egid: i64, _sgid: i64) -> i64 {
     sys_setregid(vm, rgid, egid)
+}
+
+pub fn sys_getgroups(base: u32, size: i64, list_addr: u64) -> i64 {
+    if size < 0 {
+        return EINVAL;
+    }
+    if size == 0 {
+        return 0;
+    }
+    let bytes = match (size as usize).checked_mul(4) {
+        Some(bytes) => bytes,
+        None => return EINVAL,
+    };
+    if !guest_range_valid(list_addr, bytes)
+        || crate::syscall::memory::range_has_prot_none(list_addr, bytes as u64)
+    {
+        return EFAULT;
+    }
+    unsafe {
+        guest_mem::zero_mem(base, list_addr, bytes);
+    }
+    0
+}
+
+pub fn sys_setgroups(vm: &ThreadState, size: i64, list_addr: u64) -> i64 {
+    if size < 0 {
+        return EINVAL;
+    }
+    if size > 0 {
+        let bytes = match (size as usize).checked_mul(4) {
+            Some(bytes) => bytes,
+            None => return EINVAL,
+        };
+        if !guest_range_valid(list_addr, bytes)
+            || crate::syscall::memory::range_has_prot_none(list_addr, bytes as u64)
+        {
+            return EFAULT;
+        }
+    }
+    if vm.euid != 0 {
+        return EPERM;
+    }
+    0
 }

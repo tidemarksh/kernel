@@ -52,6 +52,23 @@ pub const FD_TYPE_SIGNALFD: i32 = 14;
 // Syscall numbers (asm-generic, used by RISC-V)
 // https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/unistd.h
 // =============================================================================
+pub const SYS_IO_SETUP: u64 = 0;
+pub const SYS_IO_DESTROY: u64 = 1;
+pub const SYS_IO_SUBMIT: u64 = 2;
+pub const SYS_IO_CANCEL: u64 = 3;
+pub const SYS_IO_GETEVENTS: u64 = 4;
+pub const SYS_SETXATTR: u64 = 5;
+pub const SYS_LSETXATTR: u64 = 6;
+pub const SYS_FSETXATTR: u64 = 7;
+pub const SYS_GETXATTR: u64 = 8;
+pub const SYS_LGETXATTR: u64 = 9;
+pub const SYS_FGETXATTR: u64 = 10;
+pub const SYS_LISTXATTR: u64 = 11;
+pub const SYS_LLISTXATTR: u64 = 12;
+pub const SYS_FLISTXATTR: u64 = 13;
+pub const SYS_REMOVEXATTR: u64 = 14;
+pub const SYS_LREMOVEXATTR: u64 = 15;
+pub const SYS_FREMOVEXATTR: u64 = 16;
 pub const SYS_GETCWD: u64 = 17;
 pub const SYS_EVENTFD2: u64 = 19;
 pub const SYS_EPOLL_CREATE1: u64 = 20;
@@ -66,15 +83,19 @@ pub const SYS_IOCTL: u64 = 29;
 pub const SYS_FCNTL: u64 = 25;
 pub const SYS_MKDIRAT: u64 = 34;
 pub const SYS_UNLINKAT: u64 = 35;
+pub const SYS_UMOUNT2: u64 = 39;
 pub const SYS_STATFS: u64 = 43;
 pub const SYS_RENAMEAT2: u64 = 276;
 pub const SYS_STATX: u64 = 291;
 pub const SYS_FACCESSAT: u64 = 48;
 pub const SYS_CHDIR: u64 = 49;
+pub const SYS_CHROOT: u64 = 51;
+pub const SYS_FCHMOD: u64 = 52;
 pub const SYS_FCHMODAT: u64 = 53;
 pub const SYS_FCHOWNAT: u64 = 54;
 pub const SYS_OPENAT: u64 = 56;
 pub const SYS_CLOSE: u64 = 57;
+pub const SYS_CLOSE_RANGE: u64 = 436;
 pub const SYS_PIPE2: u64 = 59;
 pub const SYS_GETDENTS64: u64 = 61;
 pub const SYS_LSEEK: u64 = 62;
@@ -125,6 +146,8 @@ pub const SYS_SETRESUID: u64 = 147;
 pub const SYS_GETRESUID: u64 = 148;
 pub const SYS_SETRESGID: u64 = 149;
 pub const SYS_GETRESGID: u64 = 150;
+pub const SYS_GETGROUPS: u64 = 158;
+pub const SYS_SETGROUPS: u64 = 159;
 pub const SYS_TIMES: u64 = 153;
 pub const SYS_GETRLIMIT: u64 = 163;
 pub const SYS_SETRLIMIT: u64 = 164;
@@ -165,9 +188,12 @@ pub const SYS_RECVFROM: u64 = 207;
 pub const SYS_SETSOCKOPT: u64 = 208;
 pub const SYS_GETSOCKOPT: u64 = 209;
 pub const SYS_SHUTDOWN: u64 = 210;
+pub const SYS_SENDMSG: u64 = 211;
+pub const SYS_RECVMSG: u64 = 212;
 pub const SYS_GETSOCKNAME: u64 = 204;
 pub const SYS_GETPEERNAME: u64 = 205;
 pub const SYS_PPOLL: u64 = 73;
+pub const SYS_PSELECT6: u64 = 72;
 pub const SYS_SIGNALFD4: u64 = 74;
 pub const SYS_TIMERFD_CREATE: u64 = 85;
 pub const SYS_TIMERFD_SETTIME: u64 = 86;
@@ -319,6 +345,7 @@ pub const EPIPE: i64 = -32;
 pub const ENOSYS: i64 = -38;
 pub const ENOTEMPTY: i64 = -39;
 pub const ELOOP: i64 = -40;
+pub const ENODATA: i64 = -61;
 pub const ENOTSOCK: i64 = -88;
 pub const EDESTADDRREQ: i64 = -89;
 pub const EPROTOTYPE: i64 = -91;
@@ -332,6 +359,7 @@ pub const ENOTCONN: i64 = -107;
 pub const EISCONN: i64 = -106;
 pub const ECONNREFUSED: i64 = -111;
 pub const ETIMEDOUT: i64 = -110;
+pub const EINPROGRESS: i64 = -115;
 
 // =============================================================================
 // Socket address families
@@ -413,8 +441,26 @@ macro_rules! export_const_u64 {
     };
 }
 
+export_const_u64!(abi_sys_io_setup, SYS_IO_SETUP);
+export_const_u64!(abi_sys_io_destroy, SYS_IO_DESTROY);
+export_const_u64!(abi_sys_io_submit, SYS_IO_SUBMIT);
+export_const_u64!(abi_sys_io_cancel, SYS_IO_CANCEL);
+export_const_u64!(abi_sys_io_getevents, SYS_IO_GETEVENTS);
+export_const_u64!(abi_sys_setxattr, SYS_SETXATTR);
+export_const_u64!(abi_sys_lsetxattr, SYS_LSETXATTR);
+export_const_u64!(abi_sys_fsetxattr, SYS_FSETXATTR);
+export_const_u64!(abi_sys_getxattr, SYS_GETXATTR);
+export_const_u64!(abi_sys_lgetxattr, SYS_LGETXATTR);
+export_const_u64!(abi_sys_fgetxattr, SYS_FGETXATTR);
+export_const_u64!(abi_sys_listxattr, SYS_LISTXATTR);
+export_const_u64!(abi_sys_llistxattr, SYS_LLISTXATTR);
+export_const_u64!(abi_sys_flistxattr, SYS_FLISTXATTR);
+export_const_u64!(abi_sys_removexattr, SYS_REMOVEXATTR);
+export_const_u64!(abi_sys_lremovexattr, SYS_LREMOVEXATTR);
+export_const_u64!(abi_sys_fremovexattr, SYS_FREMOVEXATTR);
 export_const_u64!(abi_sys_openat, SYS_OPENAT);
 export_const_u64!(abi_sys_close, SYS_CLOSE);
+export_const_u64!(abi_sys_close_range, SYS_CLOSE_RANGE);
 export_const_u64!(abi_sys_read, SYS_READ);
 export_const_u64!(abi_sys_write, SYS_WRITE);
 export_const_u64!(abi_sys_mmap, SYS_MMAP);
@@ -454,11 +500,13 @@ export_const_u64!(abi_sys_ioctl, SYS_IOCTL);
 export_const_u64!(abi_sys_fcntl, SYS_FCNTL);
 export_const_u64!(abi_sys_mkdirat, SYS_MKDIRAT);
 export_const_u64!(abi_sys_unlinkat, SYS_UNLINKAT);
+export_const_u64!(abi_sys_umount2, SYS_UMOUNT2);
 export_const_u64!(abi_sys_statfs, SYS_STATFS);
 export_const_u64!(abi_sys_renameat2, SYS_RENAMEAT2);
 export_const_u64!(abi_sys_statx, SYS_STATX);
 export_const_u64!(abi_sys_faccessat, SYS_FACCESSAT);
 export_const_u64!(abi_sys_chdir, SYS_CHDIR);
+export_const_u64!(abi_sys_fchmod, SYS_FCHMOD);
 export_const_u64!(abi_sys_fchmodat, SYS_FCHMODAT);
 export_const_u64!(abi_sys_fchownat, SYS_FCHOWNAT);
 export_const_u64!(abi_sys_getdents64, SYS_GETDENTS64);
@@ -492,6 +540,8 @@ export_const_u64!(abi_sys_setresuid, SYS_SETRESUID);
 export_const_u64!(abi_sys_getresuid, SYS_GETRESUID);
 export_const_u64!(abi_sys_setresgid, SYS_SETRESGID);
 export_const_u64!(abi_sys_getresgid, SYS_GETRESGID);
+export_const_u64!(abi_sys_getgroups, SYS_GETGROUPS);
+export_const_u64!(abi_sys_setgroups, SYS_SETGROUPS);
 export_const_u64!(abi_sys_times, SYS_TIMES);
 export_const_u64!(abi_sys_getppid, SYS_GETPPID);
 export_const_u64!(abi_sys_getuid, SYS_GETUID);
@@ -514,11 +564,14 @@ export_const_u64!(abi_sys_accept4, SYS_ACCEPT4);
 export_const_u64!(abi_sys_connect, SYS_CONNECT);
 export_const_u64!(abi_sys_sendto, SYS_SENDTO);
 export_const_u64!(abi_sys_recvfrom, SYS_RECVFROM);
+export_const_u64!(abi_sys_sendmsg, SYS_SENDMSG);
+export_const_u64!(abi_sys_recvmsg, SYS_RECVMSG);
 export_const_u64!(abi_sys_setsockopt, SYS_SETSOCKOPT);
 export_const_u64!(abi_sys_getsockopt, SYS_GETSOCKOPT);
 export_const_u64!(abi_sys_getsockname, SYS_GETSOCKNAME);
 export_const_u64!(abi_sys_getpeername, SYS_GETPEERNAME);
 export_const_u64!(abi_sys_ppoll, SYS_PPOLL);
+export_const_u64!(abi_sys_pselect6, SYS_PSELECT6);
 export_const_u64!(abi_sys_signalfd4, SYS_SIGNALFD4);
 export_const_u64!(abi_sys_timerfd_create, SYS_TIMERFD_CREATE);
 export_const_u64!(abi_sys_timerfd_settime, SYS_TIMERFD_SETTIME);
@@ -604,6 +657,7 @@ export_const!(abi_enosys, ENOSYS as i32);
 export_const!(abi_eloop, ELOOP as i32);
 export_const!(abi_eagain, EAGAIN as i32);
 export_const!(abi_etimedout, ETIMEDOUT as i32);
+export_const!(abi_einprogress, EINPROGRESS as i32);
 export_const!(abi_epipe, EPIPE as i32);
 export_const!(abi_eperm, EPERM as i32);
 export_const!(abi_eexist, EEXIST as i32);
@@ -619,6 +673,7 @@ export_const!(abi_eisdir, EISDIR as i32);
 export_const!(abi_emfile, EMFILE as i32);
 export_const!(abi_enospc, ENOSPC as i32);
 export_const!(abi_enotempty, ENOTEMPTY as i32);
+export_const!(abi_enodata, ENODATA as i32);
 export_const!(abi_enametoolong, ENAMETOOLONG as i32);
 export_const!(abi_enotsock, ENOTSOCK as i32);
 export_const!(abi_edestaddrreq, EDESTADDRREQ as i32);
@@ -1324,6 +1379,27 @@ pub extern "C" fn process_stderr_pipe(vm_ptr: u32) -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn process_tty_pty_slot(vm_ptr: u32) -> u32 {
     process_state_from_vm(vm_ptr).map_or(0, |ps| ps.tty_pty_slot)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn process_use_pipe_stdio(vm_ptr: u32) -> i32 {
+    let vm = unsafe { &mut *(vm_ptr as *mut crate::types::ThreadState) };
+    if unsafe { crate::fs::fd_table::use_pipe_stdio(vm.guest_base, vm) } {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn process_close_host_stdin(vm_ptr: u32) {
+    if let Some(ps) = process_state_from_vm(vm_ptr) {
+        let pipe_slot = ps.stdin_pipe_slot;
+        if pipe_slot != 0 {
+            crate::syscall::pipe::pipe_close(pipe_slot, false);
+            ps.stdin_pipe_slot = 0;
+        }
+    }
 }
 
 #[unsafe(no_mangle)]

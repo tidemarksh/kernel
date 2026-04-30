@@ -57,17 +57,20 @@ const PENDING_FS_PATH_MAX: usize = 4096;
 const DT_UNKNOWN: u8 = 0;
 const DT_DIR: u8 = 4;
 const DT_REG: u8 = 8;
+const DT_LNK: u8 = 10;
 const TMPFS_MAGIC: u64 = 0x0102_1994;
 const EVENTFD_COUNTER_MAX: u64 = u64::MAX - 1;
 const S_IFIFO: u32 = 0o010000;
 const S_IFSOCK: u32 = 0o140000;
 const MAX_PATH_SYMLINK_FOLLOWS: u32 = 40;
+pub(crate) const PIPE_READ_EOF_SYNC_RETRY_MARKER: u64 = 0x7069_7065_454f_4652;
+const PIPE_EPIPE_SYNC_RETRY_MARKER: u64 = 0x7069_7065_4550_4950;
 pub const FS_EFFECT_MEMFS_MUTATION: u32 = 1 << 0;
 pub const FS_EFFECT_SHARED_OFD_STATE: u32 = 1 << 1;
 pub const FS_EFFECT_MEMFS_FILE_DATA: u32 = 1 << 2;
 pub use meta::{
-    sys_faccessat, sys_fchmodat, sys_fchownat, sys_fstat, sys_ftruncate, sys_newfstatat,
-    sys_readlinkat, sys_statfs, sys_truncate,
+    sys_faccessat, sys_fchmod, sys_fchmodat, sys_fchownat, sys_fstat, sys_ftruncate,
+    sys_newfstatat, sys_readlinkat, sys_statfs, sys_truncate,
 };
 pub use mutation::{sys_mkdirat, sys_renameat2, sys_unlinkat};
 pub use open::sys_openat;
@@ -118,6 +121,105 @@ pub fn sys_chdir(vm: &mut ThreadState, base: u32, path_addr: u64) -> i64 {
     0
 }
 
+/// chroot(2) changes the process root directory.
+/// https://man7.org/linux/man-pages/man2/chroot.2.html
+///
+/// Tidemark does not currently track per-process root directories. Returning
+/// success would lie about path resolution semantics, so expose the syscall as
+/// unavailable after normal path/type validation.
+pub fn sys_chroot(vm: &ThreadState, base: u32, path_addr: u64) -> i64 {
+    let ino = match resolve_at(vm, AT_FDCWD as u64, path_addr, base) {
+        Ok(ino) => ino,
+        Err(errno) => return errno,
+    };
+    let st = match memfs::stat(ino) {
+        Some(st) => st,
+        None => return ENOENT,
+    };
+    if st.mode & memfs::S_IFMT != memfs::S_IFDIR {
+        return ENOTDIR;
+    }
+    ENOSYS
+}
+
+/// umount2(2) unmounts a mount point.
+/// https://man7.org/linux/man-pages/man2/umount.2.html
+///
+/// Tidemark has no guest mount table yet. Existing paths are therefore not
+/// mount points; Linux reports EINVAL for a target that is not mounted.
+pub fn sys_umount2(vm: &ThreadState, base: u32, path_addr: u64, _flags: u64) -> i64 {
+    match resolve_at(vm, AT_FDCWD as u64, path_addr, base) {
+        Ok(_) => EINVAL,
+        Err(errno) => errno,
+    }
+}
+
+/// xattr syscalls.
+/// https://man7.org/linux/man-pages/man7/xattr.7.html
+/// https://man7.org/linux/man-pages/man2/setxattr.2.html
+/// https://man7.org/linux/man-pages/man2/getxattr.2.html
+/// https://man7.org/linux/man-pages/man2/listxattr.2.html
+/// https://man7.org/linux/man-pages/man2/removexattr.2.html
+///
+/// MemFS does not store extended attributes. Existing objects behave like a
+/// filesystem without xattr support: setting is not supported, getting/removing
+/// a missing attribute reports ENODATA, and listing returns an empty list.
+pub fn sys_setxattr(vm: &ThreadState, base: u32, path_addr: u64) -> i64 {
+    match resolve_at(vm, AT_FDCWD as u64, path_addr, base) {
+        Ok(_) => EOPNOTSUPP,
+        Err(errno) => errno,
+    }
+}
+
+pub fn sys_fsetxattr(vm: &ThreadState, base: u32, fd: u64) -> i64 {
+    if fd_table::get_ofd(base, vm, fd).is_none() {
+        return EBADF;
+    }
+    EOPNOTSUPP
+}
+
+pub fn sys_getxattr(vm: &ThreadState, base: u32, path_addr: u64) -> i64 {
+    match resolve_at(vm, AT_FDCWD as u64, path_addr, base) {
+        Ok(_) => ENODATA,
+        Err(errno) => errno,
+    }
+}
+
+pub fn sys_fgetxattr(vm: &ThreadState, base: u32, fd: u64) -> i64 {
+    if fd_table::get_ofd(base, vm, fd).is_none() {
+        return EBADF;
+    }
+    ENODATA
+}
+
+pub fn sys_listxattr(vm: &ThreadState, base: u32, path_addr: u64) -> i64 {
+    match resolve_at(vm, AT_FDCWD as u64, path_addr, base) {
+        Ok(_) => 0,
+        Err(errno) => errno,
+    }
+}
+
+pub fn sys_flistxattr(vm: &ThreadState, base: u32, fd: u64) -> i64 {
+    if fd_table::get_ofd(base, vm, fd).is_none() {
+        return EBADF;
+    }
+    0
+}
+
+pub fn sys_removexattr(vm: &ThreadState, base: u32, path_addr: u64) -> i64 {
+    match resolve_at(vm, AT_FDCWD as u64, path_addr, base) {
+        Ok(_) => ENODATA,
+        Err(errno) => errno,
+    }
+}
+
+pub fn sys_fremovexattr(vm: &ThreadState, base: u32, fd: u64) -> i64 {
+    if fd_table::get_ofd(base, vm, fd).is_none() {
+        return EBADF;
+    }
+    ENODATA
+}
+
 // =========================================================================
 // read / pread64
 // =========================================================================
@@ -165,15 +267,28 @@ pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) 
         if !fd_table::is_pipe_read(&ofd) {
             return EBADF;
         }
-        let mut tmp = [0u8; 4096];
+        let mut tmp = [0u8; super::pipe::PIPE_BUF_SIZE];
         let to_read = (count as usize).min(tmp.len());
         let n = super::pipe::pipe_read(ofd.ino, &mut tmp[..to_read]);
+        if n == 0 && count > 0 {
+            if vm.fault_addr != PIPE_READ_EOF_SYNC_RETRY_MARKER || vm.fault_pc != fd {
+                fd_table::pin_blocked_fd(base, vm, fd);
+                vm.fault_addr = PIPE_READ_EOF_SYNC_RETRY_MARKER;
+                vm.fault_pc = fd;
+                vm.status = STATUS_PIPE_WAIT;
+                return 0;
+            }
+            vm.fault_addr = 0;
+            vm.fault_pc = 0;
+        }
         if n == EAGAIN && ofd.status_flags & O_NONBLOCK == 0 {
             fd_table::pin_blocked_fd(base, vm, fd);
             vm.status = STATUS_PIPE_WAIT;
             return 0;
         }
         if n > 0 {
+            vm.fault_addr = 0;
+            vm.fault_pc = 0;
             if !crate::syscall::memory::guest_range_accessible(base, buf, n as u64) {
                 return EFAULT;
             }
@@ -631,14 +746,47 @@ pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64,
                 None,
             );
         }
-        let mut tmp = [0u8; 4096];
+        let mut tmp = [0u8; super::pipe::PIPE_BUF_SIZE];
         let to_write = (count as usize).min(tmp.len());
         unsafe {
             guest_mem::read_bytes(base, buf, &mut tmp[..to_write]);
         }
         let n = super::pipe::pipe_write(ofd.ino, &tmp[..to_write]);
         if n == EPIPE {
+            if !fd_table::pipe_epipe_synced(ofd_id)
+                && (vm.fault_addr != PIPE_EPIPE_SYNC_RETRY_MARKER || vm.fault_pc != fd)
+            {
+                fd_table::pin_blocked_fd(base, vm, fd);
+                fd_table::set_pipe_epipe_synced(ofd_id, true);
+                vm.fault_addr = PIPE_EPIPE_SYNC_RETRY_MARKER;
+                vm.fault_pc = fd;
+                vm.status = STATUS_PIPE_WAIT;
+                return trace_write_attempt(
+                    fd,
+                    nr,
+                    buf,
+                    count,
+                    0,
+                    ofd_id,
+                    ofd.fd_type,
+                    ofd.ino,
+                    ofd.status_flags,
+                    pipe_read_open,
+                    pipe_write_open,
+                    Some(&tmp[..to_write]),
+                );
+            }
+            vm.fault_addr = 0;
+            vm.fault_pc = 0;
             signal::send_signal(vm, SIGPIPE);
+        }
+        if n >= 0 {
+            vm.fault_addr = 0;
+            vm.fault_pc = 0;
+            fd_table::set_pipe_epipe_synced(ofd_id, false);
+        }
+        if n == EAGAIN {
+            fd_table::set_pipe_epipe_synced(ofd_id, false);
         }
         if n == EAGAIN && ofd.status_flags & O_NONBLOCK == 0 {
             fd_table::pin_blocked_fd(base, vm, fd);
@@ -1064,6 +1212,22 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
                 );
             }
             total += n;
+            if (n as usize) < to_write {
+                return trace_write_attempt(
+                    fd,
+                    SYS_WRITEV,
+                    iov_addr,
+                    iovcnt,
+                    total,
+                    ofd_id,
+                    ofd.fd_type,
+                    ofd.ino,
+                    ofd.status_flags,
+                    0,
+                    0,
+                    None,
+                );
+            }
         } else if ofd.fd_type == FD_TYPE_PIPE {
             if !fd_table::is_pipe_write(&ofd) {
                 return trace_write_attempt(
@@ -1081,7 +1245,7 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
                     None,
                 );
             }
-            let mut tmp = [0u8; 4096];
+            let mut tmp = [0u8; super::pipe::PIPE_BUF_SIZE];
             let to_write = (iov_len as usize).min(tmp.len());
             unsafe {
                 guest_mem::read_bytes(base, iov_base, &mut tmp[..to_write]);
@@ -1171,6 +1335,22 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
                 );
             }
             total += n;
+            if (n as usize) < to_write {
+                return trace_write_attempt(
+                    fd,
+                    SYS_WRITEV,
+                    iov_addr,
+                    iovcnt,
+                    total,
+                    ofd_id,
+                    ofd.fd_type,
+                    ofd.ino,
+                    ofd.status_flags,
+                    pipe_read_open,
+                    pipe_write_open,
+                    None,
+                );
+            }
         } else if ofd.fd_type == FD_TYPE_SOCKET {
             let n = super::socket::socket_write(vm, base, fd, iov_base, iov_len);
             if n == EPIPE {
@@ -1226,6 +1406,22 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
                 );
             }
             total += n;
+            if (n as u64) < iov_len {
+                return trace_write_attempt(
+                    fd,
+                    SYS_WRITEV,
+                    iov_addr,
+                    iovcnt,
+                    total,
+                    ofd_id,
+                    ofd.fd_type,
+                    ofd.ino,
+                    ofd.status_flags,
+                    0,
+                    0,
+                    None,
+                );
+            }
         } else {
             let current_offset = fd_table::get_offset(base, vm, fd);
             let n = write_regular_file_from_guest(base, iov_base, iov_len, ofd.ino, current_offset);
@@ -1287,6 +1483,92 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
 // getdents64
 // =========================================================================
 
+fn write_dirent64(
+    base: u32,
+    buf: u64,
+    offset: u64,
+    max: u64,
+    ino: u64,
+    d_type: u8,
+    name: &[u8],
+) -> Option<u64> {
+    // d_reclen = 19 + name_len + 1 (NUL) + padding to 8-byte alignment.
+    let reclen = ((19 + name.len() + 1) + 7) & !7;
+    if offset + reclen as u64 > max {
+        return None;
+    }
+
+    let entry_addr = buf + offset;
+    unsafe {
+        guest_mem::zero_mem(base, entry_addr, reclen);
+        guest_mem::write_u64(base, entry_addr, ino);
+        guest_mem::write_u64(base, entry_addr + 8, offset + reclen as u64);
+        guest_mem::write_u16(base, entry_addr + 16, reclen as u16);
+        guest_mem::write_u8(base, entry_addr + 18, d_type);
+        guest_mem::write_bytes(base, entry_addr + 19, name);
+        guest_mem::write_u8(base, entry_addr + 19 + name.len() as u64, 0);
+    }
+    Some(reclen as u64)
+}
+
+fn proc_self_fd_dir_ino() -> u32 {
+    memfs::resolve_path(b"/proc/self/fd")
+}
+
+fn u32_decimal_bytes(value: u32, out: &mut [u8; 10]) -> &[u8] {
+    if value == 0 {
+        out[9] = b'0';
+        return &out[9..10];
+    }
+
+    let mut value = value;
+    let mut cursor = out.len();
+    while value > 0 {
+        cursor -= 1;
+        out[cursor] = b'0' + (value % 10) as u8;
+        value /= 10;
+    }
+    &out[cursor..]
+}
+
+fn sys_getdents64_proc_self_fd(
+    vm: &mut ThreadState,
+    base: u32,
+    fd: u64,
+    start_index: u64,
+    buf: u64,
+    buf_size: u64,
+) -> i64 {
+    let mut offset = 0u64;
+    let mut entry_index = 0u64;
+
+    for proc_fd in 0..MAX_FDS {
+        let entry = fd_table::load_process_fd_entry(base, vm.process_ptr, proc_fd);
+        if entry.ofd_id == 0 {
+            continue;
+        }
+        if entry_index < start_index {
+            entry_index += 1;
+            continue;
+        }
+
+        let mut name_buf = [0u8; 10];
+        let name = u32_decimal_bytes(proc_fd as u32, &mut name_buf);
+        match write_dirent64(base, buf, offset, buf_size, proc_fd as u64, DT_LNK, name) {
+            Some(written) => {
+                offset += written;
+                entry_index += 1;
+            }
+            None => {
+                break;
+            }
+        }
+    }
+
+    fd_table::set_offset(base, vm, fd, entry_index);
+    offset as i64
+}
+
 /// getdents64: read directory entries into guest buffer.
 /// Writes linux_dirent64 records (variable-size, 8-byte aligned).
 pub fn sys_getdents64(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, buf_size: u64) -> i64 {
@@ -1297,6 +1579,10 @@ pub fn sys_getdents64(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, buf_si
 
     let dir_ino = ofd.ino;
     let start_index = ofd.offset.max(0) as u64;
+    if dir_ino == proc_self_fd_dir_ino() {
+        return sys_getdents64_proc_self_fd(vm, base, fd, start_index, buf, buf_size);
+    }
+
     let mut offset = 0u64;
     let max = buf_size;
     let mut entry_index = 0u64;
@@ -1311,32 +1597,22 @@ pub fn sys_getdents64(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, buf_si
             return;
         }
 
-        // d_reclen = 19 + name_len + 1 (null) + padding to 8-byte align
-        let reclen = ((19 + name.len() + 1) + 7) & !7;
-        if offset + reclen as u64 > max {
-            buffer_full = true;
-            return;
+        let st = memfs::stat(ino);
+        let d_type = match st {
+            Some(ref s) if s.mode & memfs::S_IFMT == memfs::S_IFDIR => DT_DIR,
+            Some(ref s) if s.mode & memfs::S_IFMT == memfs::S_IFREG => DT_REG,
+            Some(ref s) if s.mode & memfs::S_IFMT == memfs::S_IFLNK => DT_LNK,
+            _ => DT_UNKNOWN,
+        };
+        match write_dirent64(base, buf, offset, max, ino as u64, d_type, name) {
+            Some(written) => {
+                offset += written;
+                entry_index += 1;
+            }
+            None => {
+                buffer_full = true;
+            }
         }
-
-        let entry_addr = buf + offset;
-        unsafe {
-            guest_mem::zero_mem(base, entry_addr, reclen);
-            guest_mem::write_u64(base, entry_addr, ino as u64); // d_ino
-            guest_mem::write_u64(base, entry_addr + 8, offset + reclen as u64); // d_off
-            guest_mem::write_u16(base, entry_addr + 16, reclen as u16); // d_reclen
-
-            let st = memfs::stat(ino);
-            let d_type = match st {
-                Some(ref s) if s.mode & memfs::S_IFMT == memfs::S_IFDIR => DT_DIR,
-                Some(ref s) if s.mode & memfs::S_IFMT == memfs::S_IFREG => DT_REG,
-                _ => DT_UNKNOWN,
-            };
-            guest_mem::write_u8(base, entry_addr + 18, d_type); // d_type
-            guest_mem::write_bytes(base, entry_addr + 19, name); // d_name
-            guest_mem::write_u8(base, entry_addr + 19 + name.len() as u64, 0); // null terminator
-        }
-        offset += reclen as u64;
-        entry_index += 1;
     });
 
     fd_table::set_offset(base, vm, fd, entry_index);

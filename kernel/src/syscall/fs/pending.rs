@@ -82,7 +82,7 @@ fn with_pending_request<T>(
 fn classify_pending_request_effects(request: &ring_buffer::FsRequestInfo) -> u32 {
     match request.opcode {
         ring_buffer::FS_OP_OPENAT => {
-            let mut effects = 0;
+            let mut effects = FS_EFFECT_SHARED_OFD_STATE;
             if request.flags & (O_CREAT as u32) != 0 {
                 effects |= FS_EFFECT_MEMFS_MUTATION;
             }
@@ -111,6 +111,13 @@ fn classify_pending_request_effects(request: &ring_buffer::FsRequestInfo) -> u32
 fn openat_can_run_locally(flags: u32) -> bool {
     let access_mode = (flags as i32) & fd_table::OPEN_ACCESS_MODE_MASK;
     access_mode == O_RDONLY && flags & ((O_CREAT | O_TRUNC) as u32) == 0
+}
+
+fn openat_targets_kernel_local_device(base: u32, path_addr: u64) -> bool {
+    let mut path_buf = [0u8; 512];
+    let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf) };
+    let path = trim_trailing_slashes(&path_buf[..len]);
+    matches!(path, b"/dev/null" | b"/dev/tty")
 }
 
 pub fn pending_request_effects(vm_ptr: u32, base: u32) -> u32 {
@@ -368,7 +375,7 @@ pub fn dispatch_openat(
     flags: u64,
     mode: u64,
 ) -> i64 {
-    if openat_can_run_locally(flags as u32) {
+    if openat_can_run_locally(flags as u32) || openat_targets_kernel_local_device(base, path_addr) {
         return crate::syscall::fs::sys_openat(vm, base, dirfd, path_addr, flags, mode);
     }
 
@@ -389,8 +396,11 @@ pub fn dispatch_openat(
 #[cfg(test)]
 mod tests {
     use super::{dispatch_lseek, dispatch_openat, dispatch_write};
-    use crate::abi::{O_CREAT, O_RDONLY, O_WRONLY, STATUS_FS, STATUS_OK, SYS_WRITE};
+    use crate::abi::{
+        AF_UNIX, O_CREAT, O_RDONLY, O_WRONLY, SOCK_STREAM, STATUS_FS, STATUS_OK, SYS_WRITE,
+    };
     use crate::harness::TestVm;
+    use crate::syscall::socket::sys_socketpair;
 
     #[test]
     fn dispatch_openat_runs_read_only_existing_files_locally() {
@@ -451,6 +461,35 @@ mod tests {
         assert!(read_fd >= 3);
         let mut buf = [0u8; 5];
         assert_eq!(vm.sys_read(read_fd, &mut buf), 5);
+        assert_eq!(&buf, b"hello");
+    }
+
+    #[test]
+    fn dispatch_write_runs_sockets_locally() {
+        let mut vm = TestVm::new();
+        let sv_addr = vm.scratch + 0x700;
+        assert_eq!(
+            sys_socketpair(
+                &mut vm.vm,
+                vm.base,
+                AF_UNIX as u64,
+                SOCK_STREAM as u64,
+                0,
+                sv_addr,
+            ),
+            0,
+        );
+        let left = unsafe { crate::guest_mem::read_u32(vm.base, sv_addr) };
+        let right = unsafe { crate::guest_mem::read_u32(vm.base, sv_addr + 4) };
+        let data_addr = vm.scratch + 0x800;
+        vm.write_mem(data_addr, b"hello");
+
+        let written = dispatch_write(&mut vm.vm, vm.base, left as u64, data_addr, 5, SYS_WRITE);
+
+        assert_eq!(written, 5);
+        assert_eq!(vm.vm.status, STATUS_OK);
+        let mut buf = [0u8; 5];
+        assert_eq!(vm.sys_read(right as i64, &mut buf), 5);
         assert_eq!(&buf, b"hello");
     }
 
@@ -519,6 +558,7 @@ pub fn dispatch_write(
         None => return EBADF,
     };
     if ofd.fd_type == FD_TYPE_PIPE
+        || ofd.fd_type == FD_TYPE_SOCKET
         || ofd.fd_type == FD_TYPE_EVENTFD
         || ofd.fd_type == FD_TYPE_PTY_MASTER
         || ofd.fd_type == FD_TYPE_PTY_SLAVE

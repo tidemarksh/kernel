@@ -3,6 +3,7 @@
 //!
 //! Semantics: https://man7.org/linux/man-pages/man2/socket.2.html
 //!            https://man7.org/linux/man-pages/man7/socket.7.html
+//!            https://man7.org/linux/man-pages/man7/unix.7.html
 //!
 //! Socket state is kernel Worker managed (allocated via alloc.rs).
 //! For HTTP preview, the runtime can inject a virtual client connection into a
@@ -30,8 +31,8 @@ const EPOLLRDHUP: u32 = 0x2000;
 const SHUT_RD_MASK: u32 = 1 << 0;
 const SHUT_WR_MASK: u32 = 1 << 1;
 
-// Max sockaddr size we store (covers sockaddr_in and sockaddr_in6)
-const SOCKADDR_STORAGE_LEN: usize = 28;
+// Covers sockaddr_in, sockaddr_in6, and Linux sockaddr_un (sun_path[108]).
+const SOCKADDR_STORAGE_LEN: usize = 128;
 const ACCEPT_QUEUE_SIZE: usize = 16;
 const INVALID_BUF_IDX: i32 = -1;
 const INVALID_PEER_IDX: i32 = -1;
@@ -63,7 +64,16 @@ const SO_SNDTIMEO_NEW: u32 = 67;
 const IPPROTO_TCP: u32 = 6;
 const IPPROTO_UDP: u32 = 17;
 const TCP_NODELAY: u32 = 1;
-const DEFAULT_SOCKET_BUFFER: u32 = 8192;
+const DEFAULT_SOCKET_BUFFER: u32 = 256 * 1024;
+const MSGHDR_SIZE: u64 = 56;
+const MSGHDR_NAME_OFF: u64 = 0;
+const MSGHDR_NAMELEN_OFF: u64 = 8;
+const MSGHDR_IOV_OFF: u64 = 16;
+const MSGHDR_IOVLEN_OFF: u64 = 24;
+const MSGHDR_FLAGS_OFF: u64 = 48;
+const IOVEC_SIZE: u64 = 16;
+const MAX_MSG_IOV: u64 = 1024;
+const MSG_NOSIGNAL: u64 = 0x4000;
 
 fn timeout_to_millis(sec: u64, usec: u64) -> i64 {
     if sec == 0 && usec == 0 {
@@ -93,6 +103,7 @@ struct SocketSlot {
     peer_pid: i32,
     peer_uid: u32,
     peer_gid: u32,
+    external_peer: u32,
     recv_buf_idx: i32,
     last_error: i32,
     so_cookie: u64,
@@ -137,6 +148,49 @@ fn alloc_socket_cookie() -> u64 {
         let next = cookie.saturating_add(1).max(1);
         core::ptr::write(core::ptr::addr_of_mut!(NEXT_SOCKET_COOKIE), next);
         cookie
+    }
+}
+
+fn empty_socket_slot() -> SocketSlot {
+    SocketSlot {
+        domain: 0,
+        sock_type: 0,
+        protocol: 0,
+        state: SOCK_STATE_IDLE,
+        owner_pid: 0,
+        owner_uid: 0,
+        owner_gid: 0,
+        local_addr: [0; SOCKADDR_STORAGE_LEN],
+        local_len: 0,
+        peer_addr: [0; SOCKADDR_STORAGE_LEN],
+        peer_len: 0,
+        peer_idx: INVALID_PEER_IDX,
+        peer_pid: 0,
+        peer_uid: 0,
+        peer_gid: 0,
+        external_peer: 0,
+        recv_buf_idx: INVALID_BUF_IDX,
+        last_error: 0,
+        so_cookie: alloc_socket_cookie(),
+        so_reuseaddr: 0,
+        so_reuseport: 0,
+        so_keepalive: 0,
+        so_oobinline: 0,
+        so_nocheck: 0,
+        so_bsdcompat: 0,
+        so_broadcast: 0,
+        so_sndbuf: DEFAULT_SOCKET_BUFFER,
+        so_rcvbuf: DEFAULT_SOCKET_BUFFER,
+        so_rcvlowat: 1,
+        so_rcvtimeo_sec: 0,
+        so_rcvtimeo_usec: 0,
+        so_sndtimeo_sec: 0,
+        so_sndtimeo_usec: 0,
+        tcp_nodelay: 0,
+        shutdown_mask: 0,
+        accept_head: 0,
+        accept_tail: 0,
+        accept_queue: [-1; ACCEPT_QUEUE_SIZE],
     }
 }
 
@@ -185,50 +239,87 @@ pub fn init() {
 }
 
 fn alloc_socket_slot() -> Option<u32> {
+    reap_shutdown_socket_slots(u32::MAX);
     unsafe {
         let used = core::ptr::read(core::ptr::addr_of!(SOCKET_USED));
         for i in 0..MAX_SOCKETS {
             if used & (1u32 << i) == 0 {
                 core::ptr::write(core::ptr::addr_of_mut!(SOCKET_USED), used | (1u32 << i));
-                socket_table()[i] = SocketSlot {
-                    domain: 0,
-                    sock_type: 0,
-                    protocol: 0,
-                    state: SOCK_STATE_IDLE,
-                    owner_pid: 0,
-                    owner_uid: 0,
-                    owner_gid: 0,
-                    local_addr: [0; SOCKADDR_STORAGE_LEN],
-                    local_len: 0,
-                    peer_addr: [0; SOCKADDR_STORAGE_LEN],
-                    peer_len: 0,
-                    peer_idx: INVALID_PEER_IDX,
-                    peer_pid: 0,
-                    peer_uid: 0,
-                    peer_gid: 0,
-                    recv_buf_idx: INVALID_BUF_IDX,
-                    last_error: 0,
-                    so_cookie: alloc_socket_cookie(),
-                    so_reuseaddr: 0,
-                    so_reuseport: 0,
-                    so_keepalive: 0,
-                    so_oobinline: 0,
-                    so_nocheck: 0,
-                    so_bsdcompat: 0,
-                    so_broadcast: 0,
-                    so_sndbuf: DEFAULT_SOCKET_BUFFER,
-                    so_rcvbuf: DEFAULT_SOCKET_BUFFER,
-                    so_rcvlowat: 1,
-                    so_rcvtimeo_sec: 0,
-                    so_rcvtimeo_usec: 0,
-                    so_sndtimeo_sec: 0,
-                    so_sndtimeo_usec: 0,
-                    tcp_nodelay: 0,
-                    shutdown_mask: 0,
-                    accept_head: 0,
-                    accept_tail: 0,
-                    accept_queue: [-1; ACCEPT_QUEUE_SIZE],
-                };
+                socket_table()[i] = empty_socket_slot();
+                return Some(i as u32);
+            }
+        }
+        None
+    }
+}
+
+fn reap_shutdown_socket_slots(excluded_idx: u32) {
+    let mut stale = [u32::MAX; MAX_SOCKETS];
+    let mut stale_count = 0usize;
+    for idx in 0..MAX_SOCKETS {
+        if idx as u32 == excluded_idx || !is_slot_used(idx as u32) {
+            continue;
+        }
+        if external_peer_slot_has_live_owner(idx as u32) {
+            continue;
+        }
+        if !socket_slot_has_ofd_ref(idx as u32) || socket_table()[idx].state == SOCK_STATE_SHUTDOWN
+        {
+            stale[stale_count] = idx as u32;
+            stale_count += 1;
+        }
+    }
+    for idx in stale.into_iter().take(stale_count) {
+        if idx != excluded_idx && is_slot_used(idx) {
+            shutdown_slot(idx as usize);
+        }
+    }
+}
+
+fn external_peer_slot_has_live_owner(socket_idx: u32) -> bool {
+    if socket_idx >= MAX_SOCKETS as u32 {
+        return false;
+    }
+    let slot = &socket_table()[socket_idx as usize];
+    if slot.external_peer == 0 || slot.peer_idx < 0 {
+        return false;
+    }
+    let owner_idx = slot.peer_idx as u32;
+    if owner_idx >= MAX_SOCKETS as u32 || !is_slot_used(owner_idx) {
+        return false;
+    }
+    socket_table()[owner_idx as usize].peer_idx == socket_idx as i32
+}
+
+fn socket_slot_has_ofd_ref(socket_idx: u32) -> bool {
+    for ofd_id in 1..crate::abi::MAX_FDS {
+        if let Some(ofd) = fd_table::get_ofd_by_id(ofd_id as u32) {
+            if ofd.fd_type == FD_TYPE_SOCKET && ofd.ino == socket_idx {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn mark_socket_slot_used(idx: u32) {
+    if idx >= MAX_SOCKETS as u32 {
+        return;
+    }
+    unsafe {
+        let used = core::ptr::read(core::ptr::addr_of!(SOCKET_USED));
+        core::ptr::write(core::ptr::addr_of_mut!(SOCKET_USED), used | (1u32 << idx));
+    }
+}
+
+fn alloc_socket_slot_excluding(excluded_idx: u32) -> Option<u32> {
+    reap_shutdown_socket_slots(excluded_idx);
+    unsafe {
+        let used = core::ptr::read(core::ptr::addr_of!(SOCKET_USED)) | (1u32 << excluded_idx);
+        for i in 0..MAX_SOCKETS {
+            if used & (1u32 << i) == 0 {
+                core::ptr::write(core::ptr::addr_of_mut!(SOCKET_USED), used | (1u32 << i));
+                socket_table()[i] = empty_socket_slot();
                 return Some(i as u32);
             }
         }
@@ -290,6 +381,295 @@ fn get_socket_idx(base: u32, vm: &ThreadState, fd: u64) -> Option<u32> {
         return None;
     }
     Some(ofd.ino)
+}
+
+pub fn thread_connect_fd(vm: &ThreadState) -> i32 {
+    vm.x[10] as i32
+}
+
+pub fn connect_peer_addr_for_fd(base: u32, vm: &ThreadState, fd: u64, dst: &mut [u8]) -> i32 {
+    let Some(idx) = get_socket_idx(base, vm, fd).map(|value| value as usize) else {
+        return ENOTSOCK as i32;
+    };
+    let slot = &socket_table()[idx];
+    if slot.state != SOCK_STATE_CONNECTING {
+        return EINVAL as i32;
+    }
+    let len = (slot.peer_len as usize)
+        .min(dst.len())
+        .min(SOCKADDR_STORAGE_LEN);
+    dst[..len].copy_from_slice(&slot.peer_addr[..len]);
+    len as i32
+}
+
+pub fn connect_peer_addr(vm: &ThreadState, dst: &mut [u8]) -> i32 {
+    connect_peer_addr_for_fd(vm.guest_base, vm, vm.x[10], dst)
+}
+
+fn ensure_external_peer(idx: usize) -> Result<(), i64> {
+    if external_peer_is_usable_for_socket(idx) {
+        socket_table()[idx].external_peer = 1;
+        return Ok(());
+    }
+    if let Some(peer_idx) = find_external_peer_for_socket(idx) {
+        socket_table()[idx].peer_idx = peer_idx as i32;
+        socket_table()[idx].external_peer = 1;
+        socket_table()[peer_idx].state = SOCK_STATE_CONNECTED;
+        socket_table()[peer_idx].shutdown_mask = 0;
+        return Ok(());
+    }
+    reap_detached_external_peers();
+    let stale_peer_idx = socket_table()[idx].peer_idx;
+    if stale_peer_idx >= 0
+        && (stale_peer_idx as usize) < MAX_SOCKETS
+        && is_slot_used(stale_peer_idx as u32)
+    {
+        shutdown_slot(stale_peer_idx as usize);
+    }
+    socket_table()[idx].peer_idx = INVALID_PEER_IDX;
+    mark_socket_slot_used(idx as u32);
+    let Some(peer_idx) = alloc_socket_slot_excluding(idx as u32).map(|value| value as usize) else {
+        return Err(ENOMEM);
+    };
+    let Some(peer_recv) = crate::net::ring_buffer::alloc_buffer().map(|value| value as i32) else {
+        shutdown_slot(peer_idx);
+        return Err(ENOMEM);
+    };
+    let domain = socket_table()[idx].domain;
+    let sock_type = socket_table()[idx].sock_type;
+    let protocol = socket_table()[idx].protocol;
+    let peer_addr = socket_table()[idx].peer_addr;
+    let peer_len = socket_table()[idx].peer_len;
+    socket_table()[peer_idx] = SocketSlot {
+        domain,
+        sock_type,
+        protocol,
+        state: SOCK_STATE_CONNECTED,
+        external_peer: 1,
+        local_addr: peer_addr,
+        local_len: peer_len,
+        peer_idx: idx as i32,
+        recv_buf_idx: peer_recv,
+        ..empty_socket_slot()
+    };
+    socket_table()[idx].peer_idx = peer_idx as i32;
+    socket_table()[idx].external_peer = 1;
+    Ok(())
+}
+
+fn external_peer_is_usable_for_socket(idx: usize) -> bool {
+    let peer_idx = socket_table()[idx].peer_idx;
+    if peer_idx < 0 || (peer_idx as usize) >= MAX_SOCKETS || !is_slot_used(peer_idx as u32) {
+        return false;
+    }
+    let peer = &socket_table()[peer_idx as usize];
+    peer.external_peer != 0
+        && peer.peer_idx == idx as i32
+        && peer.state == SOCK_STATE_CONNECTED
+        && peer.recv_buf_idx >= 0
+}
+
+fn find_external_peer_for_socket(idx: usize) -> Option<usize> {
+    socket_table()
+        .iter()
+        .enumerate()
+        .find(|(peer_idx, slot)| {
+            *peer_idx != idx
+                && is_slot_used(*peer_idx as u32)
+                && slot.external_peer != 0
+                && slot.peer_idx == idx as i32
+                && slot.state == SOCK_STATE_CONNECTED
+                && slot.recv_buf_idx >= 0
+        })
+        .map(|(peer_idx, _)| peer_idx)
+}
+
+fn reap_detached_external_peers() {
+    let mut stale = [u32::MAX; MAX_SOCKETS];
+    let mut stale_count = 0usize;
+    for (idx, slot) in socket_table().iter().enumerate() {
+        if !is_slot_used(idx as u32) || slot.external_peer == 0 {
+            continue;
+        }
+        if slot.state == SOCK_STATE_SHUTDOWN || slot.state == SOCK_STATE_IDLE || slot.peer_idx < 0 {
+            stale[stale_count] = idx as u32;
+            stale_count += 1;
+            continue;
+        }
+        let owner_idx = slot.peer_idx as usize;
+        let owner_missing = owner_idx >= MAX_SOCKETS || !is_slot_used(owner_idx as u32);
+        let owner_detached = !owner_missing && socket_table()[owner_idx].peer_idx != idx as i32;
+        if owner_missing || owner_detached {
+            stale[stale_count] = idx as u32;
+            stale_count += 1;
+        }
+    }
+    for idx in stale.into_iter().take(stale_count) {
+        if is_slot_used(idx) {
+            shutdown_slot(idx as usize);
+        }
+    }
+}
+
+fn ensure_external_peer_for_connected_socket(idx: usize) -> Result<(), i64> {
+    if socket_table()[idx].external_peer != 0 && socket_table()[idx].state == SOCK_STATE_SHUTDOWN {
+        socket_table()[idx].state = SOCK_STATE_CONNECTED;
+        socket_table()[idx].shutdown_mask = 0;
+    }
+    if socket_table()[idx].state != SOCK_STATE_CONNECTED {
+        return Err(ENOTCONN);
+    }
+    ensure_external_peer(idx)
+}
+
+pub fn drain_external_outbound_for_fd(base: u32, vm: &ThreadState, fd: u64, dst: &mut [u8]) -> i32 {
+    let Some(idx) = get_socket_idx(base, vm, fd).map(|value| value as usize) else {
+        return ENOTSOCK as i32;
+    };
+    let mut peer_idx = socket_table()[idx].peer_idx;
+    if peer_idx < 0 || !is_slot_used(peer_idx as u32) {
+        if ensure_external_peer_for_connected_socket(idx).is_err() {
+            return ENOTCONN as i32;
+        }
+        peer_idx = socket_table()[idx].peer_idx;
+        if peer_idx < 0 || !is_slot_used(peer_idx as u32) {
+            return ENOTCONN as i32;
+        }
+    }
+    let peer = &socket_table()[peer_idx as usize];
+    if peer.recv_buf_idx < 0 {
+        return 0;
+    }
+    crate::net::ring_buffer::read(peer.recv_buf_idx as u32, dst) as i32
+}
+
+pub fn close_external_peer_for_fd(base: u32, vm: &ThreadState, fd: u64) -> i32 {
+    let Some(idx) = get_socket_idx(base, vm, fd).map(|value| value as usize) else {
+        return ENOTSOCK as i32;
+    };
+    let was_external = socket_table()[idx].external_peer != 0;
+    if !was_external {
+        return 0;
+    }
+    socket_table()[idx].external_peer = 0;
+    let peer_idx = if socket_table()[idx].peer_idx >= 0 {
+        socket_table()[idx].peer_idx
+    } else {
+        find_external_peer_for_socket(idx)
+            .map(|value| value as i32)
+            .unwrap_or(-1)
+    };
+    if peer_idx < 0 || !is_slot_used(peer_idx as u32) {
+        if socket_table()[idx].state == SOCK_STATE_CONNECTED {
+            socket_table()[idx].state = SOCK_STATE_SHUTDOWN;
+            socket_table()[idx].shutdown_mask = SHUT_RD_MASK | SHUT_WR_MASK;
+        }
+        return 0;
+    }
+    shutdown_slot(peer_idx as usize);
+    if socket_table()[idx].state == SOCK_STATE_CONNECTED {
+        socket_table()[idx].state = SOCK_STATE_SHUTDOWN;
+        socket_table()[idx].shutdown_mask = SHUT_RD_MASK | SHUT_WR_MASK;
+    }
+    0
+}
+
+pub fn mark_external_peer_for_fd(base: u32, vm: &ThreadState, fd: u64) -> i32 {
+    let Some(idx) = get_socket_idx(base, vm, fd).map(|value| value as usize) else {
+        return ENOTSOCK as i32;
+    };
+    if socket_table()[idx].state == SOCK_STATE_CONNECTING
+        || socket_table()[idx].state == SOCK_STATE_SHUTDOWN
+    {
+        socket_table()[idx].state = SOCK_STATE_CONNECTED;
+        socket_table()[idx].shutdown_mask = 0;
+    }
+    if socket_table()[idx].state != SOCK_STATE_CONNECTED {
+        return ENOTCONN as i32;
+    }
+    match ensure_external_peer(idx) {
+        Ok(()) => 0,
+        Err(errno) => errno as i32,
+    }
+}
+
+pub fn debug_external_outbound_available_for_fd(base: u32, vm: &ThreadState, fd: u64) -> i32 {
+    let Some(idx) = get_socket_idx(base, vm, fd).map(|value| value as usize) else {
+        return ENOTSOCK as i32;
+    };
+    let mut peer_idx = socket_table()[idx].peer_idx;
+    if peer_idx < 0 || !is_slot_used(peer_idx as u32) {
+        if ensure_external_peer_for_connected_socket(idx).is_err() {
+            return ENOTCONN as i32;
+        }
+        peer_idx = socket_table()[idx].peer_idx;
+        if peer_idx < 0 || !is_slot_used(peer_idx as u32) {
+            return ENOTCONN as i32;
+        }
+    }
+    let peer = &socket_table()[peer_idx as usize];
+    if peer.recv_buf_idx < 0 {
+        return 0;
+    }
+    crate::net::ring_buffer::available(peer.recv_buf_idx as u32) as i32
+}
+
+pub fn debug_socket_idx_for_fd(base: u32, vm: &ThreadState, fd: u64) -> i32 {
+    get_socket_idx(base, vm, fd)
+        .map(|value| value as i32)
+        .unwrap_or(ENOTSOCK as i32)
+}
+
+pub fn debug_socket_peer_idx(idx: u32) -> i32 {
+    if (idx as usize) >= MAX_SOCKETS || !is_slot_used(idx) {
+        return ENOTSOCK as i32;
+    }
+    socket_table()[idx as usize].peer_idx
+}
+
+pub fn debug_socket_state(idx: u32) -> i32 {
+    if (idx as usize) >= MAX_SOCKETS || !is_slot_used(idx) {
+        return ENOTSOCK as i32;
+    }
+    socket_table()[idx as usize].state as i32
+}
+
+pub fn debug_socket_external_peer(idx: u32) -> i32 {
+    if (idx as usize) >= MAX_SOCKETS || !is_slot_used(idx) {
+        return ENOTSOCK as i32;
+    }
+    socket_table()[idx as usize].external_peer as i32
+}
+
+pub fn debug_socket_recv_buf_idx(idx: u32) -> i32 {
+    if (idx as usize) >= MAX_SOCKETS || !is_slot_used(idx) {
+        return ENOTSOCK as i32;
+    }
+    socket_table()[idx as usize].recv_buf_idx
+}
+
+pub fn debug_socket_recv_available(idx: u32) -> i32 {
+    if (idx as usize) >= MAX_SOCKETS || !is_slot_used(idx) {
+        return ENOTSOCK as i32;
+    }
+    let recv_buf_idx = socket_table()[idx as usize].recv_buf_idx;
+    if recv_buf_idx < 0 {
+        return 0;
+    }
+    crate::net::ring_buffer::available(recv_buf_idx as u32) as i32
+}
+
+pub fn inject_external_inbound_for_fd(base: u32, vm: &ThreadState, fd: u64, src: &[u8]) -> i32 {
+    let Some(idx) = get_socket_idx(base, vm, fd).map(|value| value as usize) else {
+        return ENOTSOCK as i32;
+    };
+    if socket_table()[idx].state != SOCK_STATE_CONNECTED {
+        return ENOTCONN as i32;
+    }
+    if ensure_socket_recv_buffer(idx).is_err() {
+        return ENOMEM as i32;
+    }
+    crate::net::ring_buffer::write(socket_table()[idx].recv_buf_idx as u32, src) as i32
 }
 
 fn port_from_sockaddr(addr: &[u8], len: u32) -> u16 {
@@ -380,8 +760,14 @@ fn socket_recv_available(idx: usize) -> usize {
 }
 
 fn socket_send_space(idx: usize) -> usize {
-    let peer_idx = socket_table()[idx].peer_idx;
-    if peer_idx < 0 {
+    let mut peer_idx = socket_table()[idx].peer_idx;
+    if peer_idx < 0 || !is_slot_used(peer_idx as u32) {
+        if ensure_external_peer_for_connected_socket(idx).is_err() {
+            return 0;
+        }
+        peer_idx = socket_table()[idx].peer_idx;
+    }
+    if peer_idx < 0 || !is_slot_used(peer_idx as u32) {
         return 0;
     }
     let peer = &socket_table()[peer_idx as usize];
@@ -392,9 +778,19 @@ fn socket_send_space(idx: usize) -> usize {
 }
 
 fn slot_peer_is_closed(idx: usize) -> bool {
-    let peer_idx = socket_table()[idx].peer_idx;
+    let slot = &socket_table()[idx];
+    if slot.external_peer != 0 && slot.state == SOCK_STATE_CONNECTED {
+        return false;
+    }
+    let mut peer_idx = socket_table()[idx].peer_idx;
     if peer_idx < 0 || !is_slot_used(peer_idx as u32) {
-        return true;
+        if ensure_external_peer_for_connected_socket(idx).is_err() {
+            return true;
+        }
+        peer_idx = socket_table()[idx].peer_idx;
+        if peer_idx < 0 || !is_slot_used(peer_idx as u32) {
+            return true;
+        }
     }
     let peer = &socket_table()[peer_idx as usize];
     peer.state == SOCK_STATE_SHUTDOWN || peer.state == SOCK_STATE_IDLE
@@ -442,11 +838,17 @@ fn shutdown_slot(idx: usize) {
     }
 
     if peer_idx >= 0 && (peer_idx as usize) < MAX_SOCKETS && is_slot_used(peer_idx as u32) {
-        let peer = &mut socket_table()[peer_idx as usize];
-        if peer.peer_idx == idx as i32 {
-            peer.peer_idx = INVALID_PEER_IDX;
-            if peer.state == SOCK_STATE_CONNECTED {
-                peer.state = SOCK_STATE_SHUTDOWN;
+        let peer_is_external = socket_table()[peer_idx as usize].external_peer != 0
+            && socket_table()[peer_idx as usize].peer_idx == idx as i32;
+        if peer_is_external {
+            shutdown_slot(peer_idx as usize);
+        } else {
+            let peer = &mut socket_table()[peer_idx as usize];
+            if peer.peer_idx == idx as i32 {
+                peer.peer_idx = INVALID_PEER_IDX;
+                if peer.state == SOCK_STATE_CONNECTED {
+                    peer.state = SOCK_STATE_SHUTDOWN;
+                }
             }
         }
     }
@@ -595,6 +997,7 @@ pub fn sys_socketpair(
         peer_pid: pid,
         peer_uid: uid,
         peer_gid: gid,
+        external_peer: 0,
         recv_buf_idx: left_recv,
         last_error: 0,
         so_cookie: alloc_socket_cookie(),
@@ -634,6 +1037,7 @@ pub fn sys_socketpair(
         peer_pid: pid,
         peer_uid: uid,
         peer_gid: gid,
+        external_peer: 0,
         recv_buf_idx: right_recv,
         last_error: 0,
         so_cookie: alloc_socket_cookie(),
@@ -769,6 +1173,7 @@ fn unix_connect_stream(idx: usize, addr: &[u8], len: usize) -> i64 {
         peer_pid: client_owner_pid,
         peer_uid: client_owner_uid,
         peer_gid: client_owner_gid,
+        external_peer: 0,
         recv_buf_idx: accepted_recv,
         last_error: 0,
         so_cookie: alloc_socket_cookie(),
@@ -959,6 +1364,7 @@ pub fn sys_connect(vm: &mut ThreadState, base: u32, fd: u64, addr: u64, addrlen:
     slot.peer_len = len as u32;
     slot.state = SOCK_STATE_CONNECTING;
     vm.socket_timeout_ms = socket_send_timeout_ms_for_slot(slot);
+    fd_table::pin_blocked_fd(base, vm, fd);
 
     // Signal TS runtime to perform the actual connect
     vm.status = STATUS_CONNECT;
@@ -966,24 +1372,46 @@ pub fn sys_connect(vm: &mut ThreadState, base: u32, fd: u64, addr: u64, addrlen:
 }
 
 pub fn resume_connect_result(vm: &mut ThreadState, base: u32, result: i64) {
-    let fd = vm.x[10];
+    let fd = if vm.blocked_ofd_id != 0 {
+        vm.blocked_fd as u64
+    } else {
+        vm.x[10]
+    };
     let Some(idx) = get_socket_idx(base, vm, fd).map(|value| value as usize) else {
         vm.x[10] = ENOTSOCK as u64;
         vm.status = STATUS_OK;
+        fd_table::clear_blocked_ofd_pin(vm);
         crate::syscall::signal::check_pending(vm, base);
         return;
     };
+    let nonblocking =
+        fd_table::get_ofd(base, vm, fd).is_some_and(|ofd| ofd.status_flags & O_NONBLOCK != 0);
 
-    let slot = &mut socket_table()[idx];
-    if slot.state == SOCK_STATE_CONNECTING {
+    if socket_table()[idx].state == SOCK_STATE_CONNECTING {
         if result == 0 {
-            slot.state = SOCK_STATE_CONNECTED;
-            if slot.recv_buf_idx == INVALID_BUF_IDX {
-                slot.recv_buf_idx = crate::net::ring_buffer::alloc_buffer()
+            let current_recv = socket_table()[idx].recv_buf_idx;
+            let recv_buf_idx = if current_recv == INVALID_BUF_IDX {
+                crate::net::ring_buffer::alloc_buffer()
                     .map(|value| value as i32)
-                    .unwrap_or(INVALID_BUF_IDX);
+                    .unwrap_or(INVALID_BUF_IDX)
+            } else {
+                current_recv
+            };
+            socket_table()[idx].recv_buf_idx = recv_buf_idx;
+            socket_table()[idx].state = SOCK_STATE_CONNECTED;
+            if recv_buf_idx == INVALID_BUF_IDX || ensure_external_peer(idx).is_err() {
+                socket_table()[idx].last_error = (-ENOMEM) as i32;
+                socket_table()[idx].state = SOCK_STATE_IDLE;
+                vm.x[10] = ENOMEM as u64;
+                vm.status = STATUS_OK;
+                fd_table::clear_blocked_ofd_pin(vm);
+                crate::syscall::signal::check_pending(vm, base);
+                return;
+            } else if nonblocking {
+                socket_table()[idx].last_error = 0;
             }
         } else {
+            let slot = &mut socket_table()[idx];
             slot.last_error = (-result) as i32;
             slot.state = if slot.local_len > 0 {
                 SOCK_STATE_BOUND
@@ -996,6 +1424,7 @@ pub fn resume_connect_result(vm: &mut ThreadState, base: u32, result: i64) {
     vm.socket_timeout_ms = -1;
     vm.x[10] = result as u64;
     vm.status = STATUS_OK;
+    fd_table::clear_blocked_ofd_pin(vm);
     crate::syscall::signal::check_pending(vm, base);
 }
 
@@ -1124,6 +1553,87 @@ pub fn sys_sendto(
     n
 }
 
+/// sendmsg(2): https://man7.org/linux/man-pages/man2/sendmsg.2.html
+///
+/// Minimal stream/datagram data-path support for browser-networked guests.
+/// Control messages are ignored; payload is sent from msg_iov just like writev.
+pub fn sys_sendmsg(vm: &mut ThreadState, base: u32, fd: u64, msg: u64, flags: u64) -> i64 {
+    if !crate::syscall::memory::guest_range_accessible(base, msg, MSGHDR_SIZE) {
+        return EFAULT;
+    }
+    let name = unsafe { guest_mem::read_u64(base, msg + MSGHDR_NAME_OFF) };
+    let namelen = unsafe { guest_mem::read_u32(base, msg + MSGHDR_NAMELEN_OFF) } as u64;
+    let iov = unsafe { guest_mem::read_u64(base, msg + MSGHDR_IOV_OFF) };
+    let iovlen = unsafe { guest_mem::read_u64(base, msg + MSGHDR_IOVLEN_OFF) };
+    if iovlen > MAX_MSG_IOV {
+        return EINVAL;
+    }
+    let Some(iov_bytes) = iovlen.checked_mul(IOVEC_SIZE) else {
+        return EINVAL;
+    };
+    if iovlen > 0 && !crate::syscall::memory::guest_range_accessible(base, iov, iov_bytes) {
+        return EFAULT;
+    }
+
+    let idx = match get_socket_idx(base, vm, fd) {
+        Some(i) => i,
+        None => return ENOTSOCK,
+    };
+    if socket_table()[idx as usize].sock_type != SOCK_STREAM
+        && socket_table()[idx as usize].state != SOCK_STATE_CONNECTED
+        && name == 0
+    {
+        return EDESTADDRREQ;
+    }
+    if name != 0 && namelen > 0 && socket_table()[idx as usize].sock_type != SOCK_STREAM {
+        let len = (namelen as usize).min(SOCKADDR_STORAGE_LEN);
+        if !crate::syscall::memory::guest_range_accessible(base, name, len as u64) {
+            return EFAULT;
+        }
+        let mut addr = [0u8; SOCKADDR_STORAGE_LEN];
+        unsafe {
+            guest_mem::read_bytes(base, name, &mut addr[..len]);
+        }
+        let slot = &mut socket_table()[idx as usize];
+        slot.peer_addr[..len].copy_from_slice(&addr[..len]);
+        slot.peer_len = len as u32;
+    }
+
+    let ofd = match fd_table::get_ofd(base, vm, fd) {
+        Some(value) => value,
+        None => return EBADF,
+    };
+    let mut total = 0i64;
+    for index in 0..iovlen {
+        let iov_base = unsafe { guest_mem::read_u64(base, iov + index * IOVEC_SIZE) };
+        let iov_len = unsafe { guest_mem::read_u64(base, iov + index * IOVEC_SIZE + 8) };
+        if iov_len == 0 {
+            continue;
+        }
+        let n = socket_write(vm, base, fd, iov_base, iov_len);
+        if n == EPIPE {
+            if flags & MSG_NOSIGNAL == 0 {
+                crate::syscall::signal::send_signal(vm, SIGPIPE);
+            }
+            return if total > 0 { total } else { EPIPE };
+        }
+        if n == EAGAIN && ofd.status_flags & O_NONBLOCK == 0 {
+            fd_table::pin_blocked_fd(base, vm, fd);
+            vm.socket_timeout_ms = socket_send_timeout_ms_for_fd(base, vm, fd);
+            vm.status = STATUS_SOCKET_SEND;
+            return if total > 0 { total } else { 0 };
+        }
+        if n < 0 {
+            return if total > 0 { total } else { n };
+        }
+        total += n;
+        if (n as u64) < iov_len {
+            return total;
+        }
+    }
+    total
+}
+
 // =========================================================================
 // recvfrom(2)
 // =========================================================================
@@ -1179,6 +1689,73 @@ pub fn sys_recvfrom(
     }
 
     n
+}
+
+/// recvmsg(2): https://man7.org/linux/man-pages/man2/recvmsg.2.html
+///
+/// Minimal scatter receive support. Address/control metadata is omitted for
+/// connected stream sockets, which is sufficient for the current network path.
+pub fn sys_recvmsg(vm: &mut ThreadState, base: u32, fd: u64, msg: u64, _flags: u64) -> i64 {
+    if !crate::syscall::memory::guest_range_accessible(base, msg, MSGHDR_SIZE) {
+        return EFAULT;
+    }
+    let iov = unsafe { guest_mem::read_u64(base, msg + MSGHDR_IOV_OFF) };
+    let iovlen = unsafe { guest_mem::read_u64(base, msg + MSGHDR_IOVLEN_OFF) };
+    if iovlen > MAX_MSG_IOV {
+        return EINVAL;
+    }
+    let Some(iov_bytes) = iovlen.checked_mul(IOVEC_SIZE) else {
+        return EINVAL;
+    };
+    if iovlen > 0 && !crate::syscall::memory::guest_range_accessible(base, iov, iov_bytes) {
+        return EFAULT;
+    }
+
+    let idx = match get_socket_idx(base, vm, fd) {
+        Some(i) => i,
+        None => return ENOTSOCK,
+    };
+    if socket_table()[idx as usize].sock_type == SOCK_STREAM
+        && socket_table()[idx as usize].state != SOCK_STATE_CONNECTED
+    {
+        return ENOTCONN;
+    }
+    let ofd = match fd_table::get_ofd(base, vm, fd) {
+        Some(value) => value,
+        None => return EBADF,
+    };
+    let mut total = 0i64;
+    for index in 0..iovlen {
+        let iov_base = unsafe { guest_mem::read_u64(base, iov + index * IOVEC_SIZE) };
+        let iov_len = unsafe { guest_mem::read_u64(base, iov + index * IOVEC_SIZE + 8) };
+        if iov_len == 0 {
+            continue;
+        }
+        let n = socket_read(vm, base, fd, iov_base, iov_len);
+        if n == EAGAIN {
+            if total > 0 {
+                break;
+            }
+            if ofd.status_flags & O_NONBLOCK != 0 {
+                return EAGAIN;
+            }
+            fd_table::pin_blocked_fd(base, vm, fd);
+            vm.socket_timeout_ms = socket_recv_timeout_ms_for_fd(base, vm, fd);
+            vm.status = STATUS_SOCKET_RECV;
+            return 0;
+        }
+        if n < 0 {
+            return if total > 0 { total } else { n };
+        }
+        total += n;
+        if (n as u64) < iov_len {
+            break;
+        }
+    }
+    unsafe {
+        guest_mem::write_u32(base, msg + MSGHDR_FLAGS_OFF, 0);
+    }
+    total
 }
 
 pub fn sys_shutdown(vm: &mut ThreadState, base: u32, fd: u64, how: u64) -> i64 {
@@ -1239,9 +1816,15 @@ pub fn socket_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, len: u64
     if slot.state != SOCK_STATE_CONNECTED {
         return ENOTCONN;
     }
-    let peer_idx = slot.peer_idx;
+    let mut peer_idx = slot.peer_idx;
     if peer_idx < 0 || !is_slot_used(peer_idx as u32) {
-        return EPIPE;
+        if ensure_external_peer_for_connected_socket(idx).is_err() {
+            return EPIPE;
+        }
+        peer_idx = socket_table()[idx].peer_idx;
+        if peer_idx < 0 || !is_slot_used(peer_idx as u32) {
+            return EPIPE;
+        }
     }
 
     let peer = &socket_table()[peer_idx as usize];
@@ -1364,6 +1947,7 @@ pub fn inject_http_connection(vm_ptr: u32, port: u16, request: &[u8]) -> i32 {
         peer_pid: 0,
         peer_uid: 0,
         peer_gid: 0,
+        external_peer: 0,
         recv_buf_idx: server_recv,
         last_error: 0,
         so_cookie: alloc_socket_cookie(),
@@ -1403,6 +1987,7 @@ pub fn inject_http_connection(vm_ptr: u32, port: u16, request: &[u8]) -> i32 {
         peer_pid: 0,
         peer_uid: 0,
         peer_gid: 0,
+        external_peer: 0,
         recv_buf_idx: client_recv,
         last_error: 0,
         so_cookie: alloc_socket_cookie(),
@@ -1868,5 +2453,30 @@ mod tests {
 
         let ret = sys_accept4(&mut t.vm, t.base, fd as u64, 0, 0, 0);
         assert_eq!(ret, EAGAIN);
+    }
+
+    #[test]
+    fn external_peer_allocation_never_reuses_current_socket_when_bitmap_is_stale() {
+        let mut t = TestVm::new();
+        let fd = sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
+        assert!(fd >= 0);
+        let socket_idx = fd_table::get_ofd(t.base, &t.vm, fd as u64)
+            .expect("socket OFD should exist")
+            .ino as usize;
+
+        unsafe {
+            let used = core::ptr::read(core::ptr::addr_of!(SOCKET_USED));
+            core::ptr::write(
+                core::ptr::addr_of_mut!(SOCKET_USED),
+                used & !(1u32 << socket_idx),
+            );
+        }
+
+        assert!(ensure_external_peer(socket_idx).is_ok());
+        let peer_idx = socket_table()[socket_idx].peer_idx;
+        assert!(peer_idx >= 0);
+        assert_ne!(peer_idx as usize, socket_idx);
+        assert!(is_slot_used(socket_idx as u32));
+        assert!(is_slot_used(peer_idx as u32));
     }
 }

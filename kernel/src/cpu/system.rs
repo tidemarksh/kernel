@@ -15,6 +15,35 @@ use crate::types::ThreadState;
 
 const REG_WRITE_SOURCE_VM_RESTORE: u32 = 2;
 
+fn syscall_needs_runtime_sync_boundary(nr: u64) -> bool {
+    matches!(
+        nr,
+        abi::SYS_OPENAT
+            | abi::SYS_READ
+            | abi::SYS_READV
+            | abi::SYS_WRITE
+            | abi::SYS_WRITEV
+            | abi::SYS_CLOSE
+            | abi::SYS_CLOSE_RANGE
+            | abi::SYS_PIPE2
+            | abi::SYS_DUP
+            | abi::SYS_DUP3
+            | abi::SYS_FCNTL
+            | abi::SYS_SOCKET
+            | abi::SYS_SOCKETPAIR
+            | abi::SYS_ACCEPT4
+            | abi::SYS_EVENTFD2
+            | abi::SYS_EPOLL_CREATE1
+            | abi::SYS_EPOLL_CTL
+            | abi::SYS_EXECVE
+            | abi::SYS_SETPGID
+            | abi::SYS_SETSID
+            | abi::SYS_KILL
+            | abi::SYS_TKILL
+            | abi::SYS_TGKILL
+    )
+}
+
 // =============================================================================
 // System instruction execution
 // =============================================================================
@@ -41,7 +70,8 @@ pub(super) unsafe fn exec_system(
         let funct12 = raw >> 20;
         match funct12 {
             0 => {
-                if x[17] == crate::abi::SYS_EXECVE {
+                let syscall_nr = x[17];
+                if syscall_nr == crate::abi::SYS_EXECVE {
                     crate::tracepoints::record_execve_ecall(
                         vm.process_ptr as u64
                             + core::mem::offset_of!(crate::types::ProcessState, pid) as u64,
@@ -82,6 +112,9 @@ pub(super) unsafe fn exec_system(
                     prev_s11,
                     x,
                 );
+                if syscall_needs_runtime_sync_boundary(syscall_nr) {
+                    return StepOutcome::Return(remaining);
+                }
                 StepOutcome::Restart
             }
             1 => {

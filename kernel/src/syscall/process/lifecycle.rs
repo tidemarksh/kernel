@@ -398,6 +398,7 @@ pub fn prepare_fork_child_after_handoff(vm: &mut ThreadState, base: u32, pid: i3
     vm.epoll_maxevents = 0;
     vm.blocked_fd = 0;
     vm.blocked_ofd_id = 0;
+    vm.block_cache_ptr = 0;
     vm.sig_pending = 0;
     vm.sig_info_code = 0;
     vm.status = STATUS_OK;
@@ -465,6 +466,7 @@ pub fn record_child_exit(pid: i32, wait_status: i32) {
         if c.pid == pid && !c.exited {
             c.exited = true;
             c.wait_status = wait_status;
+            crate::syscall::signal::queue_process_signal(c.parent_pid, SIGCHLD);
             return;
         }
     }
@@ -479,6 +481,7 @@ pub fn record_child_exit_for_parent(parent_pid: i32, pid: i32, wait_status: i32)
             c.parent_pid = parent_pid;
             c.exited = true;
             c.wait_status = wait_status;
+            crate::syscall::signal::queue_process_signal(parent_pid, SIGCHLD);
             return;
         }
     }
@@ -490,6 +493,7 @@ pub fn record_child_exit_for_parent(parent_pid: i32, pid: i32, wait_status: i32)
                 exited: true,
                 wait_status,
             };
+            crate::syscall::signal::queue_process_signal(parent_pid, SIGCHLD);
             return;
         }
     }

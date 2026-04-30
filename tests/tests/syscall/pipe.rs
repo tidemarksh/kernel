@@ -33,6 +33,35 @@ fn epipe_on_reader_close() {
 }
 
 #[test]
+fn pipe_write_broken_reader_resume_completes_with_epipe() {
+    let mut t = TestVm::new();
+    let pipefd_addr = t.scratch + 0x1200;
+    assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) } as u64;
+    let write_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr + 4) } as u64;
+    assert_eq!(t.sys_close(read_fd as i64), 0);
+
+    let buf_addr = t.scratch + 0x1300;
+    unsafe {
+        tidemark_kernel::guest_mem::write_bytes(t.base, buf_addr, b"x");
+    }
+    t.vm.x[17] = SYS_WRITE;
+    t.vm.x[10] = write_fd;
+    t.vm.x[11] = buf_addr;
+    t.vm.x[12] = 1;
+    let status = tidemark_kernel::syscall::dispatch(&mut t.vm, t.base);
+    assert_eq!(status, STATUS_PIPE_WAIT);
+    assert_eq!(t.vm.status, STATUS_PIPE_WAIT);
+
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    let resumed = thread_resume_blocked_syscall(vm_ptr);
+    assert_eq!(resumed, 0);
+    assert_eq!(t.vm.x[10] as i64, EPIPE);
+    assert_eq!(t.vm.status, STATUS_FAULT);
+    assert_eq!(t.vm.term_signal, SIGPIPE);
+}
+
+#[test]
 fn pipe_close_outcome_reports_remaining_open_ends() {
     let _t = TestVm::new();
     let idx = pipe::alloc_pipe_slot().unwrap();

@@ -8,6 +8,7 @@ pub mod fs;
 pub mod identity;
 pub mod memory;
 pub mod pipe;
+pub mod poll;
 pub mod process;
 pub mod pty;
 pub mod resource;
@@ -104,8 +105,9 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
     let a3 = vm.x[13];
     let a4 = vm.x[14];
     let a5 = vm.x[15];
-    let (arg0_ofd_id, arg0_ofd_type) = trace_fd_snapshot(base, vm, a0);
-    let (arg2_ofd_id, arg2_ofd_type) = trace_fd_snapshot(base, vm, a2);
+    let (mut arg0_ofd_id, mut arg0_ofd_type) = trace_fd_snapshot(base, vm, a0);
+    let (mut arg2_ofd_id, mut arg2_ofd_type) = trace_fd_snapshot(base, vm, a2);
+    vm.status = abi::STATUS_OK;
     let result: i64 = match nr {
         // identity
         SYS_GETPID => identity::sys_getpid(vm, base),
@@ -123,9 +125,15 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_SETREGID => identity::sys_setregid(vm, a0 as i64, a1 as i64),
         SYS_SETRESUID => identity::sys_setresuid(vm, a0 as i64, a1 as i64, a2 as i64),
         SYS_SETRESGID => identity::sys_setresgid(vm, a0 as i64, a1 as i64, a2 as i64),
+        SYS_GETGROUPS => identity::sys_getgroups(base, a0 as i64, a1),
+        SYS_SETGROUPS => identity::sys_setgroups(vm, a0 as i64, a1),
         SYS_UNAME => identity::sys_uname(vm, base, a0),
         SYS_SYSINFO => identity::sys_sysinfo(vm, base, a0),
         SYS_GETRANDOM => identity::sys_getrandom(vm, base, a0, a1, a2),
+
+        // async I/O
+        SYS_IO_SETUP | SYS_IO_SUBMIT | SYS_IO_CANCEL | SYS_IO_GETEVENTS => ENOSYS,
+        SYS_IO_DESTROY => EINVAL,
 
         // time
         SYS_CLOCK_GETTIME => time::sys_clock_gettime(vm, base, a0, a1),
@@ -276,9 +284,20 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             }
             r
         }
+        SYS_SETXATTR | SYS_LSETXATTR => fs::sys_setxattr(vm, base, a0),
+        SYS_FSETXATTR => fs::sys_fsetxattr(vm, base, a0),
+        SYS_GETXATTR | SYS_LGETXATTR => fs::sys_getxattr(vm, base, a0),
+        SYS_FGETXATTR => fs::sys_fgetxattr(vm, base, a0),
+        SYS_LISTXATTR | SYS_LLISTXATTR => fs::sys_listxattr(vm, base, a0),
+        SYS_FLISTXATTR => fs::sys_flistxattr(vm, base, a0),
+        SYS_REMOVEXATTR | SYS_LREMOVEXATTR => fs::sys_removexattr(vm, base, a0),
+        SYS_FREMOVEXATTR => fs::sys_fremovexattr(vm, base, a0),
+        SYS_UMOUNT2 => fs::sys_umount2(vm, base, a0, a1),
         SYS_STATFS => fs::sys_statfs(vm, base, a0, a1),
         SYS_FACCESSAT => fs::sys_faccessat(vm, base, a0, a1, a2),
         SYS_CHDIR => fs::sys_chdir(vm, base, a0),
+        SYS_CHROOT => fs::sys_chroot(vm, base, a0),
+        SYS_FCHMOD => fs::sys_fchmod(vm, base, a0, a1),
         SYS_FCHMODAT => fs::sys_fchmodat(vm, base, a0, a1, a2, a3),
         SYS_FCHOWNAT => fs::sys_fchownat(vm, base, a0, a1, a2, a3, a4),
         SYS_READLINKAT => fs::sys_readlinkat(vm, base, a0, a1, a2, a3),
@@ -318,6 +337,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             }
             r
         }
+        SYS_CLOSE_RANGE => fd_table::sys_close_range(vm, base, a0, a1, a2),
 
         // pipe
         SYS_PIPE2 => pipe::sys_pipe2(vm, base, a0, a1),
@@ -355,6 +375,20 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             }
             r
         }
+        SYS_SENDMSG => {
+            let r = socket::sys_sendmsg(vm, base, a0, a1, a2);
+            if vm.status == abi::STATUS_SOCKET_SEND {
+                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_SOCKET_SEND);
+            }
+            r
+        }
+        SYS_RECVMSG => {
+            let r = socket::sys_recvmsg(vm, base, a0, a1, a2);
+            if vm.status == abi::STATUS_SOCKET_RECV {
+                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_SOCKET_RECV);
+            }
+            r
+        }
         SYS_SHUTDOWN => socket::sys_shutdown(vm, base, a0, a1),
         SYS_SETSOCKOPT => socket::sys_setsockopt(vm, base, a0, a1, a2, a3, a4),
         SYS_GETSOCKOPT => socket::sys_getsockopt(vm, base, a0, a1, a2, a3, a4),
@@ -368,6 +402,20 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             let r = epoll::sys_epoll_pwait(vm, base, a0, a1, a2, a3 as i64, a4);
             if vm.status == abi::STATUS_EPOLL_WAIT {
                 return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_EPOLL_WAIT);
+            }
+            r
+        }
+        SYS_PPOLL => {
+            let r = poll::sys_ppoll(vm, base, a0, a1, a2, a3, a4);
+            if vm.status == abi::STATUS_PIPE_WAIT {
+                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_PIPE_WAIT);
+            }
+            r
+        }
+        SYS_PSELECT6 => {
+            let r = poll::sys_pselect6(vm, base, a0, a1, a2, a3, a4, a5);
+            if vm.status == abi::STATUS_PIPE_WAIT {
+                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_PIPE_WAIT);
             }
             r
         }
@@ -532,6 +580,14 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         crate::tracepoints::record_execve_dispatch(vm as *const ThreadState as u32, 3);
     }
     let status = vm.status;
+    if nr == SYS_PIPE2 && result == 0 {
+        unsafe {
+            let read_fd = crate::guest_mem::read_u32(base, a0);
+            let write_fd = crate::guest_mem::read_u32(base, a0 + 4);
+            (arg0_ofd_id, arg0_ofd_type) = trace_fd_snapshot(base, vm, read_fd as u64);
+            (arg2_ofd_id, arg2_ofd_type) = trace_fd_snapshot(base, vm, write_fd as u64);
+        }
+    }
     crate::tracepoints::record_fd_syscall(
         vm as *const ThreadState as u32,
         nr,

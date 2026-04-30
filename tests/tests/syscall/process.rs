@@ -793,9 +793,12 @@ fn contract_vfork_from_secondary_thread_detaches_parent_thread_record_until_resu
     let status = process_impl::sys_vfork(&mut t.vm, t.base);
     assert_eq!(status, STATUS_VFORK_WAIT);
 
-    let parent_ps = unsafe { &*((t.base as u64 + parent_process_ptr as u64) as *const ProcessState) };
+    let parent_ps =
+        unsafe { &*((t.base as u64 + parent_process_ptr as u64) as *const ProcessState) };
     assert_eq!(
-        parent_ps.thread_count.load(core::sync::atomic::Ordering::Acquire),
+        parent_ps
+            .thread_count
+            .load(core::sync::atomic::Ordering::Acquire),
         2
     );
     assert_eq!(parent_ps.threads[2].state, THREAD_NONE);
@@ -804,9 +807,12 @@ fn contract_vfork_from_secondary_thread_detaches_parent_thread_record_until_resu
     let child_pid = process_impl::vfork_child_pid();
     process_impl::vfork_parent_resume(&mut t.vm, child_pid);
 
-    let parent_ps = unsafe { &*((t.base as u64 + parent_process_ptr as u64) as *const ProcessState) };
+    let parent_ps =
+        unsafe { &*((t.base as u64 + parent_process_ptr as u64) as *const ProcessState) };
     assert_eq!(
-        parent_ps.thread_count.load(core::sync::atomic::Ordering::Acquire),
+        parent_ps
+            .thread_count
+            .load(core::sync::atomic::Ordering::Acquire),
         3
     );
     assert_eq!(parent_ps.threads[2].tid, 3);
@@ -1486,6 +1492,9 @@ fn install_procfs_snapshot_writes_linux_like_maps() {
     assert!(maps.contains("[heap]"));
     assert!(maps.contains("[stack]"));
     assert!(maps.contains("rw-p 00000000 00:00 0 [heap]"));
+
+    let ngroups_max = String::from_utf8(read_file_bytes(b"/proc/sys/kernel/ngroups_max")).unwrap();
+    assert_eq!(ngroups_max, "65536\n");
 }
 
 #[test]
@@ -2008,7 +2017,11 @@ fn semantics_vfork_preserves_memfs_paths_before_execve() {
 
     assert_eq!(read_link_bytes(b"/proc/self/exe"), b"/bin/parent");
     assert_eq!(read_file_bytes(tool_path), tool_elf);
-    assert_ne!(memfs::resolve_path(tool_path), 0, "tool path should remain resolvable during vfork child view");
+    assert_ne!(
+        memfs::resolve_path(tool_path),
+        0,
+        "tool path should remain resolvable during vfork child view"
+    );
     assert_ne!(process_impl::vfork_child_pid(), 0);
 
     let child_ret = process_impl::sys_execve(&mut t.vm, t.base, tool_path_addr, 0, 0);
