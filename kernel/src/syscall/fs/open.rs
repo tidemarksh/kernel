@@ -160,9 +160,16 @@ fn open_existing_inode(
     if st.mode & memfs::S_IFMT == memfs::S_IFLNK && oflags & O_NOFOLLOW != 0 {
         return ELOOP;
     }
+    let file_type = st.mode & memfs::S_IFMT;
     if require_directory || oflags & O_DIRECTORY != 0 {
-        if st.mode & memfs::S_IFMT != memfs::S_IFDIR {
+        if file_type != memfs::S_IFDIR {
             return ENOTDIR;
+        }
+    }
+    if file_type == memfs::S_IFDIR {
+        let access_mode = oflags & fd_table::OPEN_ACCESS_MODE_MASK;
+        if access_mode != O_RDONLY || oflags & O_TRUNC != 0 {
+            return EISDIR;
         }
     }
 
@@ -224,4 +231,32 @@ fn openat_with_parent(
     }
 
     open_existing_inode(vm, base, ino, oflags, require_directory)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sys_openat;
+    use crate::abi::{EISDIR, O_RDONLY, O_RDWR, O_TRUNC, O_WRONLY};
+    use crate::harness::TestVm;
+
+    #[test]
+    fn openat_rejects_writable_directory() {
+        let mut vm = TestVm::new();
+        assert_eq!(vm.sys_mkdirat(b"/tmp"), 0);
+
+        assert_eq!(vm.sys_openat(b"/tmp", O_WRONLY), EISDIR);
+        assert_eq!(vm.sys_openat(b"/tmp", O_RDWR), EISDIR);
+        assert_eq!(vm.sys_openat(b"/tmp", O_RDONLY | O_TRUNC), EISDIR);
+
+        let path_addr = vm.write_path(0x400, b"/tmp");
+        let fd = sys_openat(
+            &mut vm.vm,
+            vm.base,
+            (-100i64) as u64,
+            path_addr,
+            O_RDONLY as u64,
+            0,
+        );
+        assert!(fd >= 3);
+    }
 }

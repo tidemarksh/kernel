@@ -12,6 +12,7 @@ use crate::abi::*;
 use crate::fs::fd_table;
 use crate::guest_mem;
 use crate::types::{ProcessState, ThreadState};
+use core::sync::atomic::Ordering;
 
 fn set_next_pid_floor(next_pid: i32) {
     prs().next_pid = prs().next_pid.max(next_pid.max(3));
@@ -31,6 +32,19 @@ pub(super) fn current_process_state_mut(
         None
     } else {
         unsafe { Some(&mut *(absolute as *mut ProcessState)) }
+    }
+}
+
+fn reset_process_runtime_sync_state(ps: &mut ProcessState) {
+    // fork(2) creates a single-thread child. Reservation locks are Tidemark
+    // runtime bookkeeping, not guest-visible state, so the copied child must
+    // not inherit a held inter-worker lock. See:
+    // https://man7.org/linux/man-pages/man2/fork.2.html
+    for lock in ps.reservation_lock.iter() {
+        lock.store(0, Ordering::Release);
+    }
+    for generation in ps.reservation_gen.iter() {
+        generation.store(0, Ordering::Release);
     }
 }
 
@@ -340,7 +354,9 @@ pub fn reset_process_lifecycle(
         };
     }
 
-    vm.tid = pid;
+    // ThreadState::tid is the process-local thread slot used to index
+    // ProcessState::threads. The process ID itself lives in ProcessState.
+    vm.tid = 1;
     if let Some(ps) = current_process_state_mut(vm, base) {
         ps.pid = pid;
         ps.ppid = ppid;
@@ -352,12 +368,18 @@ pub fn reset_process_lifecycle(
 }
 
 pub fn prepare_fork_child_after_handoff(vm: &mut ThreadState, base: u32, pid: i32) {
+    if let Some(snap) = take_fork_snapshot() {
+        restore_thread_snapshot(vm, snap);
+    }
+
     let clone_flags = vm.clone_flags;
     let clone_child_stack = vm.clone_child_stack;
     let clone_tls = vm.clone_tls;
     let clone_child_tidptr = vm.clone_child_tidptr;
 
-    vm.tid = pid;
+    // ThreadState::tid is the process-local thread slot used to index
+    // ProcessState::threads. The process ID itself lives in ProcessState.
+    vm.tid = 1;
     vm.x[0] = 0;
     vm.x[10] = 0;
     if clone_child_stack != 0 {
@@ -372,6 +394,14 @@ pub fn prepare_fork_child_after_handoff(vm: &mut ThreadState, base: u32, pid: i3
     } else {
         vm.clear_child_tid = 0;
     }
+    if let Some(ps) = current_process_state_mut(vm, base) {
+        ps.pid = pid;
+        reset_process_runtime_sync_state(ps);
+    }
+    vm.lr_addr = u64::MAX;
+    vm.lr_val = 0;
+    vm.lr_gen = 0;
+    vm.lr_gen_end = 0;
     crate::syscall::thread::init_main_thread(vm as *mut ThreadState as u32, base);
     if clone_flags & CLONE_CHILD_SETTID != 0 && clone_child_tidptr != 0 {
         unsafe {
@@ -398,6 +428,15 @@ pub fn prepare_fork_child_after_handoff(vm: &mut ThreadState, base: u32, pid: i3
     vm.epoll_maxevents = 0;
     vm.blocked_fd = 0;
     vm.blocked_ofd_id = 0;
+    vm.blocked_syscall_nr = 0;
+    vm.blocked_syscall_args = [0; 6];
+    vm.completed_sync_effects = 0;
+    vm.completed_pipe_sync_slots = 0;
+    vm.completed_pipe_sync_read_slots = 0;
+    vm.completed_pipe_sync_write_slots = 0;
+    vm.completed_pipe_fresh_slots = 0;
+    vm.completed_pipe_read_guest_ptr = 0;
+    vm.completed_pipe_read_len = 0;
     vm.block_cache_ptr = 0;
     vm.sig_pending = 0;
     vm.sig_info_code = 0;

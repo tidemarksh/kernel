@@ -285,7 +285,14 @@ fn epoll_pwait_resume_reports_ready_events_with_ok_status() {
     );
     assert_eq!(t.vm.status, STATUS_EPOLL_WAIT);
 
+    let waiting_status = t.vm.status;
+    let waiting_fault_addr = t.vm.fault_addr;
+    let waiting_fault_pc = t.vm.fault_pc;
+    t.vm.status = STATUS_OK;
     assert_eq!(t.sys_write_data(write_fd, b"x"), 1);
+    t.vm.status = waiting_status;
+    t.vm.fault_addr = waiting_fault_addr;
+    t.vm.fault_pc = waiting_fault_pc;
     let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
     assert_eq!(thread_resume_blocked_syscall(vm_ptr), 1);
     assert_eq!(t.vm.status, STATUS_OK);

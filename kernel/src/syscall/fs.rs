@@ -63,6 +63,12 @@ const EVENTFD_COUNTER_MAX: u64 = u64::MAX - 1;
 const S_IFIFO: u32 = 0o010000;
 const S_IFSOCK: u32 = 0o140000;
 const MAX_PATH_SYMLINK_FOLLOWS: u32 = 40;
+const SYNC_EFFECT_PIPE_STATE: u32 = 1 << 0;
+const SYNC_EFFECT_SOCKET_STATE: u32 = 1 << 1;
+const SYNC_EFFECT_EPOLL_STATE: u32 = 1 << 2;
+const SYNC_EFFECT_EPOLL_DEPENDENT_OFD_STATE: u32 = 1 << 3;
+const SYNC_EFFECT_FORK_SHARED_OFD_STATE: u32 = 1 << 6;
+const SYNC_EFFECT_PROCESS_MEMFS: u32 = 1 << 7;
 pub(crate) const PIPE_READ_EOF_SYNC_RETRY_MARKER: u64 = 0x7069_7065_454f_4652;
 const PIPE_EPIPE_SYNC_RETRY_MARKER: u64 = 0x7069_7065_4550_4950;
 pub const FS_EFFECT_MEMFS_MUTATION: u32 = 1 << 0;
@@ -70,9 +76,9 @@ pub const FS_EFFECT_SHARED_OFD_STATE: u32 = 1 << 1;
 pub const FS_EFFECT_MEMFS_FILE_DATA: u32 = 1 << 2;
 pub use meta::{
     sys_faccessat, sys_fchmod, sys_fchmodat, sys_fchownat, sys_fstat, sys_ftruncate,
-    sys_newfstatat, sys_readlinkat, sys_statfs, sys_truncate,
+    sys_newfstatat, sys_readlinkat, sys_statfs, sys_truncate, sys_utimensat,
 };
-pub use mutation::{sys_mkdirat, sys_renameat2, sys_unlinkat};
+pub use mutation::{sys_mkdirat, sys_renameat, sys_renameat2, sys_unlinkat};
 pub use open::sys_openat;
 use path::resolve_at;
 pub use pending::{
@@ -152,6 +158,24 @@ pub fn sys_umount2(vm: &ThreadState, base: u32, path_addr: u64, _flags: u64) -> 
         Ok(_) => EINVAL,
         Err(errno) => errno,
     }
+}
+
+/// mount(2) mounts a filesystem.
+/// https://man7.org/linux/man-pages/man2/mount.2.html
+///
+/// Tidemark has no guest mount table or CAP_SYS_ADMIN model. Linux rejects
+/// unprivileged mount attempts with EPERM, which lets feature probes continue
+/// without pretending the syscall number is absent.
+pub fn sys_mount(
+    _vm: &ThreadState,
+    _base: u32,
+    _source_addr: u64,
+    _target_addr: u64,
+    _filesystemtype_addr: u64,
+    _mountflags: u64,
+    _data_addr: u64,
+) -> i64 {
+    EPERM
 }
 
 /// xattr syscalls.
@@ -253,12 +277,21 @@ pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) 
             return 0;
         }
         if n > 0 {
+            let pipe_slot = if ofd.fd_type == FD_TYPE_PTY_SLAVE {
+                crate::syscall::pty::input_pipe_slot(ofd.ino)
+            } else {
+                crate::syscall::pty::output_pipe_slot(ofd.ino)
+            };
+            mark_pipe_sync_effect(vm, pipe_slot, false);
             if !crate::syscall::memory::guest_range_accessible(base, buf, n as u64) {
                 return EFAULT;
             }
             unsafe {
                 guest_mem::write_bytes(base, buf, &tmp[..n as usize]);
             }
+            flush_shared_guest_write(vm, base, buf, n as u64);
+            vm.completed_pipe_read_guest_ptr = buf;
+            vm.completed_pipe_read_len = n as u32;
         }
         return n;
     }
@@ -287,6 +320,7 @@ pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) 
             return 0;
         }
         if n > 0 {
+            mark_pipe_sync_effect(vm, ofd.ino, false);
             vm.fault_addr = 0;
             vm.fault_pc = 0;
             if !crate::syscall::memory::guest_range_accessible(base, buf, n as u64) {
@@ -295,6 +329,9 @@ pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) 
             unsafe {
                 guest_mem::write_bytes(base, buf, &tmp[..n as usize]);
             }
+            flush_shared_guest_write(vm, base, buf, n as u64);
+            vm.completed_pipe_read_guest_ptr = buf;
+            vm.completed_pipe_read_len = n as u32;
         }
         return n;
     }
@@ -321,6 +358,7 @@ pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) 
         unsafe {
             guest_mem::write_u64(base, buf, value);
         }
+        flush_shared_guest_write(vm, base, buf, 8);
         fd_table::set_offset(base, vm, fd, next);
         return 8;
     }
@@ -352,6 +390,12 @@ pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) 
             vm.socket_timeout_ms = super::socket::socket_recv_timeout_ms_for_fd(base, vm, fd);
             vm.status = STATUS_SOCKET_RECV;
             return 0;
+        }
+        if n >= 0 {
+            mark_socket_sync_effect(vm);
+        }
+        if n > 0 {
+            flush_shared_guest_write(vm, base, buf, n as u64);
         }
         return n;
     }
@@ -425,14 +469,19 @@ fn read_regular_file_to_guest(
     count: u64,
     offset: Option<u64>,
 ) -> i64 {
-    if count == 0 {
-        return 0;
-    }
-
     let ofd = match fd_table::get_ofd(base, vm, fd) {
         Some(o) => o,
         None => return EBADF,
     };
+    if let Some(st) = memfs::stat(ofd.ino) {
+        if st.mode & memfs::S_IFMT == memfs::S_IFDIR {
+            return EISDIR;
+        }
+    }
+    if count == 0 {
+        return 0;
+    }
+
     let start_offset = offset.unwrap_or(ofd.offset as u64);
     let mut tmp = [0u8; 4096];
     let mut total = 0u64;
@@ -452,6 +501,7 @@ fn read_regular_file_to_guest(
         unsafe {
             guest_mem::write_bytes(base, guest_buf + total, &tmp[..n as usize]);
         }
+        flush_shared_guest_write(vm, base, guest_buf + total, n as u64);
         total += n as u64;
         if (n as usize) < to_read {
             break;
@@ -460,6 +510,7 @@ fn read_regular_file_to_guest(
 
     if total > 0 && offset.is_none() {
         fd_table::advance_offset(base, vm, fd, total);
+        mark_fork_shared_ofd_sync_effect(vm);
     }
     total as i64
 }
@@ -486,7 +537,11 @@ pub fn sys_pwrite64(
         return count as i64;
     }
 
-    write_regular_file_from_guest(base, buf, count, ofd.ino, offset)
+    let n = write_regular_file_from_guest(base, buf, count, ofd.ino, offset);
+    if n > 0 {
+        mark_process_memfs_sync_effect(vm);
+    }
+    n
 }
 
 fn write_regular_file_from_guest(
@@ -564,6 +619,40 @@ fn trace_pipe_open_state(ofd: &OpenFileDesc) -> (i32, i32) {
         )
     } else {
         (0, 0)
+    }
+}
+
+fn mark_process_memfs_sync_effect(vm: &mut ThreadState) {
+    vm.completed_sync_effects |= SYNC_EFFECT_PROCESS_MEMFS;
+}
+
+fn flush_shared_guest_write(vm: &mut ThreadState, base: u32, guest_addr: u64, len: u64) {
+    if len == 0 {
+        return;
+    }
+    if crate::syscall::memory::flush_shared_mappings_for_guest_write(base, guest_addr, len) {
+        mark_process_memfs_sync_effect(vm);
+    }
+}
+
+fn mark_fork_shared_ofd_sync_effect(vm: &mut ThreadState) {
+    vm.completed_sync_effects |= SYNC_EFFECT_FORK_SHARED_OFD_STATE;
+}
+
+fn mark_socket_sync_effect(vm: &mut ThreadState) {
+    vm.completed_sync_effects |=
+        SYNC_EFFECT_SOCKET_STATE | SYNC_EFFECT_EPOLL_STATE | SYNC_EFFECT_EPOLL_DEPENDENT_OFD_STATE;
+}
+
+fn mark_pipe_sync_effect(vm: &mut ThreadState, pipe_slot: u32, write_effect: bool) {
+    vm.completed_sync_effects |= SYNC_EFFECT_PIPE_STATE;
+    if pipe_slot > 0 && pipe_slot < 64 {
+        vm.completed_pipe_sync_slots |= 1u64 << pipe_slot;
+        if write_effect {
+            vm.completed_pipe_sync_write_slots |= 1u64 << pipe_slot;
+        } else {
+            vm.completed_pipe_sync_read_slots |= 1u64 << pipe_slot;
+        }
     }
 }
 
@@ -690,6 +779,14 @@ pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64,
                 Some(&tmp[..to_write]),
             );
         }
+        if n > 0 {
+            let pipe_slot = if ofd.fd_type == FD_TYPE_PTY_SLAVE {
+                crate::syscall::pty::output_pipe_slot(ofd.ino)
+            } else {
+                crate::syscall::pty::input_pipe_slot(ofd.ino)
+            };
+            mark_pipe_sync_effect(vm, pipe_slot, true);
+        }
         return trace_write_attempt(
             fd,
             nr,
@@ -805,6 +902,9 @@ pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64,
                 pipe_write_open,
                 Some(&tmp[..to_write]),
             );
+        }
+        if n > 0 {
+            mark_pipe_sync_effect(vm, ofd.ino, true);
         }
         return trace_write_attempt(
             fd,
@@ -968,6 +1068,9 @@ pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64,
                 None,
             );
         }
+        if n >= 0 || n == EPIPE {
+            mark_socket_sync_effect(vm);
+        }
         return trace_write_attempt(
             fd,
             nr,
@@ -991,9 +1094,15 @@ pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64,
             guest_mem::read_bytes(base, buf, &mut trace[..to_trace]);
         }
     }
-    let n = write_regular_file_from_guest(base, buf, count, ofd.ino, ofd.offset as u64);
+    let current_offset = fd_table::get_offset_by_id(ofd_id)
+        .max(fd_table::get_offset_floor_by_id(ofd_id))
+        .max(ofd.offset as u64);
+    let n = write_regular_file_from_guest(base, buf, count, ofd.ino, current_offset);
     if n > 0 {
-        fd_table::advance_offset(base, vm, fd, n as u64);
+        let next_offset = current_offset.saturating_add(n as u64);
+        fd_table::set_offset_by_id(ofd_id, next_offset.max(fd_table::get_offset_by_id(ofd_id)));
+        mark_fork_shared_ofd_sync_effect(vm);
+        mark_process_memfs_sync_effect(vm);
     }
     trace_write_attempt(
         fd,
@@ -1211,6 +1320,9 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
                     None,
                 );
             }
+            if n > 0 {
+                mark_pipe_sync_effect(vm, ofd.ino, true);
+            }
             total += n;
             if (n as usize) < to_write {
                 return trace_write_attempt(
@@ -1334,6 +1446,9 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
                     None,
                 );
             }
+            if n > 0 {
+                mark_pipe_sync_effect(vm, ofd.ino, true);
+            }
             total += n;
             if (n as usize) < to_write {
                 return trace_write_attempt(
@@ -1423,10 +1538,19 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
                 );
             }
         } else {
-            let current_offset = fd_table::get_offset(base, vm, fd);
+            let current_offset = fd_table::get_offset(base, vm, fd)
+                .max(fd_table::get_offset_by_id(ofd_id))
+                .max(fd_table::get_offset_floor_by_id(ofd_id))
+                .max(ofd.offset as u64);
             let n = write_regular_file_from_guest(base, iov_base, iov_len, ofd.ino, current_offset);
             if n > 0 {
-                fd_table::advance_offset(base, vm, fd, n as u64);
+                let next_offset = current_offset.saturating_add(n as u64);
+                fd_table::set_offset_by_id(
+                    ofd_id,
+                    next_offset.max(fd_table::get_offset_by_id(ofd_id)),
+                );
+                mark_fork_shared_ofd_sync_effect(vm);
+                mark_process_memfs_sync_effect(vm);
             }
             if n < 0 {
                 if total > 0 {
@@ -1625,14 +1749,23 @@ pub fn sys_getdents64(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, buf_si
 
 /// lseek: reposition OFD offset. Supports SEEK_SET (0), SEEK_CUR (1), SEEK_END (2).
 pub fn sys_lseek(vm: &mut ThreadState, base: u32, fd: u64, offset: i64, whence: u64) -> i64 {
+    let ofd_id = match fd_table::get_ofd_id(base, vm, fd) {
+        Some(id) => id,
+        None => return EBADF,
+    };
     let ofd = match fd_table::get_ofd(base, vm, fd) {
         Some(o) => o,
         None => return EBADF,
     };
+    let current_offset = if ofd.fd_type == FD_TYPE_FILE {
+        (ofd.offset as u64).max(fd_table::get_offset_floor_by_id(ofd_id))
+    } else {
+        ofd.offset as u64
+    };
 
     let new_offset = match whence {
-        0 => offset as u64,                // SEEK_SET
-        1 => (ofd.offset + offset) as u64, // SEEK_CUR
+        0 => offset as u64,                           // SEEK_SET
+        1 => (current_offset as i64 + offset) as u64, // SEEK_CUR
         2 => {
             // SEEK_END
             let st = memfs::stat(ofd.ino);
@@ -1645,5 +1778,6 @@ pub fn sys_lseek(vm: &mut ThreadState, base: u32, fd: u64, offset: i64, whence: 
     };
 
     fd_table::set_offset(base, vm, fd, new_offset);
+    mark_fork_shared_ofd_sync_effect(vm);
     new_offset as i64
 }

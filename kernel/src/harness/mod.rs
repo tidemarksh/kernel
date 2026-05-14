@@ -94,16 +94,11 @@ impl TestVm {
     pub fn new() -> Self {
         unsafe {
             let current_pages = core::arch::wasm32::memory_size(0);
-            let current_bytes = (current_pages as u64).saturating_mul(65536);
-            let guest_base_hint = current_bytes.saturating_add(DEFAULT_GUEST_BASE_PADDING as u64);
-            let aligned = guest_base_hint.saturating_add((DEFAULT_GUEST_RAM_ALIGN - 1) as u64)
+            let aligned = (DEFAULT_GUEST_BASE_PADDING as u64)
+                .saturating_add((DEFAULT_GUEST_RAM_ALIGN - 1) as u64)
                 & !((DEFAULT_GUEST_RAM_ALIGN - 1) as u64);
             let candidate_base = aligned.min(u32::MAX as u64) as u32;
-            let base = if TEST_GUEST_BASE != 0 {
-                TEST_GUEST_BASE.max(candidate_base)
-            } else {
-                candidate_base
-            };
+            let base = candidate_base;
             TEST_GUEST_BASE = base;
             let target_bytes = (base as u64).saturating_add(DEFAULT_GUEST_RAM_SIZE as u64);
             let target_pages = target_bytes.div_ceil(65536) as usize;

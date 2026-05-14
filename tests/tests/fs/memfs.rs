@@ -86,6 +86,40 @@ fn write_at_offset() {
 }
 
 #[test]
+fn repeated_page_sized_appends_survive_reallocation() {
+    let _t = TestVm::new();
+    let ino = memfs::create_file(1, b"append.bin", 0o644);
+    let mut chunk = [0u8; 4096];
+    let chunk_len = chunk.len();
+    for block in 0..32usize {
+        for (index, byte) in chunk.iter_mut().enumerate() {
+            *byte = b'A' + (((block * chunk_len + index) % 23) as u8);
+        }
+        assert_eq!(
+            memfs::write_file(ino, (block * chunk_len) as u64, &chunk),
+            chunk_len as i64,
+        );
+    }
+
+    let mut buf = [0u8; 4096];
+    let buf_len = buf.len();
+    for block in 0..32usize {
+        assert_eq!(
+            memfs::read_file(ino, (block * buf_len) as u64, &mut buf),
+            buf_len as i64,
+        );
+        for (index, byte) in buf.iter().enumerate() {
+            assert_eq!(
+                *byte,
+                b'A' + (((block * buf_len + index) % 23) as u8),
+                "mismatch at {}",
+                block * buf_len + index,
+            );
+        }
+    }
+}
+
+#[test]
 fn symlink_create_and_read() {
     let _t = TestVm::new();
     let ino = memfs::create_symlink(1, b"mylink", b"/target/path");

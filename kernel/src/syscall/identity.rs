@@ -308,12 +308,20 @@ pub fn sys_riscv_hwprobe(
 /// Tidemark does not model per-core I-cache state, so this is a Linux-shaped no-op.
 /// The address range and flags are accepted and ignored.
 pub fn sys_riscv_flush_icache(
-    _vm: &ThreadState,
+    vm: &mut ThreadState,
     _base: u32,
-    _start: u64,
-    _end: u64,
+    start: u64,
+    end: u64,
     _flags: u64,
 ) -> i64 {
+    if vm.block_cache_ptr != 0 {
+        let mut cache = unsafe {
+            crate::cpu::block_cache::BlockCache::from_ptr(
+                vm.block_cache_ptr as *mut crate::cpu::block_cache::BlockEntry,
+            )
+        };
+        cache.invalidate_range(start, end);
+    }
     0
 }
 

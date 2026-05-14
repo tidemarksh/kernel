@@ -508,7 +508,7 @@ fn anonymous_exec_mapping_supports_write_protect_execute_and_repatch() {
     }
     assert_eq!(
         tidemark_kernel::syscall::identity::sys_riscv_flush_icache(
-            &t.vm,
+            &mut t.vm,
             t.base,
             code,
             code + 8,
@@ -651,6 +651,7 @@ fn guest_ram_limit_caps_brk_growth() {
 #[test]
 fn prot_none_reservation_keeps_rw_mmaps_low() {
     let mut t = TestVm::new();
+    t.vm.guest_ram_limit = 0x6000_0000;
 
     let reserve = t.sys_mmap(
         0,
@@ -823,7 +824,7 @@ fn multithreaded_flush_icache_reexec_preserves_parent_context() {
     }
     assert_eq!(
         tidemark_kernel::syscall::identity::sys_riscv_flush_icache(
-            &t.vm,
+            &mut t.vm,
             t.base,
             code,
             code + 8,
@@ -998,8 +999,26 @@ fn mmap_stays_above_expanded_brk_region() {
     );
     assert!(mapped > 0);
 
-    let floor = (((grown as u64) + 0x1F_FFFF) & !0x1F_FFFF).max(0x20_0000);
+    let floor = (((grown as u64) + 8 * 1024 * 1024 + 0xF_FFFF) & !0xF_FFFF).max(0x20_0000);
     assert!((mapped as u64) >= floor);
+}
+
+#[test]
+fn nonfixed_mmap_leaves_room_for_later_brk_growth() {
+    let mut t = TestVm::new();
+    let mapped = t.sys_mmap(
+        0,
+        1024 * 1024,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    );
+    assert!(mapped > 0);
+
+    let grown = t.sys_brk(0x80_0000);
+    assert_eq!(grown, 0x80_0000);
+    assert!((mapped as u64) >= 0x80_0000);
 }
 
 #[test]

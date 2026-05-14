@@ -144,3 +144,14 @@ pub fn sys_renameat2(
         &new_name_buf[..new_name_len],
     )
 }
+
+pub fn sys_renameat(
+    vm: &mut ThreadState,
+    base: u32,
+    olddirfd: u64,
+    oldpath_addr: u64,
+    newdirfd: u64,
+    newpath_addr: u64,
+) -> i64 {
+    sys_renameat2(vm, base, olddirfd, oldpath_addr, newdirfd, newpath_addr, 0)
+}

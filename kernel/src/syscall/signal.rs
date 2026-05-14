@@ -555,9 +555,13 @@ fn signalfd_slot(idx: u32) -> Option<&'static mut SignalFdState> {
     Some(&mut signalfd_slots()[idx as usize])
 }
 
-fn signalfd_mask_sanitized(mask: u64) -> u64 {
+pub(crate) fn sanitized_signal_mask(mask: u64) -> u64 {
     let unblockable = (1u64 << (SIGKILL - 1)) | (1u64 << (SIGSTOP - 1));
     mask & !unblockable
+}
+
+fn signalfd_mask_sanitized(mask: u64) -> u64 {
+    sanitized_signal_mask(mask)
 }
 
 fn alloc_signalfd_slot(mask: u64) -> Option<u32> {

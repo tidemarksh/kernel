@@ -1,6 +1,7 @@
 use tidemark_kernel::abi::*;
 use tidemark_kernel::fs::fd_table;
 use tidemark_kernel::harness::TestVm;
+use tidemark_kernel::net::ring_buffer;
 use tidemark_kernel::syscall::socket;
 
 const SOL_SOCKET: u64 = 1;
@@ -33,7 +34,7 @@ const F_GETFD: u64 = 1;
 fn socket_create_close_and_errors() {
     let mut t = TestVm::new();
 
-    let bad = socket::sys_socket(&mut t.vm, t.base, 16, SOCK_STREAM as u64, 0);
+    let bad = socket::sys_socket(&mut t.vm, t.base, 9999, SOCK_STREAM as u64, 0);
     assert_eq!(bad, EAFNOSUPPORT);
 
     let fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
@@ -980,6 +981,106 @@ fn socket_slot_exhaustion_and_reuse() {
     assert_eq!(t.sys_close(fds[0]), 0);
     let new_fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
     assert!(new_fd >= 0);
+}
+
+#[test]
+fn socket_connect_force_shutdown_close_reuses_slots() {
+    let mut t = TestVm::new();
+    let sockaddr: [u8; 16] = [2, 0, 0x1f, 0x90, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
+    let addr = t.scratch + 0x500;
+    t.write_mem(addr, &sockaddr);
+
+    for i in 0..(MAX_SOCKETS * 2) {
+        let fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
+        assert!(fd >= 0, "socket allocation failed on iteration {i}: {fd}");
+        t.vm.x[10] = fd as u64;
+        assert_eq!(
+            socket::sys_connect(&mut t.vm, t.base, fd as u64, addr, 16),
+            0
+        );
+        socket::resume_connect_result(&mut t.vm, t.base, 0);
+
+        if i == 0 {
+            assert_eq!(
+                socket::inject_external_inbound_for_fd(t.base, &t.vm, fd as u64, b"hello"),
+                5
+            );
+            assert_eq!(socket::force_shutdown_for_fd(t.base, &t.vm, fd as u64), 0);
+            let read_addr = t.scratch + 0x700;
+            assert_eq!(
+                socket::sys_recvfrom(&mut t.vm, t.base, fd as u64, read_addr, 8, 0, 0, 0),
+                5
+            );
+            let mut actual = [0u8; 5];
+            unsafe {
+                tidemark_kernel::guest_mem::read_bytes(t.base, read_addr, &mut actual);
+            }
+            assert_eq!(&actual, b"hello");
+            assert_eq!(
+                socket::sys_recvfrom(&mut t.vm, t.base, fd as u64, read_addr, 8, 0, 0, 0),
+                0
+            );
+        } else if i == 1 {
+            assert_eq!(
+                socket::inject_external_inbound_for_fd(t.base, &t.vm, fd as u64, b"world"),
+                5
+            );
+            assert_eq!(socket::force_shutdown_for_fd(t.base, &t.vm, fd as u64), 0);
+            let read_addr = t.scratch + 0x700;
+            let iov_addr = t.scratch + 0x740;
+            let msg_addr = t.scratch + 0x780;
+            unsafe {
+                tidemark_kernel::guest_mem::write_u64(t.base, iov_addr, read_addr);
+                tidemark_kernel::guest_mem::write_u64(t.base, iov_addr + 8, 8);
+                tidemark_kernel::guest_mem::write_u64(t.base, msg_addr + 16, iov_addr);
+                tidemark_kernel::guest_mem::write_u64(t.base, msg_addr + 24, 1);
+            }
+            assert_eq!(
+                socket::sys_recvmsg(&mut t.vm, t.base, fd as u64, msg_addr, 0),
+                5
+            );
+            let mut actual = [0u8; 5];
+            unsafe {
+                tidemark_kernel::guest_mem::read_bytes(t.base, read_addr, &mut actual);
+            }
+            assert_eq!(&actual, b"world");
+            assert_eq!(
+                socket::sys_recvmsg(&mut t.vm, t.base, fd as u64, msg_addr, 0),
+                0
+            );
+        } else {
+            assert_eq!(socket::force_shutdown_for_fd(t.base, &t.vm, fd as u64), 0);
+        }
+        assert_eq!(t.sys_close(fd), 0);
+    }
+}
+
+#[test]
+fn socket_failed_external_peer_connect_releases_recv_buffer() {
+    let mut t = TestVm::new();
+    let sockaddr: [u8; 16] = [2, 0, 0x1f, 0x90, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
+    let addr = t.scratch + 0x500;
+    t.write_mem(addr, &sockaddr);
+
+    let mut fds = [0i64; MAX_SOCKETS];
+    for slot in fds.iter_mut() {
+        *slot = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
+        assert!(*slot >= 0);
+    }
+
+    let fd = fds[MAX_SOCKETS - 1];
+    t.vm.x[10] = fd as u64;
+    assert_eq!(
+        socket::sys_connect(&mut t.vm, t.base, fd as u64, addr, 16),
+        0
+    );
+    socket::resume_connect_result(&mut t.vm, t.base, 0);
+    assert_eq!(t.vm.x[10] as i64, ENOMEM);
+    assert_eq!(ring_buffer::net_buffer_state().1, 0);
+
+    for fd in fds {
+        assert_eq!(t.sys_close(fd), 0);
+    }
 }
 
 #[test]

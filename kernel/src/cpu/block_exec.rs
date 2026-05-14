@@ -10,6 +10,7 @@
 use super::block_cache::BlockEntry;
 use super::fault::{AccessOutcome, ensure_guest_access};
 use super::integer::{div_i64, divu_64, mulh, mulhsu, mulhu, rem_i64, remu_64};
+use crate::abi;
 use crate::guest_mem;
 use crate::types::ThreadState;
 
@@ -262,7 +263,9 @@ pub(super) unsafe fn exec_block(
                     3 => 8,
                     _ => 0,
                 };
-                match unsafe { ensure_guest_access(vm, x, f, fcsr, pc, base, addr, width) } {
+                match unsafe {
+                    ensure_guest_access(vm, x, f, fcsr, pc, base, addr, width, abi::PROT_READ)
+                } {
                     AccessOutcome::Ok => {}
                     AccessOutcome::Restart => return BlockOutcome::Restart,
                     AccessOutcome::Return => return BlockOutcome::Return,
@@ -290,7 +293,9 @@ pub(super) unsafe fn exec_block(
                     3 => 8,
                     _ => 0,
                 };
-                match unsafe { ensure_guest_access(vm, x, f, fcsr, pc, base, addr, width) } {
+                match unsafe {
+                    ensure_guest_access(vm, x, f, fcsr, pc, base, addr, width, abi::PROT_WRITE)
+                } {
                     AccessOutcome::Ok => {}
                     AccessOutcome::Restart => return BlockOutcome::Restart,
                     AccessOutcome::Return => return BlockOutcome::Return,

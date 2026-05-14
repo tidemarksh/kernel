@@ -217,6 +217,60 @@ pub fn sys_faccessat(
     result
 }
 
+/// utimensat: update file timestamps.
+///
+/// MemFS currently does not persist inode timestamps, but Linux-compatible
+/// file update workflows require this syscall to succeed for existing paths.
+pub fn sys_utimensat(
+    vm: &mut ThreadState,
+    base: u32,
+    dirfd: u64,
+    path_addr: u64,
+    times_addr: u64,
+    flags: u64,
+) -> i64 {
+    if flags & !(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH) != 0 {
+        return EINVAL;
+    }
+    if times_addr != 0 && !crate::syscall::memory::guest_range_accessible(base, times_addr, 32) {
+        return EFAULT;
+    }
+
+    let mut path_buf = [0u8; 512];
+    let len = if path_addr == 0 {
+        0
+    } else {
+        unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf) }
+    };
+    let raw_path = &path_buf[..len];
+    let result = if path_addr == 0 || raw_path.is_empty() {
+        if flags & AT_EMPTY_PATH == 0 {
+            ENOENT
+        } else if dirfd as i64 == AT_FDCWD as i64 {
+            0
+        } else {
+            match fd_table::get_ofd(base, vm, dirfd) {
+                Some(_) => 0,
+                None => EBADF,
+            }
+        }
+    } else {
+        match resolve_at(vm, dirfd, path_addr, base) {
+            Ok(_) => 0,
+            Err(errno) => errno,
+        }
+    };
+    crate::tracepoints::record_path_syscall(
+        vm as *const ThreadState as u32,
+        crate::abi::SYS_UTIMENSAT,
+        dirfd as i64,
+        raw_path,
+        result,
+        vm.status,
+    );
+    result
+}
+
 pub fn sys_fchmodat(
     vm: &mut ThreadState,
     base: u32,

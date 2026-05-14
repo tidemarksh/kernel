@@ -83,6 +83,16 @@ pub fn attach_net_buffer_state(base: u32, used: u64) {
     }
 }
 
+pub fn mark_buffer_used(idx: u32) {
+    if idx as usize >= MAX_NET_BUFFERS {
+        return;
+    }
+    unsafe {
+        let used = core::ptr::read(core::ptr::addr_of!(NET_BUF_USED));
+        core::ptr::write(core::ptr::addr_of_mut!(NET_BUF_USED), used | (1u64 << idx));
+    }
+}
+
 /// Byte address of buffer `idx` in linear memory.
 fn buf_addr(idx: u32) -> u32 {
     buf_base() + idx * NET_BUF_SIZE

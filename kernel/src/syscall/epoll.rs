@@ -487,6 +487,33 @@ pub(crate) fn poll_ofd(vm: &ThreadState, base: u32, ofd: &OpenFileDesc, interest
                 revents |= EPOLLERR;
             }
         }
+    } else if ofd.fd_type == FD_TYPE_PTY_SLAVE || ofd.fd_type == FD_TYPE_PTY_MASTER {
+        let access_mode = ofd.status_flags & fd_table::OPEN_ACCESS_MODE_MASK;
+        let can_read = access_mode != O_WRONLY;
+        let can_write = access_mode != O_RDONLY;
+        let read_pipe = if ofd.fd_type == FD_TYPE_PTY_SLAVE {
+            super::pty::input_pipe_slot(ofd.ino)
+        } else {
+            super::pty::output_pipe_slot(ofd.ino)
+        };
+        let write_pipe = if ofd.fd_type == FD_TYPE_PTY_SLAVE {
+            super::pty::output_pipe_slot(ofd.ino)
+        } else {
+            super::pty::input_pipe_slot(ofd.ino)
+        };
+
+        if can_read && interest & EPOLLIN != 0 && read_pipe != 0 {
+            if super::pipe::pipe_buffered_len(read_pipe) > 0 {
+                revents |= EPOLLIN;
+            } else if super::pipe::pipe_peek(read_pipe) == 0 {
+                revents |= EPOLLHUP;
+            }
+        }
+        if can_write && interest & EPOLLOUT != 0 && write_pipe != 0 {
+            if super::pipe::pipe_writable(write_pipe, interest & EPOLLET != 0) {
+                revents |= EPOLLOUT;
+            }
+        }
     } else if ofd.fd_type == FD_TYPE_FILE {
         // Files are always ready
         if interest & EPOLLIN != 0 {

@@ -1,5 +1,5 @@
 use super::atomic::exec_amo;
-use crate::abi::STATUS_FAULT;
+use crate::abi::{MAP_ANONYMOUS, MAP_PRIVATE, PROT_EXEC, PROT_READ, PROT_WRITE, STATUS_FAULT};
 use crate::harness::TestVm;
 use core::sync::atomic::Ordering;
 
@@ -12,7 +12,15 @@ use core::sync::atomic::Ordering;
 #[test]
 fn sigill_on_invalid_instruction() {
     let mut t = TestVm::new();
-    let code_addr: u64 = t.scratch;
+    let code_addr = t.sys_mmap(
+        0,
+        4096,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    ) as u64;
+    assert!(code_addr > 0);
 
     // Write an invalid 32-bit instruction: 0x00000000 has opcode bits [6:0] = 0b0000000.
     // The two low bits are not 0b11, so the interpreter first tries compressed decode.
@@ -104,7 +112,15 @@ fn lr_sc_reservation_is_invalidated_by_intervening_store() {
 #[test]
 fn c_addi16sp_does_not_clobber_tp() {
     let mut t = TestVm::new();
-    let code_addr = t.scratch;
+    let code_addr = t.sys_mmap(
+        0,
+        4096,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    ) as u64;
+    assert!(code_addr > 0);
 
     unsafe {
         crate::guest_mem::write_u16(t.base, code_addr, 0x7101);

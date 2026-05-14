@@ -21,6 +21,13 @@ const NSEC_PER_SEC: u64 = 1_000_000_000;
 const NSEC_PER_MSEC: u64 = 1_000_000;
 const PSELECT_READ_INTEREST: u32 = 0x001;
 const PSELECT_WRITE_INTEREST: u32 = 0x004;
+const PSELECT6_SIGMASK_PTR_OFF: u64 = 0;
+const PSELECT6_SIGMASK_LEN_OFF: u64 = 8;
+const KERNEL_SIGSET_SIZE: u64 = 8;
+
+pub(crate) fn poll_hup_sync_pending(vm: &ThreadState) -> bool {
+    vm.fault_addr == PPOLL_HUP_SYNC_RETRY_MARKER
+}
 
 fn timeout_is_zero(base: u32, timeout_addr: u64) -> bool {
     if timeout_addr == 0 {
@@ -101,11 +108,67 @@ fn validate_fd_set(base: u32, set_addr: u64, bytes: u64) -> bool {
         || crate::syscall::memory::guest_range_accessible(base, set_addr, bytes)
 }
 
+fn read_pselect6_sigmask(base: u32, sigmask_arg: u64) -> Result<Option<u64>, i64> {
+    if sigmask_arg == 0 {
+        return Ok(None);
+    }
+    if !crate::syscall::memory::guest_range_accessible(base, sigmask_arg, 16) {
+        return Err(EFAULT);
+    }
+    let sigmask_addr = unsafe { guest_mem::read_u64(base, sigmask_arg + PSELECT6_SIGMASK_PTR_OFF) };
+    let sigsetsize = unsafe { guest_mem::read_u64(base, sigmask_arg + PSELECT6_SIGMASK_LEN_OFF) };
+    if sigmask_addr == 0 {
+        return Ok(None);
+    }
+    if sigsetsize != KERNEL_SIGSET_SIZE {
+        return Err(EINVAL);
+    }
+    if !crate::syscall::memory::guest_range_accessible(base, sigmask_addr, KERNEL_SIGSET_SIZE) {
+        return Err(EFAULT);
+    }
+    let mask = unsafe { guest_mem::read_u64(base, sigmask_addr) };
+    Ok(Some(crate::syscall::signal::sanitized_signal_mask(mask)))
+}
+
+fn wait_syscall_nr(vm: &ThreadState) -> u64 {
+    match vm.blocked_syscall_nr {
+        SYS_PPOLL | SYS_PSELECT6 => vm.blocked_syscall_nr,
+        _ => vm.x[17],
+    }
+}
+
+fn wait_syscall_arg(vm: &ThreadState, index: usize) -> u64 {
+    match vm.blocked_syscall_nr {
+        SYS_PPOLL | SYS_PSELECT6 => vm.blocked_syscall_args[index],
+        _ => vm.x[10 + index],
+    }
+}
+
+fn install_pselect6_sigmask(vm: &mut ThreadState, mask: Option<u64>) {
+    let Some(mask) = mask else {
+        return;
+    };
+    if vm.pselect_sigmask_active == 0 {
+        vm.pselect_saved_sig_mask = vm.sig_mask;
+        vm.pselect_sigmask_active = 1;
+    }
+    vm.sig_mask = mask;
+}
+
+pub fn restore_pselect6_sigmask(vm: &mut ThreadState) {
+    if vm.pselect_sigmask_active == 0 {
+        return;
+    }
+    vm.sig_mask = vm.pselect_saved_sig_mask;
+    vm.pselect_saved_sig_mask = 0;
+    vm.pselect_sigmask_active = 0;
+}
+
 pub fn wait_set_has_socket(vm: &ThreadState, base: u32) -> bool {
-    match vm.x[17] {
+    match wait_syscall_nr(vm) {
         SYS_PPOLL => {
-            let fds_addr = vm.x[10];
-            let nfds = vm.x[11].min(MAX_POLL_FDS);
+            let fds_addr = wait_syscall_arg(vm, 0);
+            let nfds = wait_syscall_arg(vm, 1).min(MAX_POLL_FDS);
             for index in 0..nfds {
                 let Some(entry_addr) = pollfd_addr(fds_addr, index) else {
                     return false;
@@ -127,10 +190,10 @@ pub fn wait_set_has_socket(vm: &ThreadState, base: u32) -> bool {
             false
         }
         SYS_PSELECT6 => {
-            let nfds = vm.x[10].min(MAX_POLL_FDS);
-            let readfds = vm.x[11];
-            let writefds = vm.x[12];
-            let exceptfds = vm.x[13];
+            let nfds = wait_syscall_arg(vm, 0).min(MAX_POLL_FDS);
+            let readfds = wait_syscall_arg(vm, 1);
+            let writefds = wait_syscall_arg(vm, 2);
+            let exceptfds = wait_syscall_arg(vm, 3);
             for fd in 0..nfds {
                 if !fd_set_has(base, readfds, fd)
                     && !fd_set_has(base, writefds, fd)
@@ -150,10 +213,10 @@ pub fn wait_set_has_socket(vm: &ThreadState, base: u32) -> bool {
 }
 
 pub fn wait_set_ready_count(vm: &ThreadState, base: u32) -> i32 {
-    match vm.x[17] {
+    match wait_syscall_nr(vm) {
         SYS_PPOLL => {
-            let fds_addr = vm.x[10];
-            let nfds = vm.x[11].min(MAX_POLL_FDS);
+            let fds_addr = wait_syscall_arg(vm, 0);
+            let nfds = wait_syscall_arg(vm, 1).min(MAX_POLL_FDS);
             let mut ready = 0i32;
             for index in 0..nfds {
                 let Some(entry_addr) = pollfd_addr(fds_addr, index) else {
@@ -180,10 +243,10 @@ pub fn wait_set_ready_count(vm: &ThreadState, base: u32) -> i32 {
             ready
         }
         SYS_PSELECT6 => {
-            let nfds = vm.x[10].min(MAX_POLL_FDS);
-            let readfds = vm.x[11];
-            let writefds = vm.x[12];
-            let exceptfds = vm.x[13];
+            let nfds = wait_syscall_arg(vm, 0).min(MAX_POLL_FDS);
+            let readfds = wait_syscall_arg(vm, 1);
+            let writefds = wait_syscall_arg(vm, 2);
+            let exceptfds = wait_syscall_arg(vm, 3);
             let Some(set_bytes) = fd_set_bytes(nfds) else {
                 return EINVAL as i32;
             };
@@ -228,10 +291,10 @@ pub fn wait_set_ready_count(vm: &ThreadState, base: u32) -> i32 {
 }
 
 pub fn wait_set_first_socket_revents(vm: &ThreadState, base: u32) -> u32 {
-    match vm.x[17] {
+    match wait_syscall_nr(vm) {
         SYS_PPOLL => {
-            let fds_addr = vm.x[10];
-            let nfds = vm.x[11].min(MAX_POLL_FDS);
+            let fds_addr = wait_syscall_arg(vm, 0);
+            let nfds = wait_syscall_arg(vm, 1).min(MAX_POLL_FDS);
             for index in 0..nfds {
                 let Some(entry_addr) = pollfd_addr(fds_addr, index) else {
                     return 0;
@@ -258,10 +321,10 @@ pub fn wait_set_first_socket_revents(vm: &ThreadState, base: u32) -> u32 {
             0
         }
         SYS_PSELECT6 => {
-            let nfds = vm.x[10].min(MAX_POLL_FDS);
-            let readfds = vm.x[11];
-            let writefds = vm.x[12];
-            let exceptfds = vm.x[13];
+            let nfds = wait_syscall_arg(vm, 0).min(MAX_POLL_FDS);
+            let readfds = wait_syscall_arg(vm, 1);
+            let writefds = wait_syscall_arg(vm, 2);
+            let exceptfds = wait_syscall_arg(vm, 3);
             for fd in 0..nfds {
                 let wants_read = fd_set_has(base, readfds, fd);
                 let wants_write = fd_set_has(base, writefds, fd);
@@ -294,10 +357,10 @@ pub fn wait_set_first_socket_revents(vm: &ThreadState, base: u32) -> u32 {
 }
 
 pub fn wait_set_first_pipe_revents(vm: &ThreadState, base: u32) -> u32 {
-    match vm.x[17] {
+    match wait_syscall_nr(vm) {
         SYS_PPOLL => {
-            let fds_addr = vm.x[10];
-            let nfds = vm.x[11].min(MAX_POLL_FDS);
+            let fds_addr = wait_syscall_arg(vm, 0);
+            let nfds = wait_syscall_arg(vm, 1).min(MAX_POLL_FDS);
             for index in 0..nfds {
                 let Some(entry_addr) = pollfd_addr(fds_addr, index) else {
                     return 0;
@@ -324,10 +387,10 @@ pub fn wait_set_first_pipe_revents(vm: &ThreadState, base: u32) -> u32 {
             0
         }
         SYS_PSELECT6 => {
-            let nfds = vm.x[10].min(MAX_POLL_FDS);
-            let readfds = vm.x[11];
-            let writefds = vm.x[12];
-            let exceptfds = vm.x[13];
+            let nfds = wait_syscall_arg(vm, 0).min(MAX_POLL_FDS);
+            let readfds = wait_syscall_arg(vm, 1);
+            let writefds = wait_syscall_arg(vm, 2);
+            let exceptfds = wait_syscall_arg(vm, 3);
             for fd in 0..nfds {
                 let wants_read = fd_set_has(base, readfds, fd);
                 let wants_write = fd_set_has(base, writefds, fd);
@@ -354,6 +417,59 @@ pub fn wait_set_first_pipe_revents(vm: &ThreadState, base: u32) -> u32 {
                     | ((revents & 0xff) << 24);
             }
             0
+        }
+        _ => 0,
+    }
+}
+
+pub fn wait_set_pipe_slots_mask(vm: &ThreadState, base: u32) -> u64 {
+    match wait_syscall_nr(vm) {
+        SYS_PPOLL => {
+            let fds_addr = wait_syscall_arg(vm, 0);
+            let nfds = wait_syscall_arg(vm, 1).min(MAX_POLL_FDS);
+            let mut mask = 0u64;
+            for index in 0..nfds {
+                let Some(entry_addr) = pollfd_addr(fds_addr, index) else {
+                    return mask;
+                };
+                if !crate::syscall::memory::guest_range_accessible(base, entry_addr, POLLFD_SIZE) {
+                    return mask;
+                }
+                let fd = unsafe { guest_mem::read_i32(base, entry_addr + POLLFD_FD_OFF) };
+                let events = unsafe { guest_mem::read_u16(base, entry_addr + POLLFD_EVENTS_OFF) };
+                if fd < 0 || events == 0 {
+                    continue;
+                }
+                let Some(ofd) = fd_table::get_ofd(base, vm, fd as u64) else {
+                    continue;
+                };
+                if ofd.fd_type == FD_TYPE_PIPE && ofd.ino < 64 {
+                    mask |= 1u64 << ofd.ino;
+                }
+            }
+            mask
+        }
+        SYS_PSELECT6 => {
+            let nfds = wait_syscall_arg(vm, 0).min(MAX_POLL_FDS);
+            let readfds = wait_syscall_arg(vm, 1);
+            let writefds = wait_syscall_arg(vm, 2);
+            let exceptfds = wait_syscall_arg(vm, 3);
+            let mut mask = 0u64;
+            for fd in 0..nfds {
+                let wants_read = fd_set_has(base, readfds, fd);
+                let wants_write = fd_set_has(base, writefds, fd);
+                let wants_except = fd_set_has(base, exceptfds, fd);
+                if !wants_read && !wants_write && !wants_except {
+                    continue;
+                }
+                let Some(ofd) = fd_table::get_ofd(base, vm, fd) else {
+                    continue;
+                };
+                if ofd.fd_type == FD_TYPE_PIPE && ofd.ino < 64 {
+                    mask |= 1u64 << ofd.ino;
+                }
+            }
+            mask
         }
         _ => 0,
     }
@@ -436,6 +552,8 @@ pub fn sys_ppoll(
         return ready;
     }
 
+    vm.fault_addr = 0;
+    vm.fault_pc = 0;
     fd_table::clear_blocked_ofd_pin(vm);
     vm.epoll_timeout_ms = wait_timeout_ms;
     vm.status = STATUS_PIPE_WAIT;
@@ -444,8 +562,9 @@ pub fn sys_ppoll(
 
 /// pselect6: fd_set based readiness check.
 ///
-/// This shares the same readiness backend as ppoll. Signal-mask swapping is not
-/// implemented yet; signal delivery still occurs at normal syscall boundaries.
+/// This shares the same readiness backend as ppoll. The Linux pselect6 syscall
+/// receives its signal-mask pointer through a sixth-argument structure:
+/// https://man7.org/linux/man-pages/man2/pselect.2.html
 pub fn sys_pselect6(
     vm: &mut ThreadState,
     base: u32,
@@ -454,7 +573,7 @@ pub fn sys_pselect6(
     writefds: u64,
     exceptfds: u64,
     timeout_addr: u64,
-    _sigmask_arg: u64,
+    sigmask_arg: u64,
 ) -> i64 {
     let wait_timeout_ms = match timeout_ms(base, timeout_addr) {
         Ok(ms) => ms,
@@ -472,6 +591,11 @@ pub fn sys_pselect6(
     {
         return EFAULT;
     }
+    let sigmask = match read_pselect6_sigmask(base, sigmask_arg) {
+        Ok(mask) => mask,
+        Err(errno) => return errno,
+    };
+    install_pselect6_sigmask(vm, sigmask);
 
     let mut ready_read = [false; MAX_FDS];
     let mut ready_write = [false; MAX_FDS];
@@ -487,6 +611,7 @@ pub fn sys_pselect6(
             continue;
         }
         let Some(ofd) = fd_table::get_ofd(base, vm, fd) else {
+            restore_pselect6_sigmask(vm);
             return EBADF;
         };
         let mut interest = 0u32;
@@ -520,6 +645,17 @@ pub fn sys_pselect6(
     }
 
     if ready == 0 && !timeout_is_zero(base, timeout_addr) {
+        if crate::syscall::signal::pending_signal_interrupts_blocked_syscall(vm, base) {
+            fd_table::clear_blocked_ofd_pin(vm);
+            vm.epoll_timeout_ms = 0;
+            vm.x[10] = EINTR as u64;
+            vm.status = STATUS_OK;
+            crate::syscall::signal::check_pending(vm, base);
+            restore_pselect6_sigmask(vm);
+            return EINTR;
+        }
+        vm.fault_addr = 0;
+        vm.fault_pc = 0;
         fd_table::clear_blocked_ofd_pin(vm);
         vm.epoll_timeout_ms = wait_timeout_ms;
         vm.status = STATUS_PIPE_WAIT;
@@ -544,14 +680,15 @@ pub fn sys_pselect6(
     vm.epoll_timeout_ms = 0;
     fd_table::clear_blocked_ofd_pin(vm);
     vm.status = STATUS_OK;
+    restore_pselect6_sigmask(vm);
     ready
 }
 
 pub fn resume_poll_timeout(vm: &mut ThreadState, base: u32) {
-    match vm.x[17] {
+    match wait_syscall_nr(vm) {
         SYS_PPOLL => {
-            let fds_addr = vm.x[10];
-            let nfds = vm.x[11].min(MAX_POLL_FDS);
+            let fds_addr = wait_syscall_arg(vm, 0);
+            let nfds = wait_syscall_arg(vm, 1).min(MAX_POLL_FDS);
             for index in 0..nfds {
                 if let Some(entry_addr) = pollfd_addr(fds_addr, index) {
                     if crate::syscall::memory::guest_range_accessible(base, entry_addr, POLLFD_SIZE)
@@ -562,15 +699,16 @@ pub fn resume_poll_timeout(vm: &mut ThreadState, base: u32) {
             }
         }
         SYS_PSELECT6 => {
-            let nfds = vm.x[10].min(MAX_POLL_FDS);
-            let readfds = vm.x[11];
-            let writefds = vm.x[12];
-            let exceptfds = vm.x[13];
+            let nfds = wait_syscall_arg(vm, 0).min(MAX_POLL_FDS);
+            let readfds = wait_syscall_arg(vm, 1);
+            let writefds = wait_syscall_arg(vm, 2);
+            let exceptfds = wait_syscall_arg(vm, 3);
             for fd in 0..nfds {
                 fd_set_write_bit(base, readfds, fd, false);
                 fd_set_write_bit(base, writefds, fd, false);
                 fd_set_write_bit(base, exceptfds, fd, false);
             }
+            restore_pselect6_sigmask(vm);
         }
         _ => {}
     }

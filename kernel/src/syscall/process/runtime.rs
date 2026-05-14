@@ -88,6 +88,8 @@ pub(super) struct VforkSnapshot {
     pub(super) epoll_maxevents: u32,
     pub(super) blocked_fd: u32,
     pub(super) blocked_ofd_id: u32,
+    pub(super) blocked_syscall_nr: u64,
+    pub(super) blocked_syscall_args: [u64; 6],
     pub(super) child_pid: i32,
 }
 
@@ -193,6 +195,8 @@ macro_rules! for_each_vfork_snapshot_field {
         $callback!($target, $source, epoll_maxevents);
         $callback!($target, $source, blocked_fd);
         $callback!($target, $source, blocked_ofd_id);
+        $callback!($target, $source, blocked_syscall_nr);
+        $callback!($target, $source, blocked_syscall_args);
     };
 }
 
@@ -214,9 +218,9 @@ fn checked_process_runtime_state_ptr() -> *mut ProcessRuntimeState {
     if ptr.is_null() {
         return ptr;
     }
-    let mem_size = (core::arch::wasm32::memory_size(0) as usize) * 65536;
-    let ptr_usize = ptr as usize;
-    let size = core::mem::size_of::<ProcessRuntimeState>();
+    let mem_size = (core::arch::wasm32::memory_size(0) as u64).saturating_mul(65536);
+    let ptr_usize = ptr as usize as u64;
+    let size = core::mem::size_of::<ProcessRuntimeState>() as u64;
     let end = ptr_usize.saturating_add(size);
     if end > mem_size {
         #[cfg(any(test, feature = "harness"))]
@@ -293,6 +297,8 @@ pub(super) fn empty_vfork_snapshot() -> VforkSnapshot {
         epoll_maxevents: 0,
         blocked_fd: 0,
         blocked_ofd_id: 0,
+        blocked_syscall_nr: 0,
+        blocked_syscall_args: [0; 6],
         child_pid: 0,
     }
 }

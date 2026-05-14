@@ -621,7 +621,8 @@ pub(crate) fn record_syscall(
                 | crate::abi::SYS_CLOSE_RANGE
                 | crate::abi::SYS_DUP
                 | crate::abi::SYS_DUP3
-                | crate::abi::SYS_FCNTL => {
+                | crate::abi::SYS_FCNTL
+                | crate::abi::SYS_IOCTL => {
                     SYNC_EFFECT_PIPE_STATE
                         | SYNC_EFFECT_SOCKET_STATE
                         | SYNC_EFFECT_EPOLL_STATE
@@ -730,9 +731,12 @@ pub(crate) fn record_fd_syscall(
     let should_record = matches!(
         nr,
         crate::abi::SYS_READ
+            | crate::abi::SYS_PREAD64
             | crate::abi::SYS_READV
             | crate::abi::SYS_WRITE
+            | crate::abi::SYS_PWRITE64
             | crate::abi::SYS_WRITEV
+            | crate::abi::SYS_PWRITEV
             | crate::abi::SYS_LSEEK
             | crate::abi::SYS_EPOLL_CREATE1
             | crate::abi::SYS_EPOLL_CTL
@@ -743,6 +747,7 @@ pub(crate) fn record_fd_syscall(
             | crate::abi::SYS_DUP3
             | crate::abi::SYS_PIPE2
             | crate::abi::SYS_FCNTL
+            | crate::abi::SYS_IOCTL
             | crate::abi::SYS_SOCKET
             | crate::abi::SYS_SOCKETPAIR
             | crate::abi::SYS_BIND

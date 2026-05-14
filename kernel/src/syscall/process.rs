@@ -46,6 +46,7 @@ pub use runtime::{
     shared_heap_alloc, shared_heap_base, shared_heap_ptr, vfork_active, vfork_child_pid,
 };
 pub use vfork::{
-    clear_vfork_runtime_state, sys_vfork, vfork_parent_restore_without_cleanup, vfork_parent_resume,
+    clear_vfork_runtime_state, sys_vfork, vfork_parent_restore_without_cleanup,
+    vfork_parent_resume, vfork_restore_parent_proc_self_exe_snapshot,
 };
 pub use wait::{resume_wait4, sys_wait4, sys_waitid};

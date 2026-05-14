@@ -53,6 +53,11 @@ pub struct ThreadState {
     pub sig_mask: u64,
     /// Pending signals (delivered at syscall return boundary)
     pub sig_pending: u64,
+    /// Original signal mask saved while pselect6 waits with a temporary mask.
+    pub pselect_saved_sig_mask: u64,
+    /// Non-zero while pselect6's temporary signal mask is installed.
+    pub pselect_sigmask_active: u32,
+    _pad_signal: u32,
     /// `siginfo.si_code` for the next delivered pending signal.
     pub sig_info_code: i32,
     /// Alternate signal stack base
@@ -143,9 +148,27 @@ pub struct ThreadState {
     pub blocked_fd: u32,
     /// Retained OFD id captured for a blocked syscall resume. 0 = inactive.
     pub blocked_ofd_id: u32,
+    /// Syscall number captured at a blocked syscall boundary.
+    pub blocked_syscall_nr: u64,
+    /// a0-a5 captured at a blocked syscall boundary for exact retry.
+    pub blocked_syscall_args: [u64; 6],
+    /// Runtime-owned sync effects completed by local syscalls since last poll.
+    pub completed_sync_effects: u32,
+    /// Pipe slots changed by local syscalls since last poll.
+    pub completed_pipe_sync_slots: u64,
+    /// Pipe slots whose read head changed by local syscalls since last poll.
+    pub completed_pipe_sync_read_slots: u64,
+    /// Pipe slots whose write tail/data changed by local syscalls since last poll.
+    pub completed_pipe_sync_write_slots: u64,
+    /// Pipe slots freshly allocated by pipe2 since last poll.
+    pub completed_pipe_fresh_slots: u64,
+    /// Guest buffer pointer written by the latest completed pipe read.
+    pub completed_pipe_read_guest_ptr: u64,
+    /// Number of bytes written by the latest completed pipe read.
+    pub completed_pipe_read_len: u32,
+    _pad_completed_pipe_read: u32,
     /// Thread-local decoded block cache pointer. 0 = inactive/unallocated.
     pub block_cache_ptr: u32,
-    _pad2: u32,
 }
 
 // =============================================================================

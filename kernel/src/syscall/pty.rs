@@ -26,6 +26,7 @@ const TIOCSPGRP: u64 = 0x5410;
 const TIOCGWINSZ: u64 = 0x5413;
 const TIOCSWINSZ: u64 = 0x5414;
 const FIONREAD: u64 = 0x541B;
+const FIONBIO: u64 = 0x5421;
 const TIOCNOTTY: u64 = 0x5422;
 const TIOCGPTN: u64 = 0x80045430;
 const TIOCSPTLCK: u64 = 0x40045431;
@@ -313,6 +314,23 @@ pub fn release_host_attachment(vm: &ThreadState, base: u32) {
     }
     ps.tty_pty_slot = 0;
     maybe_free_pty(pty_idx);
+}
+
+pub fn refresh_controlling_tty_foreground(vm: &ThreadState, base: u32) {
+    let Some(ps) = process_state(base, vm) else {
+        return;
+    };
+    let pty_idx = ps.tty_pty_slot;
+    if pty_idx == 0 || pty_idx as usize >= MAX_PTYS {
+        return;
+    }
+    let slot = &mut pty_table()[pty_idx as usize];
+    if slot.used == 0 {
+        return;
+    }
+    let (sid, pgid) = current_sid_and_pgrp(vm, base);
+    slot.session_sid = sid;
+    slot.fg_pgrp = pgid;
 }
 
 pub fn retain_slave(pty_idx: u32) {
@@ -808,6 +826,15 @@ pub fn sys_ioctl(vm: &mut ThreadState, base: u32, fd: u64, request: u64, arg: u6
     let Some(ofd) = fd_table::get_ofd(base, vm, fd) else {
         return EBADF;
     };
+    if request == FIONBIO {
+        if !crate::syscall::memory::guest_range_accessible(base, arg, 4) {
+            return EFAULT;
+        }
+        // Linux defines FIONBIO as a generic ioctl for toggling O_NONBLOCK;
+        // see https://codebrowser.dev/linux/linux/include/uapi/asm-generic/ioctls.h.html
+        let enabled = unsafe { guest_mem::read_u32(base, arg) != 0 };
+        return fd_table::set_fd_nonblock(base, vm, fd, enabled);
+    }
     match ofd.fd_type {
         FD_TYPE_PTY_SLAVE => ioctl_pty_slave(vm, base, ofd.ino, request, arg),
         FD_TYPE_PTY_MASTER => ioctl_pty_master(base, ofd.ino, request, arg),

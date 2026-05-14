@@ -161,7 +161,7 @@ pub fn read_completion(ring_base: u32) -> i64 {
     }
 }
 
-pub fn read_completion_for_vm(ring_base: u32, vm_ptr: u32) -> i64 {
+pub fn read_completion_for_vm(ring_base: u32, vm_ptr: u32) -> Option<i64> {
     unsafe {
         use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -171,7 +171,7 @@ pub fn read_completion_for_vm(ring_base: u32, vm_ptr: u32) -> i64 {
         let head = (*head_ptr).load(Ordering::Relaxed);
         let tail = (*tail_ptr).load(Ordering::Acquire);
         if head == tail {
-            return EAGAIN;
+            return None;
         }
 
         let mut found = None;
@@ -186,7 +186,7 @@ pub fn read_completion_for_vm(ring_base: u32, vm_ptr: u32) -> i64 {
         }
 
         let Some(found_pos) = found else {
-            return EAGAIN;
+            return None;
         };
 
         let found_idx = (found_pos as usize) % CQ_SIZE;
@@ -202,7 +202,7 @@ pub fn read_completion_for_vm(ring_base: u32, vm_ptr: u32) -> i64 {
         }
 
         (*head_ptr).store(head.wrapping_sub(1), Ordering::Release);
-        result
+        Some(result)
     }
 }
 
@@ -278,6 +278,10 @@ pub fn peek_request_info_for_vm(ring_base: u32, vm_ptr: u32) -> Option<FsRequest
 
         None
     }
+}
+
+pub fn has_pending_request_for_vm(ring_base: u32, vm_ptr: u32) -> bool {
+    peek_request_info_for_vm(ring_base, vm_ptr).is_some()
 }
 
 /// Process pending FS requests from the submission queue.

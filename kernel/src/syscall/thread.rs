@@ -854,6 +854,15 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
         child.guest_base = parent.guest_base;
         child.guest_ram_limit = parent.guest_ram_limit;
         child.process_ptr = parent.process_ptr;
+        child.completed_sync_effects = 0;
+        child.blocked_syscall_nr = 0;
+        child.blocked_syscall_args = [0; 6];
+        child.completed_pipe_sync_slots = 0;
+        child.completed_pipe_sync_read_slots = 0;
+        child.completed_pipe_sync_write_slots = 0;
+        child.completed_pipe_fresh_slots = 0;
+        child.completed_pipe_read_guest_ptr = 0;
+        child.completed_pipe_read_len = 0;
         child.block_cache_ptr = 0;
         child.status = STATUS_OK;
         child.exit_code = 0;

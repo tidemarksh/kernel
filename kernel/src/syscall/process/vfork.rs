@@ -226,6 +226,16 @@ pub fn vfork_parent_restore_without_cleanup(vm: &mut ThreadState, child_pid: i32
     vfork_parent_resume_inner(vm, child_pid, false);
 }
 
+pub fn vfork_restore_parent_proc_self_exe_snapshot() {
+    if prs().vfork_active == 0 {
+        return;
+    }
+    let proc_self_exe = super::runtime::vfork_proc_self_exe_snapshot();
+    super::execve::restore_proc_self_exe_target(
+        (!proc_self_exe.is_empty()).then_some(proc_self_exe),
+    );
+}
+
 pub fn clear_vfork_runtime_state() {
     clear_vfork_runtime_snapshot();
 }

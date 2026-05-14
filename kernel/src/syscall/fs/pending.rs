@@ -30,17 +30,11 @@ fn submit_fs_request(
         return ENOMEM;
     }
 
+    let vm_ptr = vm as *mut ThreadState as u32;
+    while ring_buffer::read_completion_for_vm(ring_base, vm_ptr).is_some() {}
+
     let idx = ring_buffer::submit_request(
-        ring_base,
-        opcode,
-        fd,
-        offset,
-        len,
-        buf_ptr,
-        path_ptr,
-        flags,
-        mode,
-        vm as *mut ThreadState as u32,
+        ring_base, opcode, fd, offset, len, buf_ptr, path_ptr, flags, mode, vm_ptr,
     );
     if idx < 0 {
         return EAGAIN;
@@ -360,7 +354,14 @@ pub fn resume_from_fs(vm_ptr: u32, base: u32) -> i64 {
             return ENOMEM;
         }
 
-        let result = ring_buffer::read_completion_for_vm(ring_base, vm_ptr);
+        let Some(result) = ring_buffer::read_completion_for_vm(ring_base, vm_ptr) else {
+            if !ring_buffer::has_pending_request_for_vm(ring_base, vm_ptr) {
+                vm.status = STATUS_OK;
+                return vm.x[10] as i64;
+            }
+            vm.status = STATUS_FS;
+            return EAGAIN;
+        };
         vm.x[10] = result as u64;
         vm.status = STATUS_OK;
         result
@@ -395,11 +396,17 @@ pub fn dispatch_openat(
 
 #[cfg(test)]
 mod tests {
-    use super::{dispatch_lseek, dispatch_openat, dispatch_write};
-    use crate::abi::{
-        AF_UNIX, O_CREAT, O_RDONLY, O_WRONLY, SOCK_STREAM, STATUS_FS, STATUS_OK, SYS_WRITE,
+    use super::{
+        dispatch_lseek, dispatch_openat, dispatch_write, process_fs_ring_base,
+        process_pending_requests, resume_from_fs,
     };
+    use crate::abi::{
+        AF_UNIX, EAGAIN, ENOENT, O_CREAT, O_RDONLY, O_WRONLY, SOCK_STREAM, STATUS_FS, STATUS_OK,
+        SYS_WRITE,
+    };
+    use crate::fs::ring_buffer;
     use crate::harness::TestVm;
+    use crate::syscall::fd_table;
     use crate::syscall::socket::sys_socketpair;
 
     #[test]
@@ -441,6 +448,176 @@ mod tests {
 
         assert_eq!(result, 0);
         assert_eq!(vm.vm.status, STATUS_FS);
+    }
+
+    #[test]
+    fn resume_from_fs_openat_result_is_usable_fd() {
+        let mut vm = TestVm::new();
+        let path_addr = vm.write_path(0x400, b"/created.txt");
+
+        let result = dispatch_openat(
+            &mut vm.vm,
+            vm.base,
+            (-100i64) as u64,
+            path_addr,
+            (O_RDONLY | O_CREAT) as u64,
+            0o644,
+        );
+
+        assert_eq!(result, 0);
+        assert_eq!(vm.vm.status, STATUS_FS);
+
+        process_pending_requests(&mut vm.vm as *mut _ as u32, vm.base);
+        let fd = resume_from_fs(&mut vm.vm as *mut _ as u32, vm.base);
+
+        assert!(fd >= 3);
+        assert_eq!(vm.vm.status, STATUS_OK);
+        assert_eq!(fd_table::sys_fcntl(&mut vm.vm, vm.base, fd as u64, 2, 1), 0,);
+    }
+
+    #[test]
+    fn submit_fs_request_drops_stale_completion_before_queueing_next_request() {
+        use core::sync::atomic::{AtomicU32, Ordering};
+
+        let mut vm = TestVm::new();
+        let vm_ptr = &mut vm.vm as *mut _ as u32;
+        let ring_base = process_fs_ring_base(vm.base, &vm.vm);
+        assert_ne!(ring_base, 0);
+
+        let cq_off = ring_base + ring_buffer::OFF_CQ_BASE;
+        unsafe {
+            *((cq_off as *mut u8) as *mut i64) = ENOENT;
+            *((cq_off as *mut u8).add(8) as *mut u32) = vm_ptr;
+            let cq_head = (ring_base + ring_buffer::OFF_COMPLETE_HEAD) as *const AtomicU32;
+            (*cq_head).store(1, Ordering::Release);
+        }
+
+        let path_addr = vm.write_path(0x400, b"/created-after-stale.txt");
+        let result = dispatch_openat(
+            &mut vm.vm,
+            vm.base,
+            (-100i64) as u64,
+            path_addr,
+            (O_RDONLY | O_CREAT) as u64,
+            0o644,
+        );
+
+        assert_eq!(result, 0);
+        assert_eq!(vm.vm.status, STATUS_FS);
+
+        process_pending_requests(vm_ptr, vm.base);
+        let fd = resume_from_fs(vm_ptr, vm.base);
+
+        assert!(fd >= 3);
+        assert_eq!(vm.vm.status, STATUS_OK);
+    }
+
+    #[test]
+    fn resume_from_fs_with_pending_request_without_completion_keeps_thread_blocked() {
+        let mut vm = TestVm::new();
+        let path_addr = vm.write_path(0x400, b"/created.txt");
+        let result = dispatch_openat(
+            &mut vm.vm,
+            vm.base,
+            (-100i64) as u64,
+            path_addr,
+            (O_RDONLY | O_CREAT) as u64,
+            0o644,
+        );
+
+        assert_eq!(result, 0);
+        vm.vm.x[10] = 0xfeed;
+        vm.vm.status = STATUS_FS;
+
+        let result = resume_from_fs(&mut vm.vm as *mut _ as u32, vm.base);
+
+        assert_eq!(result, EAGAIN);
+        assert_eq!(vm.vm.status, STATUS_FS);
+        assert_eq!(vm.vm.x[10], 0xfeed);
+    }
+
+    #[test]
+    fn resume_from_fs_without_request_or_completion_clears_stale_status() {
+        let mut vm = TestVm::new();
+        vm.vm.x[10] = 0xfeed;
+        vm.vm.status = STATUS_FS;
+
+        let result = resume_from_fs(&mut vm.vm as *mut _ as u32, vm.base);
+
+        assert_eq!(result, 0xfeed);
+        assert_eq!(vm.vm.status, STATUS_OK);
+        assert_eq!(vm.vm.x[10], 0xfeed);
+    }
+
+    #[test]
+    fn resume_from_fs_preserves_eagain_completion_as_syscall_result() {
+        use core::sync::atomic::{AtomicU32, Ordering};
+
+        let mut vm = TestVm::new();
+        let vm_ptr = &mut vm.vm as *mut _ as u32;
+        vm.vm.status = STATUS_FS;
+
+        let ring_base = process_fs_ring_base(vm.base, &vm.vm);
+        assert_ne!(ring_base, 0);
+        let cq_off = ring_base
+            + ring_buffer::HEADER_SIZE as u32
+            + (ring_buffer::SQ_SIZE * ring_buffer::REQ_SIZE) as u32;
+        unsafe {
+            *((cq_off as *mut u8) as *mut i64) = EAGAIN;
+            *((cq_off as *mut u8).add(8) as *mut u32) = vm_ptr;
+            let cq_head = (ring_base + 8) as *const AtomicU32;
+            (*cq_head).store(1, Ordering::Release);
+        }
+
+        let result = resume_from_fs(vm_ptr, vm.base);
+
+        assert_eq!(result, EAGAIN);
+        assert_eq!(vm.vm.status, STATUS_OK);
+        assert_eq!(vm.vm.x[10] as i64, EAGAIN);
+    }
+
+    #[test]
+    fn resume_from_fs_preserves_extra_completions_for_same_vm() {
+        use core::sync::atomic::{AtomicU32, Ordering};
+
+        let mut vm = TestVm::new();
+        let vm_ptr = &mut vm.vm as *mut _ as u32;
+        vm.vm.status = STATUS_FS;
+
+        let ring_base = process_fs_ring_base(vm.base, &vm.vm);
+        assert_ne!(ring_base, 0);
+        let cq_off = ring_base + ring_buffer::OFF_CQ_BASE;
+        unsafe {
+            *((cq_off as *mut u8) as *mut i64) = 7;
+            *((cq_off as *mut u8).add(8) as *mut u32) = vm_ptr;
+            *((cq_off as *mut u8).add(ring_buffer::RESP_SIZE) as *mut i64) = 0;
+            *((cq_off as *mut u8).add(ring_buffer::RESP_SIZE + 8) as *mut u32) = vm_ptr;
+            let cq_head = (ring_base + ring_buffer::OFF_COMPLETE_HEAD) as *const AtomicU32;
+            (*cq_head).store(2, Ordering::Release);
+        }
+
+        let result = resume_from_fs(vm_ptr, vm.base);
+
+        assert_eq!(result, 7);
+        assert_eq!(vm.vm.x[10], 7);
+        unsafe {
+            let cq_head = (ring_base + ring_buffer::OFF_COMPLETE_HEAD) as *const AtomicU32;
+            let cq_tail = (ring_base + ring_buffer::OFF_COMPLETE_TAIL) as *const AtomicU32;
+            assert_eq!((*cq_head).load(Ordering::Acquire), 1);
+            assert_eq!((*cq_tail).load(Ordering::Acquire), 0);
+        }
+
+        vm.vm.status = STATUS_FS;
+        let second = resume_from_fs(vm_ptr, vm.base);
+
+        assert_eq!(second, 0);
+        assert_eq!(vm.vm.x[10], 0);
+        unsafe {
+            let cq_head = (ring_base + ring_buffer::OFF_COMPLETE_HEAD) as *const AtomicU32;
+            let cq_tail = (ring_base + ring_buffer::OFF_COMPLETE_TAIL) as *const AtomicU32;
+            assert_eq!((*cq_head).load(Ordering::Acquire), 0);
+            assert_eq!((*cq_tail).load(Ordering::Acquire), 0);
+        }
     }
 
     #[test]
@@ -595,6 +772,7 @@ pub fn dispatch_fstat(vm: &mut ThreadState, base: u32, fd: u64, stat_buf: u64) -
                 | FD_TYPE_EPOLL
                 | FD_TYPE_PTY_MASTER
                 | FD_TYPE_PTY_SLAVE
+                | FD_TYPE_FILE
         )
     {
         return sys_fstat(vm, base, fd, stat_buf);

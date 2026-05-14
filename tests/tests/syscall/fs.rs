@@ -1,4 +1,5 @@
 use std::string::String;
+use std::sync::atomic::Ordering;
 use std::vec::Vec;
 use tidemark_kernel::abi::*;
 use tidemark_kernel::fs::{fd_table, memfs};
@@ -12,6 +13,8 @@ const AT_EMPTY_PATH: u64 = 0x1000;
 const S_IFIFO: u32 = 0o010000;
 const TCGETS: u64 = 0x5401;
 const TIOCGWINSZ: u64 = 0x5413;
+const SYNC_EFFECT_PIPE_STATE: u32 = 1 << 0;
+const SYNC_EFFECT_FORK_SHARED_OFD_STATE: u32 = 1 << 6;
 
 #[test]
 fn fs_syscalls() {
@@ -50,6 +53,74 @@ fn fs_syscalls() {
 }
 
 #[test]
+fn regular_file_write_advances_offset_across_large_chunks() {
+    let mut t = TestVm::new();
+    let fd = t.sys_openat(b"/large-partial", O_CREAT | O_RDWR);
+    assert!(fd >= 3);
+
+    let buf_addr = t.scratch + 0x20_000;
+    let chunk = vec![b'x'; 65_536];
+    t.write_mem(buf_addr, &chunk);
+
+    assert_eq!(
+        fs::sys_write(&mut t.vm, t.base, fd as u64, buf_addr, 64_836, SYS_WRITE),
+        64_836,
+    );
+    assert_eq!(
+        fs::sys_write(&mut t.vm, t.base, fd as u64, buf_addr, 65_536, SYS_WRITE),
+        65_536,
+    );
+    assert_eq!(t.sys_lseek(fd, 0, 1), 130_372);
+
+    assert_eq!(
+        fs::sys_write(&mut t.vm, t.base, fd as u64, buf_addr, 10_045, SYS_WRITE),
+        10_045,
+    );
+    assert_eq!(t.sys_lseek(fd, 0, 1), 140_417);
+}
+
+#[test]
+fn dispatch_openat_marks_fork_shared_ofd_sync_effect_without_harness_trace() {
+    let mut t = TestVm::new();
+    t.memfs.create_file(b"shared-open.txt", b"contents");
+    let path_addr = t.write_path(0x5800, b"/shared-open.txt");
+
+    t.vm.x[10] = AT_FDCWD;
+    t.vm.x[11] = path_addr;
+    t.vm.x[12] = O_RDONLY as u64;
+    t.vm.x[13] = 0;
+    t.vm.x[17] = SYS_OPENAT;
+
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        STATUS_OK
+    );
+    assert!(t.vm.x[10] as i64 >= 3);
+    assert_ne!(
+        t.vm.completed_sync_effects & SYNC_EFFECT_FORK_SHARED_OFD_STATE,
+        0
+    );
+}
+
+#[test]
+fn mount_dispatch_reports_permission_denied_instead_of_enosys() {
+    let mut t = TestVm::new();
+
+    t.vm.x[10] = 0;
+    t.vm.x[11] = 0;
+    t.vm.x[12] = 0;
+    t.vm.x[13] = 0;
+    t.vm.x[14] = 0;
+    t.vm.x[17] = SYS_MOUNT;
+
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        STATUS_OK
+    );
+    assert_eq!(t.vm.x[10] as i64, EPERM);
+}
+
+#[test]
 fn umask_updates_process_mask_and_filters_create_modes() {
     let mut t = TestVm::new();
 
@@ -84,7 +155,7 @@ fn umask_updates_process_mask_and_filters_create_modes() {
 }
 
 #[test]
-fn status_fs_round_trip_for_open_write_and_lseek() {
+fn status_fs_round_trip_for_open_then_local_write_and_lseek() {
     let mut t = TestVm::new();
     let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
 
@@ -106,21 +177,12 @@ fn status_fs_round_trip_for_open_write_and_lseek() {
     let buf_addr = t.scratch + 0x6100;
     t.write_mem(buf_addr, b"async fs");
     let ret = fs::dispatch_write(&mut t.vm, t.base, fd as u64, buf_addr, 8, SYS_WRITE);
-    assert_eq!(ret, 0);
-    assert_eq!(t.vm.status, STATUS_FS);
-    let expected_ino = fd_table::get_ofd(t.base, &t.vm, fd as u64)
-        .map(|ofd| ofd.ino)
-        .unwrap_or(0);
-    assert!(expected_ino > 0);
-    assert_eq!(fs::pending_request_target_ino(vm_ptr, t.base), expected_ino);
-    fs::process_pending_requests(vm_ptr, t.base);
-    assert_eq!(fs::resume_from_fs(vm_ptr, t.base), 8);
+    assert_eq!(ret, 8);
+    assert_eq!(t.vm.status, STATUS_OK);
 
     let ret = fs::dispatch_lseek(&mut t.vm, t.base, fd as u64, 0, 0);
     assert_eq!(ret, 0);
-    assert_eq!(t.vm.status, STATUS_FS);
-    fs::process_pending_requests(vm_ptr, t.base);
-    assert_eq!(fs::resume_from_fs(vm_ptr, t.base), 0);
+    assert_eq!(t.vm.status, STATUS_OK);
 
     let mut out = [0u8; 8];
     assert_eq!(fs::sys_read(&mut t.vm, t.base, fd as u64, buf_addr, 8), 8);
@@ -166,6 +228,23 @@ fn pread64_spans_multiple_chunks_from_nonzero_offset() {
     assert_eq!(
         &t.guest_mem(buf_addr, len),
         &data[offset as usize..offset as usize + len]
+    );
+}
+
+#[test]
+fn read_and_pread64_on_directory_return_eisdir() {
+    let mut t = TestVm::new();
+    assert_eq!(t.sys_mkdirat(b"/read-dir"), 0);
+    let fd = t.sys_openat(b"/read-dir", O_RDONLY | O_DIRECTORY);
+    assert!(fd >= 3);
+
+    let mut buf = [0u8; 8];
+    assert_eq!(t.sys_read(fd, &mut buf), EISDIR);
+
+    let buf_addr = t.scratch + 0x7100;
+    assert_eq!(
+        fs::sys_pread64(&mut t.vm, t.base, fd as u64, buf_addr, 8, 0),
+        EISDIR
     );
 }
 
@@ -525,6 +604,29 @@ fn renameat2_moves_file_between_paths() {
     let mut buf = [0u8; 16];
     assert_eq!(memfs::read_file(moved_ino, 0, &mut buf), 7);
     assert_eq!(&buf[..7], b"renamed");
+}
+
+#[test]
+fn renameat_moves_file_between_paths() {
+    let mut t = TestVm::new();
+    let fd = t.sys_openat(b"/old-renameat.txt", O_CREAT | O_RDWR);
+    assert!(fd >= 3);
+    assert_eq!(t.sys_write_data(fd, b"renameat"), 8);
+    t.sys_close(fd);
+
+    let old_addr = t.write_path(0xF000, b"/old-renameat.txt");
+    let new_addr = t.write_path(0xF100, b"/new-renameat.txt");
+    assert_eq!(
+        fs::sys_renameat(&mut t.vm, t.base, AT_FDCWD, old_addr, AT_FDCWD, new_addr),
+        0
+    );
+
+    assert_eq!(memfs::resolve_path(b"/old-renameat.txt"), 0);
+    let moved_ino = memfs::resolve_path(b"/new-renameat.txt");
+    assert!(moved_ino > 0);
+    let mut buf = [0u8; 16];
+    assert_eq!(memfs::read_file(moved_ino, 0, &mut buf), 8);
+    assert_eq!(&buf[..8], b"renameat");
 }
 
 #[test]
@@ -924,6 +1026,44 @@ fn stdio_pty_slave_writev_reaches_master_output() {
 }
 
 #[test]
+fn pipe_writev_marks_pipe_sync_effect() {
+    let mut t = TestVm::new();
+    let pipefd_addr = t.scratch + 0x7300;
+    let buf_a = t.scratch + 0x7400;
+    let buf_b = t.scratch + 0x7500;
+    let iov_addr = t.scratch + 0x7600;
+
+    assert_eq!(
+        tidemark_kernel::syscall::pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0),
+        0
+    );
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) } as i64;
+    let write_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr + 4) } as i64;
+
+    t.write_mem(buf_a, b"pipe-");
+    t.write_mem(buf_b, b"sync");
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, iov_addr, buf_a);
+        tidemark_kernel::guest_mem::write_u64(t.base, iov_addr + 8, 5);
+        tidemark_kernel::guest_mem::write_u64(t.base, iov_addr + 16, buf_b);
+        tidemark_kernel::guest_mem::write_u64(t.base, iov_addr + 24, 4);
+    }
+
+    let written = fs::sys_write(&mut t.vm, t.base, write_fd as u64, iov_addr, 2, SYS_WRITEV);
+    assert_eq!(written, 9);
+    assert_ne!(t.vm.completed_sync_effects & SYNC_EFFECT_PIPE_STATE, 0);
+    let pipe_slot = fd_table::get_ofd(t.base, &t.vm, write_fd as u64)
+        .map(|ofd| ofd.ino)
+        .unwrap_or(0);
+    assert!(pipe_slot > 0 && pipe_slot < 64);
+    assert_ne!(t.vm.completed_pipe_sync_slots & (1u64 << pipe_slot), 0);
+
+    let mut out = [0u8; 16];
+    assert_eq!(t.sys_read(read_fd, &mut out), 9);
+    assert_eq!(&out[..9], b"pipe-sync");
+}
+
+#[test]
 fn readv_reads_regular_file_into_multiple_iovecs() {
     let mut t = TestVm::new();
     let fd = t.sys_openat(b"/readv.txt", O_CREAT | O_RDWR);
@@ -1079,22 +1219,33 @@ fn stdio_pty_blocked_read_resume_first_thread_step_preserves_s11() {
         .unwrap_or(0);
     assert!(pty_idx > 0);
 
-    let code_addr = 0x10000u64;
     let mapped = t.sys_mmap(
-        code_addr,
+        0,
         0x1000,
-        PROT_READ | PROT_EXEC,
-        MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
+        MAP_PRIVATE | MAP_ANONYMOUS,
         -1,
         0,
     );
-    assert_eq!(mapped, code_addr as i64);
+    assert!(mapped > 0);
+    let code_addr = mapped as u64;
+    assert!(
+        tidemark_kernel::syscall::memory::guest_range_permitted(
+            &t.vm, t.base, code_addr, 2, PROT_EXEC,
+        ),
+        "mapped code is not executable at {:#x}",
+        code_addr
+    );
 
     unsafe {
         // ecall
         tidemark_kernel::guest_mem::write_u32(t.base, code_addr, 0x0000_0073);
         // addi s11, s11, 0
         tidemark_kernel::guest_mem::write_u32(t.base, code_addr + 4, 0x000d_8d93);
+        assert_eq!(
+            tidemark_kernel::guest_mem::read_u32(t.base, code_addr),
+            0x0000_0073
+        );
     }
 
     let buf_addr = t.scratch + 0x3c00;
@@ -1107,10 +1258,18 @@ fn stdio_pty_blocked_read_resume_first_thread_step_preserves_s11() {
     t.vm.x[17] = SYS_READ;
     t.vm.x[27] = 0x7788_9900;
 
+    let ps = unsafe {
+        &*((t.base as u64 + t.vm.process_ptr as u64) as *const tidemark_kernel::types::ProcessState)
+    };
+    ps.thread_count.store(2, Ordering::Release);
     let vm_ptr = &mut t.vm as *mut _ as u32;
     let remaining = tidemark_kernel::abi::thread_step(vm_ptr, 1);
     assert_eq!(remaining, 0);
-    assert_eq!(t.vm.status, STATUS_PIPE_WAIT);
+    assert_eq!(
+        t.vm.status, STATUS_PIPE_WAIT,
+        "status={} pc={:#x} fault_pc={:#x} fault_addr={:#x} sig_pending={:#x}",
+        t.vm.status, t.vm.pc, t.vm.fault_pc, t.vm.fault_addr, t.vm.sig_pending
+    );
 
     assert_eq!(
         tidemark_kernel::syscall::pty::master_write(pty_idx, b"ls\r"),

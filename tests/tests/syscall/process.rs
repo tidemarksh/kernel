@@ -1,3 +1,4 @@
+use std::sync::atomic::Ordering;
 use std::vec;
 use std::vec::Vec;
 use tidemark_kernel::abi::*;
@@ -935,6 +936,52 @@ fn contract_prepare_fork_child_sets_child_return_value_and_main_thread_state() {
 }
 
 #[test]
+fn contract_prepare_fork_child_resets_runtime_reservation_state() {
+    let mut t = TestVm::new();
+    let child_pid = process_impl::sys_fork(&mut t.vm, t.base, 0, 0, 0, 0, 0) as i32;
+    assert!(child_pid > 0);
+
+    process_impl::reset_process_lifecycle(
+        &mut t.vm,
+        t.base,
+        child_pid,
+        1,
+        child_pid + 1,
+        1,
+        1,
+        false,
+    );
+
+    let ps = unsafe { &mut *((t.base + t.vm.process_ptr) as *mut ProcessState) };
+    ps.reservation_lock[3].store(1, Ordering::Release);
+    ps.reservation_lock[17].store(1, Ordering::Release);
+    ps.reservation_gen[3].store(5, Ordering::Release);
+    ps.reservation_gen[17].store(9, Ordering::Release);
+    t.vm.lr_addr = 0x1234;
+    t.vm.lr_val = 0x5678;
+    t.vm.lr_gen = 5;
+    t.vm.lr_gen_end = 9;
+
+    process_impl::prepare_fork_child_after_handoff(&mut t.vm, t.base, child_pid);
+
+    let ps = unsafe { &*((t.base + t.vm.process_ptr) as *const ProcessState) };
+    assert!(
+        ps.reservation_lock
+            .iter()
+            .all(|lock| lock.load(Ordering::Acquire) == 0)
+    );
+    assert!(
+        ps.reservation_gen
+            .iter()
+            .all(|generation| generation.load(Ordering::Acquire) == 0)
+    );
+    assert_eq!(t.vm.lr_addr, u64::MAX);
+    assert_eq!(t.vm.lr_val, 0);
+    assert_eq!(t.vm.lr_gen, 0);
+    assert_eq!(t.vm.lr_gen_end, 0);
+}
+
+#[test]
 fn semantics_fork_inherits_signal_dispositions_and_clears_process_pending() {
     let mut t = TestVm::new();
     let sigmask_addr = t.scratch + 0x200;
@@ -1455,6 +1502,43 @@ fn contract_execve_with_pt_interp_zero_fills_interpreter_brk_padding() {
         tidemark_kernel::guest_mem::read_bytes(t.base, 0x2ff0, &mut padding);
     }
     assert_eq!(padding, [0u8; 16]);
+}
+
+#[test]
+fn contract_execve_discards_old_guest_address_space_bytes() {
+    let mut t = TestVm::new();
+    let old_brk = t.sys_brk(0x126000);
+    assert_eq!(old_brk, 0x126000);
+    let anon_map = t.sys_mmap(
+        0,
+        PAGE_SIZE,
+        PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS,
+        -1,
+        0,
+    );
+    assert!(anon_map > 0);
+    unsafe {
+        guest_mem::write_bytes(t.base, 0x125000, &[0xa5; 16]);
+        guest_mem::write_bytes(t.base, anon_map as u64, &[0x5a; 16]);
+    }
+
+    let code = [0x13, 0x05, 0x70, 0x00];
+    let elf = build_test_elf(&code);
+    let path_addr = install_exec_file_at(&t, b"/bin/test_exec_clear", &elf);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+
+    let mut old_brk_bytes = [0u8; 16];
+    let mut old_map_bytes = [0u8; 16];
+    unsafe {
+        guest_mem::read_bytes(t.base, 0x125000, &mut old_brk_bytes);
+        guest_mem::read_bytes(t.base, anon_map as u64, &mut old_map_bytes);
+    }
+    assert_eq!(old_brk_bytes, [0u8; 16]);
+    assert_eq!(old_map_bytes, [0u8; 16]);
 }
 
 #[test]

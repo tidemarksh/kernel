@@ -83,7 +83,9 @@ pub const SYS_IOCTL: u64 = 29;
 pub const SYS_FCNTL: u64 = 25;
 pub const SYS_MKDIRAT: u64 = 34;
 pub const SYS_UNLINKAT: u64 = 35;
+pub const SYS_RENAMEAT: u64 = 38;
 pub const SYS_UMOUNT2: u64 = 39;
+pub const SYS_MOUNT: u64 = 40;
 pub const SYS_STATFS: u64 = 43;
 pub const SYS_RENAMEAT2: u64 = 276;
 pub const SYS_STATX: u64 = 291;
@@ -368,6 +370,7 @@ pub const EINPROGRESS: i64 = -115;
 pub const AF_UNIX: u32 = 1;
 pub const AF_INET: u32 = 2;
 pub const AF_INET6: u32 = 10;
+pub const AF_NETLINK: u32 = 16;
 
 // =============================================================================
 // Socket types
@@ -375,6 +378,7 @@ pub const AF_INET6: u32 = 10;
 // =============================================================================
 pub const SOCK_STREAM: u32 = 1;
 pub const SOCK_DGRAM: u32 = 2;
+pub const SOCK_RAW: u32 = 3;
 pub const SOCK_NONBLOCK: u32 = 0x800;
 pub const SOCK_CLOEXEC: u32 = 0x80000;
 
@@ -501,7 +505,9 @@ export_const_u64!(abi_sys_fcntl, SYS_FCNTL);
 export_const_u64!(abi_sys_mkdirat, SYS_MKDIRAT);
 export_const_u64!(abi_sys_unlinkat, SYS_UNLINKAT);
 export_const_u64!(abi_sys_umount2, SYS_UMOUNT2);
+export_const_u64!(abi_sys_mount, SYS_MOUNT);
 export_const_u64!(abi_sys_statfs, SYS_STATFS);
+export_const_u64!(abi_sys_renameat, SYS_RENAMEAT);
 export_const_u64!(abi_sys_renameat2, SYS_RENAMEAT2);
 export_const_u64!(abi_sys_statx, SYS_STATX);
 export_const_u64!(abi_sys_faccessat, SYS_FACCESSAT);
@@ -1204,17 +1210,23 @@ pub extern "C" fn process_state_bytes() -> u32 {
 }
 
 fn process_state_from_vm(vm_ptr: u32) -> Option<&'static mut crate::types::ProcessState> {
-    unsafe {
-        let vm = &*(vm_ptr as *const crate::types::ThreadState);
-        if vm.process_ptr == 0 {
-            None
-        } else {
-            Some(
-                &mut *((vm.guest_base as u64 + vm.process_ptr as u64)
-                    as *mut crate::types::ProcessState),
-            )
-        }
+    let vm = thread_state_from_ptr(vm_ptr)?;
+    if vm.process_ptr == 0 {
+        return None;
     }
+    unsafe {
+        Some(
+            &mut *((vm.guest_base as u64 + vm.process_ptr as u64)
+                as *mut crate::types::ProcessState),
+        )
+    }
+}
+
+fn thread_state_from_ptr(vm_ptr: u32) -> Option<&'static crate::types::ThreadState> {
+    if vm_ptr == 0 {
+        return None;
+    }
+    Some(unsafe { &*(vm_ptr as *const crate::types::ThreadState) })
 }
 
 #[unsafe(no_mangle)]
@@ -1342,6 +1354,7 @@ pub extern "C" fn process_reset_lifecycle(
             sid,
             did_exec != 0,
         );
+        crate::syscall::pty::refresh_controlling_tty_foreground(vm, vm.guest_base);
     }
 }
 
@@ -1444,26 +1457,31 @@ pub extern "C" fn process_install_procfs_snapshot(target_ptr: u32, target_len: u
 
 #[unsafe(no_mangle)]
 pub extern "C" fn process_fd_ofd_id(vm_ptr: u32, fd: u32) -> u32 {
-    process_state_from_vm(vm_ptr)
-        .and_then(|ps| ps.fd_table.get(fd as usize))
-        .map_or(0, |entry| entry.ofd_id)
+    let Some(vm) = thread_state_from_ptr(vm_ptr) else {
+        return 0;
+    };
+    crate::fs::fd_table::load_process_fd_entry(vm.guest_base, vm.process_ptr, fd as usize).ofd_id
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn process_fd_flags(vm_ptr: u32, fd: u32) -> u32 {
-    process_state_from_vm(vm_ptr)
-        .and_then(|ps| ps.fd_table.get(fd as usize))
-        .map_or(0, |entry| entry.fd_flags)
+    let Some(vm) = thread_state_from_ptr(vm_ptr) else {
+        return 0;
+    };
+    crate::fs::fd_table::load_process_fd_entry(vm.guest_base, vm.process_ptr, fd as usize).fd_flags
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn process_set_fd_entry(vm_ptr: u32, fd: u32, ofd_id: u32, fd_flags: u32) {
-    if let Some(ps) = process_state_from_vm(vm_ptr)
-        && let Some(entry) = ps.fd_table.get_mut(fd as usize)
-    {
-        entry.ofd_id = ofd_id;
-        entry.fd_flags = fd_flags;
-    }
+    let Some(vm) = thread_state_from_ptr(vm_ptr) else {
+        return;
+    };
+    crate::fs::fd_table::store_process_fd_entry(
+        vm.guest_base,
+        vm.process_ptr,
+        fd as usize,
+        crate::types::FdEntry { ofd_id, fd_flags },
+    );
 }
 
 #[unsafe(no_mangle)]

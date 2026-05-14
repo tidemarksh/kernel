@@ -29,6 +29,7 @@ fn syscall_needs_runtime_sync_boundary(nr: u64) -> bool {
             | abi::SYS_DUP
             | abi::SYS_DUP3
             | abi::SYS_FCNTL
+            | abi::SYS_IOCTL
             | abi::SYS_SOCKET
             | abi::SYS_SOCKETPAIR
             | abi::SYS_ACCEPT4

@@ -16,7 +16,8 @@
 //!     read_open:  AtomicI32,            // offset 8   — kernel Worker only
 //!     write_open: AtomicI32,            // offset 12  — kernel Worker only
 //!     notify:     AtomicI32,            // offset 16  — Atomics.wait/notify target
-//!     _pad:       [u8; 12],             // offset 20
+//!     generation: AtomicU32,            // offset 20  — internal slot reuse guard
+//!     _pad:       [u8; 8],              // offset 24
 //!     data:       [u8; 65536],          // offset 32  — circular buffer
 //! };
 
@@ -36,6 +37,7 @@ const OFF_HEAD: u32 = 0;
 const OFF_TAIL: u32 = 4;
 const OFF_READ_OPEN: u32 = 8;
 const OFF_WRITE_OPEN: u32 = 12;
+const OFF_GENERATION: u32 = 20;
 const OFF_DATA: u32 = 32;
 
 /// SAB page cache base address for pipe slots.
@@ -46,6 +48,7 @@ static mut SAB_PIPE_BASE: u32 = 0;
 
 /// Pipe slot allocation bitmap (1 = in use).
 static mut PIPE_USED: u64 = 0;
+static mut PIPE_GENERATION: u32 = 1;
 
 /// Initialize pipe subsystem. Allocates pipe slot region on shared memory.
 pub fn init() {
@@ -53,6 +56,7 @@ pub fn init() {
         core::ptr::write(core::ptr::addr_of_mut!(SAB_PIPE_BASE), 0);
         // Slot 0 stays reserved as the ABI-level "no pipe" sentinel.
         core::ptr::write(core::ptr::addr_of_mut!(PIPE_USED), 1);
+        core::ptr::write(core::ptr::addr_of_mut!(PIPE_GENERATION), 1);
 
         let total = MAX_PIPES as u32 * PIPE_SLOT_SIZE;
         // Allocate from shared memory (in production, this is SAB;
@@ -82,10 +86,26 @@ pub fn pipe_region_bytes() -> u32 {
     MAX_PIPES as u32 * PIPE_SLOT_SIZE
 }
 
+fn max_pipe_generation() -> u32 {
+    let mut max_generation = 0;
+    for i in 1..MAX_PIPES {
+        let generation = pipe_generation(i as u32);
+        if generation > max_generation {
+            max_generation = generation;
+        }
+    }
+    max_generation
+}
+
 pub fn attach_pipe_state(base: u32, used: u64) {
     unsafe {
         core::ptr::write(core::ptr::addr_of_mut!(SAB_PIPE_BASE), base);
         core::ptr::write(core::ptr::addr_of_mut!(PIPE_USED), used);
+        let current_generation = core::ptr::read(core::ptr::addr_of!(PIPE_GENERATION));
+        let max_generation = max_pipe_generation();
+        if max_generation > current_generation {
+            core::ptr::write(core::ptr::addr_of_mut!(PIPE_GENERATION), max_generation);
+        }
     }
 }
 
@@ -104,6 +124,15 @@ pub fn read_open_ptr(slot: u32) -> &'static AtomicI32 {
 }
 fn write_open_ptr(slot: u32) -> &'static AtomicI32 {
     unsafe { &*((slot + OFF_WRITE_OPEN) as *const AtomicI32) }
+}
+fn generation_ptr(slot: u32) -> &'static AtomicU32 {
+    unsafe { &*((slot + OFF_GENERATION) as *const AtomicU32) }
+}
+pub fn pipe_generation(idx: u32) -> u32 {
+    generation_ptr(slot_addr(idx)).load(Ordering::Acquire)
+}
+pub fn pipe_generation_matches(idx: u32, expected_generation: u32) -> bool {
+    expected_generation == 0 || pipe_generation(idx) == expected_generation
 }
 pub fn debug_read_open(idx: u32) -> i32 {
     read_open_ptr(slot_addr(idx)).load(Ordering::Acquire)
@@ -129,22 +158,23 @@ pub fn alloc_pipe_slot() -> Option<u32> {
             if used & (1u64 << i) == 0 {
                 core::ptr::write(core::ptr::addr_of_mut!(PIPE_USED), used | (1u64 << i));
                 let addr = slot_addr(i as u32);
+                let current_generation = core::ptr::read(core::ptr::addr_of!(PIPE_GENERATION));
+                let max_generation = max_pipe_generation();
+                let mut generation = current_generation.max(max_generation).wrapping_add(1);
+                if generation == 0 {
+                    generation = 1;
+                }
+                core::ptr::write(core::ptr::addr_of_mut!(PIPE_GENERATION), generation);
                 // Zero the slot
                 core::ptr::write_bytes(addr as *mut u8, 0, PIPE_SLOT_SIZE as usize);
                 // Initialize refcounts
                 read_open_ptr(addr).store(1, Ordering::Release);
                 write_open_ptr(addr).store(1, Ordering::Release);
+                generation_ptr(addr).store(generation, Ordering::Release);
                 return Some(i as u32);
             }
         }
         None
-    }
-}
-
-fn free_pipe_slot(idx: u32) {
-    unsafe {
-        let used = core::ptr::read(core::ptr::addr_of!(PIPE_USED));
-        core::ptr::write(core::ptr::addr_of_mut!(PIPE_USED), used & !(1u64 << idx));
     }
 }
 
@@ -322,9 +352,10 @@ pub fn pipe_close_outcome(pipe_idx: u32, is_read_end: bool) -> PipeCloseOutcome 
     let read_open = read_open_ptr(addr).load(Ordering::Acquire);
     let write_open = write_open_ptr(addr).load(Ordering::Acquire);
     let slot_released = read_open <= 0 && write_open <= 0;
-    if slot_released {
-        free_pipe_slot(pipe_idx);
-    }
+    // Do not clear PIPE_USED from a process-local close path. In the runtime,
+    // forked processes have separate kernel instances and a local endpoint count
+    // may be stale until the kernel-worker reconciles all process-held FDs.
+    // Reuse is made visible by attach_pipe_state after that global reconcile.
 
     PipeCloseOutcome {
         read_open,
@@ -353,3 +384,61 @@ pub fn sys_eventfd2(vm: &mut ThreadState, base: u32, initval: u64, flags: u64) -
 // =========================================================================
 // Tests
 // =========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fs::fd_table;
+    use crate::harness::TestVm;
+
+    const F_SETFD: u64 = 2;
+    const FD_CLOEXEC: u64 = 1;
+
+    fn read_pipe_fds(vm: &TestVm, addr: u64) -> (u32, u32) {
+        unsafe {
+            (
+                crate::guest_mem::read_u32(vm.base, addr),
+                crate::guest_mem::read_u32(vm.base, addr + 4),
+            )
+        }
+    }
+
+    #[test]
+    fn pipe2_fds_survive_close_on_exec_updates_for_adjacent_descriptors() {
+        let mut vm = TestVm::new();
+        let first = vm.scratch;
+        let second = vm.scratch + 8;
+
+        assert_eq!(sys_pipe2(&mut vm.vm, vm.base, first, 0), 0);
+        assert_eq!(sys_pipe2(&mut vm.vm, vm.base, second, 0), 0);
+        let (first_read, first_write) = read_pipe_fds(&vm, first);
+        let (second_read, second_write) = read_pipe_fds(&vm, second);
+        assert_eq!(
+            (first_read, first_write, second_read, second_write),
+            (3, 4, 5, 6)
+        );
+
+        assert_eq!(
+            fd_table::sys_fcntl(&mut vm.vm, vm.base, first_read as u64, F_SETFD, FD_CLOEXEC),
+            0
+        );
+        assert_eq!(
+            fd_table::sys_fcntl(&mut vm.vm, vm.base, first_write as u64, F_SETFD, FD_CLOEXEC),
+            0
+        );
+        assert_eq!(
+            fd_table::sys_fcntl(&mut vm.vm, vm.base, second_read as u64, F_SETFD, FD_CLOEXEC),
+            0
+        );
+        assert_eq!(
+            fd_table::sys_fcntl(
+                &mut vm.vm,
+                vm.base,
+                second_write as u64,
+                F_SETFD,
+                FD_CLOEXEC
+            ),
+            0
+        );
+    }
+}

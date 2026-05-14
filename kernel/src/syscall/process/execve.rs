@@ -630,11 +630,10 @@ fn current_guest_memory_limit(base: u32) -> u64 {
 
 fn execve_guest_limit(base: u32, brk_start: u64, stack_size: u64, ram_limit: u64) -> u64 {
     const EXECVE_STACK_HEADROOM: u64 = 64 * 1024 * 1024;
-    let current_limit = if ram_limit != 0 {
-        ram_limit.min(max_execve_ram_limit(base))
-    } else {
-        current_guest_memory_limit(base)
-    };
+    if ram_limit != 0 {
+        return ram_limit.min(max_execve_ram_limit(base));
+    }
+    let current_limit = current_guest_memory_limit(base);
     let usable_stack = ((stack_size.max(64 * 1024) + 4095) & !4095).saturating_add(4096);
     let required_limit = brk_start
         .saturating_add(usable_stack)
@@ -643,6 +642,23 @@ fn execve_guest_limit(base: u32, brk_start: u64, stack_size: u64, ram_limit: u64
     current_limit
         .max(rounded_limit)
         .min(max_execve_ram_limit(base))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn execve_guest_limit_respects_explicit_guest_ram_limit() {
+        let limit = execve_guest_limit(
+            0,
+            0x83000,
+            crate::syscall::memory::DEFAULT_STACK_SIZE,
+            16 * 1024 * 1024,
+        );
+
+        assert_eq!(limit, 16 * 1024 * 1024);
+    }
 }
 
 fn complete_execve_in_place_inner(
@@ -998,7 +1014,8 @@ fn complete_execve_in_place_inner(
     vm.fcsr = 0;
     vm.status = STATUS_OK;
     vm.exit_code = 0;
-    vm.tid = target_pid;
+    // ThreadState::tid is process-local; ProcessState::pid carries getpid().
+    vm.tid = 1;
     vm.tls_base = elf_result.tls_base;
     vm.sigaltstack_sp = 0;
     vm.sigaltstack_size = 0;
@@ -1032,6 +1049,15 @@ fn complete_execve_in_place_inner(
     vm.epoll_maxevents = 0;
     vm.blocked_fd = 0;
     vm.blocked_ofd_id = 0;
+    vm.blocked_syscall_nr = 0;
+    vm.blocked_syscall_args = [0; 6];
+    vm.completed_sync_effects = 0;
+    vm.completed_pipe_sync_slots = 0;
+    vm.completed_pipe_sync_read_slots = 0;
+    vm.completed_pipe_sync_write_slots = 0;
+    vm.completed_pipe_fresh_slots = 0;
+    vm.completed_pipe_read_guest_ptr = 0;
+    vm.completed_pipe_read_len = 0;
     vm.block_cache_ptr = 0;
     clear_wait4_state(vm);
     clear_spawn_handoff(vm);
@@ -1140,6 +1166,7 @@ pub fn sys_execve(
             );
             return ECHILD;
         }
+        install_procfs_snapshot(trace_path);
         crate::syscall::signal::reset_on_execve(child_pid);
         set_spawn_handoff(
             vm,

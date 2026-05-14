@@ -22,9 +22,17 @@ use crate::abi::*;
 use crate::fs::fd_table;
 use crate::types::ThreadState;
 
+const SYNC_EFFECT_PIPE_STATE: u32 = 1 << 0;
+const SYNC_EFFECT_SOCKET_STATE: u32 = 1 << 1;
+const SYNC_EFFECT_EPOLL_STATE: u32 = 1 << 2;
+const SYNC_EFFECT_EPOLL_DEPENDENT_OFD_STATE: u32 = 1 << 3;
+const SYNC_EFFECT_PROCESS_LIFECYCLE: u32 = 1 << 4;
+const SYNC_EFFECT_SIGNAL_WAITERS: u32 = 1 << 5;
+const SYNC_EFFECT_FORK_SHARED_OFD_STATE: u32 = 1 << 6;
+
 #[inline(always)]
 fn debug_return(
-    vm: &ThreadState,
+    vm: &mut ThreadState,
     nr: u64,
     a0: u64,
     a1: u64,
@@ -35,6 +43,64 @@ fn debug_return(
     result: i64,
     status: i32,
 ) -> i32 {
+    debug_return_with_fd_trace(vm, nr, a0, a1, a2, a3, a4, a5, result, status, 0, 0, 0, 0)
+}
+
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn debug_return_fd_arg0(
+    vm: &mut ThreadState,
+    base: u32,
+    nr: u64,
+    a0: u64,
+    a1: u64,
+    a2: u64,
+    a3: u64,
+    a4: u64,
+    a5: u64,
+    result: i64,
+    status: i32,
+) -> i32 {
+    let (arg0_ofd_id, arg0_ofd_type) = trace_fd_snapshot(base, vm, a0);
+    debug_return_with_fd_trace(
+        vm,
+        nr,
+        a0,
+        a1,
+        a2,
+        a3,
+        a4,
+        a5,
+        result,
+        status,
+        arg0_ofd_id,
+        arg0_ofd_type,
+        0,
+        0,
+    )
+}
+
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn debug_return_with_fd_trace(
+    vm: &mut ThreadState,
+    nr: u64,
+    a0: u64,
+    a1: u64,
+    a2: u64,
+    a3: u64,
+    a4: u64,
+    a5: u64,
+    result: i64,
+    status: i32,
+    _arg0_ofd_id: u32,
+    _arg0_ofd_type: i32,
+    _arg2_ofd_id: u32,
+    _arg2_ofd_type: i32,
+) -> i32 {
+    if nr != SYS_RT_SIGRETURN {
+        vm.x[10] = result as u64;
+    }
     crate::tracepoints::record_syscall(
         vm as *const ThreadState as u32,
         nr,
@@ -47,7 +113,44 @@ fn debug_return(
         result,
         status,
     );
+    #[cfg(not(any(test, feature = "harness")))]
+    record_fd_syscall_trace(
+        vm as *const ThreadState as u32,
+        nr,
+        a0,
+        _arg0_ofd_id,
+        _arg0_ofd_type,
+        a1,
+        a2,
+        _arg2_ofd_id,
+        _arg2_ofd_type,
+        a3,
+        result,
+        status,
+    );
+    if fd_table::blocked_status_uses_ofd_pin(status) {
+        save_blocked_syscall_args(vm, nr, a0, a1, a2, a3, a4, a5);
+    } else if status == abi::STATUS_OK {
+        fd_table::clear_blocked_ofd_pin(vm);
+    } else {
+        fd_table::clear_blocked_ofd_pin(vm);
+    }
     status
+}
+
+#[inline(always)]
+fn save_blocked_syscall_args(
+    vm: &mut ThreadState,
+    nr: u64,
+    a0: u64,
+    a1: u64,
+    a2: u64,
+    a3: u64,
+    a4: u64,
+    a5: u64,
+) {
+    vm.blocked_syscall_nr = nr;
+    vm.blocked_syscall_args = [a0, a1, a2, a3, a4, a5];
 }
 
 #[inline(always)]
@@ -89,6 +192,308 @@ fn trace_fd_snapshot(base: u32, vm: &ThreadState, fd: u64) -> (u32, i32) {
         .map(|ofd| ofd.fd_type)
         .unwrap_or(0);
     (ofd_id, ofd_type)
+}
+
+#[cfg(not(any(test, feature = "harness")))]
+#[derive(Clone, Copy)]
+pub struct FdSyscallTraceEntry {
+    pub vm_ptr: u32,
+    pub nr: u64,
+    pub arg0: u64,
+    pub arg0_ofd_id: u32,
+    pub arg0_ofd_type: i32,
+    pub arg0_ofd_offset: i64,
+    pub arg0_ofd_host_fd: i32,
+    pub arg0_ofd_status_flags: i32,
+    pub arg0_ofd_ino: u32,
+    pub arg0_inode_mode: u32,
+    pub arg0_pipe_generation: u32,
+    pub arg1: u64,
+    pub arg2: u64,
+    pub arg2_ofd_id: u32,
+    pub arg2_ofd_type: i32,
+    pub arg3: u64,
+    pub result: i64,
+    pub status: i32,
+    pub pid_sample0: u64,
+    pub pid_sample1: u64,
+}
+
+#[cfg(not(any(test, feature = "harness")))]
+const FD_SYSCALL_TRACE_CAP: usize = 1024;
+
+#[cfg(not(any(test, feature = "harness")))]
+static mut FD_SYSCALL_TRACE: [FdSyscallTraceEntry; FD_SYSCALL_TRACE_CAP] = [FdSyscallTraceEntry {
+    vm_ptr: 0,
+    nr: 0,
+    arg0: 0,
+    arg0_ofd_id: 0,
+    arg0_ofd_type: 0,
+    arg0_ofd_offset: 0,
+    arg0_ofd_host_fd: 0,
+    arg0_ofd_status_flags: 0,
+    arg0_ofd_ino: 0,
+    arg0_inode_mode: 0,
+    arg0_pipe_generation: 0,
+    arg1: 0,
+    arg2: 0,
+    arg2_ofd_id: 0,
+    arg2_ofd_type: 0,
+    arg3: 0,
+    result: 0,
+    status: 0,
+    pid_sample0: 0,
+    pid_sample1: 0,
+}; FD_SYSCALL_TRACE_CAP];
+
+#[cfg(not(any(test, feature = "harness")))]
+static mut FD_SYSCALL_TRACE_LEN: u32 = 0;
+
+#[cfg(not(any(test, feature = "harness")))]
+static mut FD_SYSCALL_TRACE_NEXT: u32 = 0;
+
+#[cfg(not(any(test, feature = "harness")))]
+fn sample_process_pid_bytes(vm_ptr: u32) -> (u64, u64) {
+    if vm_ptr == 0 {
+        return (0, 0);
+    }
+    let vm = unsafe { &*(vm_ptr as *const crate::types::ThreadState) };
+    if vm.process_ptr == 0 {
+        return (0, 0);
+    }
+    let pid_addr = vm.guest_base as usize
+        + vm.process_ptr as usize
+        + core::mem::offset_of!(crate::types::ProcessState, pid);
+    let sample0 = unsafe { core::ptr::read_unaligned(pid_addr as *const u64) };
+    let sample1 = unsafe { core::ptr::read_unaligned((pid_addr + 8) as *const u64) };
+    (sample0, sample1)
+}
+
+#[cfg(not(any(test, feature = "harness")))]
+#[allow(clippy::too_many_arguments)]
+fn record_fd_syscall_trace(
+    vm_ptr: u32,
+    nr: u64,
+    arg0: u64,
+    arg0_ofd_id: u32,
+    arg0_ofd_type: i32,
+    arg1: u64,
+    arg2: u64,
+    arg2_ofd_id: u32,
+    arg2_ofd_type: i32,
+    arg3: u64,
+    result: i64,
+    status: i32,
+) {
+    let should_record = matches!(
+        nr,
+        SYS_READ
+            | SYS_PREAD64
+            | SYS_READV
+            | SYS_WRITE
+            | SYS_PWRITE64
+            | SYS_WRITEV
+            | SYS_PWRITEV
+            | SYS_LSEEK
+            | SYS_EPOLL_CREATE1
+            | SYS_EPOLL_CTL
+            | SYS_EPOLL_PWAIT
+            | SYS_CLOSE
+            | SYS_CLOSE_RANGE
+            | SYS_DUP
+            | SYS_DUP3
+            | SYS_PIPE2
+            | SYS_FCNTL
+            | SYS_IOCTL
+            | SYS_SOCKET
+            | SYS_SOCKETPAIR
+            | SYS_BIND
+            | SYS_LISTEN
+            | SYS_CONNECT
+            | SYS_ACCEPT4
+            | SYS_SENDTO
+            | SYS_RECVFROM
+            | SYS_SENDMSG
+            | SYS_RECVMSG
+            | SYS_SHUTDOWN
+            | SYS_SETSOCKOPT
+            | SYS_GETSOCKOPT
+            | SYS_GETSOCKNAME
+            | SYS_GETPEERNAME
+    );
+    if !should_record {
+        return;
+    }
+    let (pid_sample0, pid_sample1) = sample_process_pid_bytes(vm_ptr);
+    let (
+        arg0_ofd_offset,
+        arg0_ofd_host_fd,
+        arg0_ofd_status_flags,
+        arg0_ofd_ino,
+        arg0_inode_mode,
+        arg0_pipe_generation,
+    ) = fd_table::get_ofd_by_id(arg0_ofd_id)
+        .map(|ofd| {
+            let pipe_generation = if ofd.fd_type == FD_TYPE_PIPE {
+                crate::syscall::pipe::pipe_generation(ofd.ino)
+            } else {
+                0
+            };
+            let inode_mode = if ofd.fd_type == FD_TYPE_FILE {
+                crate::fs::memfs::stat(ofd.ino).map_or(0, |stat| stat.mode)
+            } else {
+                0
+            };
+            (
+                ofd.offset,
+                ofd.host_fd,
+                ofd.status_flags,
+                ofd.ino,
+                inode_mode,
+                pipe_generation,
+            )
+        })
+        .unwrap_or((0, 0, 0, 0, 0, 0));
+    unsafe {
+        let idx = (FD_SYSCALL_TRACE_NEXT as usize) % FD_SYSCALL_TRACE_CAP;
+        FD_SYSCALL_TRACE[idx] = FdSyscallTraceEntry {
+            vm_ptr,
+            nr,
+            arg0,
+            arg0_ofd_id,
+            arg0_ofd_type,
+            arg0_ofd_offset,
+            arg0_ofd_host_fd,
+            arg0_ofd_status_flags,
+            arg0_ofd_ino,
+            arg0_inode_mode,
+            arg0_pipe_generation,
+            arg1,
+            arg2,
+            arg2_ofd_id,
+            arg2_ofd_type,
+            arg3,
+            result,
+            status,
+            pid_sample0,
+            pid_sample1,
+        };
+        FD_SYSCALL_TRACE_NEXT = ((idx + 1) % FD_SYSCALL_TRACE_CAP) as u32;
+        if FD_SYSCALL_TRACE_LEN < FD_SYSCALL_TRACE_CAP as u32 {
+            FD_SYSCALL_TRACE_LEN += 1;
+        }
+    }
+}
+
+#[cfg(not(any(test, feature = "harness")))]
+fn empty_fd_syscall_trace_entry() -> FdSyscallTraceEntry {
+    FdSyscallTraceEntry {
+        vm_ptr: 0,
+        nr: 0,
+        arg0: 0,
+        arg0_ofd_id: 0,
+        arg0_ofd_type: 0,
+        arg0_ofd_offset: 0,
+        arg0_ofd_host_fd: 0,
+        arg0_ofd_status_flags: 0,
+        arg0_ofd_ino: 0,
+        arg0_inode_mode: 0,
+        arg0_pipe_generation: 0,
+        arg1: 0,
+        arg2: 0,
+        arg2_ofd_id: 0,
+        arg2_ofd_type: 0,
+        arg3: 0,
+        result: 0,
+        status: 0,
+        pid_sample0: 0,
+        pid_sample1: 0,
+    }
+}
+
+#[cfg(not(any(test, feature = "harness")))]
+pub fn fd_syscall_trace_len() -> u32 {
+    unsafe { FD_SYSCALL_TRACE_LEN }
+}
+
+#[cfg(not(any(test, feature = "harness")))]
+pub fn fd_syscall_trace_entry(index: u32) -> FdSyscallTraceEntry {
+    unsafe {
+        let len = FD_SYSCALL_TRACE_LEN.min(FD_SYSCALL_TRACE_CAP as u32);
+        if index >= len {
+            return empty_fd_syscall_trace_entry();
+        }
+        let start = if len < FD_SYSCALL_TRACE_CAP as u32 {
+            0
+        } else {
+            FD_SYSCALL_TRACE_NEXT % FD_SYSCALL_TRACE_CAP as u32
+        };
+        let idx = ((start + index) as usize) % FD_SYSCALL_TRACE_CAP;
+        FD_SYSCALL_TRACE[idx]
+    }
+}
+
+#[inline(always)]
+fn mark_completed_syscall_sync_effects(
+    vm: &mut ThreadState,
+    base: u32,
+    nr: u64,
+    a0: u64,
+    result: i64,
+    status: i32,
+) {
+    if status != abi::STATUS_OK || result < 0 {
+        return;
+    }
+    let effects = match nr {
+        SYS_OPENAT => SYNC_EFFECT_FORK_SHARED_OFD_STATE,
+        SYS_PIPE2 => {
+            SYNC_EFFECT_PIPE_STATE | SYNC_EFFECT_EPOLL_STATE | SYNC_EFFECT_FORK_SHARED_OFD_STATE
+        }
+        SYS_CLOSE | SYS_CLOSE_RANGE | SYS_DUP | SYS_DUP3 | SYS_FCNTL | SYS_IOCTL => {
+            SYNC_EFFECT_PIPE_STATE
+                | SYNC_EFFECT_SOCKET_STATE
+                | SYNC_EFFECT_EPOLL_STATE
+                | SYNC_EFFECT_EPOLL_DEPENDENT_OFD_STATE
+                | SYNC_EFFECT_FORK_SHARED_OFD_STATE
+        }
+        SYS_SOCKET | SYS_SOCKETPAIR | SYS_ACCEPT4 => {
+            SYNC_EFFECT_SOCKET_STATE | SYNC_EFFECT_EPOLL_STATE | SYNC_EFFECT_FORK_SHARED_OFD_STATE
+        }
+        SYS_EVENTFD2 => {
+            SYNC_EFFECT_EPOLL_DEPENDENT_OFD_STATE
+                | SYNC_EFFECT_EPOLL_STATE
+                | SYNC_EFFECT_FORK_SHARED_OFD_STATE
+        }
+        SYS_EPOLL_CREATE1 => SYNC_EFFECT_EPOLL_STATE | SYNC_EFFECT_FORK_SHARED_OFD_STATE,
+        SYS_EPOLL_CTL => SYNC_EFFECT_EPOLL_STATE,
+        SYS_EXECVE => {
+            SYNC_EFFECT_PIPE_STATE
+                | SYNC_EFFECT_SOCKET_STATE
+                | SYNC_EFFECT_EPOLL_STATE
+                | SYNC_EFFECT_EPOLL_DEPENDENT_OFD_STATE
+                | SYNC_EFFECT_FORK_SHARED_OFD_STATE
+                | SYNC_EFFECT_PROCESS_LIFECYCLE
+        }
+        SYS_SETPGID | SYS_SETSID => SYNC_EFFECT_PROCESS_LIFECYCLE,
+        SYS_KILL | SYS_TKILL | SYS_TGKILL => SYNC_EFFECT_SIGNAL_WAITERS,
+        _ => 0,
+    };
+    if nr == SYS_PIPE2 {
+        unsafe {
+            let read_fd = crate::guest_mem::read_u32(base, a0) as u64;
+            if let Some(ofd) = fd_table::get_ofd(base, vm, read_fd) {
+                if ofd.fd_type == abi::FD_TYPE_PIPE && ofd.ino < 64 {
+                    let bit = 1u64 << ofd.ino;
+                    vm.completed_pipe_sync_slots |= bit;
+                    vm.completed_pipe_sync_read_slots |= bit;
+                    vm.completed_pipe_sync_write_slots |= bit;
+                    vm.completed_pipe_fresh_slots |= bit;
+                }
+            }
+        }
+    }
+    vm.completed_sync_effects |= effects;
 }
 
 /// Dispatch a syscall. Called from ECALL handler in cpu::exec.
@@ -203,10 +608,36 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_READ => {
             let r = fs::sys_read(vm, base, a0, a1, a2);
             if vm.status == abi::STATUS_PIPE_WAIT {
-                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_PIPE_WAIT);
+                save_blocked_syscall_args(vm, nr, a0, a1, a2, a3, a4, a5);
+                return debug_return_fd_arg0(
+                    vm,
+                    base,
+                    nr,
+                    a0,
+                    a1,
+                    a2,
+                    a3,
+                    a4,
+                    a5,
+                    r,
+                    abi::STATUS_PIPE_WAIT,
+                );
             }
             if vm.status == abi::STATUS_SOCKET_RECV {
-                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_SOCKET_RECV);
+                save_blocked_syscall_args(vm, nr, a0, a1, a2, a3, a4, a5);
+                return debug_return_fd_arg0(
+                    vm,
+                    base,
+                    nr,
+                    a0,
+                    a1,
+                    a2,
+                    a3,
+                    a4,
+                    a5,
+                    r,
+                    abi::STATUS_SOCKET_RECV,
+                );
             }
             r
         }
@@ -217,10 +648,36 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
                 return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_FS);
             }
             if vm.status == abi::STATUS_PIPE_WAIT {
-                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_PIPE_WAIT);
+                save_blocked_syscall_args(vm, nr, a0, a1, a2, a3, a4, a5);
+                return debug_return_fd_arg0(
+                    vm,
+                    base,
+                    nr,
+                    a0,
+                    a1,
+                    a2,
+                    a3,
+                    a4,
+                    a5,
+                    r,
+                    abi::STATUS_PIPE_WAIT,
+                );
             }
             if vm.status == abi::STATUS_SOCKET_SEND {
-                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_SOCKET_SEND);
+                save_blocked_syscall_args(vm, nr, a0, a1, a2, a3, a4, a5);
+                return debug_return_fd_arg0(
+                    vm,
+                    base,
+                    nr,
+                    a0,
+                    a1,
+                    a2,
+                    a3,
+                    a4,
+                    a5,
+                    r,
+                    abi::STATUS_SOCKET_SEND,
+                );
             }
             r
         }
@@ -234,14 +691,41 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_READV => {
             let r = fs::sys_readv(vm, base, a0, a1, a2);
             if vm.status == abi::STATUS_PIPE_WAIT {
-                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_PIPE_WAIT);
+                save_blocked_syscall_args(vm, nr, a0, a1, a2, a3, a4, a5);
+                return debug_return_fd_arg0(
+                    vm,
+                    base,
+                    nr,
+                    a0,
+                    a1,
+                    a2,
+                    a3,
+                    a4,
+                    a5,
+                    r,
+                    abi::STATUS_PIPE_WAIT,
+                );
             }
             if vm.status == abi::STATUS_SOCKET_RECV {
-                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_SOCKET_RECV);
+                save_blocked_syscall_args(vm, nr, a0, a1, a2, a3, a4, a5);
+                return debug_return_fd_arg0(
+                    vm,
+                    base,
+                    nr,
+                    a0,
+                    a1,
+                    a2,
+                    a3,
+                    a4,
+                    a5,
+                    r,
+                    abi::STATUS_SOCKET_RECV,
+                );
             }
             r
         }
         SYS_NEWFSTATAT => fs::sys_newfstatat(vm, base, a0, a1, a2, a3),
+        SYS_UTIMENSAT => fs::sys_utimensat(vm, base, a0, a1, a2, a3),
         SYS_FSTAT => {
             let r = fs::dispatch_fstat(vm, base, a0, a1);
             if vm.status == abi::STATUS_FS {
@@ -277,8 +761,9 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             }
             r
         }
-        SYS_RENAMEAT2 => {
-            let r = fs::dispatch_renameat2(vm, base, a0, a1, a2, a3, a4);
+        SYS_RENAMEAT | SYS_RENAMEAT2 => {
+            let flags = if nr == SYS_RENAMEAT { 0 } else { a4 };
+            let r = fs::dispatch_renameat2(vm, base, a0, a1, a2, a3, flags);
             if vm.status == abi::STATUS_FS {
                 return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_FS);
             }
@@ -293,6 +778,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_REMOVEXATTR | SYS_LREMOVEXATTR => fs::sys_removexattr(vm, base, a0),
         SYS_FREMOVEXATTR => fs::sys_fremovexattr(vm, base, a0),
         SYS_UMOUNT2 => fs::sys_umount2(vm, base, a0, a1),
+        SYS_MOUNT => fs::sys_mount(vm, base, a0, a1, a2, a3, a4),
         SYS_STATFS => fs::sys_statfs(vm, base, a0, a1),
         SYS_FACCESSAT => fs::sys_faccessat(vm, base, a0, a1, a2),
         SYS_CHDIR => fs::sys_chdir(vm, base, a0),
@@ -326,14 +812,38 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_FLOCK => {
             let r = fd_table::sys_flock(vm, base, a0, a1);
             if vm.status == abi::STATUS_FLOCK_WAIT {
-                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_FLOCK_WAIT);
+                return debug_return_fd_arg0(
+                    vm,
+                    base,
+                    nr,
+                    a0,
+                    a1,
+                    a2,
+                    a3,
+                    a4,
+                    a5,
+                    r,
+                    abi::STATUS_FLOCK_WAIT,
+                );
             }
             r
         }
         SYS_CLOSE => {
             let r = fd_table::sys_close(vm, base, a0);
             if vm.status == abi::STATUS_SOCKET_SEND {
-                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_SOCKET_SEND);
+                return debug_return_fd_arg0(
+                    vm,
+                    base,
+                    nr,
+                    a0,
+                    a1,
+                    a2,
+                    a3,
+                    a4,
+                    a5,
+                    r,
+                    abi::STATUS_SOCKET_SEND,
+                );
             }
             r
         }
@@ -350,42 +860,114 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_CONNECT => {
             let r = socket::sys_connect(vm, base, a0, a1, a2);
             if vm.status == abi::STATUS_CONNECT {
-                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_CONNECT);
+                return debug_return_fd_arg0(
+                    vm,
+                    base,
+                    nr,
+                    a0,
+                    a1,
+                    a2,
+                    a3,
+                    a4,
+                    a5,
+                    r,
+                    abi::STATUS_CONNECT,
+                );
             }
             r
         }
         SYS_ACCEPT4 => {
             let r = socket::sys_accept4(vm, base, a0, a1, a2, a3);
             if vm.status == abi::STATUS_SOCKET_RECV {
-                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_SOCKET_RECV);
+                return debug_return_fd_arg0(
+                    vm,
+                    base,
+                    nr,
+                    a0,
+                    a1,
+                    a2,
+                    a3,
+                    a4,
+                    a5,
+                    r,
+                    abi::STATUS_SOCKET_RECV,
+                );
             }
             r
         }
         SYS_SENDTO => {
             let r = socket::sys_sendto(vm, base, a0, a1, a2, a3, a4, a5);
             if vm.status == abi::STATUS_SOCKET_SEND {
-                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_SOCKET_SEND);
+                return debug_return_fd_arg0(
+                    vm,
+                    base,
+                    nr,
+                    a0,
+                    a1,
+                    a2,
+                    a3,
+                    a4,
+                    a5,
+                    r,
+                    abi::STATUS_SOCKET_SEND,
+                );
             }
             r
         }
         SYS_RECVFROM => {
             let r = socket::sys_recvfrom(vm, base, a0, a1, a2, a3, a4, a5);
             if vm.status == abi::STATUS_SOCKET_RECV {
-                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_SOCKET_RECV);
+                return debug_return_fd_arg0(
+                    vm,
+                    base,
+                    nr,
+                    a0,
+                    a1,
+                    a2,
+                    a3,
+                    a4,
+                    a5,
+                    r,
+                    abi::STATUS_SOCKET_RECV,
+                );
             }
             r
         }
         SYS_SENDMSG => {
             let r = socket::sys_sendmsg(vm, base, a0, a1, a2);
             if vm.status == abi::STATUS_SOCKET_SEND {
-                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_SOCKET_SEND);
+                return debug_return_fd_arg0(
+                    vm,
+                    base,
+                    nr,
+                    a0,
+                    a1,
+                    a2,
+                    a3,
+                    a4,
+                    a5,
+                    r,
+                    abi::STATUS_SOCKET_SEND,
+                );
             }
             r
         }
         SYS_RECVMSG => {
             let r = socket::sys_recvmsg(vm, base, a0, a1, a2);
             if vm.status == abi::STATUS_SOCKET_RECV {
-                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_SOCKET_RECV);
+                return debug_return_fd_arg0(
+                    vm,
+                    base,
+                    nr,
+                    a0,
+                    a1,
+                    a2,
+                    a3,
+                    a4,
+                    a5,
+                    r,
+                    abi::STATUS_SOCKET_RECV,
+                );
             }
             r
         }
@@ -580,6 +1162,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         crate::tracepoints::record_execve_dispatch(vm as *const ThreadState as u32, 3);
     }
     let status = vm.status;
+    mark_completed_syscall_sync_effects(vm, base, nr, a0, result, status);
     if nr == SYS_PIPE2 && result == 0 {
         unsafe {
             let read_fd = crate::guest_mem::read_u32(base, a0);
@@ -587,8 +1170,34 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             (arg0_ofd_id, arg0_ofd_type) = trace_fd_snapshot(base, vm, read_fd as u64);
             (arg2_ofd_id, arg2_ofd_type) = trace_fd_snapshot(base, vm, write_fd as u64);
         }
+    } else if (nr == SYS_SOCKET || nr == SYS_ACCEPT4) && result >= 0 {
+        (arg0_ofd_id, arg0_ofd_type) = trace_fd_snapshot(base, vm, result as u64);
+        arg2_ofd_id = 0;
+        arg2_ofd_type = 0;
+    } else if nr == SYS_SOCKETPAIR && result == 0 {
+        unsafe {
+            let left_fd = crate::guest_mem::read_u32(base, a3);
+            let right_fd = crate::guest_mem::read_u32(base, a3 + 4);
+            (arg0_ofd_id, arg0_ofd_type) = trace_fd_snapshot(base, vm, left_fd as u64);
+            (arg2_ofd_id, arg2_ofd_type) = trace_fd_snapshot(base, vm, right_fd as u64);
+        }
     }
     crate::tracepoints::record_fd_syscall(
+        vm as *const ThreadState as u32,
+        nr,
+        a0,
+        arg0_ofd_id,
+        arg0_ofd_type,
+        a1,
+        a2,
+        arg2_ofd_id,
+        arg2_ofd_type,
+        a3,
+        result,
+        status,
+    );
+    #[cfg(not(any(test, feature = "harness")))]
+    record_fd_syscall_trace(
         vm as *const ThreadState as u32,
         nr,
         a0,
@@ -615,7 +1224,13 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         status,
     );
     if status != abi::STATUS_OK {
+        if fd_table::blocked_status_uses_ofd_pin(status) {
+            save_blocked_syscall_args(vm, nr, a0, a1, a2, a3, a4, a5);
+        } else {
+            fd_table::clear_blocked_ofd_pin(vm);
+        }
         return status;
     }
+    fd_table::clear_blocked_ofd_pin(vm);
     abi::STATUS_OK
 }

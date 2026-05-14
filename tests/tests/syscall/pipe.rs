@@ -1,9 +1,14 @@
 use tidemark_kernel::abi::*;
 use tidemark_kernel::harness::TestVm;
 use tidemark_kernel::syscall::pipe::{self, PipeCloseOutcome};
+use tidemark_kernel::syscall::{poll, pty};
 
 const OPEN_ACCESS_MODE_MASK: i64 = 0x3;
 const EFD_SEMAPHORE: u64 = 0x1;
+const FIONBIO: u64 = 0x5421;
+const SYNC_EFFECT_PIPE_STATE: u32 = 1 << 0;
+const SYNC_EFFECT_EPOLL_STATE: u32 = 1 << 2;
+const SYNC_EFFECT_FORK_SHARED_OFD_STATE: u32 = 1 << 6;
 
 #[test]
 fn write_read_roundtrip() {
@@ -16,12 +21,69 @@ fn write_read_roundtrip() {
 }
 
 #[test]
+fn dispatch_pipe2_marks_runtime_sync_effects_without_harness_trace() {
+    let mut t = TestVm::new();
+    let pipefd_addr = t.scratch + 0x0800;
+
+    t.vm.x[10] = pipefd_addr;
+    t.vm.x[11] = 0;
+    t.vm.x[17] = SYS_PIPE2;
+
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        STATUS_OK
+    );
+    assert_eq!(t.vm.x[10] as i64, 0);
+    assert_ne!(t.vm.completed_sync_effects & SYNC_EFFECT_PIPE_STATE, 0);
+    assert_ne!(t.vm.completed_sync_effects & SYNC_EFFECT_EPOLL_STATE, 0);
+    assert_ne!(
+        t.vm.completed_sync_effects & SYNC_EFFECT_FORK_SHARED_OFD_STATE,
+        0
+    );
+}
+
+#[test]
 fn eof_on_writer_close() {
     let _t = TestVm::new();
     let idx = pipe::alloc_pipe_slot().unwrap();
     pipe::pipe_close(idx, false);
     let mut buf = [0u8; 16];
     assert_eq!(pipe::pipe_read(idx, &mut buf), 0);
+}
+
+#[test]
+fn pselect_reports_closed_pipe_read_end_as_ready() {
+    let mut t = TestVm::new();
+    let pipefd_addr = t.scratch + 0x1000;
+    assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) } as u64;
+    let write_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr + 4) } as u64;
+    assert_eq!(t.sys_close(write_fd as i64), 0);
+
+    let readfds = t.scratch + 0x1100;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, readfds, 1u64 << read_fd);
+    }
+
+    t.vm.x[17] = SYS_PSELECT6;
+    t.vm.x[10] = read_fd + 1;
+    t.vm.x[11] = readfds;
+    t.vm.x[12] = 0;
+    t.vm.x[13] = 0;
+    t.vm.x[14] = 0;
+    t.vm.x[15] = 0;
+    let result = poll::sys_pselect6(&mut t.vm, t.base, read_fd + 1, readfds, 0, 0, 0, 0);
+    assert_eq!(result, 0);
+    assert_eq!(t.vm.status, STATUS_PIPE_WAIT);
+
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    assert_eq!(thread_poll_hup_sync_pending(vm_ptr), 1);
+    assert_eq!(thread_resume_blocked_syscall(vm_ptr), 1);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, readfds) } & (1u64 << read_fd),
+        1u64 << read_fd
+    );
 }
 
 #[test]
@@ -158,6 +220,38 @@ fn sys_pipe2_reports_read_write_access_modes() {
         t.sys_fcntl(write_fd as u64, 3, 0) & OPEN_ACCESS_MODE_MASK,
         O_WRONLY as i64
     );
+}
+
+#[test]
+fn ioctl_fionbio_toggles_pipe_nonblock_status() {
+    let mut t = TestVm::new();
+    let pipefd_addr = t.scratch + 0x1500;
+
+    assert_eq!(
+        pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, O_NONBLOCK as u64),
+        0
+    );
+
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) } as u64;
+    let flag_addr = t.scratch + 0x1510;
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, flag_addr, 0);
+    }
+    assert_eq!(
+        pty::sys_ioctl(&mut t.vm, t.base, read_fd, FIONBIO, flag_addr),
+        0
+    );
+    assert_eq!(t.sys_fcntl(read_fd, 3, 0) & O_NONBLOCK as i64, 0);
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, flag_addr, 1);
+    }
+    assert_eq!(
+        pty::sys_ioctl(&mut t.vm, t.base, read_fd, FIONBIO, flag_addr),
+        0
+    );
+    assert_ne!(t.sys_fcntl(read_fd, 3, 0) & O_NONBLOCK as i64, 0);
 }
 
 #[test]

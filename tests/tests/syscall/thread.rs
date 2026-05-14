@@ -255,7 +255,7 @@ fn contract_spawn_from_clone_first_thread_step_preserves_go_child_gettid_path() 
     let mapped = t.sys_mmap(
         0x10000,
         0x1000,
-        PROT_READ | PROT_EXEC,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
         MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS,
         -1,
         0,
@@ -350,7 +350,7 @@ fn contract_runtime_notesleep_futex_return_path_preserves_go_worker_context() {
     let notesleep_page = t.sys_mmap(
         0x2a000,
         0x1000,
-        PROT_READ | PROT_EXEC,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
         MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS,
         -1,
         0,
@@ -359,7 +359,7 @@ fn contract_runtime_notesleep_futex_return_path_preserves_go_worker_context() {
     let futexsleep_page = t.sys_mmap(
         0x4d000,
         0x1000,
-        PROT_READ | PROT_EXEC,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
         MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS,
         -1,
         0,
@@ -368,7 +368,7 @@ fn contract_runtime_notesleep_futex_return_path_preserves_go_worker_context() {
     let futex_page = t.sys_mmap(
         0x83000,
         0x1000,
-        PROT_READ | PROT_EXEC,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
         MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS,
         -1,
         0,
@@ -383,6 +383,21 @@ fn contract_runtime_notesleep_futex_return_path_preserves_go_worker_context() {
         0,
     );
     assert_eq!(cgo_yield_page, 0xbdc000);
+    tidemark_kernel::syscall::memory::register_elf_load_segment(
+        0x2a000,
+        0x2b000,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
+    );
+    tidemark_kernel::syscall::memory::register_elf_load_segment(
+        0x4d000,
+        0x4e000,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
+    );
+    tidemark_kernel::syscall::memory::register_elf_load_segment(
+        0x83000,
+        0x84000,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
+    );
 
     unsafe {
         // runtime.notesleep tail around the futexsleep call and loop.
@@ -405,6 +420,12 @@ fn contract_runtime_notesleep_futex_return_path_preserves_go_worker_context() {
         tidemark_kernel::guest_mem::write_u32(t.base, 0x2a4b4, 0x6282_b283); // ld t0,1576(t0)
         tidemark_kernel::guest_mem::write_u32(t.base, 0x2a4b8, 0x0002_b283); // ld t0,0(t0)
         tidemark_kernel::guest_mem::write_u32(t.base, 0x2a4bc, 0xfc02_83e3); // beqz t0,2a482
+        tidemark_kernel::guest_mem::write_u16(t.base, 0x2a4c0, 0x0001); // c.nop
+        tidemark_kernel::guest_mem::write_u16(t.base, 0x2a4c2, 0x0001); // c.nop
+        tidemark_kernel::guest_mem::write_u16(t.base, 0x2a4c4, 0x0001); // c.nop
+        tidemark_kernel::guest_mem::write_u16(t.base, 0x2a4c6, 0x0001); // c.nop
+        tidemark_kernel::guest_mem::write_u16(t.base, 0x2a4c8, 0x0001); // c.nop
+        tidemark_kernel::guest_mem::write_u16(t.base, 0x2a4ca, 0x0001); // c.nop
         tidemark_kernel::guest_mem::write_u16(t.base, 0x2a4cc, 0x6082); // ld ra,0(sp)
         tidemark_kernel::guest_mem::write_u16(t.base, 0x2a4ce, 0x6145); // addi sp,sp,48
         tidemark_kernel::guest_mem::write_u32(t.base, 0x2a4d0, 0x0000_8067); // ret
@@ -429,9 +450,16 @@ fn contract_runtime_notesleep_futex_return_path_preserves_go_worker_context() {
         tidemark_kernel::guest_mem::write_u32(t.base, 0x83304, 0x0000_0073); // ecall
         tidemark_kernel::guest_mem::write_u32(t.base, 0x83308, 0x0000_8067); // ret
 
-        // cgo_yield pointer slot is null so notesleep loops back.
-        tidemark_kernel::guest_mem::write_u64(t.base, 0xbdcad8, 0);
+        // cgo_yield points at a null function pointer so notesleep loops back.
+        tidemark_kernel::guest_mem::write_u64(t.base, 0xbdcad8, 0xbdcb00);
+        tidemark_kernel::guest_mem::write_u64(t.base, 0xbdcb00, 0);
     }
+    assert_eq!(
+        tidemark_kernel::syscall::identity::sys_riscv_flush_icache(
+            &mut t.vm, t.base, 0x2a000, 0x84000, 0,
+        ),
+        0
+    );
 
     let futexsleep_sp = t.scratch + 0x7000;
     let notesleep_sp = futexsleep_sp + 64;
@@ -449,11 +477,26 @@ fn contract_runtime_notesleep_futex_return_path_preserves_go_worker_context() {
 
     t.vm.tid = 3;
     t.vm.status = STATUS_OK;
+    t.vm.guest_base = t.base;
     t.vm.pc = 0x83308;
     t.vm.x[1] = 0x4d654;
     t.vm.x[2] = futexsleep_sp;
     t.vm.x[27] = g;
     install_current_thread_record(&mut t);
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.thread_count
+            .store(2, std::sync::atomic::Ordering::Release);
+    }
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, 0x83308, 0x0000_8067);
+    }
+    assert!(
+        tidemark_kernel::syscall::memory::guest_range_permitted(
+            &t.vm, t.base, 0x83308, 4, PROT_EXEC,
+        ),
+        "synthetic futex return page must be executable"
+    );
 
     let remaining = tidemark_kernel::abi::thread_step(&mut t.vm as *mut ThreadState as u32, 64);
     assert!(remaining >= 0);
@@ -481,7 +524,7 @@ fn contract_runtime_notesleep_futex_wake_return_path_preserves_go_worker_context
     let notesleep_page = t.sys_mmap(
         0x2a000,
         0x1000,
-        PROT_READ | PROT_EXEC,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
         MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS,
         -1,
         0,
@@ -490,7 +533,7 @@ fn contract_runtime_notesleep_futex_wake_return_path_preserves_go_worker_context
     let futexsleep_page = t.sys_mmap(
         0x4d000,
         0x1000,
-        PROT_READ | PROT_EXEC,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
         MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS,
         -1,
         0,
@@ -499,7 +542,7 @@ fn contract_runtime_notesleep_futex_wake_return_path_preserves_go_worker_context
     let futex_page = t.sys_mmap(
         0x83000,
         0x1000,
-        PROT_READ | PROT_EXEC,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
         MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS,
         -1,
         0,
@@ -517,12 +560,27 @@ fn contract_runtime_notesleep_futex_wake_return_path_preserves_go_worker_context
     let caller_page = t.sys_mmap(
         0x2b000,
         0x1000,
-        PROT_READ | PROT_EXEC,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
         MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS,
         -1,
         0,
     );
     assert_eq!(caller_page, 0x2b000);
+    tidemark_kernel::syscall::memory::register_elf_load_segment(
+        0x2a000,
+        0x2c000,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
+    );
+    tidemark_kernel::syscall::memory::register_elf_load_segment(
+        0x4d000,
+        0x4e000,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
+    );
+    tidemark_kernel::syscall::memory::register_elf_load_segment(
+        0x83000,
+        0x84000,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
+    );
 
     unsafe {
         // runtime.notesleep tail around the futexsleep call and wake check.
@@ -545,6 +603,12 @@ fn contract_runtime_notesleep_futex_wake_return_path_preserves_go_worker_context
         tidemark_kernel::guest_mem::write_u32(t.base, 0x2a4b4, 0x6282_b283); // ld t0,1576(t0)
         tidemark_kernel::guest_mem::write_u32(t.base, 0x2a4b8, 0x0002_b283); // ld t0,0(t0)
         tidemark_kernel::guest_mem::write_u32(t.base, 0x2a4bc, 0xfc02_83e3); // beqz t0,2a482
+        tidemark_kernel::guest_mem::write_u16(t.base, 0x2a4c0, 0x0001); // c.nop
+        tidemark_kernel::guest_mem::write_u16(t.base, 0x2a4c2, 0x0001); // c.nop
+        tidemark_kernel::guest_mem::write_u16(t.base, 0x2a4c4, 0x0001); // c.nop
+        tidemark_kernel::guest_mem::write_u16(t.base, 0x2a4c6, 0x0001); // c.nop
+        tidemark_kernel::guest_mem::write_u16(t.base, 0x2a4c8, 0x0001); // c.nop
+        tidemark_kernel::guest_mem::write_u16(t.base, 0x2a4ca, 0x0001); // c.nop
         tidemark_kernel::guest_mem::write_u16(t.base, 0x2a4cc, 0x6082); // ld ra,0(sp)
         tidemark_kernel::guest_mem::write_u16(t.base, 0x2a4ce, 0x6145); // addi sp,sp,48
         tidemark_kernel::guest_mem::write_u32(t.base, 0x2a4d0, 0x0000_8067); // ret
@@ -569,13 +633,20 @@ fn contract_runtime_notesleep_futex_wake_return_path_preserves_go_worker_context
         tidemark_kernel::guest_mem::write_u32(t.base, 0x83304, 0x0000_0073); // ecall
         tidemark_kernel::guest_mem::write_u32(t.base, 0x83308, 0x0000_8067); // ret
 
-        // cgo_yield pointer slot is non-zero so notesleep exits after wake.
-        tidemark_kernel::guest_mem::write_u64(t.base, 0xbdcad8, 1);
+        // cgo_yield points at a non-zero function pointer so notesleep exits after wake.
+        tidemark_kernel::guest_mem::write_u64(t.base, 0xbdcad8, 0xbdcb00);
+        tidemark_kernel::guest_mem::write_u64(t.base, 0xbdcb00, 1);
 
         // Caller target after notesleep returns.
         tidemark_kernel::guest_mem::write_u32(t.base, 0x2b000, 0x0010_0513); // li a0,1
         tidemark_kernel::guest_mem::write_u32(t.base, 0x2b004, 0x0000_8067); // ret
     }
+    assert_eq!(
+        tidemark_kernel::syscall::identity::sys_riscv_flush_icache(
+            &mut t.vm, t.base, 0x2a000, 0x84000, 0,
+        ),
+        0
+    );
 
     let futexsleep_sp = t.scratch + 0x7000;
     let notesleep_sp = futexsleep_sp + 64;
@@ -595,11 +666,18 @@ fn contract_runtime_notesleep_futex_wake_return_path_preserves_go_worker_context
 
     t.vm.tid = 3;
     t.vm.status = STATUS_OK;
+    t.vm.guest_base = t.base;
     t.vm.pc = 0x83308;
     t.vm.x[1] = 0x4d654;
     t.vm.x[2] = futexsleep_sp;
     t.vm.x[27] = g;
     install_current_thread_record(&mut t);
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.thread_count
+            .store(2, std::sync::atomic::Ordering::Release);
+        tidemark_kernel::guest_mem::write_u32(t.base, 0x83308, 0x0000_8067);
+    }
 
     let remaining = tidemark_kernel::abi::thread_step(&mut t.vm as *mut ThreadState as u32, 64);
     assert!(remaining >= 0);
@@ -609,7 +687,7 @@ fn contract_runtime_notesleep_futex_wake_return_path_preserves_go_worker_context
         t.vm.status, t.vm.pc, t.vm.x[1], t.vm.x[2], t.vm.exit_code, t.vm.fault_pc, t.vm.fault_addr,
     );
     assert_eq!(
-        t.vm.pc, 0x2b000,
+        t.vm.pc, 0x2b004,
         "status={} pc=0x{:x} ra=0x{:x} sp=0x{:x} exit={} fault_pc=0x{:x} fault_addr=0x{:x}",
         t.vm.status, t.vm.pc, t.vm.x[1], t.vm.x[2], t.vm.exit_code, t.vm.fault_pc, t.vm.fault_addr,
     );

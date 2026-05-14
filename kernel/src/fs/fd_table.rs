@@ -32,10 +32,17 @@
 //!   F_SETFD         = 2     set close_on_exec
 //!   F_GETFL         = 3     get file status flags
 //!   F_SETFL         = 4     set file status flags
+//!   F_GETLK         = 5     query POSIX record lock
+//!   F_SETLK         = 6     set POSIX record lock
+//!   F_SETLKW        = 7     blocking POSIX record lock
+//!   F_OFD_GETLK     = 36    query open-file-description lock
+//!   F_OFD_SETLK     = 37    set open-file-description lock
+//!   F_OFD_SETLKW    = 38    blocking open-file-description lock
 //!   F_DUPFD_CLOEXEC = 1030  dup with CLOEXEC
 //!   FD_CLOEXEC      = 1
 
 use crate::abi::*;
+use crate::guest_mem;
 use crate::types::{FdEntry, OpenFileDesc, ProcessState, ThreadState};
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -45,9 +52,18 @@ const F_GETFD: u64 = 1;
 const F_SETFD: u64 = 2;
 const F_GETFL: u64 = 3;
 const F_SETFL: u64 = 4;
+const F_GETLK: u64 = 5;
+const F_SETLK: u64 = 6;
+const F_SETLKW: u64 = 7;
+const F_OFD_GETLK: u64 = 36;
+const F_OFD_SETLK: u64 = 37;
+const F_OFD_SETLKW: u64 = 38;
 const F_DUPFD_CLOEXEC: u64 = 1030;
 const OFD_PIPE_EPIPE_SYNCED: u32 = 1 << 31;
 pub(crate) const OPEN_ACCESS_MODE_MASK: i32 = 0x3;
+const F_RDLCK: u16 = 0;
+const F_WRLCK: u16 = 1;
+const F_UNLCK: u16 = 2;
 const CLOSE_RANGE_UNSHARE: u64 = 1 << 1;
 const CLOSE_RANGE_CLOEXEC: u64 = 1 << 2;
 const LOCK_SH: u32 = 0x1;
@@ -62,6 +78,7 @@ const EFD_SEMAPHORE: i32 = 0x1;
 pub enum BackendCleanup {
     Pipe {
         pipe_idx: u32,
+        generation: u32,
         is_read_end: bool,
         ofd_id: u32,
     },
@@ -86,6 +103,7 @@ pub enum BackendCleanup {
 /// Pointer to OFD table in kernel Worker linear memory.
 static mut OFD_TABLE_PTR: *mut [OpenFileDesc; MAX_FDS] = core::ptr::null_mut();
 static mut OFD_RESERVED: [u64; (MAX_FDS + 63) / 64] = [0; (MAX_FDS + 63) / 64];
+static mut OFD_OFFSET_FLOOR: [u64; MAX_FDS] = [0; MAX_FDS];
 
 fn ofd_table() -> &'static mut [OpenFileDesc; MAX_FDS] {
     unsafe {
@@ -122,6 +140,7 @@ pub fn init() {
             core::ptr::addr_of_mut!(OFD_RESERVED),
             [0; (MAX_FDS + 63) / 64],
         );
+        core::ptr::write(core::ptr::addr_of_mut!(OFD_OFFSET_FLOOR), [0; MAX_FDS]);
 
         let size = core::mem::size_of::<[OpenFileDesc; MAX_FDS]>() as u32;
         let align = core::mem::align_of::<OpenFileDesc>() as u32;
@@ -144,6 +163,14 @@ fn ofd_reserved(ofd_id: usize) -> bool {
         let word = core::ptr::read(core::ptr::addr_of!(OFD_RESERVED[ofd_id / 64]));
         (word & (1u64 << (ofd_id % 64))) != 0
     }
+}
+
+pub fn ofd_reserved_ptr() -> u32 {
+    core::ptr::addr_of!(OFD_RESERVED) as u32
+}
+
+pub fn ofd_reserved_bytes() -> u32 {
+    core::mem::size_of::<[u64; (MAX_FDS + 63) / 64]>() as u32
 }
 
 pub fn reserve_ofd_id(ofd_id: u32) {
@@ -271,6 +298,7 @@ unsafe fn find_free_fd(base: u32, vm: &ThreadState, min_fd: usize) -> Option<usi
 unsafe fn alloc_ofd(fd_type: i32, status_flags: i32) -> u32 {
     for i in 1..MAX_FDS {
         if ofd_table()[i].refcount == 0 && !ofd_reserved(i) {
+            set_offset_floor_by_id(i as u32, 0);
             ofd_table()[i] = OpenFileDesc {
                 fd_type,
                 host_fd: -1,
@@ -290,6 +318,7 @@ fn backend_cleanup_for_ofd(ofd_id: u32, ofd: &OpenFileDesc) -> Option<BackendCle
     if ofd.fd_type == FD_TYPE_PIPE {
         Some(BackendCleanup::Pipe {
             pipe_idx: ofd.ino,
+            generation: ofd.offset as u32,
             is_read_end: ofd.host_fd >= 0,
             ofd_id,
         })
@@ -336,9 +365,13 @@ pub fn run_backend_cleanup(cleanup: BackendCleanup) {
     match cleanup {
         BackendCleanup::Pipe {
             pipe_idx,
+            generation,
             is_read_end,
             ofd_id,
         } => {
+            if !crate::syscall::pipe::pipe_generation_matches(pipe_idx, generation) {
+                return;
+            }
             let outcome = crate::syscall::pipe::pipe_close_outcome(pipe_idx, is_read_end);
             crate::tracepoints::record_pipe_close_event(
                 pipe_idx,
@@ -385,6 +418,7 @@ pub fn blocked_status_uses_ofd_pin(status: i32) -> bool {
         status,
         STATUS_PIPE_WAIT
             | STATUS_EPOLL_WAIT
+            | STATUS_CONNECT
             | STATUS_SOCKET_RECV
             | STATUS_SOCKET_SEND
             | STATUS_FLOCK_WAIT
@@ -395,6 +429,8 @@ pub fn clear_blocked_ofd_pin(vm: &mut ThreadState) {
     let ofd_id = vm.blocked_ofd_id;
     vm.blocked_fd = 0;
     vm.blocked_ofd_id = 0;
+    vm.blocked_syscall_nr = 0;
+    vm.blocked_syscall_args = [0; 6];
     if ofd_id != 0 {
         release_ofd_id(ofd_id);
     }
@@ -487,6 +523,7 @@ pub fn release_ofd_id_deferred(ofd_id: u32) -> Option<BackendCleanup> {
     crate::syscall::epoll::release_interest_for_ofd(ofd_id);
     let cleanup = backend_cleanup_for_ofd(ofd_id, ofd);
     clear_ofd(ofd);
+    set_offset_floor_by_id(ofd_id, 0);
     cleanup
 }
 
@@ -569,6 +606,8 @@ pub fn open_pipe(
         }
         ofd_table()[ofd_id as usize].host_fd = host_fd;
         ofd_table()[ofd_id as usize].ino = pipe_idx;
+        ofd_table()[ofd_id as usize].offset =
+            crate::syscall::pipe::pipe_generation(pipe_idx) as i64;
 
         let cloexec = if flags & O_CLOEXEC != 0 {
             FD_CLOEXEC
@@ -593,12 +632,16 @@ pub fn open_pipe(
 
 /// Check if an OFD is a pipe read-end (host_fd >= 0 and fd_type == PIPE).
 pub fn is_pipe_read(ofd: &OpenFileDesc) -> bool {
-    ofd.fd_type == FD_TYPE_PIPE && ofd.host_fd >= 0
+    ofd.fd_type == FD_TYPE_PIPE
+        && ofd.host_fd >= 0
+        && crate::syscall::pipe::pipe_generation_matches(ofd.ino, ofd.offset as u32)
 }
 
 /// Check if an OFD is a pipe write-end (host_fd < 0 and fd_type == PIPE).
 pub fn is_pipe_write(ofd: &OpenFileDesc) -> bool {
-    ofd.fd_type == FD_TYPE_PIPE && ofd.host_fd < 0
+    ofd.fd_type == FD_TYPE_PIPE
+        && ofd.host_fd < 0
+        && crate::syscall::pipe::pipe_generation_matches(ofd.ino, ofd.offset as u32)
 }
 
 // =========================================================================
@@ -1055,8 +1098,40 @@ pub fn sys_fcntl(vm: &mut ThreadState, base: u32, fd: u64, cmd: u64, arg: u64) -
                 ofd.status_flags = (ofd.status_flags & !changeable) | (arg as i32 & changeable);
                 0
             }
+            F_GETLK | F_OFD_GETLK => fcntl_getlk(base, vm, fd, arg),
+            F_SETLK | F_SETLKW | F_OFD_SETLK | F_OFD_SETLKW => fcntl_setlk(base, vm, fd, arg),
             _ => EINVAL,
         }
+    }
+}
+
+fn fcntl_getlk(base: u32, vm: &ThreadState, fd: u64, flock_addr: u64) -> i64 {
+    if unsafe { get_fd_entry(base, vm, fd) }.is_none() {
+        return EBADF;
+    }
+    if flock_addr == 0 {
+        return EFAULT;
+    }
+    unsafe {
+        guest_mem::write_u16(base, flock_addr, F_UNLCK);
+    }
+    0
+}
+
+fn fcntl_setlk(base: u32, vm: &ThreadState, fd: u64, flock_addr: u64) -> i64 {
+    let Some(entry) = (unsafe { get_fd_entry(base, vm, fd) }) else {
+        return EBADF;
+    };
+    if flock_addr == 0 {
+        return EFAULT;
+    }
+    let lock_type = unsafe { guest_mem::read_u16(base, flock_addr) };
+    let access_mode = ofd_table()[entry.ofd_id as usize].status_flags & OPEN_ACCESS_MODE_MASK;
+    match lock_type {
+        F_RDLCK if access_mode == O_WRONLY => EBADF,
+        F_WRLCK if access_mode == O_RDONLY => EBADF,
+        F_RDLCK | F_WRLCK | F_UNLCK => 0,
+        _ => EINVAL,
     }
 }
 
@@ -1253,6 +1328,40 @@ pub fn get_ofd_by_id(ofd_id: u32) -> Option<OpenFileDesc> {
     Some(*ofd)
 }
 
+pub fn get_offset_by_id(ofd_id: u32) -> u64 {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return 0;
+    }
+    ofd_table()[ofd_id as usize].offset as u64
+}
+
+pub fn get_offset_floor_by_id(ofd_id: u32) -> u64 {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(OFD_OFFSET_FLOOR[ofd_id as usize])) }
+}
+
+pub fn set_offset_floor_by_id(ofd_id: u32, offset: u64) {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return;
+    }
+    unsafe {
+        core::ptr::write(
+            core::ptr::addr_of_mut!(OFD_OFFSET_FLOOR[ofd_id as usize]),
+            offset,
+        );
+    }
+}
+
+pub fn set_offset_by_id(ofd_id: u32, offset: u64) {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return;
+    }
+    ofd_table()[ofd_id as usize].offset = offset as i64;
+    set_offset_floor_by_id(ofd_id, offset);
+}
+
 pub fn pipe_epipe_synced(ofd_id: u32) -> bool {
     if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
         return false;
@@ -1273,6 +1382,22 @@ pub fn set_pipe_epipe_synced(ofd_id: u32, synced: bool) {
         ofd.flock_state |= OFD_PIPE_EPIPE_SYNCED;
     } else {
         ofd.flock_state &= !OFD_PIPE_EPIPE_SYNCED;
+    }
+}
+
+pub fn set_fd_nonblock(base: u32, vm: &ThreadState, fd: u64, enabled: bool) -> i64 {
+    unsafe {
+        let entry = match get_fd_entry(base, vm, fd) {
+            Some(entry) => entry,
+            None => return EBADF,
+        };
+        let ofd = &mut ofd_table()[entry.ofd_id as usize];
+        if enabled {
+            ofd.status_flags |= O_NONBLOCK;
+        } else {
+            ofd.status_flags &= !O_NONBLOCK;
+        }
+        0
     }
 }
 
@@ -1359,6 +1484,10 @@ pub fn advance_offset(base: u32, vm: &ThreadState, fd: u64, delta: u64) {
     unsafe {
         if let Some(entry) = get_fd_entry(base, vm, fd) {
             ofd_table()[entry.ofd_id as usize].offset += delta as i64;
+            set_offset_floor_by_id(
+                entry.ofd_id,
+                ofd_table()[entry.ofd_id as usize].offset as u64,
+            );
         }
     }
 }
@@ -1368,6 +1497,7 @@ pub fn set_offset(base: u32, vm: &ThreadState, fd: u64, offset: u64) {
     unsafe {
         if let Some(entry) = get_fd_entry(base, vm, fd) {
             ofd_table()[entry.ofd_id as usize].offset = offset as i64;
+            set_offset_floor_by_id(entry.ofd_id, offset);
         }
     }
 }

@@ -50,6 +50,12 @@ pub extern "C" fn thread_step(vm_ptr: u32, budget: i32) -> i32 {
             crate::tracepoints::record_thread_step_phase(vm, 5, budget, budget);
             return budget;
         }
+        if vm.status != STATUS_OK && vm.status != STATUS_VFORK_WAIT {
+            crate::tracepoints::record_thread_step_phase(vm, 3, budget, budget);
+            crate::tracepoints::record_thread_step_trace(vm, budget, budget);
+            crate::tracepoints::record_thread_step_phase(vm, 5, budget, budget);
+            return budget;
+        }
         vm.status = STATUS_OK;
         crate::tracepoints::record_thread_step_phase(vm, 3, budget, 0);
         let mut cache = thread_block_cache(vm, base);
@@ -142,6 +148,22 @@ pub extern "C" fn thread_blocked_ofd_id(vm_ptr: u32) -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn thread_blocked_syscall_nr(vm_ptr: u32) -> u64 {
+    unsafe { (*(vm_ptr as *const ThreadState)).blocked_syscall_nr }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_blocked_syscall_arg(vm_ptr: u32, index: u32) -> u64 {
+    unsafe {
+        let vm = &*(vm_ptr as *const ThreadState);
+        if index >= vm.blocked_syscall_args.len() as u32 {
+            return 0;
+        }
+        vm.blocked_syscall_args[index as usize]
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn thread_spawn_from_clone(parent_vm_ptr: u32) -> u32 {
     unsafe {
         let parent = &*(parent_vm_ptr as *const ThreadState);
@@ -172,6 +194,72 @@ pub extern "C" fn thread_pending_fs_effects(vm_ptr: u32) -> u32 {
     unsafe {
         let vm = &*(vm_ptr as *const ThreadState);
         crate::syscall::fs::pending_request_effects(vm_ptr, vm.guest_base)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_take_completed_sync_effects(vm_ptr: u32) -> u32 {
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut ThreadState);
+        let effects = vm.completed_sync_effects;
+        vm.completed_sync_effects = 0;
+        effects
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_take_completed_pipe_sync_slots(vm_ptr: u32) -> u64 {
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut ThreadState);
+        let slots = vm.completed_pipe_sync_slots;
+        vm.completed_pipe_sync_slots = 0;
+        slots
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_take_completed_pipe_sync_read_slots(vm_ptr: u32) -> u64 {
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut ThreadState);
+        let slots = vm.completed_pipe_sync_read_slots;
+        vm.completed_pipe_sync_read_slots = 0;
+        slots
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_take_completed_pipe_sync_write_slots(vm_ptr: u32) -> u64 {
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut ThreadState);
+        let slots = vm.completed_pipe_sync_write_slots;
+        vm.completed_pipe_sync_write_slots = 0;
+        slots
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_take_completed_pipe_fresh_slots(vm_ptr: u32) -> u64 {
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut ThreadState);
+        let slots = vm.completed_pipe_fresh_slots;
+        vm.completed_pipe_fresh_slots = 0;
+        slots
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_completed_pipe_read_guest_ptr(vm_ptr: u32) -> u64 {
+    unsafe { (*(vm_ptr as *const ThreadState)).completed_pipe_read_guest_ptr }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_take_completed_pipe_read_len(vm_ptr: u32) -> u32 {
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut ThreadState);
+        let len = vm.completed_pipe_read_len;
+        vm.completed_pipe_read_guest_ptr = 0;
+        vm.completed_pipe_read_len = 0;
+        len
     }
 }
 
@@ -229,6 +317,130 @@ pub extern "C" fn thread_pending_fs_secondary_absolute_path(
             buf_ptr,
             buf_len,
         )
+    }
+}
+
+unsafe fn thread_fs_ring_base_inner(vm_ptr: u32) -> u32 {
+    let vm = unsafe { &*(vm_ptr as *const ThreadState) };
+    if vm.process_ptr == 0 {
+        return 0;
+    }
+    let ps = unsafe { &*((vm.guest_base as u64 + vm.process_ptr as u64) as *const ProcessState) };
+    ps.fs_ring_base
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_fs_ring_base(vm_ptr: u32) -> u32 {
+    unsafe { thread_fs_ring_base_inner(vm_ptr) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_fs_ring_submit_head(vm_ptr: u32) -> u32 {
+    unsafe {
+        let ring_base = thread_fs_ring_base_inner(vm_ptr);
+        if ring_base == 0 {
+            return 0;
+        }
+        (*(ring_base as *const core::sync::atomic::AtomicU32)).load(Ordering::Acquire)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_fs_ring_submit_tail(vm_ptr: u32) -> u32 {
+    unsafe {
+        let ring_base = thread_fs_ring_base_inner(vm_ptr);
+        if ring_base == 0 {
+            return 0;
+        }
+        (*((ring_base + crate::fs::ring_buffer::OFF_SUBMIT_TAIL)
+            as *const core::sync::atomic::AtomicU32))
+            .load(Ordering::Acquire)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_fs_ring_complete_head(vm_ptr: u32) -> u32 {
+    unsafe {
+        let ring_base = thread_fs_ring_base_inner(vm_ptr);
+        if ring_base == 0 {
+            return 0;
+        }
+        (*((ring_base + crate::fs::ring_buffer::OFF_COMPLETE_HEAD)
+            as *const core::sync::atomic::AtomicU32))
+            .load(Ordering::Acquire)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_fs_ring_complete_tail(vm_ptr: u32) -> u32 {
+    unsafe {
+        let ring_base = thread_fs_ring_base_inner(vm_ptr);
+        if ring_base == 0 {
+            return 0;
+        }
+        (*((ring_base + crate::fs::ring_buffer::OFF_COMPLETE_TAIL)
+            as *const core::sync::atomic::AtomicU32))
+            .load(Ordering::Acquire)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_fs_ring_request_opcode_at(vm_ptr: u32, pos: u32) -> u32 {
+    unsafe {
+        let ring_base = thread_fs_ring_base_inner(vm_ptr);
+        if ring_base == 0 {
+            return 0;
+        }
+        let idx = (pos as usize) % crate::fs::ring_buffer::SQ_SIZE;
+        let entry_off = ring_base
+            + crate::fs::ring_buffer::OFF_SQ_BASE
+            + (idx as u32) * (crate::fs::ring_buffer::REQ_SIZE as u32);
+        *(entry_off as *const u32)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_fs_ring_request_vm_ptr_at(vm_ptr: u32, pos: u32) -> u32 {
+    unsafe {
+        let ring_base = thread_fs_ring_base_inner(vm_ptr);
+        if ring_base == 0 {
+            return 0;
+        }
+        let idx = (pos as usize) % crate::fs::ring_buffer::SQ_SIZE;
+        let entry_off = ring_base
+            + crate::fs::ring_buffer::OFF_SQ_BASE
+            + (idx as u32) * (crate::fs::ring_buffer::REQ_SIZE as u32);
+        *((entry_off as *const u8).add(48) as *const u32)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_fs_ring_completion_vm_ptr_at(vm_ptr: u32, pos: u32) -> u32 {
+    unsafe {
+        let ring_base = thread_fs_ring_base_inner(vm_ptr);
+        if ring_base == 0 {
+            return 0;
+        }
+        let idx = (pos as usize) % crate::fs::ring_buffer::CQ_SIZE;
+        let entry_off = ring_base
+            + crate::fs::ring_buffer::OFF_CQ_BASE
+            + (idx as u32) * (crate::fs::ring_buffer::RESP_SIZE as u32);
+        *((entry_off as *const u8).add(8) as *const u32)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_fs_ring_completion_result_at(vm_ptr: u32, pos: u32) -> i64 {
+    unsafe {
+        let ring_base = thread_fs_ring_base_inner(vm_ptr);
+        if ring_base == 0 {
+            return 0;
+        }
+        let idx = (pos as usize) % crate::fs::ring_buffer::CQ_SIZE;
+        let entry_off = ring_base
+            + crate::fs::ring_buffer::OFF_CQ_BASE
+            + (idx as u32) * (crate::fs::ring_buffer::RESP_SIZE as u32);
+        *(entry_off as *const i64)
     }
 }
 
@@ -299,10 +511,26 @@ pub extern "C" fn thread_poll_wait_first_pipe_revents(vm_ptr: u32) -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn thread_poll_wait_pipe_slots_mask(vm_ptr: u32) -> u64 {
+    unsafe {
+        let vm = &*(vm_ptr as *const ThreadState);
+        crate::syscall::poll::wait_set_pipe_slots_mask(vm, vm.guest_base)
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn thread_pipe_read_eof_sync_pending(vm_ptr: u32) -> i32 {
     unsafe {
         let vm = &*(vm_ptr as *const ThreadState);
         i32::from(vm.fault_addr == crate::syscall::fs::PIPE_READ_EOF_SYNC_RETRY_MARKER)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_poll_hup_sync_pending(vm_ptr: u32) -> i32 {
+    unsafe {
+        let vm = &*(vm_ptr as *const ThreadState);
+        i32::from(crate::syscall::poll::poll_hup_sync_pending(vm))
     }
 }
 
@@ -359,7 +587,9 @@ pub extern "C" fn thread_blocked_pipe_read_ready(vm_ptr: u32) -> i32 {
                 return 1;
             }
         }
-        if vm.blocked_ofd_id != 0 {
+        if vm.blocked_ofd_id != 0
+            || (vm.blocked_syscall_nr != SYS_PPOLL && vm.blocked_syscall_nr != SYS_PSELECT6)
+        {
             return 0;
         }
         for candidate_fd in 0..crate::abi::MAX_FDS as u64 {
@@ -374,6 +604,25 @@ pub extern "C" fn thread_blocked_pipe_read_ready(vm_ptr: u32) -> i32 {
             }
         }
         0
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_blocked_pipe_write_ready(vm_ptr: u32) -> i32 {
+    unsafe {
+        let vm = &*(vm_ptr as *const ThreadState);
+        let fd = if vm.blocked_ofd_id != 0 {
+            vm.blocked_fd as u64
+        } else {
+            vm.x[10]
+        };
+        let Some(ofd) = crate::fs::fd_table::get_ofd(vm.guest_base, vm, fd) else {
+            return 0;
+        };
+        if ofd.fd_type != crate::abi::FD_TYPE_PIPE || !crate::fs::fd_table::is_pipe_write(&ofd) {
+            return 0;
+        }
+        i32::from(crate::syscall::pipe::pipe_writable(ofd.ino, false))
     }
 }
 
@@ -427,6 +676,20 @@ pub extern "C" fn thread_connect_peer_addr(vm_ptr: u32, dst_ptr: u32, dst_len: u
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn thread_connect_peer_addr_for_fd(
+    vm_ptr: u32,
+    fd: u32,
+    dst_ptr: u32,
+    dst_len: u32,
+) -> i32 {
+    unsafe {
+        let vm = &*(vm_ptr as *const ThreadState);
+        let dst = core::slice::from_raw_parts_mut(dst_ptr as *mut u8, dst_len as usize);
+        crate::syscall::socket::connect_peer_addr_for_fd(vm.guest_base, vm, fd as u64, dst)
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn thread_socket_drain_outbound(
     vm_ptr: u32,
     fd: u32,
@@ -449,10 +712,26 @@ pub extern "C" fn thread_socket_close_external_peer(vm_ptr: u32, fd: u32) -> i32
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn thread_socket_force_shutdown(vm_ptr: u32, fd: u32) -> i32 {
+    unsafe {
+        let vm = &*(vm_ptr as *const ThreadState);
+        crate::syscall::socket::force_shutdown_for_fd(vm.guest_base, vm, fd as u64)
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn thread_socket_mark_external_peer(vm_ptr: u32, fd: u32) -> i32 {
     unsafe {
         let vm = &*(vm_ptr as *const ThreadState);
         crate::syscall::socket::mark_external_peer_for_fd(vm.guest_base, vm, fd as u64)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_socket_commit_external_connect(vm_ptr: u32, fd: u32) -> i32 {
+    unsafe {
+        let vm = &*(vm_ptr as *const ThreadState);
+        crate::syscall::socket::commit_external_connect_for_fd(vm.guest_base, vm, fd as u64)
     }
 }
 
@@ -487,6 +766,11 @@ pub extern "C" fn thread_socket_state(socket_idx: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn thread_socket_type(socket_idx: u32) -> i32 {
+    crate::syscall::socket::debug_socket_type(socket_idx)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn thread_socket_external_peer(socket_idx: u32) -> i32 {
     crate::syscall::socket::debug_socket_external_peer(socket_idx)
 }
@@ -499,6 +783,36 @@ pub extern "C" fn thread_socket_recv_buf_idx(socket_idx: u32) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn thread_socket_recv_available(socket_idx: u32) -> i32 {
     crate::syscall::socket::debug_socket_recv_available(socket_idx)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_socket_read_count(socket_idx: u32) -> u32 {
+    crate::syscall::socket::debug_socket_read_count(socket_idx)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_socket_read_bytes(socket_idx: u32) -> u64 {
+    crate::syscall::socket::debug_socket_read_bytes(socket_idx)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_socket_read_last_fd(socket_idx: u32) -> u32 {
+    crate::syscall::socket::debug_socket_read_last_fd(socket_idx)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_socket_read_last_result(socket_idx: u32) -> i64 {
+    crate::syscall::socket::debug_socket_read_last_result(socket_idx)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_socket_read_last_before(socket_idx: u32) -> u32 {
+    crate::syscall::socket::debug_socket_read_last_before(socket_idx)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_socket_read_last_after(socket_idx: u32) -> u32 {
+    crate::syscall::socket::debug_socket_read_last_after(socket_idx)
 }
 
 #[unsafe(no_mangle)]
@@ -566,6 +880,25 @@ pub extern "C" fn thread_resume_poll_wait_timeout(vm_ptr: u32) {
 pub extern "C" fn thread_resume_blocked_syscall(vm_ptr: u32) -> i64 {
     unsafe {
         let vm = &mut *(vm_ptr as *mut ThreadState);
+        if vm.status == STATUS_PIPE_WAIT
+            && vm.fault_addr == crate::syscall::fs::PIPE_READ_EOF_SYNC_RETRY_MARKER
+        {
+            let fd = vm.fault_pc;
+            if let Some(ofd) = crate::fs::fd_table::get_ofd(vm.guest_base, vm, fd) {
+                if ofd.fd_type == crate::abi::FD_TYPE_PIPE
+                    && crate::fs::fd_table::is_pipe_read(&ofd)
+                    && crate::syscall::pipe::pipe_buffered_len(ofd.ino) == 0
+                    && crate::syscall::pipe::debug_write_open(ofd.ino) <= 0
+                {
+                    crate::fs::fd_table::clear_blocked_ofd_pin(vm);
+                    vm.fault_pc = 0;
+                    vm.fault_addr = 0;
+                    vm.x[10] = 0;
+                    vm.status = STATUS_OK;
+                    return 0;
+                }
+            }
+        }
         if crate::fs::fd_table::blocked_status_uses_ofd_pin(vm.status)
             && crate::syscall::signal::pending_signal_interrupts_blocked_syscall(vm, vm.guest_base)
         {
@@ -575,10 +908,19 @@ pub extern "C" fn thread_resume_blocked_syscall(vm_ptr: u32) -> i64 {
             vm.x[10] = EINTR as u64;
             vm.status = STATUS_OK;
             crate::syscall::signal::check_pending(vm, vm.guest_base);
+            crate::syscall::poll::restore_pselect6_sigmask(vm);
             return EINTR;
         }
         let saved_fd_entry =
             crate::fs::fd_table::patch_blocked_fd_entry_for_resume(vm.guest_base, vm);
+        if vm.blocked_syscall_nr != 0 {
+            vm.x[17] = vm.blocked_syscall_nr;
+            for (idx, value) in vm.blocked_syscall_args.iter().enumerate() {
+                vm.x[10 + idx] = *value;
+            }
+        } else if vm.blocked_ofd_id != 0 {
+            vm.x[10] = vm.blocked_fd as u64;
+        }
         let status = if vm.status == STATUS_EPOLL_WAIT {
             crate::syscall::epoll::resume_wait(vm, vm.guest_base);
             vm.status
@@ -614,6 +956,14 @@ pub extern "C" fn thread_resume_connect_result(vm_ptr: u32, result: i64) {
     unsafe {
         let vm = &mut *(vm_ptr as *mut ThreadState);
         crate::syscall::socket::resume_connect_result(vm, vm.guest_base, result);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_resume_connect_result_for_fd(vm_ptr: u32, fd: u32, result: i64) {
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut ThreadState);
+        crate::syscall::socket::resume_connect_result_for_fd(vm, vm.guest_base, fd as u64, result);
     }
 }
 
@@ -727,6 +1077,11 @@ pub extern "C" fn thread_restore_vfork_parent_without_cleanup(vm_ptr: u32, child
         let vm = &mut *(vm_ptr as *mut ThreadState);
         crate::syscall::process::vfork_parent_restore_without_cleanup(vm, child_pid);
     }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_restore_vfork_parent_proc_self_exe_snapshot() {
+    crate::syscall::process::vfork_restore_parent_proc_self_exe_snapshot();
 }
 
 #[unsafe(no_mangle)]

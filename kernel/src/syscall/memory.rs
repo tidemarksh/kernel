@@ -23,6 +23,11 @@ use crate::fs::{fd_table, memfs};
 use crate::guest_mem;
 use crate::types::{ThreadState, Vma};
 
+const MIN_MMAP_BASE: u64 = 0x20_0000;
+const MMAP_BASE_ALIGN: u64 = 0x10_0000;
+const BRK_MMAP_GAP: u64 = 8 * 1024 * 1024;
+const PROT_NONE_TOPDOWN_LIMIT: u64 = 0x8000_0000;
+
 /// Address space state — shared by all threads of a process.
 /// Allocated in kernel Worker linear memory via alloc.rs.
 /// Separated for fork (new address space) and execve (reinit).
@@ -263,11 +268,19 @@ pub(crate) fn debug_syscall_trace_entry_process_ptr(index: u32) -> u32 {
     debug_syscall_trace_entry(index).process_ptr
 }
 
+fn align_mmap_base(addr: u64) -> u64 {
+    (addr.saturating_add(MMAP_BASE_ALIGN - 1)) & !(MMAP_BASE_ALIGN - 1)
+}
+
+fn default_mmap_start(brk_start: u64) -> u64 {
+    align_mmap_base(brk_start.saturating_add(BRK_MMAP_GAP)).max(MIN_MMAP_BASE)
+}
+
 /// Initialize memory state. Allocates AddressSpaceState via alloc.rs.
 pub fn init(brk_start: u64) {
     // Guest VMA placement must depend on the guest address space, not on the
     // kernel-worker bump allocator's host-side placement.
-    let mmap_start = ((brk_start + 0x1F_FFFF) & !0xF_FFFF).max(0x20_0000);
+    let mmap_start = default_mmap_start(brk_start);
     unsafe {
         // Null the pointer so we always take the fresh allocation path.
         // Re-initialization intentionally leaks older test-only state so a
@@ -374,10 +387,11 @@ pub(crate) fn restore_state_from_image(image: &AddressSpaceStateImage) {
 }
 
 pub fn reset_for_execve_with_flush(base: u32, brk_start: u64, flush_shared: bool) {
-    let mmap_start = ((brk_start + 0x1F_FFFF) & !0xF_FFFF).max(0x20_0000);
+    let mmap_start = default_mmap_start(brk_start);
     if flush_shared {
         flush_shared_mappings_in_range(base, 0, u64::MAX);
     }
+    discard_execve_guest_address_space(base);
     let s = ms();
     s.vmas.clear();
     s.brk_base = brk_start;
@@ -392,6 +406,28 @@ pub fn reset_for_execve(base: u32, brk_start: u64) {
 
 pub fn flush_shared_mappings(base: u32) {
     flush_shared_mappings_in_range(base, 0, u64::MAX);
+}
+
+fn discard_execve_guest_address_space(base: u32) {
+    // execve(2) does not preserve the old memory mappings. Tidemark keeps the
+    // same WebAssembly Memory for in-place exec, so clear the previously mapped
+    // guest bytes before installing the new image. See:
+    // https://man7.org/linux/man-pages/man2/execve.2.html
+    let s = ms();
+    let mut ranges: Vec<(u64, u64)> = Vec::new();
+    for vma in s.vmas.iter() {
+        ranges.push((vma.start, vma.end));
+    }
+    if s.brk_current > s.brk_base {
+        ranges.push((page_align_down(s.brk_base), page_align_up(s.brk_current)));
+    }
+    for (start, end) in ranges {
+        if end > start {
+            unsafe {
+                guest_mem::zero_mem(base, start, (end - start) as usize);
+            }
+        }
+    }
 }
 
 pub fn refresh_shared_file_mappings(base: u32, guest_limit: u64) {
@@ -453,6 +489,10 @@ fn current_linear_guest_limit(base: u32) -> u64 {
 
 fn prot_none_reservation_limit() -> u64 {
     u32::MAX as u64 + 1
+}
+
+fn nonfixed_prot_none_reservation_limit(guest_limit: u64) -> u64 {
+    guest_limit.min(PROT_NONE_TOPDOWN_LIMIT)
 }
 
 fn needs_sparse_linear_backing(base: u32, guest_end: u64) -> bool {
@@ -946,6 +986,11 @@ pub fn sys_mmap(
 
     let mut sparse_fixed_upgrade = false;
     let mut remove_fixed_overlap_after_validation = false;
+    let nonfixed_limit = if is_sparse_anon_reservation {
+        nonfixed_prot_none_reservation_limit(guest_limit)
+    } else {
+        guest_limit
+    };
     let start = if is_fixed {
         if addr & (PAGE_SIZE - 1) != 0 {
             return EINVAL;
@@ -975,19 +1020,27 @@ pub fn sys_mmap(
         }
         addr
     } else if addr != 0
-        && addr >= mmap_floor(s)
-        && addr + len <= guest_limit
+        && addr >= mmap_preferred_floor(s, len, nonfixed_limit)
+        && addr
+            .checked_add(len)
+            .is_some_and(|end| end <= nonfixed_limit)
         && !overlaps(s, addr, addr + len)
     {
         addr
+    } else if is_sparse_anon_reservation {
+        let hole = find_high_hole(s, len, mmap_min_floor(s), nonfixed_limit);
+        if hole == 0 {
+            return ENOMEM;
+        }
+        hole
     } else if addr != 0 {
-        let hole = find_hole_from(s, mmap_floor(s), len, guest_limit);
+        let hole = find_hole(s, len, nonfixed_limit);
         if hole == 0 {
             return ENOMEM;
         }
         hole
     } else {
-        let hole = find_hole(s, len, guest_limit);
+        let hole = find_hole(s, len, nonfixed_limit);
         if hole == 0 {
             return ENOMEM;
         }
@@ -1312,12 +1365,26 @@ pub fn sys_mprotect(_vm: &mut ThreadState, base: u32, addr: u64, length: u64, pr
 // VMA table helpers
 // =========================================================================
 
-fn mmap_floor(s: &AddressSpaceState) -> u64 {
-    ((s.brk_current.max(s.brk_base) + 0x1F_FFFF) & !0xF_FFFF).max(0x20_0000)
+fn mmap_min_floor(s: &AddressSpaceState) -> u64 {
+    align_mmap_base(s.brk_current.max(s.brk_base).saturating_add(0x1F_FFFF)).max(MIN_MMAP_BASE)
+}
+
+fn mmap_preferred_floor(s: &AddressSpaceState, len: u64, guest_limit: u64) -> u64 {
+    let min_floor = mmap_min_floor(s);
+    let preferred = align_mmap_base(s.brk_current.max(s.brk_base).saturating_add(BRK_MMAP_GAP))
+        .max(MIN_MMAP_BASE);
+    if preferred
+        .checked_add(len)
+        .is_some_and(|end| end <= guest_limit)
+    {
+        preferred
+    } else {
+        min_floor
+    }
 }
 
 fn find_hole(s: &mut AddressSpaceState, len: u64, guest_limit: u64) -> u64 {
-    let floor = mmap_floor(s);
+    let floor = mmap_preferred_floor(s, len, guest_limit);
     let hole = find_hole_from(s, s.mmap_next.max(floor), len, guest_limit);
     if hole != 0 {
         s.mmap_next = hole + len;
@@ -1325,6 +1392,12 @@ fn find_hole(s: &mut AddressSpaceState, len: u64, guest_limit: u64) -> u64 {
     }
 
     let hole = find_hole_from(s, floor, len, guest_limit);
+    if hole != 0 {
+        s.mmap_next = hole + len;
+        return hole;
+    }
+
+    let hole = find_hole_from(s, mmap_min_floor(s), len, guest_limit);
     if hole != 0 {
         s.mmap_next = hole + len;
     }
@@ -1345,6 +1418,39 @@ fn find_hole_from(s: &AddressSpaceState, start: u64, len: u64, guest_limit: u64)
                 candidate = (v.end + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
                 break;
             }
+        }
+    }
+}
+
+fn find_high_hole(s: &AddressSpaceState, len: u64, floor: u64, guest_limit: u64) -> u64 {
+    if len == 0
+        || floor
+            .checked_add(len)
+            .is_none_or(|min_end| min_end > guest_limit)
+    {
+        return 0;
+    }
+
+    let mut candidate = (guest_limit - len) & !(PAGE_SIZE - 1);
+    loop {
+        let end = candidate + len;
+        let mut moved = false;
+        for v in s.vmas.iter().rev() {
+            if v.end <= candidate || v.start >= end {
+                continue;
+            }
+            let Some(next) = v.start.checked_sub(len) else {
+                return 0;
+            };
+            candidate = next & !(PAGE_SIZE - 1);
+            if candidate < floor {
+                return 0;
+            }
+            moved = true;
+            break;
+        }
+        if !moved {
+            return candidate;
         }
     }
 }
@@ -1570,6 +1676,25 @@ fn flush_shared_mappings_in_range(base: u32, start: u64, length: u64) {
         }
         flush_shared_vma_range(base, vma, flush_start, flush_end);
     }
+}
+
+pub(crate) fn flush_shared_mappings_for_guest_write(base: u32, start: u64, length: u64) -> bool {
+    let end = start.saturating_add(length);
+    let s = ms();
+    let mut flushed = false;
+    for vma in s.vmas.iter() {
+        if (vma.flags as u64 & MAP_SHARED) == 0 || vma.fd < 0 {
+            continue;
+        }
+        let flush_start = start.max(vma.start);
+        let flush_end = end.min(vma.end);
+        if flush_start >= flush_end {
+            continue;
+        }
+        flush_shared_vma_range(base, vma, flush_start, flush_end);
+        flushed = true;
+    }
+    flushed
 }
 
 fn flush_shared_vma_range(base: u32, vma: &Vma, flush_start: u64, flush_end: u64) {
