@@ -122,6 +122,30 @@ fn data_ptr(addr: u32) -> *mut u8 {
     (addr + OFF_DATA) as *mut u8
 }
 
+unsafe fn copy_into_ring(dst: *mut u8, tail: usize, cap: usize, data: &[u8], len: usize) {
+    let first = len.min(cap - tail);
+    unsafe {
+        core::ptr::copy_nonoverlapping(data.as_ptr(), dst.add(tail), first);
+    }
+    if len > first {
+        unsafe {
+            core::ptr::copy_nonoverlapping(data.as_ptr().add(first), dst, len - first);
+        }
+    }
+}
+
+unsafe fn copy_from_ring(src: *const u8, head: usize, cap: usize, out: &mut [u8], len: usize) {
+    let first = len.min(cap - head);
+    unsafe {
+        core::ptr::copy_nonoverlapping(src.add(head), out.as_mut_ptr(), first);
+    }
+    if len > first {
+        unsafe {
+            core::ptr::copy_nonoverlapping(src, out.as_mut_ptr().add(first), len - first);
+        }
+    }
+}
+
 /// Allocate a free net buffer. Returns the buffer index, or `None` if full.
 pub fn alloc_buffer() -> Option<u32> {
     unsafe {
@@ -169,10 +193,8 @@ pub fn write(idx: u32, data: &[u8]) -> usize {
     let to_write = data.len().min(free);
     let dp = data_ptr(addr);
 
-    for (i, byte) in data.iter().enumerate().take(to_write) {
-        unsafe {
-            *dp.add((tail + i) % cap) = *byte;
-        }
+    unsafe {
+        copy_into_ring(dp, tail, cap, data, to_write);
     }
     set_tail(addr, ((tail + to_write) % cap) as u32);
 
@@ -198,8 +220,8 @@ pub fn read(idx: u32, buf: &mut [u8]) -> usize {
     let to_read = buf.len().min(avail);
     let dp = data_ptr(addr);
 
-    for (i, slot) in buf.iter_mut().enumerate().take(to_read) {
-        *slot = unsafe { *dp.add((head + i) % cap) };
+    unsafe {
+        copy_from_ring(dp, head, cap, buf, to_read);
     }
     set_head(addr, ((head + to_read) % cap) as u32);
 

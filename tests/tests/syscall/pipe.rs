@@ -172,6 +172,32 @@ fn circular_wrap() {
 }
 
 #[test]
+fn circular_wrap_preserves_split_payload_order() {
+    let _t = TestVm::new();
+    let idx = pipe::alloc_pipe_slot().unwrap();
+
+    let cap = pipe::PIPE_BUF_SIZE;
+    let first_write_len = cap - 512;
+    let first_read_len = cap - 1024;
+    let wrap_write_len = 2048;
+    let remaining_first = first_write_len - first_read_len;
+
+    let first = vec![0xB1u8; first_write_len];
+    assert_eq!(pipe::pipe_write(idx, &first), first_write_len as i64);
+
+    let mut tmp = vec![0u8; first_read_len];
+    assert_eq!(pipe::pipe_read(idx, &mut tmp), first_read_len as i64);
+
+    let wrapped = vec![0xC2u8; wrap_write_len];
+    assert_eq!(pipe::pipe_write(idx, &wrapped), wrap_write_len as i64);
+
+    let mut out = vec![0u8; remaining_first + wrap_write_len];
+    assert_eq!(pipe::pipe_read(idx, &mut out), out.len() as i64);
+    assert!(out[..remaining_first].iter().all(|byte| *byte == 0xB1));
+    assert!(out[remaining_first..].iter().all(|byte| *byte == 0xC2));
+}
+
+#[test]
 fn sys_pipe2_sets_cloexec_and_nonblock_flags() {
     let mut t = TestVm::new();
     let pipefd_addr = t.scratch + 0x1000;

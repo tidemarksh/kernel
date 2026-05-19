@@ -144,6 +144,30 @@ fn data_ptr(slot: u32) -> *mut u8 {
     (slot + OFF_DATA) as *mut u8
 }
 
+unsafe fn copy_into_ring(dst: *mut u8, tail: usize, cap: usize, data: &[u8], len: usize) {
+    let first = len.min(cap - tail);
+    unsafe {
+        core::ptr::copy_nonoverlapping(data.as_ptr(), dst.add(tail), first);
+    }
+    if len > first {
+        unsafe {
+            core::ptr::copy_nonoverlapping(data.as_ptr().add(first), dst, len - first);
+        }
+    }
+}
+
+unsafe fn copy_from_ring(src: *const u8, head: usize, cap: usize, out: &mut [u8], len: usize) {
+    let first = len.min(cap - head);
+    unsafe {
+        core::ptr::copy_nonoverlapping(src.add(head), out.as_mut_ptr(), first);
+    }
+    if len > first {
+        unsafe {
+            core::ptr::copy_nonoverlapping(src, out.as_mut_ptr().add(first), len - first);
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PipeCloseOutcome {
     pub read_open: i32,
@@ -234,8 +258,8 @@ pub fn pipe_read(pipe_idx: u32, buf: &mut [u8]) -> i64 {
     let h = head as usize;
     let dp = data_ptr(addr);
 
-    for (i, slot) in buf.iter_mut().enumerate().take(to_read) {
-        *slot = unsafe { *dp.add((h + i) % cap) };
+    unsafe {
+        copy_from_ring(dp, h, cap, buf, to_read);
     }
     head_ptr(addr).store(((h + to_read) % cap) as u32, Ordering::Release);
 
@@ -278,10 +302,8 @@ pub fn pipe_write(pipe_idx: u32, data: &[u8]) -> i64 {
     let to_write = data.len().min(free);
     let dp = data_ptr(addr);
 
-    for (i, byte) in data.iter().enumerate().take(to_write) {
-        unsafe {
-            *dp.add((tail + i) % cap) = *byte;
-        }
+    unsafe {
+        copy_into_ring(dp, tail, cap, data, to_write);
     }
     tail_ptr(addr).store(((tail + to_write) % cap) as u32, Ordering::Release);
 
