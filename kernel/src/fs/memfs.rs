@@ -1003,6 +1003,15 @@ pub fn file_data_ptr(ino: u32) -> Option<u32> {
     Some(fs().data as u32 + ins[idx].data_offset)
 }
 
+pub fn debug_file_data_layout(ino: u32) -> u64 {
+    let idx = ino as usize;
+    let ins = inodes();
+    if idx >= ins.len() || ino == 0 {
+        return 0;
+    }
+    ((ins[idx].data_cap as u64) << 32) | ins[idx].data_offset as u64
+}
+
 pub fn truncate(ino: u32, size: u64) -> i64 {
     let idx = ino as usize;
     if inodes()[idx].mode & S_IFMT != S_IFREG {

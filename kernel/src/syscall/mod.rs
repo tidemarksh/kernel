@@ -320,6 +320,11 @@ fn record_fd_syscall_trace(
             | SYS_GETSOCKOPT
             | SYS_GETSOCKNAME
             | SYS_GETPEERNAME
+            | SYS_FACCESSAT
+            | SYS_NEWFSTATAT
+            | SYS_READLINKAT
+            | SYS_EXECVE
+            | SYS_EXECVEAT
     );
     if !should_record {
         return;
@@ -467,7 +472,7 @@ fn mark_completed_syscall_sync_effects(
         }
         SYS_EPOLL_CREATE1 => SYNC_EFFECT_EPOLL_STATE | SYNC_EFFECT_FORK_SHARED_OFD_STATE,
         SYS_EPOLL_CTL => SYNC_EFFECT_EPOLL_STATE,
-        SYS_EXECVE => {
+        SYS_EXECVE | SYS_EXECVEAT => {
             SYNC_EFFECT_PIPE_STATE
                 | SYNC_EFFECT_SOCKET_STATE
                 | SYNC_EFFECT_EPOLL_STATE
@@ -501,7 +506,7 @@ fn mark_completed_syscall_sync_effects(
 /// or a blocking STATUS (STATUS_FS, STATUS_SLEEP, etc.) if JS must wait.
 pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
     let nr = vm.x[17]; // a7 = syscall number
-    if nr == SYS_EXECVE {
+    if nr == SYS_EXECVE || nr == SYS_EXECVEAT {
         crate::tracepoints::record_execve_dispatch(vm as *const ThreadState as u32, 1);
     }
     let a0 = vm.x[10];
@@ -1108,6 +1113,25 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             }
             ret
         }
+        SYS_EXECVEAT => {
+            let ret = process::sys_execveat(vm, base, a0, a1, a2, a3, a4);
+            crate::tracepoints::record_execve_dispatch(vm as *const ThreadState as u32, 2);
+            if vm.status == abi::STATUS_EXECVE_SPAWN {
+                return debug_return(
+                    vm,
+                    nr,
+                    a0,
+                    a1,
+                    a2,
+                    a3,
+                    a4,
+                    a5,
+                    ret,
+                    abi::STATUS_EXECVE_SPAWN,
+                );
+            }
+            ret
+        }
         SYS_WAIT4 => {
             let ret = process::sys_wait4(vm, base, a0 as i64, a1, a2, a3);
             if vm.status == abi::STATUS_WAIT4 {
@@ -1158,7 +1182,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
 
     // Check and deliver pending signals at syscall return boundary
     signal::check_pending(vm, base);
-    if nr == SYS_EXECVE {
+    if nr == SYS_EXECVE || nr == SYS_EXECVEAT {
         crate::tracepoints::record_execve_dispatch(vm as *const ThreadState as u32, 3);
     }
     let status = vm.status;

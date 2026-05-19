@@ -1,70 +1,73 @@
-const BUF_SIZE: usize = 8192;
 use tidemark_kernel::harness::TestVm;
+use tidemark_kernel::net::ring_buffer::{self, BUF_SIZE};
 
 #[test]
 fn write_read_roundtrip() {
     let _t = TestVm::new();
-    let idx = tidemark_kernel::net::ring_buffer::alloc_buffer().unwrap();
-    let written = tidemark_kernel::net::ring_buffer::write(idx, b"hello network");
+    let idx = ring_buffer::alloc_buffer().unwrap();
+    let written = ring_buffer::write(idx, b"hello network");
     assert_eq!(written, 13);
     let mut buf = [0u8; 32];
-    let n = tidemark_kernel::net::ring_buffer::read(idx, &mut buf);
+    let n = ring_buffer::read(idx, &mut buf);
     assert_eq!(n, 13);
     assert_eq!(&buf[..13], b"hello network");
-    tidemark_kernel::net::ring_buffer::free_buffer(idx);
+    ring_buffer::free_buffer(idx);
 }
 
 #[test]
 fn buffer_full_returns_zero() {
     let _t = TestVm::new();
-    let idx = tidemark_kernel::net::ring_buffer::alloc_buffer().unwrap();
+    let idx = ring_buffer::alloc_buffer().unwrap();
 
-    let max_usable = BUF_SIZE - 1;
+    let max_usable = BUF_SIZE as usize - 1;
     let chunk = [0xAAu8; 4096];
     let mut total_written = 0usize;
     while total_written < max_usable {
         let remain = max_usable - total_written;
         let to_write = remain.min(chunk.len());
-        let w = tidemark_kernel::net::ring_buffer::write(idx, &chunk[..to_write]);
+        let w = ring_buffer::write(idx, &chunk[..to_write]);
         assert!(w > 0);
         total_written += w;
     }
-    assert_eq!(
-        tidemark_kernel::net::ring_buffer::available(idx),
-        max_usable
-    );
-    assert_eq!(tidemark_kernel::net::ring_buffer::space(idx), 0);
-    assert_eq!(tidemark_kernel::net::ring_buffer::write(idx, b"more"), 0);
+    assert_eq!(ring_buffer::available(idx), max_usable);
+    assert_eq!(ring_buffer::space(idx), 0);
+    assert_eq!(ring_buffer::write(idx, b"more"), 0);
 
-    tidemark_kernel::net::ring_buffer::free_buffer(idx);
+    ring_buffer::free_buffer(idx);
 }
 
 #[test]
 fn circular_wrap_around() {
     let _t = TestVm::new();
-    let idx = tidemark_kernel::net::ring_buffer::alloc_buffer().unwrap();
+    let idx = ring_buffer::alloc_buffer().unwrap();
 
-    let big = [0xBBu8; 7000];
-    let w1 = tidemark_kernel::net::ring_buffer::write(idx, &big);
-    assert_eq!(w1, 7000);
+    let cap = BUF_SIZE as usize;
+    let first_write_len = cap - 512;
+    let first_read_len = cap - 1024;
+    let wrap_write_len = 2048;
+    let remaining_first = first_write_len - first_read_len;
 
-    let mut tmp = [0u8; 6000];
-    let r1 = tidemark_kernel::net::ring_buffer::read(idx, &mut tmp);
-    assert_eq!(r1, 6000);
+    let big = vec![0xBBu8; first_write_len];
+    let w1 = ring_buffer::write(idx, &big);
+    assert_eq!(w1, first_write_len);
 
-    let wrap_data = [0xCCu8; 7000];
-    let w2 = tidemark_kernel::net::ring_buffer::write(idx, &wrap_data);
-    assert_eq!(w2, 7000);
+    let mut tmp = vec![0u8; first_read_len];
+    let r1 = ring_buffer::read(idx, &mut tmp);
+    assert_eq!(r1, first_read_len);
 
-    let mut out = [0u8; 8000];
-    let r2 = tidemark_kernel::net::ring_buffer::read(idx, &mut out);
-    assert_eq!(r2, 8000);
-    for b in &out[..1000] {
+    let wrap_data = vec![0xCCu8; wrap_write_len];
+    let w2 = ring_buffer::write(idx, &wrap_data);
+    assert_eq!(w2, wrap_write_len);
+
+    let mut out = vec![0u8; remaining_first + wrap_write_len];
+    let r2 = ring_buffer::read(idx, &mut out);
+    assert_eq!(r2, out.len());
+    for b in &out[..remaining_first] {
         assert_eq!(*b, 0xBB);
     }
-    for b in &out[1000..8000] {
+    for b in &out[remaining_first..] {
         assert_eq!(*b, 0xCC);
     }
 
-    tidemark_kernel::net::ring_buffer::free_buffer(idx);
+    ring_buffer::free_buffer(idx);
 }

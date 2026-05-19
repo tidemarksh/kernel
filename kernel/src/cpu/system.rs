@@ -37,6 +37,7 @@ fn syscall_needs_runtime_sync_boundary(nr: u64) -> bool {
             | abi::SYS_EPOLL_CREATE1
             | abi::SYS_EPOLL_CTL
             | abi::SYS_EXECVE
+            | abi::SYS_EXECVEAT
             | abi::SYS_SETPGID
             | abi::SYS_SETSID
             | abi::SYS_KILL

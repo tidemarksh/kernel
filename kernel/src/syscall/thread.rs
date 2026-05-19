@@ -935,6 +935,7 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
         parent.clone_child_tidptr = 0;
         parent.clone_child_tid = 0;
         parent.clone_pending = 0;
+        parent.status = STATUS_OK;
 
         child_ptr
     }

@@ -657,7 +657,7 @@ pub(crate) fn record_syscall(
                     SYNC_EFFECT_EPOLL_STATE | SYNC_EFFECT_FORK_SHARED_OFD_STATE
                 }
                 crate::abi::SYS_EPOLL_CTL => SYNC_EFFECT_EPOLL_STATE,
-                crate::abi::SYS_EXECVE => {
+                crate::abi::SYS_EXECVE | crate::abi::SYS_EXECVEAT => {
                     SYNC_EFFECT_PIPE_STATE
                         | SYNC_EFFECT_SOCKET_STATE
                         | SYNC_EFFECT_EPOLL_STATE
@@ -874,6 +874,7 @@ pub(crate) fn record_path_syscall(
             | crate::abi::SYS_FACCESSAT
             | crate::abi::SYS_READLINKAT
             | crate::abi::SYS_EXECVE
+            | crate::abi::SYS_EXECVEAT
     );
     if !should_record {
         return;

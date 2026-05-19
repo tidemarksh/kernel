@@ -191,6 +191,7 @@ fn read_execve_elf_bytes(vm_ptr: u32, ino: u32, elf_len: u32) -> Result<ExecveFi
         crate::alloc::heap_ptr() as u64,
     );
     crate::tracepoints::record_execve_dispatch(vm_ptr, 1245);
+    crate::tracepoints::record_execve_stage(109, ino as u64, memfs::debug_file_data_layout(ino));
     let read = memfs::read_file(ino, 0, &mut elf_bytes);
     crate::tracepoints::record_execve_dispatch(vm_ptr, 1246);
     if read != elf_len as i64 {
@@ -311,6 +312,20 @@ fn load_execve_image(
     let envp = read_guest_strvec(base, envp_addr)?;
     crate::tracepoints::record_execve_dispatch(vm_ptr, 127);
     crate::tracepoints::record_execve_stage(103, envp.len() as u64, envp_addr);
+    let file_head0 = file_bytes
+        .as_slice()
+        .iter()
+        .take(8)
+        .enumerate()
+        .fold(0u64, |acc, (idx, byte)| acc | ((*byte as u64) << (idx * 8)));
+    let file_head1 = file_bytes
+        .as_slice()
+        .iter()
+        .skip(8)
+        .take(8)
+        .enumerate()
+        .fold(0u64, |acc, (idx, byte)| acc | ((*byte as u64) << (idx * 8)));
+    crate::tracepoints::record_execve_stage(108, file_head0, file_head1);
     let (path_bytes, main_bytes, mut argv) =
         match parse_interpreter_script_header(file_bytes.as_slice())? {
             Some((interp_path, optional_arg)) => {
@@ -1217,6 +1232,46 @@ pub fn sys_execve(
         vm.status,
     );
     ret
+}
+
+/// execveat: execute a pathname relative to a directory file descriptor.
+/// This supports the Linux-compatible case used by libc execv wrappers:
+/// AT_FDCWD with no flags is identical to execve.
+pub fn sys_execveat(
+    vm: &mut ThreadState,
+    base: u32,
+    dirfd: u64,
+    path_addr: u64,
+    argv_addr: u64,
+    envp_addr: u64,
+    flags: u64,
+) -> i64 {
+    const AT_FDCWD_I64: i64 = -100;
+    const AT_FDCWD_U32: u64 = (-100i32 as u32) as u64;
+
+    let trace_path = read_guest_cstr_bytes(base, path_addr).unwrap_or_default();
+    let record_failure = |vm: &mut ThreadState, result: i64| {
+        crate::tracepoints::record_path_syscall(
+            vm as *mut ThreadState as u32,
+            SYS_EXECVEAT,
+            dirfd as i64,
+            &trace_path,
+            result,
+            STATUS_OK,
+        );
+        result
+    };
+
+    if flags != 0 {
+        return record_failure(vm, EINVAL);
+    }
+    let is_at_fdcwd = dirfd as i64 == AT_FDCWD_I64 || dirfd == AT_FDCWD_U32;
+    let is_absolute = trace_path.first() == Some(&b'/');
+    if !is_at_fdcwd && !is_absolute {
+        return record_failure(vm, ENOSYS);
+    }
+
+    sys_execve(vm, base, path_addr, argv_addr, envp_addr)
 }
 
 pub fn max_execve_ram_limit(base: u32) -> u64 {

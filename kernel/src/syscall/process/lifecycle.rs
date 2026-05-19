@@ -467,13 +467,48 @@ pub fn restore_fork_parent_after_handoff(
     }
 
     vm.process_ptr = process_ptr;
-    vm.tid = pid;
 
     if let Some(ps) = current_process_state_mut(vm, base) {
         ps.pid = pid;
         ps.ppid = ppid;
     }
 
+    vm.clone_flags = 0;
+    vm.clone_child_stack = 0;
+    vm.clone_tls = 0;
+    vm.clone_child_tidptr = 0;
+    vm.clone_child_tid = 0;
+    vm.clone_pending = 0;
+    clear_wait4_state(vm);
+    vm.futex_wait_addr = 0;
+    vm.futex_wait_timeout = 0;
+    vm.futex_wait_expected = 0;
+    vm.futex_wait_bitset = 0;
+    vm.futex_wait_absolute = 0;
+    vm.futex_wait_flags = 0;
+    vm.epoll_timeout_ms = 0;
+    vm.socket_timeout_ms = -1;
+    vm.epoll_maxevents = 0;
+    vm.blocked_fd = 0;
+    vm.blocked_ofd_id = 0;
+    vm.blocked_syscall_nr = 0;
+    vm.blocked_syscall_args = [0; 6];
+    vm.completed_sync_effects = 0;
+    vm.completed_pipe_sync_slots = 0;
+    vm.completed_pipe_sync_read_slots = 0;
+    vm.completed_pipe_sync_write_slots = 0;
+    vm.completed_pipe_fresh_slots = 0;
+    vm.completed_pipe_read_guest_ptr = 0;
+    vm.completed_pipe_read_len = 0;
+    vm.block_cache_ptr = 0;
+    vm.sig_pending = 0;
+    vm.sig_info_code = 0;
+    vm.status = STATUS_OK;
+    vm.exit_code = 0;
+    vm.term_signal = 0;
+    vm.fault_pc = 0;
+    vm.fault_addr = 0;
+    fd_table::clear_blocked_ofd_pin(vm);
     reattach_guest_thread_count(vm, base);
 }
 
