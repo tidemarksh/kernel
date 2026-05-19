@@ -2062,18 +2062,19 @@ pub fn socket_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, len: u64)
         return result;
     }
 
-    let mut tmp = [0u8; 4096];
-    let to_read = (len as usize).min(tmp.len());
     let recv_buf_idx = socket_table()[idx].recv_buf_idx;
-    let n = crate::net::ring_buffer::read(recv_buf_idx as u32, &mut tmp[..to_read]);
-    if n > 0 {
-        if !crate::syscall::memory::guest_range_accessible(base, buf, n as u64) {
+    let available = crate::net::ring_buffer::available(recv_buf_idx as u32);
+    let to_read = (len as usize).min(available);
+    if to_read > 0 {
+        if !crate::syscall::memory::guest_range_accessible(base, buf, to_read as u64) {
             record_socket_read_debug(idx, fd, before, EFAULT, socket_recv_available(idx));
             return EFAULT;
         }
-        unsafe {
-            guest_mem::write_bytes(base, buf, &tmp[..n]);
-        }
+        let n = unsafe {
+            guest_mem::with_write_slice(base, buf, to_read, |dst| {
+                crate::net::ring_buffer::read(recv_buf_idx as u32, dst)
+            })
+        };
         record_socket_read_debug(idx, fd, before, n as i64, socket_recv_available(idx));
         return n as i64;
     }
@@ -2856,6 +2857,32 @@ mod tests {
         assert_eq!(t.sys_read(fd, &mut buf), 5);
         assert_eq!(&buf[..5], b"hello");
         assert_eq!(t.sys_read(fd, &mut buf), ENOTCONN);
+    }
+
+    #[test]
+    fn socket_read_returns_available_stream_bytes_beyond_page_size() {
+        let mut t = TestVm::new();
+        let fd = sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
+        assert!(fd >= 0);
+
+        let sockaddr: [u8; 16] = [2, 0, 0x1f, 0x90, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
+        let addr = t.scratch + 0x930;
+        t.write_mem(addr, &sockaddr);
+        assert_eq!(sys_connect(&mut t.vm, t.base, fd as u64, addr, 16), 0);
+        resume_connect_result(&mut t.vm, t.base, 0);
+
+        let mut payload = [0u8; 16 * 1024];
+        for (idx, byte) in payload.iter_mut().enumerate() {
+            *byte = (idx as u8).wrapping_mul(17).wrapping_add(23);
+        }
+        assert_eq!(
+            inject_external_inbound_for_fd(t.base, &t.vm, fd as u64, &payload),
+            payload.len() as i32,
+        );
+
+        let mut buf = [0u8; 16 * 1024];
+        assert_eq!(t.sys_read(fd, &mut buf), payload.len() as i64);
+        assert_eq!(buf, payload);
     }
 
     #[test]

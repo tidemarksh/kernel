@@ -730,6 +730,47 @@ pub unsafe fn write_bytes(base: u32, addr: u64, data: &[u8]) {
     }
 }
 
+/// Expose a writable guest-memory slice to a caller-owned copy routine.
+///
+/// # Safety
+/// `base + addr..base + addr + len` must be writable guest memory, and the
+/// closure must not retain the slice after returning.
+pub unsafe fn with_write_slice<R>(
+    base: u32,
+    addr: u64,
+    len: usize,
+    f: impl FnOnce(&mut [u8]) -> R,
+) -> R {
+    record_access(addr, len.min(u32::MAX as usize) as u32, ACCESS_WRITE);
+    check_range(base, addr, len, "guest_mem::with_write_slice");
+    let dst = (base + addr as u32) as *mut u8;
+    debug_assert!(
+        !dst.is_null(),
+        "guest_mem::with_write_slice null dst: base=0x{base:x} addr=0x{addr:x} len={len}"
+    );
+    let dst_slice = unsafe { core::slice::from_raw_parts_mut(dst, len) };
+    let result = if unsafe { is_multi_threaded() } && len > 0 {
+        let mask = stripe_mask(addr, len);
+        unsafe { lock_mask(mask) };
+        unsafe { seqlock_begin_mask(mask) };
+        let result = f(dst_slice);
+        unsafe { seqlock_end_mask(mask) };
+        unsafe { unlock_mask(mask) };
+        result
+    } else {
+        f(dst_slice)
+    };
+    let (sample, sample_len) = sample_u64(dst_slice);
+    crate::tracepoints::record_guest_write_overlap(
+        addr,
+        len.min(u32::MAX as usize) as u32,
+        WRITE_OP_BYTES,
+        sample,
+        sample_len,
+    );
+    result
+}
+
 /// Zero a guest memory range.
 ///
 /// # Safety
