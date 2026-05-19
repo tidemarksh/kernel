@@ -551,10 +551,27 @@ fn write_regular_file_from_guest(
     ino: u32,
     start_offset: u64,
 ) -> i64 {
+    if len == 0 {
+        return 0;
+    }
+    if len <= u32::MAX as u64
+        && crate::syscall::memory::guest_range_accessible(base, guest_addr, len)
+    {
+        let data = unsafe { guest_mem::read_slice(base, guest_addr, len as usize) };
+        return memfs::write_file(ino, start_offset, data);
+    }
+
     let mut tmp = [0u8; 4096];
     let mut total = 0u64;
     while total < len {
         let to_write = ((len - total) as usize).min(tmp.len());
+        if !crate::syscall::memory::guest_range_accessible(
+            base,
+            guest_addr + total,
+            to_write as u64,
+        ) {
+            return if total > 0 { total as i64 } else { EFAULT };
+        }
         unsafe {
             guest_mem::read_bytes(base, guest_addr + total, &mut tmp[..to_write]);
         }

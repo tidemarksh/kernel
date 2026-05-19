@@ -347,6 +347,25 @@ pub unsafe fn read_bytes(base: u32, addr: u64, buf: &mut [u8]) {
     unsafe { core::ptr::copy_nonoverlapping(src, buf.as_mut_ptr(), buf.len()) };
 }
 
+/// Borrow a contiguous readable range from guest memory.
+///
+/// # Safety
+/// `base + addr..base + addr + len` must be readable guest memory and the
+/// returned slice must not outlive the current linear-memory instance.
+pub unsafe fn read_slice<'a>(base: u32, addr: u64, len: usize) -> &'a [u8] {
+    if len == 0 {
+        return &[];
+    }
+    record_access(addr, len as u32, ACCESS_READ);
+    check_range(base, addr, len, "guest_mem::read_slice");
+    let src = (base + addr as u32) as *const u8;
+    debug_assert!(
+        !src.is_null(),
+        "guest_mem::read_slice null src: base=0x{base:x} addr=0x{addr:x} len={len}"
+    );
+    unsafe { core::slice::from_raw_parts(src, len) }
+}
+
 // ---------------------------------------------------------------------------
 // Writes — seqlock when multi-threaded, plain when single-threaded
 // ---------------------------------------------------------------------------
