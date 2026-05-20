@@ -2146,9 +2146,13 @@ pub fn poll_revents_ofd(ofd: &OpenFileDesc, interest: u32) -> u32 {
         if accept_queue_len(slot) > 0 {
             revents |= EPOLLIN;
         }
-    } else if socket_recv_available(idx) > 0 {
-        revents |= EPOLLIN;
-    } else if slot.state == SOCK_STATE_CONNECTED || slot.state == SOCK_STATE_SHUTDOWN {
+    } else {
+        if socket_recv_available(idx) > 0 {
+            revents |= EPOLLIN;
+        }
+    }
+
+    if slot.state == SOCK_STATE_CONNECTED || slot.state == SOCK_STATE_SHUTDOWN {
         if slot.shutdown_mask & SHUT_RD_MASK != 0 {
             revents |= EPOLLRDHUP;
         }
@@ -2860,13 +2864,39 @@ mod tests {
     }
 
     #[test]
-    fn socket_read_returns_available_stream_bytes_beyond_page_size() {
+    fn socket_poll_reports_write_ready_when_recv_data_pending() {
         let mut t = TestVm::new();
         let fd = sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
         assert!(fd >= 0);
 
         let sockaddr: [u8; 16] = [2, 0, 0x1f, 0x90, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
         let addr = t.scratch + 0x930;
+        t.write_mem(addr, &sockaddr);
+        assert_eq!(sys_connect(&mut t.vm, t.base, fd as u64, addr, 16), 0);
+        resume_connect_result(&mut t.vm, t.base, 0);
+
+        assert_eq!(
+            inject_external_inbound_for_fd(t.base, &t.vm, fd as u64, b"hello"),
+            5,
+        );
+        let ofd = fd_table::get_ofd(t.base, &t.vm, fd as u64).expect("socket OFD should exist");
+
+        let write_only = poll_revents_ofd(&ofd, EPOLLOUT);
+        assert_ne!(write_only & EPOLLOUT, 0);
+
+        let read_write = poll_revents_ofd(&ofd, EPOLLIN | EPOLLOUT);
+        assert_ne!(read_write & EPOLLIN, 0);
+        assert_ne!(read_write & EPOLLOUT, 0);
+    }
+
+    #[test]
+    fn socket_read_returns_available_stream_bytes_beyond_page_size() {
+        let mut t = TestVm::new();
+        let fd = sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
+        assert!(fd >= 0);
+
+        let sockaddr: [u8; 16] = [2, 0, 0x1f, 0x90, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
+        let addr = t.scratch + 0x950;
         t.write_mem(addr, &sockaddr);
         assert_eq!(sys_connect(&mut t.vm, t.base, fd as u64, addr, 16), 0);
         resume_connect_result(&mut t.vm, t.base, 0);
