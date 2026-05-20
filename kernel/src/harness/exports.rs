@@ -109,6 +109,96 @@ pub extern "C" fn debug_clear_cpu_trace() {
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_block_hits() -> u64 {
+    crate::harness::debug::cpu_profile_block_hits()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_block_misses() -> u64 {
+    crate::harness::debug::cpu_profile_block_misses()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_block_builds() -> u64 {
+    crate::harness::debug::cpu_profile_block_builds()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_block_build_failures() -> u64 {
+    crate::harness::debug::cpu_profile_block_build_failures()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_block_build_ops() -> u64 {
+    crate::harness::debug::cpu_profile_block_build_ops()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_block_build_budget() -> u64 {
+    crate::harness::debug::cpu_profile_block_build_budget()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_block_budget_skips() -> u64 {
+    crate::harness::debug::cpu_profile_block_budget_skips()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_block_cache_unsupported() -> u64 {
+    crate::harness::debug::cpu_profile_block_cache_unsupported()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_block_exec_ops() -> u64 {
+    crate::harness::debug::cpu_profile_block_exec_ops()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_block_exec_unsupported() -> u64 {
+    crate::harness::debug::cpu_profile_block_exec_unsupported()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_interpreter_ops() -> u64 {
+    crate::harness::debug::cpu_profile_interpreter_ops()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_block_build_op_count(op_id: u32) -> u64 {
+    crate::harness::debug::cpu_profile_block_build_op_count(op_id)
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_block_exec_op_count(op_id: u32) -> u64 {
+    crate::harness::debug::cpu_profile_block_exec_op_count(op_id)
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_interpreter_op_count(op_id: u32) -> u64 {
+    crate::harness::debug::cpu_profile_interpreter_op_count(op_id)
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_unsupported_op_count(op_id: u32) -> u64 {
+    crate::harness::debug::cpu_profile_unsupported_op_count(op_id)
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
 pub extern "C" fn debug_clear_guest_write_watch_trace() {
     crate::harness::debug::clear_guest_write_watch_trace();
 }

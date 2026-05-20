@@ -1315,6 +1315,27 @@ pub(crate) fn execve_stage_trace_entry(index: u32) -> ExecveStageTraceEntry {
 }
 
 const CPU_EXEC_TRACE_CAP: usize = 1024;
+const CPU_PROFILE_OP_SLOTS: usize = 32;
+
+static mut CPU_PROFILE_BLOCK_HITS: u64 = 0;
+static mut CPU_PROFILE_BLOCK_MISSES: u64 = 0;
+static mut CPU_PROFILE_BLOCK_BUILDS: u64 = 0;
+static mut CPU_PROFILE_BLOCK_BUILD_FAILURES: u64 = 0;
+static mut CPU_PROFILE_BLOCK_BUILD_OPS: u64 = 0;
+static mut CPU_PROFILE_BLOCK_BUILD_BUDGET: u64 = 0;
+static mut CPU_PROFILE_BLOCK_BUDGET_SKIPS: u64 = 0;
+static mut CPU_PROFILE_BLOCK_CACHE_UNSUPPORTED: u64 = 0;
+static mut CPU_PROFILE_BLOCK_EXEC_OPS: u64 = 0;
+static mut CPU_PROFILE_BLOCK_EXEC_UNSUPPORTED: u64 = 0;
+static mut CPU_PROFILE_INTERPRETER_OPS: u64 = 0;
+static mut CPU_PROFILE_BLOCK_BUILD_OP_COUNTS: [u64; CPU_PROFILE_OP_SLOTS] =
+    [0; CPU_PROFILE_OP_SLOTS];
+static mut CPU_PROFILE_BLOCK_EXEC_OP_COUNTS: [u64; CPU_PROFILE_OP_SLOTS] =
+    [0; CPU_PROFILE_OP_SLOTS];
+static mut CPU_PROFILE_INTERPRETER_OP_COUNTS: [u64; CPU_PROFILE_OP_SLOTS] =
+    [0; CPU_PROFILE_OP_SLOTS];
+static mut CPU_PROFILE_UNSUPPORTED_OP_COUNTS: [u64; CPU_PROFILE_OP_SLOTS] =
+    [0; CPU_PROFILE_OP_SLOTS];
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -1996,6 +2017,287 @@ pub(crate) fn record_exec_trace(
             );
         }
     }
+}
+
+#[inline(always)]
+fn cpu_profile_slot(op_id: u32) -> Option<usize> {
+    if (op_id as usize) < CPU_PROFILE_OP_SLOTS {
+        Some(op_id as usize)
+    } else {
+        None
+    }
+}
+
+#[inline(always)]
+unsafe fn cpu_profile_add(ptr: *mut u64, delta: u64) {
+    unsafe {
+        let value = core::ptr::read(ptr);
+        core::ptr::write(ptr, value.wrapping_add(delta));
+    }
+}
+
+#[inline(always)]
+unsafe fn cpu_profile_add_op_count(ptr: *mut [u64; CPU_PROFILE_OP_SLOTS], op_id: u32) {
+    if let Some(slot) = cpu_profile_slot(op_id) {
+        unsafe {
+            let slot_ptr = core::ptr::addr_of_mut!((*ptr)[slot]);
+            cpu_profile_add(slot_ptr, 1);
+        }
+    }
+}
+
+pub(crate) fn record_block_cache_hit() {
+    if !RUNTIME_DEBUG_ENABLED {
+        return;
+    }
+    unsafe { cpu_profile_add(core::ptr::addr_of_mut!(CPU_PROFILE_BLOCK_HITS), 1) }
+}
+
+pub(crate) fn record_block_cache_miss() {
+    if !RUNTIME_DEBUG_ENABLED {
+        return;
+    }
+    unsafe { cpu_profile_add(core::ptr::addr_of_mut!(CPU_PROFILE_BLOCK_MISSES), 1) }
+}
+
+pub(crate) fn record_block_cache_build(len: u32, budget: u32) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (len, budget);
+        return;
+    }
+    unsafe {
+        cpu_profile_add(core::ptr::addr_of_mut!(CPU_PROFILE_BLOCK_BUILDS), 1);
+        cpu_profile_add(
+            core::ptr::addr_of_mut!(CPU_PROFILE_BLOCK_BUILD_OPS),
+            len as u64,
+        );
+        cpu_profile_add(
+            core::ptr::addr_of_mut!(CPU_PROFILE_BLOCK_BUILD_BUDGET),
+            budget as u64,
+        );
+    }
+}
+
+pub(crate) fn record_block_cache_build_op(op_id: u32) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = op_id;
+        return;
+    }
+    unsafe {
+        cpu_profile_add_op_count(
+            core::ptr::addr_of_mut!(CPU_PROFILE_BLOCK_BUILD_OP_COUNTS),
+            op_id,
+        );
+    }
+}
+
+pub(crate) fn record_block_cache_build_failure() {
+    if !RUNTIME_DEBUG_ENABLED {
+        return;
+    }
+    unsafe {
+        cpu_profile_add(core::ptr::addr_of_mut!(CPU_PROFILE_BLOCK_BUILD_FAILURES), 1);
+    }
+}
+
+pub(crate) fn record_block_cache_budget_skip() {
+    if !RUNTIME_DEBUG_ENABLED {
+        return;
+    }
+    unsafe { cpu_profile_add(core::ptr::addr_of_mut!(CPU_PROFILE_BLOCK_BUDGET_SKIPS), 1) }
+}
+
+pub(crate) fn record_block_cache_unsupported_op(op_id: u32) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = op_id;
+        return;
+    }
+    unsafe {
+        cpu_profile_add(
+            core::ptr::addr_of_mut!(CPU_PROFILE_BLOCK_CACHE_UNSUPPORTED),
+            1,
+        );
+        cpu_profile_add_op_count(
+            core::ptr::addr_of_mut!(CPU_PROFILE_UNSUPPORTED_OP_COUNTS),
+            op_id,
+        );
+    }
+}
+
+pub(crate) fn record_block_exec_ops(count: u32) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = count;
+        return;
+    }
+    unsafe {
+        cpu_profile_add(
+            core::ptr::addr_of_mut!(CPU_PROFILE_BLOCK_EXEC_OPS),
+            count as u64,
+        );
+    }
+}
+
+pub(crate) fn record_block_exec_unsupported_op(op_id: u32) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = op_id;
+        return;
+    }
+    unsafe {
+        cpu_profile_add(
+            core::ptr::addr_of_mut!(CPU_PROFILE_BLOCK_EXEC_UNSUPPORTED),
+            1,
+        );
+        cpu_profile_add_op_count(
+            core::ptr::addr_of_mut!(CPU_PROFILE_UNSUPPORTED_OP_COUNTS),
+            op_id,
+        );
+    }
+}
+
+pub(crate) fn record_interpreter_op(op_id: u32) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = op_id;
+        return;
+    }
+    unsafe {
+        cpu_profile_add(core::ptr::addr_of_mut!(CPU_PROFILE_INTERPRETER_OPS), 1);
+        cpu_profile_add_op_count(
+            core::ptr::addr_of_mut!(CPU_PROFILE_INTERPRETER_OP_COUNTS),
+            op_id,
+        );
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn cpu_profile_block_hits() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_BLOCK_HITS)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn cpu_profile_block_misses() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_BLOCK_MISSES)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn cpu_profile_block_builds() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_BLOCK_BUILDS)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn cpu_profile_block_build_failures() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_BLOCK_BUILD_FAILURES)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn cpu_profile_block_build_ops() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_BLOCK_BUILD_OPS)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn cpu_profile_block_build_budget() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_BLOCK_BUILD_BUDGET)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn cpu_profile_block_budget_skips() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_BLOCK_BUDGET_SKIPS)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn cpu_profile_block_cache_unsupported() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_BLOCK_CACHE_UNSUPPORTED)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn cpu_profile_block_exec_ops() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_BLOCK_EXEC_OPS)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn cpu_profile_block_exec_unsupported() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_BLOCK_EXEC_UNSUPPORTED)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn cpu_profile_interpreter_ops() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_INTERPRETER_OPS)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn cpu_profile_block_build_op_count(op_id: u32) -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    let Some(slot) = cpu_profile_slot(op_id) else {
+        return 0;
+    };
+    unsafe { core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_BLOCK_BUILD_OP_COUNTS[slot])) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn cpu_profile_block_exec_op_count(op_id: u32) -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    let Some(slot) = cpu_profile_slot(op_id) else {
+        return 0;
+    };
+    unsafe { core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_BLOCK_EXEC_OP_COUNTS[slot])) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn cpu_profile_interpreter_op_count(op_id: u32) -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    let Some(slot) = cpu_profile_slot(op_id) else {
+        return 0;
+    };
+    unsafe { core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_INTERPRETER_OP_COUNTS[slot])) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn cpu_profile_unsupported_op_count(op_id: u32) -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    let Some(slot) = cpu_profile_slot(op_id) else {
+        return 0;
+    };
+    unsafe { core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_UNSUPPORTED_OP_COUNTS[slot])) }
 }
 
 pub(crate) fn record_thread_step_trace(

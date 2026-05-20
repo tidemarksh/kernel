@@ -247,6 +247,8 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
                     BlockOutcome::Return => return *remaining,
                     BlockOutcome::Unsupported => {}
                 }
+            } else {
+                crate::tracepoints::record_block_cache_budget_skip();
             }
         }
         let raw16 = unsafe { guest_mem::read_u16_seqlock(base, *pc) };
@@ -310,6 +312,7 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
             step,
             x,
         );
+        crate::tracepoints::record_interpreter_op(block_cache::op_id_for_raw(raw) as u32);
         if x[17] == crate::abi::SYS_EXECVE {
             crate::tracepoints::record_execve_approach(
                 vm as *const ThreadState as u32,

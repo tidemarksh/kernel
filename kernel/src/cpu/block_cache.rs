@@ -31,6 +31,47 @@ const fn block_exec_supports(op_id: u8) -> bool {
     matches!(op_id, 1..=11 | 13 | 22 | 23)
 }
 
+pub(crate) fn op_id_for_raw(raw: u32) -> u8 {
+    let opc = decode::opcode(raw);
+    let f7 = decode::funct7(raw);
+    match opc {
+        decode::OP_OP_IMM => 1,
+        decode::OP_OP_IMM_32 => 2,
+        decode::OP_OP => {
+            if f7 == 1 {
+                22
+            } else {
+                3
+            }
+        }
+        decode::OP_OP_32 => {
+            if f7 == 1 {
+                23
+            } else {
+                4
+            }
+        }
+        decode::OP_LOAD => 5,
+        decode::OP_STORE => 6,
+        decode::OP_LUI => 7,
+        decode::OP_AUIPC => 8,
+        decode::OP_BRANCH => 9,
+        decode::OP_JAL => 10,
+        decode::OP_JALR => 11,
+        decode::OP_SYSTEM => 12,
+        decode::OP_MISC_MEM => 13,
+        decode::OP_AMO => 14,
+        decode::OP_LOAD_FP => 15,
+        decode::OP_STORE_FP => 16,
+        decode::OP_OP_FP => 17,
+        decode::OP_FMADD => 18,
+        decode::OP_FMSUB => 19,
+        decode::OP_FNMSUB => 20,
+        decode::OP_FNMADD => 21,
+        _ => 0,
+    }
+}
+
 /// Pre-decoded operation. Packed into a single u64 for cache-friendly access.
 ///
 /// Layout (upper 32 bits):
@@ -169,9 +210,20 @@ impl BlockCache {
         ram_base: u32,
     ) -> Option<&BlockEntry> {
         if self.get(pc).is_some() {
+            crate::tracepoints::record_block_cache_hit();
             return self.get(pc);
         }
-        unsafe { self.build_block_inner(Some(vm), pc, ram_base) }
+        crate::tracepoints::record_block_cache_miss();
+        let built = unsafe { self.build_block_inner(Some(vm), pc, ram_base) };
+        if let Some(entry) = built {
+            crate::tracepoints::record_block_cache_build(
+                entry.len as u32,
+                entry.total_budget as u32,
+            );
+        } else {
+            crate::tracepoints::record_block_cache_build_failure();
+        }
+        built
     }
 
     unsafe fn build_block_inner(
@@ -216,49 +268,16 @@ impl BlockCache {
                 let f7 = decode::funct7(raw);
                 let f7b5 = (f7 >> 5) & 1 != 0;
 
-                let op_id = match opc {
-                    decode::OP_OP_IMM => 1,
-                    decode::OP_OP_IMM_32 => 2,
-                    decode::OP_OP => {
-                        if f7 == 1 {
-                            22
-                        } else {
-                            3
-                        }
-                    } // 22 = M ext
-                    decode::OP_OP_32 => {
-                        if f7 == 1 {
-                            23
-                        } else {
-                            4
-                        }
-                    } // 23 = M ext 32
-                    decode::OP_LOAD => 5,
-                    decode::OP_STORE => 6,
-                    decode::OP_LUI => 7,
-                    decode::OP_AUIPC => 8,
-                    decode::OP_BRANCH => 9,
-                    decode::OP_JAL => 10,
-                    decode::OP_JALR => 11,
-                    decode::OP_SYSTEM => 12,
-                    decode::OP_MISC_MEM => 13, // FENCE
-                    decode::OP_AMO => 14,
-                    decode::OP_LOAD_FP => 15,
-                    decode::OP_STORE_FP => 16,
-                    decode::OP_OP_FP => 17,
-                    decode::OP_FMADD => 18,
-                    decode::OP_FMSUB => 19,
-                    decode::OP_FNMSUB => 20,
-                    decode::OP_FNMADD => 21,
-                    _ => 0, // unknown → stop block
-                };
+                let op_id = op_id_for_raw(raw);
 
                 if op_id == 0 {
                     break;
                 }
                 if vm.is_some() && !block_exec_supports(op_id) {
+                    crate::tracepoints::record_block_cache_unsupported_op(op_id as u32);
                     break;
                 }
+                crate::tracepoints::record_block_cache_build_op(op_id as u32);
 
                 // Extract immediate based on instruction type
                 let imm = match opc {

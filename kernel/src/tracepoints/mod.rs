@@ -10,8 +10,11 @@ mod io;
 mod runtime;
 
 pub(crate) use cpu::{
-    record_exec_trace, record_guest_write_overlap, record_jalr, record_special_reg_transitions,
-    record_zero_reg_transition,
+    record_block_cache_budget_skip, record_block_cache_build, record_block_cache_build_failure,
+    record_block_cache_build_op, record_block_cache_hit, record_block_cache_miss,
+    record_block_cache_unsupported_op, record_block_exec_ops, record_block_exec_unsupported_op,
+    record_exec_trace, record_guest_write_overlap, record_interpreter_op, record_jalr,
+    record_special_reg_transitions, record_zero_reg_transition,
 };
 pub(crate) use execve::{
     record_execve_approach, record_execve_dispatch, record_execve_ecall,
