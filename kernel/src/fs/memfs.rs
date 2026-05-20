@@ -340,7 +340,7 @@ pub fn reserve_inode_until(target_ino: u32) -> i64 {
 
 fn alloc_data(size: u32) -> u32 {
     let aligned = (size + 7) & !7;
-    let data_used = fs().data_used;
+    let data_used = fs().data_used.max(referenced_data_high_watermark());
     let needed = match data_used.checked_add(aligned) {
         Some(needed) => needed,
         None => return u32::MAX,
@@ -349,9 +349,24 @@ fn alloc_data(size: u32) -> u32 {
         return u32::MAX;
     }
     let h = fs();
-    let off = h.data_used;
+    let off = data_used;
     h.data_used = needed;
     off
+}
+
+fn referenced_data_high_watermark() -> u32 {
+    let inode_count = fs().inode_count as usize;
+    let mut high = fs().data_used;
+    for inode in inodes().iter().take(inode_count).skip(1) {
+        if inode.data_cap == 0 {
+            continue;
+        }
+        let Some(end) = inode.data_offset.checked_add(inode.data_cap) else {
+            return u32::MAX;
+        };
+        high = high.max(end);
+    }
+    high
 }
 
 fn has_external_file_data(ino: u32) -> bool {
@@ -1190,3 +1205,37 @@ pub fn create_file_with_data(parent_ino: u32, name: &[u8], data: &[u8]) -> u32 {
 // =========================================================================
 // Tests
 // =========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::harness::TestVm;
+
+    #[test]
+    fn alloc_data_does_not_reuse_referenced_file_ranges_after_stale_data_used() {
+        let _t = TestVm::new();
+
+        let first = create_file(1, b"first.bin", 0o644);
+        assert!(first > 0);
+        let first_data = [0x41u8; 4096];
+        assert_eq!(write_file(first, 0, &first_data), first_data.len() as i64);
+
+        // Runtime ownership can restore/copy MemFS metadata independently from
+        // the bump header. The allocator must treat inode data ranges as live
+        // even when the header's data_used value is stale.
+        fs().data_used = 8;
+
+        let second = create_file(1, b"second.bin", 0o644);
+        assert!(second > 0);
+        let second_data = [0x42u8; 4096];
+        assert_eq!(write_file(second, 0, &second_data), second_data.len() as i64);
+
+        let mut first_read = [0u8; 4096];
+        assert_eq!(read_file(first, 0, &mut first_read), first_read.len() as i64);
+        assert_eq!(first_read, first_data);
+
+        let mut second_read = [0u8; 4096];
+        assert_eq!(read_file(second, 0, &mut second_read), second_read.len() as i64);
+        assert_eq!(second_read, second_data);
+    }
+}
