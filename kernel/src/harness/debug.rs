@@ -192,7 +192,11 @@ static mut MEMORY_TRACE_NEXT: u32 = 0;
 static mut LAST_EXECVE_STAGE: u32 = 0;
 static mut LAST_EXECVE_VALUE0: u64 = 0;
 static mut LAST_EXECVE_VALUE1: u64 = 0;
-const EXECVE_STAGE_TRACE_CAP: usize = 16;
+static mut LAST_EXECVE_ERROR_ERRNO: i64 = 0;
+static mut LAST_EXECVE_ERROR_STAGE: u32 = 0;
+static mut LAST_EXECVE_ERROR_VALUE0: u64 = 0;
+static mut LAST_EXECVE_ERROR_VALUE1: u64 = 0;
+const EXECVE_STAGE_TRACE_CAP: usize = 64;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -1052,6 +1056,28 @@ pub(crate) fn record_execve_stage(stage: u32, value0: u64, value1: u64) {
     }
 }
 
+pub(crate) fn record_execve_error(errno: i64) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = errno;
+        return;
+    }
+    unsafe {
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_EXECVE_ERROR_ERRNO), errno);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_EXECVE_ERROR_STAGE),
+            core::ptr::read(core::ptr::addr_of!(LAST_EXECVE_STAGE)),
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_EXECVE_ERROR_VALUE0),
+            core::ptr::read(core::ptr::addr_of!(LAST_EXECVE_VALUE0)),
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LAST_EXECVE_ERROR_VALUE1),
+            core::ptr::read(core::ptr::addr_of!(LAST_EXECVE_VALUE1)),
+        );
+    }
+}
+
 pub(crate) fn record_execve_approach(vm_ptr: u32, pc: u64, raw: u32) {
     let _ = (vm_ptr, pc, raw);
 }
@@ -1275,6 +1301,38 @@ pub(crate) fn execve_value1() -> u64 {
         return 0;
     }
     unsafe { core::ptr::read(core::ptr::addr_of!(LAST_EXECVE_VALUE1)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn execve_error_errno() -> i64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(LAST_EXECVE_ERROR_ERRNO)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn execve_error_stage() -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(LAST_EXECVE_ERROR_STAGE)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn execve_error_value0() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(LAST_EXECVE_ERROR_VALUE0)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn execve_error_value1() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(LAST_EXECVE_ERROR_VALUE1)) }
 }
 
 #[cfg(any(test, feature = "harness"))]

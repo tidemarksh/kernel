@@ -240,9 +240,30 @@ fn inspect_execve_elf_bytes(
     elf_bytes: &[u8],
     ram_size: u64,
 ) -> Result<crate::elf::ElfLoadResult, i64> {
+    let file_head0 = elf_bytes
+        .iter()
+        .take(8)
+        .enumerate()
+        .fold(0u64, |acc, (idx, byte)| acc | ((*byte as u64) << (idx * 8)));
+    let file_head1 = elf_bytes
+        .iter()
+        .skip(8)
+        .take(8)
+        .enumerate()
+        .fold(0u64, |acc, (idx, byte)| acc | ((*byte as u64) << (idx * 8)));
     unsafe {
-        crate::elf::inspect_elf(elf_bytes.as_ptr() as u32, elf_bytes.len() as u32, ram_size)
-            .map_err(|_| ENOEXEC)
+        match crate::elf::inspect_elf(elf_bytes.as_ptr() as u32, elf_bytes.len() as u32, ram_size) {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                crate::tracepoints::record_execve_stage(
+                    180,
+                    error as i64 as u64,
+                    elf_bytes.len() as u64,
+                );
+                crate::tracepoints::record_execve_stage(181, file_head0, file_head1);
+                Err(ENOEXEC)
+            }
+        }
     }
 }
 
@@ -374,8 +395,17 @@ fn load_execve_image(
         };
     crate::tracepoints::record_execve_dispatch(vm_ptr, 128);
     let mut elf = inspect_execve_elf_bytes(main_bytes.as_slice(), ram_size)?;
-    let interp_path =
-        crate::elf::read_interp_path_bytes(main_bytes.as_slice()).map_err(|_| ENOEXEC)?;
+    let interp_path = match crate::elf::read_interp_path_bytes(main_bytes.as_slice()) {
+        Ok(path) => path,
+        Err(error) => {
+            crate::tracepoints::record_execve_stage(
+                182,
+                error as i64 as u64,
+                main_bytes.len as u64,
+            );
+            return Err(ENOEXEC);
+        }
+    };
     let main_bias = crate::elf::main_executable_load_bias(&elf, interp_path.is_some());
     if main_bias != 0 {
         elf = crate::elf::bias_load_result(elf, main_bias);
@@ -873,6 +903,7 @@ fn complete_execve_in_place_inner(
     let main_segments =
         unsafe { crate::elf::collect_load_segments(main_bytes.ptr, main_bytes.len, main_bias) };
     let Ok(main_segments) = main_segments else {
+        crate::tracepoints::record_execve_stage(184, main_bytes.ptr as u64, main_bytes.len as u64);
         return ENOEXEC;
     };
     for segment in main_segments {
@@ -883,6 +914,11 @@ fn complete_execve_in_place_inner(
             crate::elf::collect_load_segments(interp_bytes.ptr, interp_bytes.len, interp_bias)
         };
         let Ok(interp_segments) = interp_segments else {
+            crate::tracepoints::record_execve_stage(
+                185,
+                interp_bytes.ptr as u64,
+                interp_bytes.len as u64,
+            );
             return ENOEXEC;
         };
         for segment in interp_segments {
@@ -1159,6 +1195,7 @@ pub fn sys_execve(
         if let Err(errno) =
             load_execve_image(vm, base, path_addr, argv_addr, envp_addr, execve_ram_limit)
         {
+            crate::harness::debug::record_execve_error(errno);
             crate::tracepoints::record_path_syscall(
                 vm as *mut ThreadState as u32,
                 SYS_EXECVE,
@@ -1221,6 +1258,7 @@ pub fn sys_execve(
     let ret = complete_execve_in_place(vm, base, execve_ram_limit);
     crate::tracepoints::record_execve_dispatch(vm as *const ThreadState as u32, 14);
     if ret < 0 {
+        crate::harness::debug::record_execve_error(ret);
         clear_spawn_handoff(vm);
     }
     crate::tracepoints::record_path_syscall(

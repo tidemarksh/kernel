@@ -1229,6 +1229,30 @@ pub extern "C" fn debug_execve_value1() -> u64 {
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
+pub extern "C" fn debug_execve_error_errno() -> i64 {
+    crate::harness::debug::execve_error_errno()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_execve_error_stage() -> u32 {
+    crate::harness::debug::execve_error_stage()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_execve_error_value0() -> u64 {
+    crate::harness::debug::execve_error_value0()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_execve_error_value1() -> u64 {
+    crate::harness::debug::execve_error_value1()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
 pub extern "C" fn debug_execve_stage_trace_len() -> u32 {
     crate::harness::debug::execve_stage_trace_len()
 }
