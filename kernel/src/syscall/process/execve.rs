@@ -828,7 +828,7 @@ fn complete_execve_in_place_inner(
     let ps_align = core::mem::align_of::<ProcessState>() as u64;
     let new_ps_addr = (load_brk_start + ps_align - 1) & !(ps_align - 1);
     crate::tracepoints::record_execve_stage(3, guest_limit, new_ps_addr + ps_size);
-    if !ensure_guest_memory_capacity(base, guest_limit) {
+    if !ensure_guest_memory_capacity(base, new_ps_addr + ps_size) {
         crate::tracepoints::record_execve_stage(11, guest_limit, new_ps_addr + ps_size);
         return ENOMEM;
     }

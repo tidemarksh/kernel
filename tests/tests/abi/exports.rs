@@ -839,6 +839,50 @@ fn process_create_populates_initial_stack_contract() {
 }
 
 #[test]
+fn process_create_keeps_initial_stack_compact_for_large_ram_limit() {
+    let _t = TestVm::new();
+    let ram_size = 512 * 1024 * 1024;
+    let stack_size = 1024 * 1024;
+    let guest_base = process_guest_base(ram_size);
+    assert_ne!(guest_base, 0);
+
+    let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    let elf_ptr = unsafe { tidemark_kernel::alloc::alloc_zeroed(0x1000, 16) };
+    assert_ne!(elf_ptr, 0);
+    unsafe {
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64, &elf);
+    }
+
+    process_clear_args();
+    let vm_ptr = process_create(elf_ptr, elf.len() as u32, ram_size, stack_size);
+    assert_ne!(vm_ptr, 0);
+
+    let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
+    assert_eq!(vm.guest_ram_limit, ram_size);
+    assert!(
+        vm.x[2] < (ram_size as u64 / 2),
+        "initial stack should not force materializing the full RAM window: sp=0x{:x}",
+        vm.x[2],
+    );
+
+    let mut stack_vma_end = 0;
+    for index in 0..tidemark_kernel::harness::memory::debug_vma_len() {
+        let start = tidemark_kernel::harness::memory::debug_vma_start(index);
+        let end = tidemark_kernel::harness::memory::debug_vma_end(index);
+        let prot = tidemark_kernel::harness::memory::debug_vma_prot(index);
+        if start <= vm.x[2] && vm.x[2] < end && prot == (PROT_READ | PROT_WRITE) {
+            stack_vma_end = end;
+            break;
+        }
+    }
+    assert_ne!(stack_vma_end, 0, "initial stack VMA must cover sp");
+    assert!(
+        stack_vma_end < (ram_size as u64 / 2),
+        "stack VMA should be placed below the logical RAM ceiling: end=0x{stack_vma_end:x}",
+    );
+}
+
+#[test]
 fn process_guest_base_reserves_exec_scratch_headroom() {
     let _t = TestVm::new();
     let ram_size = 64 * 1024 * 1024;

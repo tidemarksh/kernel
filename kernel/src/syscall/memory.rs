@@ -135,6 +135,7 @@ static mut MEM_STATE: *mut AddressSpaceState = core::ptr::null_mut();
 
 pub const DEFAULT_STACK_SIZE: u64 = 1024 * 1024;
 const MIN_STACK_SIZE: u64 = 64 * 1024;
+const INITIAL_STACK_HEADROOM: u64 = 64 * 1024 * 1024;
 
 fn ms() -> &'static mut AddressSpaceState {
     unsafe {
@@ -863,7 +864,24 @@ pub fn map_initial_stack(base: u32, guest_limit: u64, stack_size: u64) -> i64 {
         return ENOMEM;
     }
 
-    let stack_start = guest_limit - usable;
+    let s = ms();
+    let mapped_high = s
+        .vmas
+        .iter()
+        .fold(s.brk_current.max(s.brk_base), |high, vma| high.max(vma.end));
+    let compact_top = page_align_up(
+        mapped_high
+            .saturating_add(INITIAL_STACK_HEADROOM)
+            .saturating_add(PAGE_SIZE)
+            .saturating_add(usable),
+    );
+    let stack_top = if compact_top <= guest_limit {
+        compact_top
+    } else {
+        guest_limit
+    };
+
+    let stack_start = stack_top - usable;
     let guard_start = stack_start - PAGE_SIZE;
 
     let guard = map_fixed_anonymous(base, guard_start, PAGE_SIZE, PROT_NONE, guest_limit);
@@ -881,7 +899,7 @@ pub fn map_initial_stack(base: u32, guest_limit: u64, stack_size: u64) -> i64 {
         return stack;
     }
 
-    (guest_limit - PAGE_SIZE) as i64
+    (stack_top - PAGE_SIZE) as i64
 }
 
 /// Grow brk to `new_brk`, return new brk as i64. Used by process_create to
