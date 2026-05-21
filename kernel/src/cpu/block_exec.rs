@@ -14,8 +14,6 @@ use crate::abi;
 use crate::guest_mem;
 use crate::types::ThreadState;
 
-const REG_WRITE_SOURCE_BLOCK: u32 = 3;
-
 pub(super) enum BlockOutcome {
     Restart,
     Return,
@@ -27,33 +25,6 @@ fn charge_block_op(remaining: &mut i32, index: usize, first_consumed: bool) {
     if !(first_consumed && index == 0) {
         *remaining -= 1;
     }
-}
-
-#[inline(always)]
-fn record_block_transition(
-    vm_ptr: u32,
-    tid: i32,
-    op_pc: u64,
-    prev_sp: u64,
-    prev_tp: u64,
-    prev_s11: u64,
-    x: &[u64; 32],
-) {
-    if prev_sp == x[2] && prev_s11 == x[27] {
-        let _ = (vm_ptr, tid, op_pc, prev_tp);
-        return;
-    }
-    crate::tracepoints::record_special_reg_transitions(
-        vm_ptr,
-        tid,
-        op_pc,
-        0,
-        REG_WRITE_SOURCE_BLOCK,
-        prev_sp,
-        prev_tp,
-        prev_s11,
-        x,
-    );
 }
 
 // =============================================================================
@@ -80,15 +51,10 @@ pub(super) unsafe fn exec_block(
     let len = blk.len as usize;
     let mut cur_pc = blk.start_pc;
     let vm_ptr = vm as *const ThreadState as u32;
-    let tid = vm.tid;
     crate::tracepoints::record_block_exec_ops(len as u32);
 
     for index in 0..len {
         let op = blk.ops[index];
-        let prev_sp = x[2];
-        let prev_tp = x[4];
-        let prev_s11 = x[27];
-        let op_pc = cur_pc;
         let rd = op.rd();
         let r1 = op.rs1();
         let r2 = op.rs2();
@@ -340,7 +306,6 @@ pub(super) unsafe fn exec_block(
                     cur_pc + step
                 };
                 x[0] = 0;
-                record_block_transition(vm_ptr, tid, op_pc, prev_sp, prev_tp, prev_s11, x);
                 return BlockOutcome::Restart;
             }
             10 => {
@@ -349,7 +314,6 @@ pub(super) unsafe fn exec_block(
                 }
                 *pc = (cur_pc as i64 + imm) as u64;
                 x[0] = 0;
-                record_block_transition(vm_ptr, tid, op_pc, prev_sp, prev_tp, prev_s11, x);
                 return BlockOutcome::Restart;
             }
             11 => {
@@ -360,7 +324,6 @@ pub(super) unsafe fn exec_block(
                 }
                 *pc = target;
                 x[0] = 0;
-                record_block_transition(vm_ptr, tid, op_pc, prev_sp, prev_tp, prev_s11, x);
                 return BlockOutcome::Restart;
             }
             13 => {}
@@ -372,7 +335,6 @@ pub(super) unsafe fn exec_block(
         }
 
         x[0] = 0;
-        record_block_transition(vm_ptr, tid, op_pc, prev_sp, prev_tp, prev_s11, x);
         cur_pc += step;
     }
 
