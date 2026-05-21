@@ -8,7 +8,7 @@
 //! direct-mapped block cache.
 
 use super::block_cache::BlockEntry;
-use super::fault::{AccessOutcome, ensure_guest_access};
+use super::fault::{ensure_guest_access, AccessOutcome};
 use super::integer::{div_i64, divu_64, mulh, mulhsu, mulhu, rem_i64, remu_64};
 use crate::abi;
 use crate::guest_mem;
@@ -21,9 +21,26 @@ pub(super) enum BlockOutcome {
 }
 
 #[inline(always)]
-fn charge_block_op(remaining: &mut i32, index: usize, first_consumed: bool) {
-    if !(first_consumed && index == 0) {
-        *remaining -= 1;
+fn block_budget_charge(len: usize, first_consumed: bool) -> i32 {
+    if first_consumed {
+        len.saturating_sub(1) as i32
+    } else {
+        len as i32
+    }
+}
+
+#[inline(always)]
+fn block_budget_refund_after(len: usize, index: usize) -> i32 {
+    len.saturating_sub(index + 1) as i32
+}
+
+#[inline(always)]
+fn block_budget_refund_from(len: usize, index: usize, first_consumed: bool) -> i32 {
+    let first_charged = if first_consumed { 1 } else { 0 };
+    if index < first_charged {
+        len.saturating_sub(first_charged) as i32
+    } else {
+        len.saturating_sub(index) as i32
     }
 }
 
@@ -52,6 +69,7 @@ pub(super) unsafe fn exec_block(
     let mut cur_pc = blk.start_pc;
     let vm_ptr = vm as *const ThreadState as u32;
     crate::tracepoints::record_block_exec_ops(len as u32);
+    *remaining -= block_budget_charge(len, first_consumed);
 
     for index in 0..len {
         let op = blk.ops[index];
@@ -64,8 +82,9 @@ pub(super) unsafe fn exec_block(
         let op_id = op.op_id();
 
         match op_id {
-            1..=11 | 13 | 22 | 23 => charge_block_op(remaining, index, first_consumed),
+            1..=11 | 13 | 22 | 23 => {}
             _ => {
+                *remaining += block_budget_refund_from(len, index, first_consumed);
                 crate::tracepoints::record_block_exec_unsupported_op(op_id as u32);
                 *pc = cur_pc;
                 return BlockOutcome::Unsupported;
@@ -218,7 +237,11 @@ pub(super) unsafe fn exec_block(
                     }
                     7 => {
                         let (u1, u2) = (v1 as u32, v2 as u32);
-                        if u2 == 0 { v1 } else { (u1 % u2) as i32 }
+                        if u2 == 0 {
+                            v1
+                        } else {
+                            (u1 % u2) as i32
+                        }
                     }
                     _ => 0,
                 };
@@ -239,8 +262,14 @@ pub(super) unsafe fn exec_block(
                     ensure_guest_access(vm, x, f, fcsr, pc, base, addr, width, abi::PROT_READ)
                 } {
                     AccessOutcome::Ok => {}
-                    AccessOutcome::Restart => return BlockOutcome::Restart,
-                    AccessOutcome::Return => return BlockOutcome::Return,
+                    AccessOutcome::Restart => {
+                        *remaining += block_budget_refund_after(len, index);
+                        return BlockOutcome::Restart;
+                    }
+                    AccessOutcome::Return => {
+                        *remaining += block_budget_refund_after(len, index);
+                        return BlockOutcome::Return;
+                    }
                 }
                 let val: u64 = match f3 {
                     0 => unsafe { guest_mem::read_i8(base, addr) as u64 },
@@ -269,8 +298,14 @@ pub(super) unsafe fn exec_block(
                     ensure_guest_access(vm, x, f, fcsr, pc, base, addr, width, abi::PROT_WRITE)
                 } {
                     AccessOutcome::Ok => {}
-                    AccessOutcome::Restart => return BlockOutcome::Restart,
-                    AccessOutcome::Return => return BlockOutcome::Return,
+                    AccessOutcome::Restart => {
+                        *remaining += block_budget_refund_after(len, index);
+                        return BlockOutcome::Restart;
+                    }
+                    AccessOutcome::Return => {
+                        *remaining += block_budget_refund_after(len, index);
+                        return BlockOutcome::Return;
+                    }
                 }
                 match f3 {
                     0 => unsafe { guest_mem::write_u8(base, addr, x[r2] as u8) },
@@ -328,6 +363,7 @@ pub(super) unsafe fn exec_block(
             }
             13 => {}
             _ => {
+                *remaining += block_budget_refund_from(len, index, first_consumed);
                 crate::tracepoints::record_block_exec_unsupported_op(op_id as u32);
                 *pc = cur_pc;
                 return BlockOutcome::Unsupported;
