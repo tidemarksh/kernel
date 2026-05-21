@@ -518,31 +518,25 @@ fn range_cover_end_with_prot(s: &AddressSpaceState, addr: u64, prot: i32) -> u64
         cover_end = s.brk_current;
     }
 
-    for v in s.vmas.iter() {
-        if addr < v.start || addr >= v.end {
-            continue;
+    if let Some(index) = find_vma_containing(s, addr) {
+        let v = s.vmas[index];
+        if v.prot != PROT_NONE && (v.prot & prot) == prot {
+            cover_end = cover_end.max(v.end);
         }
-        if v.prot == PROT_NONE || (v.prot & prot) != prot {
-            continue;
-        }
-        cover_end = cover_end.max(v.end);
     }
 
     cover_end
 }
 
 fn range_cover_end_with_sparse_anon_reservation(s: &AddressSpaceState, addr: u64) -> u64 {
-    let mut cover_end = 0u64;
-    for v in s.vmas.iter() {
-        if addr < v.start || addr >= v.end {
-            continue;
-        }
+    if let Some(index) = find_vma_containing(s, addr) {
+        let v = s.vmas[index];
         if v.prot != PROT_NONE || v.fd >= 0 || (v.flags as u64 & MAP_ANONYMOUS) == 0 {
-            continue;
+            return 0;
         }
-        cover_end = cover_end.max(v.end);
+        return v.end;
     }
-    cover_end
+    0
 }
 
 fn range_fully_covered_by_sparse_anon_reservation(
@@ -1498,10 +1492,8 @@ fn range_cover_end_any_mapping(s: &AddressSpaceState, addr: u64) -> u64 {
         cover_end = s.brk_current;
     }
 
-    for v in s.vmas.iter() {
-        if addr >= v.start && addr < v.end {
-            cover_end = cover_end.max(v.end);
-        }
+    if let Some(index) = find_vma_containing(s, addr) {
+        cover_end = cover_end.max(s.vmas[index].end);
     }
 
     cover_end
@@ -1665,12 +1657,22 @@ fn remove_overlap(s: &mut AddressSpaceState, start: u64, end: u64) {
 }
 
 fn find_vma_containing(s: &AddressSpaceState, addr: u64) -> Option<usize> {
-    for (i, v) in s.vmas.iter().enumerate() {
-        if addr >= v.start && addr < v.end {
-            return Some(i);
+    let mut lo = 0usize;
+    let mut hi = s.vmas.len();
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if s.vmas[mid].start <= addr {
+            lo = mid + 1;
+        } else {
+            hi = mid;
         }
     }
-    None
+    let index = lo.checked_sub(1)?;
+    if addr < s.vmas[index].end {
+        Some(index)
+    } else {
+        None
+    }
 }
 
 fn recompute_prot_none(s: &mut AddressSpaceState) {
