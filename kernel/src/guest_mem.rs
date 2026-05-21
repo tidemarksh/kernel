@@ -529,7 +529,6 @@ unsafe fn write_scalar_with_mode_and_sync(
     let reservation_gen = sync.map_or(unsafe { RESERVATION_GEN }, |ctx| ctx.reservation_gen);
     let reservation_lock = sync.map_or(unsafe { RESERVATION_LOCK }, |ctx| ctx.reservation_lock);
     let thread_count = sync.map_or(unsafe { THREAD_COUNT }, |ctx| ctx.thread_count);
-    let (sample, sample_len) = sample_u64(bytes);
     let op = match bytes.len() {
         1 => WRITE_OP_U8,
         2 => WRITE_OP_U16,
@@ -537,13 +536,16 @@ unsafe fn write_scalar_with_mode_and_sync(
         8 => WRITE_OP_U64,
         _ => WRITE_OP_BYTES,
     };
-    crate::tracepoints::record_guest_write_overlap(
-        addr,
-        bytes.len().min(u32::MAX as usize) as u32,
-        op,
-        sample,
-        sample_len,
-    );
+    if crate::tracepoints::guest_write_overlap_enabled() {
+        let (sample, sample_len) = sample_u64(bytes);
+        crate::tracepoints::record_guest_write_overlap(
+            addr,
+            bytes.len().min(u32::MAX as usize) as u32,
+            op,
+            sample,
+            sample_len,
+        );
+    }
     let is_multi = unsafe { is_multi_threaded_with(thread_count) };
     let mask = if is_multi {
         stripe_mask(addr, bytes.len())
@@ -704,14 +706,16 @@ pub unsafe fn write_bytes(base: u32, addr: u64, data: &[u8]) {
     }
     record_access(addr, data.len() as u32, ACCESS_WRITE);
     check_range(base, addr, data.len(), "guest_mem::write_bytes");
-    let (sample, sample_len) = sample_u64(data);
-    crate::tracepoints::record_guest_write_overlap(
-        addr,
-        data.len().min(u32::MAX as usize) as u32,
-        WRITE_OP_BYTES,
-        sample,
-        sample_len,
-    );
+    if crate::tracepoints::guest_write_overlap_enabled() {
+        let (sample, sample_len) = sample_u64(data);
+        crate::tracepoints::record_guest_write_overlap(
+            addr,
+            data.len().min(u32::MAX as usize) as u32,
+            WRITE_OP_BYTES,
+            sample,
+            sample_len,
+        );
+    }
     let dst = (base + addr as u32) as *mut u8;
     debug_assert!(
         !dst.is_null(),
@@ -760,14 +764,16 @@ pub unsafe fn with_write_slice<R>(
     } else {
         f(dst_slice)
     };
-    let (sample, sample_len) = sample_u64(dst_slice);
-    crate::tracepoints::record_guest_write_overlap(
-        addr,
-        len.min(u32::MAX as usize) as u32,
-        WRITE_OP_BYTES,
-        sample,
-        sample_len,
-    );
+    if crate::tracepoints::guest_write_overlap_enabled() {
+        let (sample, sample_len) = sample_u64(dst_slice);
+        crate::tracepoints::record_guest_write_overlap(
+            addr,
+            len.min(u32::MAX as usize) as u32,
+            WRITE_OP_BYTES,
+            sample,
+            sample_len,
+        );
+    }
     result
 }
 
@@ -782,13 +788,15 @@ pub unsafe fn zero_mem(base: u32, addr: u64, len: usize) {
     record_access(addr, len.min(u32::MAX as usize) as u32, ACCESS_ZERO);
     check_range(base, addr, len, "guest_mem::zero_mem");
     crate::tracepoints::record_execve_stage(360, addr, len as u64);
-    crate::tracepoints::record_guest_write_overlap(
-        addr,
-        len.min(u32::MAX as usize) as u32,
-        WRITE_OP_ZERO,
-        0,
-        0,
-    );
+    if crate::tracepoints::guest_write_overlap_enabled() {
+        crate::tracepoints::record_guest_write_overlap(
+            addr,
+            len.min(u32::MAX as usize) as u32,
+            WRITE_OP_ZERO,
+            0,
+            0,
+        );
+    }
     if unsafe { is_multi_threaded() } && len > 0 {
         let mask = stripe_mask(addr, len);
         crate::tracepoints::record_execve_stage(361, unsafe { debug_thread_count() }, mask as u64);

@@ -435,6 +435,22 @@ pub(crate) fn record_guest_write_overlap(
     }
 }
 
+#[inline(always)]
+pub(crate) fn guest_write_overlap_enabled() -> bool {
+    if !RUNTIME_DEBUG_ENABLED {
+        return false;
+    }
+    unsafe {
+        for slot in 0..GUEST_WRITE_WATCH_CAP {
+            let region = GUEST_WRITE_WATCH[slot];
+            if region.start < region.end {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 #[cfg(any(test, feature = "harness"))]
 pub(crate) fn guest_write_overlap_trace_len() -> u32 {
     if !RUNTIME_DEBUG_ENABLED {
