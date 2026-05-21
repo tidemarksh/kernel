@@ -89,7 +89,6 @@ pub(super) unsafe fn exec_block(
         let prev_tp = x[4];
         let prev_s11 = x[27];
         let op_pc = cur_pc;
-        crate::tracepoints::record_exec_trace(vm_ptr, tid, op_pc, 0, op.step(), x);
         let rd = op.rd();
         let r1 = op.rs1();
         let r2 = op.rs2();
