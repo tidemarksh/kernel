@@ -45,6 +45,7 @@ struct PageCacheMeta {
 unsafe extern "C" {
     fn tidemark_page_cache_read(ino: u32, offset: u64, dst_ptr: u32, dst_len: u32) -> i64;
     fn tidemark_page_cache_stat(ino: u32, out_ptr: u32) -> i32;
+    fn tidemark_page_cache_write(ino: u32, offset: u64, src_ptr: u32, src_len: u32) -> i64;
 }
 
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
@@ -57,6 +58,16 @@ unsafe fn tidemark_page_cache_stat(_ino: u32, _out_ptr: u32) -> i32 {
     0
 }
 
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+unsafe fn tidemark_page_cache_write(
+    _ino: u32,
+    _offset: u64,
+    _src_ptr: u32,
+    _src_len: u32,
+) -> i64 {
+    ENOSYS
+}
+
 pub const S_IFMT: u32 = 0o170000;
 pub const S_IFDIR: u32 = 0o040000;
 pub const S_IFREG: u32 = 0o100000;
@@ -67,6 +78,7 @@ const MAX_INODES: usize = 65536;
 const MAX_NAME_LEN: usize = 255;
 const MAX_SYMLINK_FOLLOWS: u32 = 40;
 const INITIAL_DATA_SIZE: u32 = 256 * 1024;
+const EXTERNAL_FILE_WRITE_THRESHOLD: u64 = 32 * 1024 * 1024;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -936,12 +948,48 @@ pub fn write_file(ino: u32, offset: u64, data: &[u8]) -> i64 {
         return EBADF;
     }
 
-    let materialized = materialize_external_file_data(ino);
-    if materialized < 0 {
-        return materialized;
+    let Some(end_u64) = offset.checked_add(data.len() as u64) else {
+        return ENOSPC;
+    };
+    if end_u64 > u32::MAX as u64 {
+        return ENOSPC;
+    }
+    if (inodes()[idx].data_cap == 0 && inodes()[idx].size > 0)
+        || end_u64 >= EXTERNAL_FILE_WRITE_THRESHOLD
+    {
+        let old_size = inodes()[idx].size;
+        let old_data_cap = inodes()[idx].data_cap;
+        if old_data_cap != 0 && old_size > 0 {
+            let old_data_offset = inodes()[idx].data_offset as usize;
+            let old_data_ptr = unsafe { fs().data.add(old_data_offset) as u32 };
+            let old_published = unsafe {
+                tidemark_page_cache_write(ino, 0, old_data_ptr, old_size as u32)
+            };
+            if old_published != old_size as i64 {
+                if end_u64 < EXTERNAL_FILE_WRITE_THRESHOLD {
+                    return ENOSPC;
+                }
+            }
+        }
+        let written = unsafe {
+            tidemark_page_cache_write(ino, offset, data.as_ptr() as u32, data.len() as u32)
+        };
+        if written == data.len() as i64 {
+            let inode = &mut inodes()[idx];
+            inode.size = inode.size.max(end_u64);
+            inode.data_offset = 0;
+            inode.data_cap = 0;
+            return written;
+        }
+        if old_data_cap == 0 {
+            let materialized = materialize_external_file_data(ino);
+            if materialized < 0 {
+                return materialized;
+            }
+        }
     }
 
-    let end = offset as u32 + data.len() as u32;
+    let end = end_u64 as u32;
     let data_cap = inodes()[idx].data_cap;
 
     if data_cap == 0 {
