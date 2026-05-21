@@ -209,9 +209,11 @@ impl BlockCache {
         pc: u64,
         ram_base: u32,
     ) -> Option<&BlockEntry> {
-        if self.get(pc).is_some() {
+        let idx = ((pc >> 1) as usize) & (CACHE_SIZE - 1);
+        let entry = unsafe { &*self.entries.add(idx) };
+        if entry.start_pc == pc && entry.len > 0 {
             crate::tracepoints::record_block_cache_hit();
-            return self.get(pc);
+            return Some(entry);
         }
         crate::tracepoints::record_block_cache_miss();
         let built = unsafe { self.build_block_inner(Some(vm), pc, ram_base) };
