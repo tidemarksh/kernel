@@ -954,32 +954,39 @@ pub fn write_file(ino: u32, offset: u64, data: &[u8]) -> i64 {
     if end_u64 > u32::MAX as u64 {
         return ENOSPC;
     }
-    if (inodes()[idx].data_cap == 0 && inodes()[idx].size > 0)
-        || end_u64 >= EXTERNAL_FILE_WRITE_THRESHOLD
-    {
-        let old_size = inodes()[idx].size;
-        let old_data_cap = inodes()[idx].data_cap;
+    let old_size = inodes()[idx].size;
+    let old_data_cap = inodes()[idx].data_cap;
+    let inline_growth_needed = end_u64 > old_data_cap as u64;
+    let external_required =
+        (old_data_cap == 0 && old_size > 0) || end_u64 >= EXTERNAL_FILE_WRITE_THRESHOLD;
+    if external_required || inline_growth_needed {
+        // Avoid growing the kernel-owned inline data pool once a file write can
+        // be published to the shared page cache.
+        let mut old_published = true;
         if old_data_cap != 0 && old_size > 0 {
             let old_data_offset = inodes()[idx].data_offset as usize;
             let old_data_ptr = unsafe { fs().data.add(old_data_offset) as u32 };
-            let old_published = unsafe {
+            let published = unsafe {
                 tidemark_page_cache_write(ino, 0, old_data_ptr, old_size as u32)
             };
-            if old_published != old_size as i64 {
-                if end_u64 < EXTERNAL_FILE_WRITE_THRESHOLD {
+            if published != old_size as i64 {
+                old_published = false;
+                if external_required {
                     return ENOSPC;
                 }
             }
         }
-        let written = unsafe {
-            tidemark_page_cache_write(ino, offset, data.as_ptr() as u32, data.len() as u32)
-        };
-        if written == data.len() as i64 {
-            let inode = &mut inodes()[idx];
-            inode.size = inode.size.max(end_u64);
-            inode.data_offset = 0;
-            inode.data_cap = 0;
-            return written;
+        if old_published {
+            let written = unsafe {
+                tidemark_page_cache_write(ino, offset, data.as_ptr() as u32, data.len() as u32)
+            };
+            if written == data.len() as i64 {
+                let inode = &mut inodes()[idx];
+                inode.size = inode.size.max(end_u64);
+                inode.data_offset = 0;
+                inode.data_cap = 0;
+                return written;
+            }
         }
         if old_data_cap == 0 {
             let materialized = materialize_external_file_data(ino);
