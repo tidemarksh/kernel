@@ -75,7 +75,7 @@ pub const FS_EFFECT_MEMFS_MUTATION: u32 = 1 << 0;
 pub const FS_EFFECT_SHARED_OFD_STATE: u32 = 1 << 1;
 pub const FS_EFFECT_MEMFS_FILE_DATA: u32 = 1 << 2;
 pub use meta::{
-    sys_faccessat, sys_fchmod, sys_fchmodat, sys_fchownat, sys_fstat, sys_ftruncate,
+    sys_faccessat, sys_fchmod, sys_fchmodat, sys_fchown, sys_fchownat, sys_fstat, sys_ftruncate,
     sys_newfstatat, sys_readlinkat, sys_statfs, sys_truncate, sys_utimensat,
 };
 pub use mutation::{sys_mkdirat, sys_renameat, sys_renameat2, sys_unlinkat};

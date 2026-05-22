@@ -791,6 +791,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         SYS_FCHMOD => fs::sys_fchmod(vm, base, a0, a1),
         SYS_FCHMODAT => fs::sys_fchmodat(vm, base, a0, a1, a2, a3),
         SYS_FCHOWNAT => fs::sys_fchownat(vm, base, a0, a1, a2, a3, a4),
+        SYS_FCHOWN => fs::sys_fchown(vm, base, a0, a1, a2),
         SYS_READLINKAT => fs::sys_readlinkat(vm, base, a0, a1, a2, a3),
         SYS_TRUNCATE => {
             let r = fs::dispatch_truncate(vm, base, a0, a1);
