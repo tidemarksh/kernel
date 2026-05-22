@@ -545,20 +545,6 @@ unsafe fn seqlock_end_mask_with(reservation_gen: *const AtomicU32, mask: u64) {
 }
 
 #[inline(always)]
-unsafe fn write_scalar_with_mode(
-    base: u32,
-    addr: u64,
-    bytes: &[u8],
-    use_lock: bool,
-    use_gen: bool,
-    bytewise: bool,
-) {
-    unsafe {
-        write_scalar_with_mode_and_sync(base, addr, bytes, use_lock, use_gen, bytewise, None)
-    };
-}
-
-#[inline(always)]
 unsafe fn write_scalar_with_mode_and_sync(
     base: u32,
     addr: u64,
@@ -701,8 +687,19 @@ pub unsafe fn write_u32(base: u32, addr: u64, val: u32) {
 #[inline(always)]
 pub(crate) unsafe fn write_u32_unchecked(base: u32, addr: u64, val: u32) {
     record_access(addr, 4, ACCESS_WRITE);
-    let bytes = val.to_le_bytes();
-    unsafe { write_scalar_with_mode(base, addr, &bytes, true, true, false) };
+    if crate::tracepoints::guest_write_overlap_enabled() {
+        crate::tracepoints::record_guest_write_overlap(addr, 4, WRITE_OP_U32, val as u64, 4);
+    }
+    if unsafe { is_multi_threaded() } {
+        let mask = stripe_mask(addr, 4);
+        unsafe { lock_mask(mask) };
+        unsafe { seqlock_begin_mask(mask) };
+        unsafe { ((base + addr as u32) as *mut u32).write_unaligned(val) };
+        unsafe { seqlock_end_mask(mask) };
+        unsafe { unlock_mask(mask) };
+    } else {
+        unsafe { ((base + addr as u32) as *mut u32).write_unaligned(val) };
+    }
 }
 
 /// Write a `u64` into guest memory.
@@ -722,8 +719,19 @@ pub unsafe fn write_u64(base: u32, addr: u64, val: u64) {
 #[inline(always)]
 pub(crate) unsafe fn write_u64_unchecked(base: u32, addr: u64, val: u64) {
     record_access(addr, 8, ACCESS_WRITE);
-    let bytes = val.to_le_bytes();
-    unsafe { write_scalar_with_mode(base, addr, &bytes, true, true, false) };
+    if crate::tracepoints::guest_write_overlap_enabled() {
+        crate::tracepoints::record_guest_write_overlap(addr, 8, WRITE_OP_U64, val, 8);
+    }
+    if unsafe { is_multi_threaded() } {
+        let mask = stripe_mask(addr, 8);
+        unsafe { lock_mask(mask) };
+        unsafe { seqlock_begin_mask(mask) };
+        unsafe { ((base + addr as u32) as *mut u64).write_unaligned(val) };
+        unsafe { seqlock_end_mask(mask) };
+        unsafe { unlock_mask(mask) };
+    } else {
+        unsafe { ((base + addr as u32) as *mut u64).write_unaligned(val) };
+    }
 }
 
 #[inline(always)]
