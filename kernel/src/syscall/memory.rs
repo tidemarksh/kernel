@@ -604,6 +604,7 @@ fn range_fully_covered_by_sparse_anon_reservation(
     true
 }
 
+#[inline(always)]
 pub fn guest_range_permitted(vm: &ThreadState, base: u32, start: u64, len: u64, prot: i32) -> bool {
     if len == 0 {
         return true;
