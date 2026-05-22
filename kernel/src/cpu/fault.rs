@@ -54,10 +54,10 @@ pub(super) unsafe fn ensure_guest_access(
     let in_bounds = width != 0 && guest_range_in_bounds(base, addr, width);
     let permitted =
         in_bounds && crate::syscall::memory::guest_range_permitted(vm, base, addr, width, prot);
-    let accerr = in_bounds
-        && crate::syscall::memory::has_prot_none()
-        && crate::syscall::memory::is_prot_none(addr);
     if !permitted {
+        let accerr = in_bounds
+            && crate::syscall::memory::has_prot_none()
+            && crate::syscall::memory::is_prot_none(addr);
         unsafe {
             if !deliver_sync_sigsegv(vm, x, f, fcsr, pc, base, addr, accerr) {
                 return AccessOutcome::Return;
