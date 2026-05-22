@@ -332,11 +332,22 @@ fn invalidate_permit_cache(s: &mut AddressSpaceState) {
     s.permit_cache_prot = [0; PERMIT_CACHE_SLOTS];
 }
 
-fn cache_permitted_range(s: &mut AddressSpaceState, start: u64, end: u64, prot: i32) {
-    let slot = (prot as usize) & (PERMIT_CACHE_SLOTS - 1);
+#[inline(always)]
+fn permit_cache_slot(prot: i32) -> usize {
+    (prot as usize) & (PERMIT_CACHE_SLOTS - 1)
+}
+
+fn cache_permitted_range(
+    s: &mut AddressSpaceState,
+    start: u64,
+    end: u64,
+    cover_prot: i32,
+    requested_prot: i32,
+) {
+    let slot = permit_cache_slot(requested_prot);
     s.permit_cache_start[slot] = start;
     s.permit_cache_end[slot] = end;
-    s.permit_cache_prot[slot] = prot;
+    s.permit_cache_prot[slot] = cover_prot;
 }
 
 #[allow(dead_code)]
@@ -597,17 +608,13 @@ pub fn guest_range_permitted(vm: &ThreadState, base: u32, start: u64, len: u64, 
     }
 
     let s = ms();
-    for i in 0..PERMIT_CACHE_SLOTS {
-        if start >= s.permit_cache_start[i]
-            && end <= s.permit_cache_end[i]
-            && (s.permit_cache_prot[i] & prot) == prot
-        {
-            crate::tracepoints::record_guest_range_permit_check(
-                prot as u32,
-                PERMIT_OUTCOME_CACHE_HIT,
-            );
-            return true;
-        }
+    let slot = permit_cache_slot(prot);
+    if start >= s.permit_cache_start[slot]
+        && end <= s.permit_cache_end[slot]
+        && (s.permit_cache_prot[slot] & prot) == prot
+    {
+        crate::tracepoints::record_guest_range_permit_check(prot as u32, PERMIT_OUTCOME_CACHE_HIT);
+        return true;
     }
     let mut cur = start;
     while cur < end {
@@ -620,7 +627,7 @@ pub fn guest_range_permitted(vm: &ThreadState, base: u32, start: u64, len: u64, 
             return false;
         }
         if cur == start && end <= cover_end {
-            cache_permitted_range(s, cover_start, cover_end, cover_prot);
+            cache_permitted_range(s, cover_start, cover_end, cover_prot, prot);
             crate::tracepoints::record_guest_range_permit_check(
                 prot as u32,
                 PERMIT_OUTCOME_COVER_HIT,
