@@ -27,6 +27,7 @@ const MIN_MMAP_BASE: u64 = 0x20_0000;
 const MMAP_BASE_ALIGN: u64 = 0x10_0000;
 const BRK_MMAP_GAP: u64 = 8 * 1024 * 1024;
 const PROT_NONE_TOPDOWN_LIMIT: u64 = 0x8000_0000;
+const PERMIT_CACHE_SLOTS: usize = 4;
 
 /// Address space state — shared by all threads of a process.
 /// Allocated in kernel Worker linear memory via alloc.rs.
@@ -39,9 +40,9 @@ struct AddressSpaceState {
     brk_current: u64,
     mmap_next: u64,
     has_prot_none: u32,
-    permit_cache_start: u64,
-    permit_cache_end: u64,
-    permit_cache_prot: i32,
+    permit_cache_start: [u64; PERMIT_CACHE_SLOTS],
+    permit_cache_end: [u64; PERMIT_CACHE_SLOTS],
+    permit_cache_prot: [i32; PERMIT_CACHE_SLOTS],
 }
 
 #[derive(Clone, Copy)]
@@ -306,9 +307,9 @@ pub fn init(brk_start: u64) {
                 brk_current: brk_start,
                 mmap_next: mmap_start,
                 has_prot_none: 0,
-                permit_cache_start: 0,
-                permit_cache_end: 0,
-                permit_cache_prot: 0,
+                permit_cache_start: [0; PERMIT_CACHE_SLOTS],
+                permit_cache_end: [0; PERMIT_CACHE_SLOTS],
+                permit_cache_prot: [0; PERMIT_CACHE_SLOTS],
             },
         );
         core::ptr::write(
@@ -323,15 +324,16 @@ pub fn has_prot_none() -> bool {
 }
 
 fn invalidate_permit_cache(s: &mut AddressSpaceState) {
-    s.permit_cache_start = 0;
-    s.permit_cache_end = 0;
-    s.permit_cache_prot = 0;
+    s.permit_cache_start = [0; PERMIT_CACHE_SLOTS];
+    s.permit_cache_end = [0; PERMIT_CACHE_SLOTS];
+    s.permit_cache_prot = [0; PERMIT_CACHE_SLOTS];
 }
 
 fn cache_permitted_range(s: &mut AddressSpaceState, start: u64, end: u64, prot: i32) {
-    s.permit_cache_start = start;
-    s.permit_cache_end = end;
-    s.permit_cache_prot = prot;
+    let slot = (prot as usize) & (PERMIT_CACHE_SLOTS - 1);
+    s.permit_cache_start[slot] = start;
+    s.permit_cache_end[slot] = end;
+    s.permit_cache_prot[slot] = prot;
 }
 
 #[allow(dead_code)]
@@ -590,11 +592,13 @@ pub fn guest_range_permitted(vm: &ThreadState, base: u32, start: u64, len: u64, 
     }
 
     let s = ms();
-    if start >= s.permit_cache_start
-        && end <= s.permit_cache_end
-        && (s.permit_cache_prot & prot) == prot
-    {
-        return true;
+    for i in 0..PERMIT_CACHE_SLOTS {
+        if start >= s.permit_cache_start[i]
+            && end <= s.permit_cache_end[i]
+            && (s.permit_cache_prot[i] & prot) == prot
+        {
+            return true;
+        }
     }
     let mut cur = start;
     while cur < end {
