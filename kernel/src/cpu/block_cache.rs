@@ -136,7 +136,11 @@ impl PackedOp {
     }
     #[inline(always)]
     pub fn step(self) -> u64 {
-        if (self.packed >> 36) & 1 != 0 { 4 } else { 2 }
+        if (self.packed >> 36) & 1 != 0 {
+            4
+        } else {
+            2
+        }
     }
     #[inline(always)]
     pub fn imm(self) -> i32 {
@@ -215,7 +219,7 @@ impl BlockCache {
             crate::tracepoints::record_block_cache_hit();
             return Some(entry);
         }
-        crate::tracepoints::record_block_cache_miss();
+        crate::tracepoints::record_block_cache_miss(pc, idx as u32, entry.start_pc);
         let built = unsafe { self.build_block_inner(Some(vm), pc, ram_base) };
         if let Some(entry) = built {
             crate::tracepoints::record_block_cache_build(

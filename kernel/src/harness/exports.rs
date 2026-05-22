@@ -181,6 +181,48 @@ pub extern "C" fn debug_cpu_profile_block_exec_sampled_blocks() -> u64 {
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_block_miss_sample_interval() -> u64 {
+    crate::harness::debug::cpu_profile_block_miss_sample_interval()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_block_miss_sampled() -> u64 {
+    crate::harness::debug::cpu_profile_block_miss_sampled()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_block_miss_sample_count() -> u32 {
+    crate::harness::debug::cpu_profile_block_miss_sample_count()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_block_miss_sample_pc(index: u32) -> u64 {
+    crate::harness::debug::cpu_profile_block_miss_sample_entry(index).pc
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_block_miss_sample_evicted_pc(index: u32) -> u64 {
+    crate::harness::debug::cpu_profile_block_miss_sample_entry(index).evicted_pc
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_block_miss_sample_cache_index(index: u32) -> u32 {
+    crate::harness::debug::cpu_profile_block_miss_sample_entry(index).index
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_block_miss_sample_count_at(index: u32) -> u64 {
+    crate::harness::debug::cpu_profile_block_miss_sample_entry(index).count
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
 pub extern "C" fn debug_cpu_profile_interpreter_ops() -> u64 {
     crate::harness::debug::cpu_profile_interpreter_ops()
 }

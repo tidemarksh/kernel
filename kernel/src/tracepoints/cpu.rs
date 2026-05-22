@@ -23,7 +23,7 @@ macro_rules! noop_tracepoint {
 
 noop_tracepoint! {
     fn record_block_cache_hit() {}
-    fn record_block_cache_miss() {}
+    fn record_block_cache_miss(pc: u64, index: u32, evicted_pc: u64) {}
     fn record_block_cache_build(len: u32, budget: u32) {}
     fn record_block_cache_build_op(op_id: u32) {}
     fn record_block_cache_build_failure() {}

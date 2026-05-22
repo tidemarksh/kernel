@@ -1391,6 +1391,8 @@ pub(crate) fn execve_stage_trace_entry(index: u32) -> ExecveStageTraceEntry {
 const CPU_EXEC_TRACE_CAP: usize = 1024;
 const CPU_PROFILE_OP_SLOTS: usize = 32;
 const CPU_PROFILE_BLOCK_EXEC_OP_SAMPLE_INTERVAL: u64 = 1024;
+const CPU_PROFILE_BLOCK_MISS_SAMPLE_INTERVAL: u64 = 1024;
+const CPU_PROFILE_BLOCK_MISS_SAMPLE_CAP: usize = 64;
 
 static mut CPU_PROFILE_BLOCK_HITS: u64 = 0;
 static mut CPU_PROFILE_BLOCK_MISSES: u64 = 0;
@@ -1404,6 +1406,8 @@ static mut CPU_PROFILE_BLOCK_EXEC_OPS: u64 = 0;
 static mut CPU_PROFILE_BLOCK_EXEC_UNSUPPORTED: u64 = 0;
 static mut CPU_PROFILE_BLOCK_EXEC_SAMPLE_TICKS: u64 = 0;
 static mut CPU_PROFILE_BLOCK_EXEC_SAMPLED_BLOCKS: u64 = 0;
+static mut CPU_PROFILE_BLOCK_MISS_SAMPLE_TICKS: u64 = 0;
+static mut CPU_PROFILE_BLOCK_MISS_SAMPLED: u64 = 0;
 static mut CPU_PROFILE_INTERPRETER_OPS: u64 = 0;
 static mut CPU_PROFILE_BLOCK_BUILD_OP_COUNTS: [u64; CPU_PROFILE_OP_SLOTS] =
     [0; CPU_PROFILE_OP_SLOTS];
@@ -1413,6 +1417,22 @@ static mut CPU_PROFILE_INTERPRETER_OP_COUNTS: [u64; CPU_PROFILE_OP_SLOTS] =
     [0; CPU_PROFILE_OP_SLOTS];
 static mut CPU_PROFILE_UNSUPPORTED_OP_COUNTS: [u64; CPU_PROFILE_OP_SLOTS] =
     [0; CPU_PROFILE_OP_SLOTS];
+static mut CPU_PROFILE_BLOCK_MISS_SAMPLES: [BlockMissSample; CPU_PROFILE_BLOCK_MISS_SAMPLE_CAP] =
+    [BlockMissSample {
+        pc: 0,
+        evicted_pc: 0,
+        count: 0,
+        index: 0,
+    }; CPU_PROFILE_BLOCK_MISS_SAMPLE_CAP];
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BlockMissSample {
+    pub pc: u64,
+    pub evicted_pc: u64,
+    pub count: u64,
+    pub index: u32,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -2130,11 +2150,65 @@ pub(crate) fn record_block_cache_hit() {
     unsafe { cpu_profile_add(core::ptr::addr_of_mut!(CPU_PROFILE_BLOCK_HITS), 1) }
 }
 
-pub(crate) fn record_block_cache_miss() {
+pub(crate) fn record_block_cache_miss(pc: u64, index: u32, evicted_pc: u64) {
     if !RUNTIME_DEBUG_ENABLED {
+        let _ = (pc, index, evicted_pc);
         return;
     }
-    unsafe { cpu_profile_add(core::ptr::addr_of_mut!(CPU_PROFILE_BLOCK_MISSES), 1) }
+    unsafe {
+        cpu_profile_add(core::ptr::addr_of_mut!(CPU_PROFILE_BLOCK_MISSES), 1);
+        let ticks = core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_BLOCK_MISS_SAMPLE_TICKS))
+            .wrapping_add(1);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(CPU_PROFILE_BLOCK_MISS_SAMPLE_TICKS),
+            ticks,
+        );
+        if ticks % CPU_PROFILE_BLOCK_MISS_SAMPLE_INTERVAL != 0 {
+            return;
+        }
+        cpu_profile_add(core::ptr::addr_of_mut!(CPU_PROFILE_BLOCK_MISS_SAMPLED), 1);
+
+        let samples = core::ptr::addr_of_mut!(CPU_PROFILE_BLOCK_MISS_SAMPLES);
+        let mut empty_slot = CPU_PROFILE_BLOCK_MISS_SAMPLE_CAP;
+        let mut min_slot = 0usize;
+        let mut min_count = u64::MAX;
+        for slot in 0..CPU_PROFILE_BLOCK_MISS_SAMPLE_CAP {
+            let entry = core::ptr::read(core::ptr::addr_of!((*samples)[slot]));
+            if entry.count != 0 && entry.pc == pc && entry.index == index {
+                let entry_ptr = core::ptr::addr_of_mut!((*samples)[slot]);
+                core::ptr::write(
+                    entry_ptr,
+                    BlockMissSample {
+                        count: entry.count.wrapping_add(1),
+                        evicted_pc,
+                        ..entry
+                    },
+                );
+                return;
+            }
+            if entry.count == 0 && empty_slot == CPU_PROFILE_BLOCK_MISS_SAMPLE_CAP {
+                empty_slot = slot;
+            }
+            if entry.count < min_count {
+                min_count = entry.count;
+                min_slot = slot;
+            }
+        }
+        let slot = if empty_slot < CPU_PROFILE_BLOCK_MISS_SAMPLE_CAP {
+            empty_slot
+        } else {
+            min_slot
+        };
+        core::ptr::write(
+            core::ptr::addr_of_mut!((*samples)[slot]),
+            BlockMissSample {
+                pc,
+                evicted_pc,
+                count: 1,
+                index,
+            },
+        );
+    }
 }
 
 pub(crate) fn record_block_cache_build(len: u32, budget: u32) {
@@ -2374,6 +2448,70 @@ pub(crate) fn cpu_profile_block_exec_sampled_blocks() -> u64 {
         return 0;
     }
     unsafe { core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_BLOCK_EXEC_SAMPLED_BLOCKS)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn cpu_profile_block_miss_sample_interval() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    CPU_PROFILE_BLOCK_MISS_SAMPLE_INTERVAL
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn cpu_profile_block_miss_sampled() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_BLOCK_MISS_SAMPLED)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn cpu_profile_block_miss_sample_count() -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    let mut count = 0u32;
+    unsafe {
+        for slot in 0..CPU_PROFILE_BLOCK_MISS_SAMPLE_CAP {
+            let entry = core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_BLOCK_MISS_SAMPLES[slot]));
+            if entry.count != 0 {
+                count = count.saturating_add(1);
+            }
+        }
+    }
+    count
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn cpu_profile_block_miss_sample_entry(index: u32) -> BlockMissSample {
+    if !RUNTIME_DEBUG_ENABLED {
+        return BlockMissSample {
+            pc: 0,
+            evicted_pc: 0,
+            count: 0,
+            index: 0,
+        };
+    }
+    let mut seen = 0u32;
+    unsafe {
+        for slot in 0..CPU_PROFILE_BLOCK_MISS_SAMPLE_CAP {
+            let entry = core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_BLOCK_MISS_SAMPLES[slot]));
+            if entry.count == 0 {
+                continue;
+            }
+            if seen == index {
+                return entry;
+            }
+            seen = seen.saturating_add(1);
+        }
+    }
+    BlockMissSample {
+        pc: 0,
+        evicted_pc: 0,
+        count: 0,
+        index: 0,
+    }
 }
 
 #[cfg(any(test, feature = "harness"))]
