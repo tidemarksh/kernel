@@ -276,13 +276,13 @@ pub(super) unsafe fn exec_block(
                     }
                 }
                 let val: u64 = match f3 {
-                    0 => unsafe { guest_mem::read_i8(base, addr) as u64 },
-                    1 => unsafe { guest_mem::read_i16(base, addr) as u64 },
-                    2 => unsafe { guest_mem::read_i32(base, addr) as u64 },
-                    3 => unsafe { guest_mem::read_u64(base, addr) },
-                    4 => unsafe { guest_mem::read_u8(base, addr) as u64 },
-                    5 => unsafe { guest_mem::read_u16(base, addr) as u64 },
-                    6 => unsafe { guest_mem::read_u32(base, addr) as u64 },
+                    0 => unsafe { guest_mem::read_u8_unchecked(base, addr) as i8 as u64 },
+                    1 => unsafe { guest_mem::read_u16_unchecked(base, addr) as i16 as u64 },
+                    2 => unsafe { guest_mem::read_u32_unchecked(base, addr) as i32 as u64 },
+                    3 => unsafe { guest_mem::read_u64_unchecked(base, addr) },
+                    4 => unsafe { guest_mem::read_u8_unchecked(base, addr) as u64 },
+                    5 => unsafe { guest_mem::read_u16_unchecked(base, addr) as u64 },
+                    6 => unsafe { guest_mem::read_u32_unchecked(base, addr) as u64 },
                     _ => 0,
                 };
                 if rd != 0 {
@@ -312,10 +312,10 @@ pub(super) unsafe fn exec_block(
                     }
                 }
                 match f3 {
-                    0 => unsafe { guest_mem::write_u8(base, addr, x[r2] as u8) },
-                    1 => unsafe { guest_mem::write_u16(base, addr, x[r2] as u16) },
-                    2 => unsafe { guest_mem::write_u32(base, addr, x[r2] as u32) },
-                    3 => unsafe { guest_mem::write_u64(base, addr, x[r2]) },
+                    0 => unsafe { guest_mem::write_u8_unchecked(base, addr, x[r2] as u8) },
+                    1 => unsafe { guest_mem::write_u16_unchecked(base, addr, x[r2] as u16) },
+                    2 => unsafe { guest_mem::write_u32_unchecked(base, addr, x[r2] as u32) },
+                    3 => unsafe { guest_mem::write_u64_unchecked(base, addr, x[r2]) },
                     _ => {}
                 }
             }
