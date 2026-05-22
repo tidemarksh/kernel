@@ -69,6 +69,7 @@ pub(super) unsafe fn exec_block(
     let mut cur_pc = blk.start_pc;
     let vm_ptr = vm as *const ThreadState as u32;
     crate::tracepoints::record_block_exec_ops(len as u32);
+    let sample_ops = crate::tracepoints::record_block_exec_sample_start();
     *remaining -= block_budget_charge(len, first_consumed);
 
     for index in 0..len {
@@ -80,6 +81,9 @@ pub(super) unsafe fn exec_block(
         let step = op.step();
         let imm = op.imm() as i64;
         let op_id = op.op_id();
+        if sample_ops {
+            crate::tracepoints::record_block_exec_sampled_op(op_id as u32);
+        }
 
         match op_id {
             1..=11 | 13 | 22 | 23 => {}

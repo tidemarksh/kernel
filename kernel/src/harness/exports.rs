@@ -169,6 +169,18 @@ pub extern "C" fn debug_cpu_profile_block_exec_unsupported() -> u64 {
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_block_exec_op_sample_interval() -> u64 {
+    crate::harness::debug::cpu_profile_block_exec_op_sample_interval()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_block_exec_sampled_blocks() -> u64 {
+    crate::harness::debug::cpu_profile_block_exec_sampled_blocks()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
 pub extern "C" fn debug_cpu_profile_interpreter_ops() -> u64 {
     crate::harness::debug::cpu_profile_interpreter_ops()
 }

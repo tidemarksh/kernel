@@ -1390,6 +1390,7 @@ pub(crate) fn execve_stage_trace_entry(index: u32) -> ExecveStageTraceEntry {
 
 const CPU_EXEC_TRACE_CAP: usize = 1024;
 const CPU_PROFILE_OP_SLOTS: usize = 32;
+const CPU_PROFILE_BLOCK_EXEC_OP_SAMPLE_INTERVAL: u64 = 1024;
 
 static mut CPU_PROFILE_BLOCK_HITS: u64 = 0;
 static mut CPU_PROFILE_BLOCK_MISSES: u64 = 0;
@@ -1401,6 +1402,8 @@ static mut CPU_PROFILE_BLOCK_BUDGET_SKIPS: u64 = 0;
 static mut CPU_PROFILE_BLOCK_CACHE_UNSUPPORTED: u64 = 0;
 static mut CPU_PROFILE_BLOCK_EXEC_OPS: u64 = 0;
 static mut CPU_PROFILE_BLOCK_EXEC_UNSUPPORTED: u64 = 0;
+static mut CPU_PROFILE_BLOCK_EXEC_SAMPLE_TICKS: u64 = 0;
+static mut CPU_PROFILE_BLOCK_EXEC_SAMPLED_BLOCKS: u64 = 0;
 static mut CPU_PROFILE_INTERPRETER_OPS: u64 = 0;
 static mut CPU_PROFILE_BLOCK_BUILD_OP_COUNTS: [u64; CPU_PROFILE_OP_SLOTS] =
     [0; CPU_PROFILE_OP_SLOTS];
@@ -2211,6 +2214,41 @@ pub(crate) fn record_block_exec_ops(count: u32) {
     }
 }
 
+pub(crate) fn record_block_exec_sample_start() -> bool {
+    if !RUNTIME_DEBUG_ENABLED {
+        return false;
+    }
+    unsafe {
+        let next = core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_BLOCK_EXEC_SAMPLE_TICKS))
+            .wrapping_add(1);
+        core::ptr::write(
+            core::ptr::addr_of_mut!(CPU_PROFILE_BLOCK_EXEC_SAMPLE_TICKS),
+            next,
+        );
+        if next % CPU_PROFILE_BLOCK_EXEC_OP_SAMPLE_INTERVAL != 0 {
+            return false;
+        }
+        cpu_profile_add(
+            core::ptr::addr_of_mut!(CPU_PROFILE_BLOCK_EXEC_SAMPLED_BLOCKS),
+            1,
+        );
+        true
+    }
+}
+
+pub(crate) fn record_block_exec_sampled_op(op_id: u32) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = op_id;
+        return;
+    }
+    unsafe {
+        cpu_profile_add_op_count(
+            core::ptr::addr_of_mut!(CPU_PROFILE_BLOCK_EXEC_OP_COUNTS),
+            op_id,
+        );
+    }
+}
+
 pub(crate) fn record_block_exec_unsupported_op(op_id: u32) {
     if !RUNTIME_DEBUG_ENABLED {
         let _ = op_id;
@@ -2320,6 +2358,22 @@ pub(crate) fn cpu_profile_block_exec_unsupported() -> u64 {
         return 0;
     }
     unsafe { core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_BLOCK_EXEC_UNSUPPORTED)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn cpu_profile_block_exec_op_sample_interval() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    CPU_PROFILE_BLOCK_EXEC_OP_SAMPLE_INTERVAL
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn cpu_profile_block_exec_sampled_blocks() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_BLOCK_EXEC_SAMPLED_BLOCKS)) }
 }
 
 #[cfg(any(test, feature = "harness"))]
