@@ -18,7 +18,7 @@ pub(crate) use cpu::{
     record_interpreter_op, record_jalr, record_special_reg_transitions, record_zero_reg_transition,
 };
 pub(crate) use execve::{
-    record_execve_approach, record_execve_dispatch, record_execve_ecall,
+    record_execve_approach, record_execve_dispatch, record_execve_ecall, record_execve_error,
     record_execve_pre_dispatch, record_execve_stage,
 };
 pub(crate) use io::{

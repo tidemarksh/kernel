@@ -54,7 +54,11 @@ impl ExecveFileBytes {
 fn current_cwd_ino(vm: &ThreadState, base: u32) -> u32 {
     let cwd_off = core::mem::offset_of!(ProcessState, cwd_ino) as u64;
     let cwd = unsafe { guest_mem::read_u32(base, vm.process_ptr as u64 + cwd_off) };
-    if cwd == 0 { 1 } else { cwd }
+    if cwd == 0 {
+        1
+    } else {
+        cwd
+    }
 }
 
 fn current_effective_uid(vm: &ThreadState) -> u32 {
@@ -1195,7 +1199,7 @@ pub fn sys_execve(
         if let Err(errno) =
             load_execve_image(vm, base, path_addr, argv_addr, envp_addr, execve_ram_limit)
         {
-            crate::harness::debug::record_execve_error(errno);
+            crate::tracepoints::record_execve_error(errno);
             crate::tracepoints::record_path_syscall(
                 vm as *mut ThreadState as u32,
                 SYS_EXECVE,
@@ -1258,7 +1262,7 @@ pub fn sys_execve(
     let ret = complete_execve_in_place(vm, base, execve_ram_limit);
     crate::tracepoints::record_execve_dispatch(vm as *const ThreadState as u32, 14);
     if ret < 0 {
-        crate::harness::debug::record_execve_error(ret);
+        crate::tracepoints::record_execve_error(ret);
         clear_spawn_handoff(vm);
     }
     crate::tracepoints::record_path_syscall(
