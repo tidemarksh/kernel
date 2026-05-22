@@ -48,6 +48,11 @@ static mut SYSCALL_TRACE_RING: [SyscallTraceSummary; SYSCALL_TRACE_CAP] = [Sysca
 }; SYSCALL_TRACE_CAP];
 static mut SYSCALL_TRACE_RING_LEN: u32 = 0;
 static mut SYSCALL_TRACE_RING_NEXT: u32 = 0;
+const SYSCALL_PROFILE_SLOTS: usize = 512;
+static mut SYSCALL_PROFILE_COUNTS: [u64; SYSCALL_PROFILE_SLOTS] = [0; SYSCALL_PROFILE_SLOTS];
+static mut SYSCALL_PROFILE_NON_OK_STATUS_COUNTS: [u64; SYSCALL_PROFILE_SLOTS] =
+    [0; SYSCALL_PROFILE_SLOTS];
+static mut SYSCALL_PROFILE_ERROR_COUNTS: [u64; SYSCALL_PROFILE_SLOTS] = [0; SYSCALL_PROFILE_SLOTS];
 
 const RISCV_SYSCALL_TRACE_CAP: usize = 64;
 #[repr(C)]
@@ -557,6 +562,20 @@ pub(crate) fn record_syscall(
     }
     let (pid_sample0, pid_sample1) = sample_process_pid_bytes(vm_ptr);
     unsafe {
+        if (nr as usize) < SYSCALL_PROFILE_SLOTS {
+            let slot = nr as usize;
+            let count_ptr = core::ptr::addr_of_mut!(SYSCALL_PROFILE_COUNTS[slot]);
+            core::ptr::write(count_ptr, core::ptr::read(count_ptr).wrapping_add(1));
+            if status != crate::abi::STATUS_OK {
+                let status_ptr =
+                    core::ptr::addr_of_mut!(SYSCALL_PROFILE_NON_OK_STATUS_COUNTS[slot]);
+                core::ptr::write(status_ptr, core::ptr::read(status_ptr).wrapping_add(1));
+            }
+            if result < 0 {
+                let error_ptr = core::ptr::addr_of_mut!(SYSCALL_PROFILE_ERROR_COUNTS[slot]);
+                core::ptr::write(error_ptr, core::ptr::read(error_ptr).wrapping_add(1));
+            }
+        }
         core::ptr::write(
             core::ptr::addr_of_mut!(SYSCALL_TRACE),
             SyscallTraceSummary {
@@ -1183,6 +1202,38 @@ pub(crate) fn syscall_trace_entry(index: u32) -> SyscallTraceSummary {
             (next + index as usize) % SYSCALL_TRACE_CAP
         };
         core::ptr::read(core::ptr::addr_of!(SYSCALL_TRACE_RING[slot]))
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn syscall_profile_slot_count(nr: u32) -> u64 {
+    if !RUNTIME_DEBUG_ENABLED || nr as usize >= SYSCALL_PROFILE_SLOTS {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(SYSCALL_PROFILE_COUNTS[nr as usize])) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn syscall_profile_slot_non_ok_status_count(nr: u32) -> u64 {
+    if !RUNTIME_DEBUG_ENABLED || nr as usize >= SYSCALL_PROFILE_SLOTS {
+        return 0;
+    }
+    unsafe {
+        core::ptr::read(core::ptr::addr_of!(
+            SYSCALL_PROFILE_NON_OK_STATUS_COUNTS[nr as usize]
+        ))
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn syscall_profile_slot_error_count(nr: u32) -> u64 {
+    if !RUNTIME_DEBUG_ENABLED || nr as usize >= SYSCALL_PROFILE_SLOTS {
+        return 0;
+    }
+    unsafe {
+        core::ptr::read(core::ptr::addr_of!(
+            SYSCALL_PROFILE_ERROR_COUNTS[nr as usize]
+        ))
     }
 }
 

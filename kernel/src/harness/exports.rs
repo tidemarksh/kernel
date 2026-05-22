@@ -361,6 +361,24 @@ pub extern "C" fn debug_syscall_trace_entry_pid_sample1(index: u32) -> u64 {
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
+pub extern "C" fn debug_syscall_profile_count(nr: u32) -> u64 {
+    crate::harness::debug::syscall_profile_slot_count(nr)
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_syscall_profile_non_ok_status_count(nr: u32) -> u64 {
+    crate::harness::debug::syscall_profile_slot_non_ok_status_count(nr)
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_syscall_profile_error_count(nr: u32) -> u64 {
+    crate::harness::debug::syscall_profile_slot_error_count(nr)
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
 pub extern "C" fn debug_riscv_syscall_trace_len() -> u32 {
     crate::harness::debug::riscv_syscall_trace_len()
 }
