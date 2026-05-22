@@ -405,6 +405,44 @@ fn mprotect_split_on_boundary_mismatch() {
 }
 
 #[test]
+fn permission_cache_is_invalidated_by_address_space_changes() {
+    let mut t = TestVm::new();
+    let a = t.sys_mmap(
+        0,
+        PAGE_SIZE,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    );
+    assert!(a > 0);
+    assert!(memory::guest_range_permitted(
+        &t.vm, t.base, a as u64, 8, PROT_WRITE,
+    ));
+    assert_eq!(t.sys_mprotect(a as u64, PAGE_SIZE, PROT_READ), 0);
+    assert!(!memory::guest_range_permitted(
+        &t.vm, t.base, a as u64, 8, PROT_WRITE,
+    ));
+    assert!(memory::guest_range_permitted(
+        &t.vm, t.base, a as u64, 8, PROT_READ,
+    ));
+    assert_eq!(t.sys_munmap(a as u64, PAGE_SIZE), 0);
+    assert!(!memory::guest_range_permitted(
+        &t.vm, t.base, a as u64, 8, PROT_READ,
+    ));
+
+    let cur = t.sys_brk(0) as u64;
+    assert_eq!(t.sys_brk(cur + PAGE_SIZE), (cur + PAGE_SIZE) as i64);
+    assert!(memory::guest_range_permitted(
+        &t.vm, t.base, cur, 8, PROT_WRITE,
+    ));
+    assert_eq!(t.sys_brk(cur), cur as i64);
+    assert!(!memory::guest_range_permitted(
+        &t.vm, t.base, cur, 8, PROT_WRITE,
+    ));
+}
+
+#[test]
 fn brk_refuses_above_current_guest_window() {
     let mut t = TestVm::new();
     let cur = t.sys_brk(0);

@@ -39,6 +39,9 @@ struct AddressSpaceState {
     brk_current: u64,
     mmap_next: u64,
     has_prot_none: u32,
+    permit_cache_start: u64,
+    permit_cache_end: u64,
+    permit_cache_prot: i32,
 }
 
 #[derive(Clone, Copy)]
@@ -303,6 +306,9 @@ pub fn init(brk_start: u64) {
                 brk_current: brk_start,
                 mmap_next: mmap_start,
                 has_prot_none: 0,
+                permit_cache_start: 0,
+                permit_cache_end: 0,
+                permit_cache_prot: 0,
             },
         );
         core::ptr::write(
@@ -314,6 +320,18 @@ pub fn init(brk_start: u64) {
 
 pub fn has_prot_none() -> bool {
     ms().has_prot_none != 0
+}
+
+fn invalidate_permit_cache(s: &mut AddressSpaceState) {
+    s.permit_cache_start = 0;
+    s.permit_cache_end = 0;
+    s.permit_cache_prot = 0;
+}
+
+fn cache_permitted_range(s: &mut AddressSpaceState, start: u64, end: u64, prot: i32) {
+    s.permit_cache_start = start;
+    s.permit_cache_end = end;
+    s.permit_cache_prot = prot;
 }
 
 #[allow(dead_code)]
@@ -385,6 +403,7 @@ pub(crate) fn restore_state_from_image(image: &AddressSpaceStateImage) {
     s.brk_current = image.brk_current;
     s.mmap_next = image.mmap_next;
     s.has_prot_none = image.has_prot_none;
+    invalidate_permit_cache(s);
 }
 
 pub fn reset_for_execve_with_flush(base: u32, brk_start: u64, flush_shared: bool) {
@@ -399,6 +418,7 @@ pub fn reset_for_execve_with_flush(base: u32, brk_start: u64, flush_shared: bool
     s.brk_current = brk_start;
     s.mmap_next = mmap_start;
     s.has_prot_none = 0;
+    invalidate_permit_cache(s);
 }
 
 pub fn reset_for_execve(base: u32, brk_start: u64) {
@@ -511,21 +531,23 @@ pub(crate) fn effective_guest_limit(vm: &ThreadState, base: u32) -> u64 {
     }
 }
 
-fn range_cover_end_with_prot(s: &AddressSpaceState, addr: u64, prot: i32) -> u64 {
-    let mut cover_end = 0u64;
+fn range_cover_with_prot(s: &AddressSpaceState, addr: u64, prot: i32) -> Option<(u64, u64, i32)> {
+    let mut cover: Option<(u64, u64, i32)> = None;
 
     if (prot & PROT_EXEC) == 0 && addr >= s.brk_base && addr < s.brk_current {
-        cover_end = s.brk_current;
+        cover = Some((s.brk_base, s.brk_current, PROT_READ | PROT_WRITE));
     }
 
     if let Some(index) = find_vma_containing(s, addr) {
         let v = s.vmas[index];
         if v.prot != PROT_NONE && (v.prot & prot) == prot {
-            cover_end = cover_end.max(v.end);
+            if cover.is_none_or(|(_, cover_end, _)| v.end > cover_end) {
+                cover = Some((v.start, v.end, v.prot));
+            }
         }
     }
 
-    cover_end
+    cover
 }
 
 fn range_cover_end_with_sparse_anon_reservation(s: &AddressSpaceState, addr: u64) -> u64 {
@@ -568,11 +590,23 @@ pub fn guest_range_permitted(vm: &ThreadState, base: u32, start: u64, len: u64, 
     }
 
     let s = ms();
+    if start >= s.permit_cache_start
+        && end <= s.permit_cache_end
+        && (s.permit_cache_prot & prot) == prot
+    {
+        return true;
+    }
     let mut cur = start;
     while cur < end {
-        let cover_end = range_cover_end_with_prot(s, cur, prot);
+        let Some((cover_start, cover_end, cover_prot)) = range_cover_with_prot(s, cur, prot) else {
+            return false;
+        };
         if cover_end <= cur {
             return false;
+        }
+        if cur == start && end <= cover_end {
+            cache_permitted_range(s, cover_start, cover_end, cover_prot);
+            return true;
         }
         cur = cover_end.min(end);
     }
@@ -597,6 +631,7 @@ pub fn register_elf_load_segment(start: u64, end: u64, prot: i32) {
     });
     s.vmas.sort_by_key(|v| v.start);
     recompute_prot_none(s);
+    invalidate_permit_cache(s);
 }
 
 // =========================================================================
@@ -627,6 +662,7 @@ pub fn rebase_brk_after_hidden_prefix(hidden_end: u64) {
     if s.brk_current < public_brk {
         s.brk_current = public_brk;
     }
+    invalidate_permit_cache(s);
 }
 
 pub(crate) fn address_space_brk_base() -> u64 {
@@ -846,6 +882,7 @@ fn map_fixed_anonymous(base: u32, start: u64, length: u64, prot: i32, guest_limi
     });
     s.vmas.sort_by_key(|v| v.start);
     recompute_prot_none(s);
+    invalidate_permit_cache(s);
     start as i64
 }
 
@@ -916,6 +953,7 @@ pub fn grow_brk(base: u32, new_brk: u64) -> i64 {
         guest_mem::zero_mem(base, s.brk_current, (new_brk - s.brk_current) as usize);
     }
     s.brk_current = new_brk;
+    invalidate_permit_cache(s);
     new_brk as i64
 }
 
@@ -950,6 +988,7 @@ pub fn sys_brk(vm: &mut ThreadState, base: u32, addr: u64) -> i64 {
     }
 
     s.brk_current = addr;
+    invalidate_permit_cache(s);
     addr as i64
 }
 
@@ -1127,6 +1166,7 @@ pub fn sys_mmap(
     if prot as i32 == PROT_NONE {
         s.has_prot_none = 1;
     }
+    invalidate_permit_cache(s);
 
     start as i64
 }
@@ -1145,6 +1185,7 @@ pub fn sys_munmap(_vm: &mut ThreadState, base: u32, addr: u64, length: u64) -> i
     flush_shared_mappings_in_range(base, addr, len);
     remove_overlap(s, addr, addr + len);
     recompute_prot_none(s);
+    invalidate_permit_cache(s);
     0
 }
 
@@ -1249,6 +1290,7 @@ pub fn sys_mremap(
 
     if new_len <= old_len {
         s.vmas[idx].end = old_addr + new_len;
+        invalidate_permit_cache(s);
         return old_addr as i64;
     }
 
@@ -1261,6 +1303,7 @@ pub fn sys_mremap(
             guest_mem::zero_mem(base, old_addr + old_len, (new_len - old_len) as usize);
         }
         s.vmas[idx].end = grow_end;
+        invalidate_permit_cache(s);
         return old_addr as i64;
     }
 
@@ -1298,6 +1341,7 @@ pub fn sys_mremap(
     s.vmas[idx].start = new_start;
     s.vmas[idx].end = new_start + new_len;
     s.vmas.sort_by_key(|v| v.start);
+    invalidate_permit_cache(s);
     new_start as i64
 }
 
@@ -1370,6 +1414,7 @@ pub fn sys_mprotect(_vm: &mut ThreadState, base: u32, addr: u64, length: u64, pr
 
     s.vmas = rebuilt_vmas;
     recompute_prot_none(s);
+    invalidate_permit_cache(s);
     0
 }
 
@@ -1654,6 +1699,7 @@ fn remove_overlap(s: &mut AddressSpaceState, start: u64, end: u64) {
         i += 1;
     }
     s.vmas.sort_by_key(|v| v.start);
+    invalidate_permit_cache(s);
 }
 
 fn find_vma_containing(s: &AddressSpaceState, addr: u64) -> Option<usize> {
