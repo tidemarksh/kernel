@@ -21,8 +21,8 @@ mod integer;
 mod system;
 pub mod trace;
 
-use self::block_cache::BlockCache;
-use self::block_exec::{BlockOutcome, exec_block};
+use self::block_cache::{BLOCK_LOOP_SIMPLE_LOAD_SCAN, BlockCache};
+use self::block_exec::{BlockOutcome, exec_block, exec_simple_load_scan_loop};
 use self::dispatch::{StepOutcome, exec_decoded};
 use self::fault::{deliver_sync_sigsegv, guest_range_in_bounds};
 use self::trace::{HotCounts, JitBitmap, TraceBuffer};
@@ -239,7 +239,14 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
         {
             let cost = blk.total_budget as i32;
             if cost > 0 && remaining.saturating_add(1) >= cost {
-                match unsafe { exec_block(blk, vm, x, f, fcsr, pc, base, remaining, true) } {
+                let outcome = if blk.loop_flags & BLOCK_LOOP_SIMPLE_LOAD_SCAN != 0 {
+                    unsafe {
+                        exec_simple_load_scan_loop(blk, vm, x, f, fcsr, pc, base, remaining, true)
+                    }
+                } else {
+                    unsafe { exec_block(blk, vm, x, f, fcsr, pc, base, remaining, true) }
+                };
+                match outcome {
                     BlockOutcome::Restart => {
                         x[0] = 0;
                         continue;

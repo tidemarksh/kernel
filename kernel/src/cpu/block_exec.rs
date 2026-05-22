@@ -8,7 +8,7 @@
 //! direct-mapped block cache.
 
 use super::block_cache::BlockEntry;
-use super::fault::{ensure_guest_access, AccessOutcome};
+use super::fault::{AccessOutcome, ensure_guest_access};
 use super::integer::{div_i64, divu_64, mulh, mulhsu, mulhu, rem_i64, remu_64};
 use crate::abi;
 use crate::guest_mem;
@@ -41,6 +41,178 @@ fn block_budget_refund_from(len: usize, index: usize, first_consumed: bool) -> i
         len.saturating_sub(first_charged) as i32
     } else {
         len.saturating_sub(index) as i32
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) unsafe fn exec_simple_load_scan_loop(
+    blk: &BlockEntry,
+    vm: &mut ThreadState,
+    x: &mut [u64; 32],
+    f: &mut [u64; 32],
+    fcsr: &mut u32,
+    pc: &mut u64,
+    base: u32,
+    remaining: &mut i32,
+    first_consumed: bool,
+) -> BlockOutcome {
+    let len = blk.len as usize;
+    let mut cur_pc = blk.start_pc;
+    let mut charged_ops = 0u32;
+    let sample_ops = crate::tracepoints::record_block_exec_sample_start();
+    *remaining -= block_budget_charge(len, first_consumed);
+    charged_ops = charged_ops.saturating_add(len as u32);
+
+    'block_loop: loop {
+        for index in 0..len {
+            let op = blk.ops[index];
+            let rd = op.rd();
+            let r1 = op.rs1();
+            let r2 = op.rs2();
+            let f3 = op.f3();
+            let step = op.step();
+            let imm = op.imm() as i64;
+            let op_id = op.op_id();
+            if sample_ops {
+                crate::tracepoints::record_block_exec_sampled_op(op_id as u32);
+            }
+
+            match op_id {
+                1 => {
+                    let v = x[r1] as i64;
+                    let r = match f3 {
+                        0 => v.wrapping_add(imm),
+                        1 => (x[r1] << (imm & 0x3F)) as i64,
+                        2 if v < imm => 1,
+                        3 if x[r1] < imm as u64 => 1,
+                        4 => v ^ imm,
+                        5 => {
+                            let sh = imm & 0x3F;
+                            if op.f7b5() {
+                                v >> sh
+                            } else {
+                                (x[r1] >> sh) as i64
+                            }
+                        }
+                        6 => v | imm,
+                        7 => v & imm,
+                        _ => 0,
+                    };
+                    if rd != 0 {
+                        x[rd] = r as u64;
+                    }
+                }
+                3 => {
+                    let v1 = x[r1];
+                    let v2 = x[r2];
+                    let r: u64 = match f3 {
+                        0 => {
+                            if op.f7b5() {
+                                (v1 as i64).wrapping_sub(v2 as i64) as u64
+                            } else {
+                                v1.wrapping_add(v2)
+                            }
+                        }
+                        1 => v1 << (v2 & 0x3F),
+                        2 if (v1 as i64) < (v2 as i64) => 1,
+                        3 if v1 < v2 => 1,
+                        4 => v1 ^ v2,
+                        5 => {
+                            if op.f7b5() {
+                                ((v1 as i64) >> (v2 & 0x3F)) as u64
+                            } else {
+                                v1 >> (v2 & 0x3F)
+                            }
+                        }
+                        6 => v1 | v2,
+                        7 => v1 & v2,
+                        _ => 0,
+                    };
+                    if rd != 0 {
+                        x[rd] = r;
+                    }
+                }
+                5 => {
+                    let addr = (x[r1] as i64 + imm) as u64;
+                    let width = match f3 {
+                        0 | 4 => 1,
+                        1 | 5 => 2,
+                        2 | 6 => 4,
+                        3 => 8,
+                        _ => 0,
+                    };
+                    match unsafe {
+                        ensure_guest_access(vm, x, f, fcsr, pc, base, addr, width, abi::PROT_READ)
+                    } {
+                        AccessOutcome::Ok => {}
+                        AccessOutcome::Restart => {
+                            *remaining += block_budget_refund_after(len, index);
+                            crate::tracepoints::record_block_exec_ops(charged_ops);
+                            return BlockOutcome::Restart;
+                        }
+                        AccessOutcome::Return => {
+                            *remaining += block_budget_refund_after(len, index);
+                            crate::tracepoints::record_block_exec_ops(charged_ops);
+                            return BlockOutcome::Return;
+                        }
+                    }
+                    let val: u64 = match f3 {
+                        0 => unsafe { guest_mem::read_u8_unchecked(base, addr) as i8 as u64 },
+                        1 => unsafe { guest_mem::read_u16_unchecked(base, addr) as i16 as u64 },
+                        2 => unsafe { guest_mem::read_u32_unchecked(base, addr) as i32 as u64 },
+                        3 => unsafe { guest_mem::read_u64_unchecked(base, addr) },
+                        4 => unsafe { guest_mem::read_u8_unchecked(base, addr) as u64 },
+                        5 => unsafe { guest_mem::read_u16_unchecked(base, addr) as u64 },
+                        6 => unsafe { guest_mem::read_u32_unchecked(base, addr) as u64 },
+                        _ => 0,
+                    };
+                    if rd != 0 {
+                        x[rd] = val;
+                    }
+                }
+                9 => {
+                    let taken = match f3 {
+                        0 => x[r1] == x[r2],
+                        1 => x[r1] != x[r2],
+                        4 => (x[r1] as i64) < (x[r2] as i64),
+                        5 => (x[r1] as i64) >= (x[r2] as i64),
+                        6 => x[r1] < x[r2],
+                        7 => x[r1] >= x[r2],
+                        _ => false,
+                    };
+                    if taken {
+                        let target = (cur_pc as i64 + imm) as u64;
+                        if target == blk.start_pc && index + 1 == len && *remaining >= len as i32 {
+                            *remaining -= len as i32;
+                            charged_ops = charged_ops.saturating_add(len as u32);
+                            cur_pc = blk.start_pc;
+                            x[0] = 0;
+                            continue 'block_loop;
+                        }
+                        *pc = target;
+                    } else {
+                        *pc = cur_pc + step;
+                    }
+                    x[0] = 0;
+                    crate::tracepoints::record_block_exec_ops(charged_ops);
+                    return BlockOutcome::Restart;
+                }
+                _ => {
+                    *remaining += block_budget_refund_from(len, index, first_consumed);
+                    crate::tracepoints::record_block_exec_unsupported_op(op_id as u32);
+                    *pc = cur_pc;
+                    crate::tracepoints::record_block_exec_ops(charged_ops);
+                    return BlockOutcome::Unsupported;
+                }
+            }
+
+            x[0] = 0;
+            cur_pc += step;
+        }
+
+        *pc = cur_pc;
+        crate::tracepoints::record_block_exec_ops(charged_ops);
+        return BlockOutcome::Restart;
     }
 }
 
@@ -231,11 +403,7 @@ pub(super) unsafe fn exec_block(
                     }
                     7 => {
                         let (u1, u2) = (v1 as u32, v2 as u32);
-                        if u2 == 0 {
-                            v1
-                        } else {
-                            (u1 % u2) as i32
-                        }
+                        if u2 == 0 { v1 } else { (u1 % u2) as i32 }
                     }
                     _ => 0,
                 };

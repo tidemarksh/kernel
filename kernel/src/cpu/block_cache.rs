@@ -11,6 +11,7 @@ use crate::types::ThreadState;
 
 pub const CACHE_SIZE: usize = 4096;
 pub const MAX_BLOCK_OPS: usize = 32;
+pub const BLOCK_LOOP_SIMPLE_LOAD_SCAN: u16 = 1 << 0;
 
 #[inline(always)]
 fn block_fetch_permitted(vm: Option<&ThreadState>, ram_base: u32, pc: u64, width: u64) -> bool {
@@ -136,11 +137,7 @@ impl PackedOp {
     }
     #[inline(always)]
     pub fn step(self) -> u64 {
-        if (self.packed >> 36) & 1 != 0 {
-            4
-        } else {
-            2
-        }
+        if (self.packed >> 36) & 1 != 0 { 4 } else { 2 }
     }
     #[inline(always)]
     pub fn imm(self) -> i32 {
@@ -159,6 +156,36 @@ pub struct BlockEntry {
     pub len: u16,
     /// Total instruction count (for budget)
     pub total_budget: u16,
+    /// Precomputed block-shape flags used by optional executor fast paths.
+    pub loop_flags: u16,
+}
+
+fn classify_loop_flags(ops: &[PackedOp; MAX_BLOCK_OPS], len: u16, start_pc: u64) -> u16 {
+    if len == 0 {
+        return 0;
+    }
+    let last = ops[len as usize - 1];
+    if last.op_id() != 9 {
+        return 0;
+    }
+
+    if len == 5
+        && ops[0].op_id() == 5
+        && ops[1].op_id() == 1
+        && ops[2].op_id() == 1
+        && ops[3].op_id() == 3
+        && (start_pc as i64
+            + ops[0].step() as i64
+            + ops[1].step() as i64
+            + ops[2].step() as i64
+            + ops[3].step() as i64
+            + ops[4].imm() as i64) as u64
+            == start_pc
+    {
+        BLOCK_LOOP_SIMPLE_LOAD_SCAN
+    } else {
+        0
+    }
 }
 
 /// The block cache (direct-mapped, indexed by PC).
@@ -244,6 +271,7 @@ impl BlockCache {
             entry.start_pc = pc;
             entry.len = 0;
             entry.total_budget = 0;
+            entry.loop_flags = 0;
 
             let mut cur_pc = pc;
             let mut count = 0u16;
@@ -321,6 +349,7 @@ impl BlockCache {
 
             entry.len = count;
             entry.total_budget = count;
+            entry.loop_flags = classify_loop_flags(&entry.ops, count, pc);
             Some(&*self.entries.add(idx))
         }
     }
@@ -341,7 +370,44 @@ impl BlockCache {
             if entry.start_pc != 0 && entry.start_pc >= start && entry.start_pc < end {
                 entry.start_pc = 0;
                 entry.len = 0;
+                entry.loop_flags = 0;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_ops() -> [PackedOp; MAX_BLOCK_OPS] {
+        [PackedOp { packed: 0 }; MAX_BLOCK_OPS]
+    }
+
+    #[test]
+    fn classifies_simple_load_scan_backedge() {
+        let mut ops = empty_ops();
+        ops[0] = PackedOp::new(5, 13, 14, 0, 4, false, 4, 0);
+        ops[1] = PackedOp::new(1, 15, 15, 0, 0, false, 2, 1);
+        ops[2] = PackedOp::new(1, 14, 14, 0, 0, false, 2, 1);
+        ops[3] = PackedOp::new(3, 8, 8, 13, 0, false, 2, 0);
+        ops[4] = PackedOp::new(9, 0, 15, 10, 4, false, 4, -10);
+
+        assert_eq!(
+            classify_loop_flags(&ops, 5, 0x104de),
+            BLOCK_LOOP_SIMPLE_LOAD_SCAN
+        );
+    }
+
+    #[test]
+    fn does_not_classify_non_backedge_load_scan_shape() {
+        let mut ops = empty_ops();
+        ops[0] = PackedOp::new(5, 13, 14, 0, 4, false, 4, 0);
+        ops[1] = PackedOp::new(1, 15, 15, 0, 0, false, 2, 1);
+        ops[2] = PackedOp::new(1, 14, 14, 0, 0, false, 2, 1);
+        ops[3] = PackedOp::new(3, 8, 8, 13, 0, false, 2, 0);
+        ops[4] = PackedOp::new(9, 0, 15, 10, 4, false, 4, 4);
+
+        assert_eq!(classify_loop_flags(&ops, 5, 0x104de), 0);
     }
 }
