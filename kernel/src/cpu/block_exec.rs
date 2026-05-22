@@ -86,16 +86,6 @@ pub(super) unsafe fn exec_block(
         }
 
         match op_id {
-            1..=11 | 13 | 22 | 23 => {}
-            _ => {
-                *remaining += block_budget_refund_from(len, index, first_consumed);
-                crate::tracepoints::record_block_exec_unsupported_op(op_id as u32);
-                *pc = cur_pc;
-                return BlockOutcome::Unsupported;
-            }
-        }
-
-        match op_id {
             1 => {
                 let v = x[r1] as i64;
                 let r = match f3 {
