@@ -27,7 +27,9 @@ const MIN_MMAP_BASE: u64 = 0x20_0000;
 const MMAP_BASE_ALIGN: u64 = 0x10_0000;
 const BRK_MMAP_GAP: u64 = 8 * 1024 * 1024;
 const PROT_NONE_TOPDOWN_LIMIT: u64 = 0x8000_0000;
-const PERMIT_CACHE_SLOTS: usize = 4;
+const PERMIT_CACHE_PROT_SLOTS: usize = 4;
+const PERMIT_CACHE_WAYS: usize = 2;
+const PERMIT_CACHE_SLOTS: usize = PERMIT_CACHE_PROT_SLOTS * PERMIT_CACHE_WAYS;
 const PERMIT_OUTCOME_CACHE_HIT: u32 = 1;
 const PERMIT_OUTCOME_COVER_HIT: u32 = 2;
 const PERMIT_OUTCOME_DENIED: u32 = 3;
@@ -334,7 +336,7 @@ fn invalidate_permit_cache(s: &mut AddressSpaceState) {
 
 #[inline(always)]
 fn permit_cache_slot(prot: i32) -> usize {
-    (prot as usize) & (PERMIT_CACHE_SLOTS - 1)
+    ((prot as usize) & (PERMIT_CACHE_PROT_SLOTS - 1)) * PERMIT_CACHE_WAYS
 }
 
 fn cache_permitted_range(
@@ -345,6 +347,15 @@ fn cache_permitted_range(
     requested_prot: i32,
 ) {
     let slot = permit_cache_slot(requested_prot);
+    if s.permit_cache_start[slot] == start
+        && s.permit_cache_end[slot] == end
+        && s.permit_cache_prot[slot] == cover_prot
+    {
+        return;
+    }
+    s.permit_cache_start[slot + 1] = s.permit_cache_start[slot];
+    s.permit_cache_end[slot + 1] = s.permit_cache_end[slot];
+    s.permit_cache_prot[slot + 1] = s.permit_cache_prot[slot];
     s.permit_cache_start[slot] = start;
     s.permit_cache_end[slot] = end;
     s.permit_cache_prot[slot] = cover_prot;
@@ -609,12 +620,17 @@ pub fn guest_range_permitted(vm: &ThreadState, base: u32, start: u64, len: u64, 
 
     let s = ms();
     let slot = permit_cache_slot(prot);
-    if start >= s.permit_cache_start[slot]
-        && end <= s.permit_cache_end[slot]
-        && (s.permit_cache_prot[slot] & prot) == prot
-    {
-        crate::tracepoints::record_guest_range_permit_check(prot as u32, PERMIT_OUTCOME_CACHE_HIT);
-        return true;
+    for i in slot..slot + PERMIT_CACHE_WAYS {
+        if start >= s.permit_cache_start[i]
+            && end <= s.permit_cache_end[i]
+            && (s.permit_cache_prot[i] & prot) == prot
+        {
+            crate::tracepoints::record_guest_range_permit_check(
+                prot as u32,
+                PERMIT_OUTCOME_CACHE_HIT,
+            );
+            return true;
+        }
     }
     let mut cur = start;
     while cur < end {
