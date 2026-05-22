@@ -21,8 +21,8 @@ pub(super) enum BlockOutcome {
 }
 
 #[inline(always)]
-fn block_budget_charge(len: usize, first_consumed: bool) -> i32 {
-    if first_consumed {
+fn block_budget_charge<const FIRST_CONSUMED: bool>(len: usize) -> i32 {
+    if FIRST_CONSUMED {
         len.saturating_sub(1) as i32
     } else {
         len as i32
@@ -35,8 +35,8 @@ fn block_budget_refund_after(len: usize, index: usize) -> i32 {
 }
 
 #[inline(always)]
-fn block_budget_refund_from(len: usize, index: usize, first_consumed: bool) -> i32 {
-    let first_charged = if first_consumed { 1 } else { 0 };
+fn block_budget_refund_from<const FIRST_CONSUMED: bool>(len: usize, index: usize) -> i32 {
+    let first_charged = if FIRST_CONSUMED { 1 } else { 0 };
     if index < first_charged {
         len.saturating_sub(first_charged) as i32
     } else {
@@ -45,7 +45,7 @@ fn block_budget_refund_from(len: usize, index: usize, first_consumed: bool) -> i
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) unsafe fn exec_simple_load_scan_loop(
+pub(super) unsafe fn exec_simple_load_scan_loop<const FIRST_CONSUMED: bool>(
     blk: &BlockEntry,
     vm: &mut ThreadState,
     x: &mut [u64; 32],
@@ -54,13 +54,12 @@ pub(super) unsafe fn exec_simple_load_scan_loop(
     pc: &mut u64,
     base: u32,
     remaining: &mut i32,
-    first_consumed: bool,
 ) -> BlockOutcome {
     let len = blk.len as usize;
     let mut cur_pc = blk.start_pc;
     let mut charged_ops = 0u32;
     let sample_ops = crate::tracepoints::record_block_exec_sample_start();
-    *remaining -= block_budget_charge(len, first_consumed);
+    *remaining -= block_budget_charge::<FIRST_CONSUMED>(len);
     charged_ops = charged_ops.saturating_add(len as u32);
 
     'block_loop: loop {
@@ -198,7 +197,7 @@ pub(super) unsafe fn exec_simple_load_scan_loop(
                     return BlockOutcome::Restart;
                 }
                 _ => {
-                    *remaining += block_budget_refund_from(len, index, first_consumed);
+                    *remaining += block_budget_refund_from::<FIRST_CONSUMED>(len, index);
                     crate::tracepoints::record_block_exec_unsupported_op(op_id as u32);
                     *pc = cur_pc;
                     crate::tracepoints::record_block_exec_ops(charged_ops);
@@ -226,7 +225,7 @@ pub(super) unsafe fn exec_simple_load_scan_loop(
 /// dispatched into this helper when `first_consumed` is true. Data accesses are
 /// still validated through the same fault path used by the interpreter.
 #[allow(clippy::too_many_arguments)]
-pub(super) unsafe fn exec_block(
+pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
     blk: &BlockEntry,
     vm: &mut ThreadState,
     x: &mut [u64; 32],
@@ -235,14 +234,13 @@ pub(super) unsafe fn exec_block(
     pc: &mut u64,
     base: u32,
     remaining: &mut i32,
-    first_consumed: bool,
 ) -> BlockOutcome {
     let len = blk.len as usize;
     let mut cur_pc = blk.start_pc;
     let vm_ptr = vm as *const ThreadState as u32;
     crate::tracepoints::record_block_exec_ops(len as u32);
     let sample_ops = crate::tracepoints::record_block_exec_sample_start();
-    *remaining -= block_budget_charge(len, first_consumed);
+    *remaining -= block_budget_charge::<FIRST_CONSUMED>(len);
 
     for index in 0..len {
         let op = blk.ops[index];
@@ -525,7 +523,7 @@ pub(super) unsafe fn exec_block(
             }
             13 => {}
             _ => {
-                *remaining += block_budget_refund_from(len, index, first_consumed);
+                *remaining += block_budget_refund_from::<FIRST_CONSUMED>(len, index);
                 crate::tracepoints::record_block_exec_unsupported_op(op_id as u32);
                 *pc = cur_pc;
                 return BlockOutcome::Unsupported;

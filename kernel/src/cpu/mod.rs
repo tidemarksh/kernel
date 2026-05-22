@@ -241,10 +241,10 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
             if cost > 0 && remaining.saturating_add(1) >= cost {
                 let outcome = if blk.loop_flags & BLOCK_LOOP_SIMPLE_LOAD_SCAN != 0 {
                     unsafe {
-                        exec_simple_load_scan_loop(blk, vm, x, f, fcsr, pc, base, remaining, true)
+                        exec_simple_load_scan_loop::<true>(blk, vm, x, f, fcsr, pc, base, remaining)
                     }
                 } else {
-                    unsafe { exec_block(blk, vm, x, f, fcsr, pc, base, remaining, true) }
+                    unsafe { exec_block::<true>(blk, vm, x, f, fcsr, pc, base, remaining) }
                 };
                 match outcome {
                     BlockOutcome::Restart => {

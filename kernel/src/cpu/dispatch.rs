@@ -172,7 +172,7 @@ pub(super) unsafe fn exec_decoded(
                 {
                     let cost = blk.total_budget as i32;
                     if *remaining >= cost {
-                        match exec_block(blk, vm, x, f, fcsr, pc, base, remaining, false) {
+                        match exec_block::<false>(blk, vm, x, f, fcsr, pc, base, remaining) {
                             BlockOutcome::Restart => {
                                 x[0] = 0;
                                 return StepOutcome::Restart;
