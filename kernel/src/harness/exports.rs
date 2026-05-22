@@ -253,6 +253,54 @@ pub extern "C" fn debug_cpu_profile_unsupported_op_count(op_id: u32) -> u64 {
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_permit_checks() -> u64 {
+    crate::harness::debug::memory_permit_checks()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_permit_cache_hits() -> u64 {
+    crate::harness::debug::memory_permit_cache_hits()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_permit_cover_hits() -> u64 {
+    crate::harness::debug::memory_permit_cover_hits()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_permit_denied() -> u64 {
+    crate::harness::debug::memory_permit_denied()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_permit_checks_by_prot(prot: u32) -> u64 {
+    crate::harness::debug::memory_permit_checks_by_prot(prot)
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_permit_cache_hits_by_prot(prot: u32) -> u64 {
+    crate::harness::debug::memory_permit_cache_hits_by_prot(prot)
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_permit_cover_hits_by_prot(prot: u32) -> u64 {
+    crate::harness::debug::memory_permit_cover_hits_by_prot(prot)
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_permit_denied_by_prot(prot: u32) -> u64 {
+    crate::harness::debug::memory_permit_denied_by_prot(prot)
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
 pub extern "C" fn debug_clear_guest_write_watch_trace() {
     crate::harness::debug::clear_guest_write_watch_trace();
 }

@@ -4,8 +4,8 @@ pub(crate) use crate::harness::debug::{
     record_block_cache_build_failure, record_block_cache_build_op, record_block_cache_hit,
     record_block_cache_miss, record_block_cache_unsupported_op, record_block_exec_ops,
     record_block_exec_sample_start, record_block_exec_sampled_op, record_block_exec_unsupported_op,
-    record_exec_trace, record_guest_write_overlap, record_interpreter_op, record_jalr,
-    record_special_reg_transitions, record_zero_reg_transition,
+    record_exec_trace, record_guest_range_permit_check, record_guest_write_overlap,
+    record_interpreter_op, record_jalr, record_special_reg_transitions, record_zero_reg_transition,
 };
 
 macro_rules! noop_tracepoint {
@@ -34,6 +34,7 @@ noop_tracepoint! {
     fn record_block_exec_sampled_op(op_id: u32) {}
     fn record_block_exec_unsupported_op(op_id: u32) {}
     fn record_interpreter_op(op_id: u32) {}
+    fn record_guest_range_permit_check(prot: u32, outcome: u32) {}
     fn record_exec_trace(vm_ptr: u32, tid: i32, pc: u64, raw: u32, step: u64, x: &[u64; 32]) {}
     fn guest_write_overlap_enabled() -> bool { false }
     fn record_guest_write_overlap(addr: u64, len: u32, op: u32, sample: u64, sample_len: u32) {}

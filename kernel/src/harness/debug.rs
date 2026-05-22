@@ -1444,6 +1444,10 @@ const CPU_PROFILE_OP_SLOTS: usize = 32;
 const CPU_PROFILE_BLOCK_EXEC_OP_SAMPLE_INTERVAL: u64 = 1024;
 const CPU_PROFILE_BLOCK_MISS_SAMPLE_INTERVAL: u64 = 1024;
 const CPU_PROFILE_BLOCK_MISS_SAMPLE_CAP: usize = 64;
+const MEMORY_PERMIT_PROT_SLOTS: usize = 8;
+const MEMORY_PERMIT_OUTCOME_CACHE_HIT: u32 = 1;
+const MEMORY_PERMIT_OUTCOME_COVER_HIT: u32 = 2;
+const MEMORY_PERMIT_OUTCOME_DENIED: u32 = 3;
 
 static mut CPU_PROFILE_BLOCK_HITS: u64 = 0;
 static mut CPU_PROFILE_BLOCK_MISSES: u64 = 0;
@@ -1460,6 +1464,10 @@ static mut CPU_PROFILE_BLOCK_EXEC_SAMPLED_BLOCKS: u64 = 0;
 static mut CPU_PROFILE_BLOCK_MISS_SAMPLE_TICKS: u64 = 0;
 static mut CPU_PROFILE_BLOCK_MISS_SAMPLED: u64 = 0;
 static mut CPU_PROFILE_INTERPRETER_OPS: u64 = 0;
+static mut MEMORY_PERMIT_CHECKS: u64 = 0;
+static mut MEMORY_PERMIT_CACHE_HITS: u64 = 0;
+static mut MEMORY_PERMIT_COVER_HITS: u64 = 0;
+static mut MEMORY_PERMIT_DENIED: u64 = 0;
 static mut CPU_PROFILE_BLOCK_BUILD_OP_COUNTS: [u64; CPU_PROFILE_OP_SLOTS] =
     [0; CPU_PROFILE_OP_SLOTS];
 static mut CPU_PROFILE_BLOCK_EXEC_OP_COUNTS: [u64; CPU_PROFILE_OP_SLOTS] =
@@ -1468,6 +1476,14 @@ static mut CPU_PROFILE_INTERPRETER_OP_COUNTS: [u64; CPU_PROFILE_OP_SLOTS] =
     [0; CPU_PROFILE_OP_SLOTS];
 static mut CPU_PROFILE_UNSUPPORTED_OP_COUNTS: [u64; CPU_PROFILE_OP_SLOTS] =
     [0; CPU_PROFILE_OP_SLOTS];
+static mut MEMORY_PERMIT_CHECKS_BY_PROT: [u64; MEMORY_PERMIT_PROT_SLOTS] =
+    [0; MEMORY_PERMIT_PROT_SLOTS];
+static mut MEMORY_PERMIT_CACHE_HITS_BY_PROT: [u64; MEMORY_PERMIT_PROT_SLOTS] =
+    [0; MEMORY_PERMIT_PROT_SLOTS];
+static mut MEMORY_PERMIT_COVER_HITS_BY_PROT: [u64; MEMORY_PERMIT_PROT_SLOTS] =
+    [0; MEMORY_PERMIT_PROT_SLOTS];
+static mut MEMORY_PERMIT_DENIED_BY_PROT: [u64; MEMORY_PERMIT_PROT_SLOTS] =
+    [0; MEMORY_PERMIT_PROT_SLOTS];
 static mut CPU_PROFILE_BLOCK_MISS_SAMPLES: [BlockMissSample; CPU_PROFILE_BLOCK_MISS_SAMPLE_CAP] =
     [BlockMissSample {
         pc: 0,
@@ -2405,6 +2421,50 @@ pub(crate) fn record_interpreter_op(op_id: u32) {
     }
 }
 
+#[inline(always)]
+fn memory_permit_prot_slot(prot: u32) -> usize {
+    (prot as usize) & (MEMORY_PERMIT_PROT_SLOTS - 1)
+}
+
+pub(crate) fn record_guest_range_permit_check(prot: u32, outcome: u32) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (prot, outcome);
+        return;
+    }
+    unsafe {
+        let slot = memory_permit_prot_slot(prot);
+        cpu_profile_add(core::ptr::addr_of_mut!(MEMORY_PERMIT_CHECKS), 1);
+        cpu_profile_add(
+            core::ptr::addr_of_mut!(MEMORY_PERMIT_CHECKS_BY_PROT[slot]),
+            1,
+        );
+        match outcome {
+            MEMORY_PERMIT_OUTCOME_CACHE_HIT => {
+                cpu_profile_add(core::ptr::addr_of_mut!(MEMORY_PERMIT_CACHE_HITS), 1);
+                cpu_profile_add(
+                    core::ptr::addr_of_mut!(MEMORY_PERMIT_CACHE_HITS_BY_PROT[slot]),
+                    1,
+                );
+            }
+            MEMORY_PERMIT_OUTCOME_COVER_HIT => {
+                cpu_profile_add(core::ptr::addr_of_mut!(MEMORY_PERMIT_COVER_HITS), 1);
+                cpu_profile_add(
+                    core::ptr::addr_of_mut!(MEMORY_PERMIT_COVER_HITS_BY_PROT[slot]),
+                    1,
+                );
+            }
+            MEMORY_PERMIT_OUTCOME_DENIED => {
+                cpu_profile_add(core::ptr::addr_of_mut!(MEMORY_PERMIT_DENIED), 1);
+                cpu_profile_add(
+                    core::ptr::addr_of_mut!(MEMORY_PERMIT_DENIED_BY_PROT[slot]),
+                    1,
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
 #[cfg(any(test, feature = "harness"))]
 pub(crate) fn cpu_profile_block_hits() -> u64 {
     if !RUNTIME_DEBUG_ENABLED {
@@ -2615,6 +2675,86 @@ pub(crate) fn cpu_profile_unsupported_op_count(op_id: u32) -> u64 {
         return 0;
     };
     unsafe { core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_UNSUPPORTED_OP_COUNTS[slot])) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn memory_permit_checks() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(MEMORY_PERMIT_CHECKS)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn memory_permit_cache_hits() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(MEMORY_PERMIT_CACHE_HITS)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn memory_permit_cover_hits() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(MEMORY_PERMIT_COVER_HITS)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn memory_permit_denied() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(MEMORY_PERMIT_DENIED)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn memory_permit_checks_by_prot(prot: u32) -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe {
+        core::ptr::read(core::ptr::addr_of!(
+            MEMORY_PERMIT_CHECKS_BY_PROT[memory_permit_prot_slot(prot)]
+        ))
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn memory_permit_cache_hits_by_prot(prot: u32) -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe {
+        core::ptr::read(core::ptr::addr_of!(
+            MEMORY_PERMIT_CACHE_HITS_BY_PROT[memory_permit_prot_slot(prot)]
+        ))
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn memory_permit_cover_hits_by_prot(prot: u32) -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe {
+        core::ptr::read(core::ptr::addr_of!(
+            MEMORY_PERMIT_COVER_HITS_BY_PROT[memory_permit_prot_slot(prot)]
+        ))
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn memory_permit_denied_by_prot(prot: u32) -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe {
+        core::ptr::read(core::ptr::addr_of!(
+            MEMORY_PERMIT_DENIED_BY_PROT[memory_permit_prot_slot(prot)]
+        ))
+    }
 }
 
 pub(crate) fn record_thread_step_trace(

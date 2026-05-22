@@ -14,8 +14,8 @@ pub(crate) use cpu::{
     record_block_cache_build_failure, record_block_cache_build_op, record_block_cache_hit,
     record_block_cache_miss, record_block_cache_unsupported_op, record_block_exec_ops,
     record_block_exec_sample_start, record_block_exec_sampled_op, record_block_exec_unsupported_op,
-    record_exec_trace, record_guest_write_overlap, record_interpreter_op, record_jalr,
-    record_special_reg_transitions, record_zero_reg_transition,
+    record_exec_trace, record_guest_range_permit_check, record_guest_write_overlap,
+    record_interpreter_op, record_jalr, record_special_reg_transitions, record_zero_reg_transition,
 };
 pub(crate) use execve::{
     record_execve_approach, record_execve_dispatch, record_execve_ecall,

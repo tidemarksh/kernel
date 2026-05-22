@@ -28,6 +28,9 @@ const MMAP_BASE_ALIGN: u64 = 0x10_0000;
 const BRK_MMAP_GAP: u64 = 8 * 1024 * 1024;
 const PROT_NONE_TOPDOWN_LIMIT: u64 = 0x8000_0000;
 const PERMIT_CACHE_SLOTS: usize = 4;
+const PERMIT_OUTCOME_CACHE_HIT: u32 = 1;
+const PERMIT_OUTCOME_COVER_HIT: u32 = 2;
+const PERMIT_OUTCOME_DENIED: u32 = 3;
 
 /// Address space state — shared by all threads of a process.
 /// Allocated in kernel Worker linear memory via alloc.rs.
@@ -584,10 +587,12 @@ pub fn guest_range_permitted(vm: &ThreadState, base: u32, start: u64, len: u64, 
         return true;
     }
     let Some(end) = start.checked_add(len) else {
+        crate::tracepoints::record_guest_range_permit_check(prot as u32, PERMIT_OUTCOME_DENIED);
         return false;
     };
     let guest_limit = effective_guest_limit(vm, base);
     if start > u32::MAX as u64 || end > guest_limit || end > u32::MAX as u64 {
+        crate::tracepoints::record_guest_range_permit_check(prot as u32, PERMIT_OUTCOME_DENIED);
         return false;
     }
 
@@ -597,23 +602,34 @@ pub fn guest_range_permitted(vm: &ThreadState, base: u32, start: u64, len: u64, 
             && end <= s.permit_cache_end[i]
             && (s.permit_cache_prot[i] & prot) == prot
         {
+            crate::tracepoints::record_guest_range_permit_check(
+                prot as u32,
+                PERMIT_OUTCOME_CACHE_HIT,
+            );
             return true;
         }
     }
     let mut cur = start;
     while cur < end {
         let Some((cover_start, cover_end, cover_prot)) = range_cover_with_prot(s, cur, prot) else {
+            crate::tracepoints::record_guest_range_permit_check(prot as u32, PERMIT_OUTCOME_DENIED);
             return false;
         };
         if cover_end <= cur {
+            crate::tracepoints::record_guest_range_permit_check(prot as u32, PERMIT_OUTCOME_DENIED);
             return false;
         }
         if cur == start && end <= cover_end {
             cache_permitted_range(s, cover_start, cover_end, cover_prot);
+            crate::tracepoints::record_guest_range_permit_check(
+                prot as u32,
+                PERMIT_OUTCOME_COVER_HIT,
+            );
             return true;
         }
         cur = cover_end.min(end);
     }
+    crate::tracepoints::record_guest_range_permit_check(prot as u32, PERMIT_OUTCOME_COVER_HIT);
     true
 }
 
