@@ -1,6 +1,6 @@
 //! Pre-decoded basic block cache.
 //!
-//! Direct-mapped, 4096 entries. Each entry holds a pre-decoded basic block
+//! Direct-mapped, 8192 entries. Each entry holds a pre-decoded basic block
 //! (up to MAX_BLOCK_OPS instructions) with packed fields for fast dispatch.
 //!
 //! JALR rs1==ra triggers a cache lookup for return prediction.
@@ -9,7 +9,7 @@ use crate::cpu::decode;
 use crate::guest_mem;
 use crate::types::ThreadState;
 
-pub const CACHE_SIZE: usize = 4096;
+pub const CACHE_SIZE: usize = 8192;
 pub const MAX_BLOCK_OPS: usize = 32;
 pub const BLOCK_LOOP_SIMPLE_LOAD_SCAN: u16 = 1 << 0;
 
@@ -189,7 +189,7 @@ fn classify_loop_flags(ops: &[PackedOp; MAX_BLOCK_OPS], len: u16, start_pc: u64)
 }
 
 /// The block cache (direct-mapped, indexed by PC).
-/// Heap-allocated due to large size (~1.3MB for 4096 entries).
+/// Heap-allocated due to large size (~2.2MB for 8192 entries).
 pub struct BlockCache {
     entries: *mut BlockEntry,
 }
