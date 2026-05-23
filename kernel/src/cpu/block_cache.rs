@@ -1,6 +1,6 @@
 //! Pre-decoded basic block cache.
 //!
-//! 2-way set-associative, 32768 entries. Each entry holds a pre-decoded basic block
+//! Direct-mapped, 4096 entries. Each entry holds a pre-decoded basic block
 //! (up to MAX_BLOCK_OPS instructions) with packed fields for fast dispatch.
 //!
 //! JALR rs1==ra triggers a cache lookup for return prediction.
@@ -9,16 +9,9 @@ use crate::cpu::decode;
 use crate::guest_mem;
 use crate::types::ThreadState;
 
-pub const CACHE_SIZE: usize = 32768;
-pub const CACHE_WAYS: usize = 2;
-pub const CACHE_SETS: usize = CACHE_SIZE / CACHE_WAYS;
+pub const CACHE_SIZE: usize = 4096;
 pub const MAX_BLOCK_OPS: usize = 32;
 pub const BLOCK_LOOP_SIMPLE_LOAD_SCAN: u16 = 1 << 0;
-
-#[inline(always)]
-fn cache_set_base(pc: u64) -> usize {
-    (((pc >> 1) as usize) & (CACHE_SETS - 1)) * CACHE_WAYS
-}
 
 #[inline(always)]
 fn block_fetch_permitted(vm: Option<&ThreadState>, ram_base: u32, pc: u64, width: u64) -> bool {
@@ -195,7 +188,8 @@ fn classify_loop_flags(ops: &[PackedOp; MAX_BLOCK_OPS], len: u16, start_pc: u64)
     }
 }
 
-/// The block cache, indexed by PC and heap-allocated due to size.
+/// The block cache (direct-mapped, indexed by PC).
+/// Heap-allocated due to large size (~1.3MB for 4096 entries).
 pub struct BlockCache {
     entries: *mut BlockEntry,
 }
@@ -218,14 +212,13 @@ impl BlockCache {
     /// Look up a block by PC. Returns None if not cached or tag mismatch.
     #[inline(always)]
     pub fn get(&self, pc: u64) -> Option<&BlockEntry> {
-        let base = cache_set_base(pc);
-        for way in 0..CACHE_WAYS {
-            let entry = unsafe { &*self.entries.add(base + way) };
-            if entry.start_pc == pc && entry.len > 0 {
-                return Some(entry);
-            }
+        let idx = ((pc >> 1) as usize) & (CACHE_SIZE - 1);
+        let entry = unsafe { &*self.entries.add(idx) };
+        if entry.start_pc == pc && entry.len > 0 {
+            Some(entry)
+        } else {
+            None
         }
-        None
     }
 
     /// Build a block starting at `pc` by decoding instructions from guest memory.
@@ -235,15 +228,7 @@ impl BlockCache {
     /// `ram_base` must point at readable guest RAM containing instructions for
     /// every byte touched while decoding the block rooted at `pc`.
     pub unsafe fn build_block(&mut self, pc: u64, ram_base: u32) -> Option<&BlockEntry> {
-        unsafe {
-            let base = cache_set_base(pc);
-            let target = self.victim_index(base);
-            if !self.build_block_inner_at(target, None, pc, ram_base) {
-                return None;
-            }
-            let idx = self.promote_to_mru(base, target);
-            Some(&*self.entries.add(idx))
-        }
+        unsafe { self.build_block_inner(None, pc, ram_base) }
     }
 
     /// Look up a block or build it after verifying each fetched instruction has
@@ -255,65 +240,33 @@ impl BlockCache {
         pc: u64,
         ram_base: u32,
     ) -> Option<&BlockEntry> {
-        let base = cache_set_base(pc);
-        for way in 0..CACHE_WAYS {
-            let idx = base + way;
-            let entry = unsafe { &*self.entries.add(idx) };
-            if entry.start_pc == pc && entry.len > 0 {
-                crate::tracepoints::record_block_cache_hit();
-                let idx = unsafe { self.promote_to_mru(base, idx) };
-                return Some(unsafe { &*self.entries.add(idx) });
-            }
+        let idx = ((pc >> 1) as usize) & (CACHE_SIZE - 1);
+        let entry = unsafe { &*self.entries.add(idx) };
+        if entry.start_pc == pc && entry.len > 0 {
+            crate::tracepoints::record_block_cache_hit();
+            return Some(entry);
         }
-
-        let target = unsafe { self.victim_index(base) };
-        let evicted_pc = unsafe { (*self.entries.add(target)).start_pc };
-        crate::tracepoints::record_block_cache_miss(pc, target as u32, evicted_pc);
-        let built = unsafe { self.build_block_inner_at(target, Some(vm), pc, ram_base) };
-        if built {
-            let idx = unsafe { self.promote_to_mru(base, target) };
-            let entry = unsafe { &*self.entries.add(idx) };
+        crate::tracepoints::record_block_cache_miss(pc, idx as u32, entry.start_pc);
+        let built = unsafe { self.build_block_inner(Some(vm), pc, ram_base) };
+        if let Some(entry) = built {
             crate::tracepoints::record_block_cache_build(
                 entry.len as u32,
                 entry.total_budget as u32,
             );
-            Some(entry)
         } else {
             crate::tracepoints::record_block_cache_build_failure();
-            None
         }
+        built
     }
 
-    unsafe fn victim_index(&self, base: usize) -> usize {
-        unsafe {
-            for way in 0..CACHE_WAYS {
-                let idx = base + way;
-                let entry = &*self.entries.add(idx);
-                if entry.start_pc == 0 || entry.len == 0 {
-                    return idx;
-                }
-            }
-        }
-        base + CACHE_WAYS - 1
-    }
-
-    unsafe fn promote_to_mru(&mut self, base: usize, idx: usize) -> usize {
-        if idx != base {
-            unsafe {
-                core::ptr::swap(self.entries.add(base), self.entries.add(idx));
-            }
-        }
-        base
-    }
-
-    unsafe fn build_block_inner_at(
+    unsafe fn build_block_inner(
         &mut self,
-        idx: usize,
         vm: Option<&ThreadState>,
         pc: u64,
         ram_base: u32,
-    ) -> bool {
+    ) -> Option<&BlockEntry> {
         unsafe {
+            let idx = ((pc >> 1) as usize) & (CACHE_SIZE - 1);
             let entry = &mut *self.entries.add(idx);
             entry.start_pc = pc;
             entry.len = 0;
@@ -391,13 +344,13 @@ impl BlockCache {
 
             if count == 0 {
                 entry.start_pc = 0; // mark empty
-                return false;
+                return None;
             }
 
             entry.len = count;
             entry.total_budget = count;
             entry.loop_flags = classify_loop_flags(&entry.ops, count, pc);
-            true
+            Some(&*self.entries.add(idx))
         }
     }
 

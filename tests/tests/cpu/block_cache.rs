@@ -24,7 +24,7 @@ fn packed_op_step2() {
 fn block_entry_size() {
     let size = BlockCache::allocation_size();
     assert!(size > 0);
-    assert!(size < 16 * 1024 * 1024);
+    assert!(size < 4 * 1024 * 1024);
 }
 
 #[test]
