@@ -1,5 +1,30 @@
 use tidemark_kernel::cpu::block_cache::{BlockCache, BlockEntry, PackedOp};
 use tidemark_kernel::harness::TestVm;
+use tidemark_kernel::{abi, guest_mem};
+
+fn alloc_block_cache_ptr() -> u32 {
+    let alloc_size = BlockCache::allocation_size();
+    let cache_ptr = unsafe { tidemark_kernel::alloc::alloc_zeroed(alloc_size as u32, 8) };
+    assert!(cache_ptr != 0);
+    cache_ptr
+}
+
+fn alloc_block_cache() -> BlockCache {
+    unsafe { BlockCache::from_ptr(alloc_block_cache_ptr() as *mut BlockEntry) }
+}
+
+fn mmap_exec(t: &mut TestVm, len: u64) -> u64 {
+    let addr = t.sys_mmap(
+        0,
+        len,
+        abi::PROT_READ | abi::PROT_WRITE | abi::PROT_EXEC,
+        abi::MAP_ANONYMOUS | abi::MAP_PRIVATE,
+        -1,
+        0,
+    );
+    assert!(addr > 0, "mmap failed: {addr}");
+    addr as u64
+}
 
 #[test]
 fn packed_op_round_trip() {
@@ -35,15 +60,11 @@ fn block_cache_populate_and_get() {
     let ecall: u32 = 0x00000073;
 
     unsafe {
-        tidemark_kernel::guest_mem::write_u32(t.base, code_addr, addi_x1_x0_42);
-        tidemark_kernel::guest_mem::write_u32(t.base, code_addr + 4, ecall);
+        guest_mem::write_u32(t.base, code_addr, addi_x1_x0_42);
+        guest_mem::write_u32(t.base, code_addr + 4, ecall);
     }
 
-    let alloc_size = BlockCache::allocation_size();
-    let cache_ptr = unsafe { tidemark_kernel::alloc::alloc_zeroed(alloc_size as u32, 8) };
-    assert!(cache_ptr != 0);
-
-    let mut cache = unsafe { BlockCache::from_ptr(cache_ptr as *mut BlockEntry) };
+    let mut cache = alloc_block_cache();
     assert!(cache.get(code_addr).is_none());
 
     let block = unsafe { cache.build_block(code_addr, t.base) };
@@ -63,4 +84,90 @@ fn block_cache_populate_and_get() {
     assert!(cached.is_some());
     assert_eq!(cached.unwrap().start_pc, code_addr);
     assert_eq!(cached.unwrap().len, 2);
+}
+
+#[test]
+fn cached_exec_matches_interpreter_for_ialign2_jalr_target() {
+    fn run(use_cache: bool) -> (i32, u64, u64, u64) {
+        let mut t = TestVm::new();
+        if use_cache {
+            t.vm.block_cache_ptr = alloc_block_cache_ptr();
+        }
+        let code = mmap_exec(&mut t, 4096);
+        let start = code + 2;
+        let target = code + 0x20;
+        unsafe {
+            // addi t2, zero, 3; jalr ra, t0, 1.
+            // RVC relaxes IALIGN to 2 bytes, and JALR must clear the low target bit.
+            guest_mem::write_u16(t.base, code, 0x0001);
+            guest_mem::write_u32(t.base, start, 0x0030_0393);
+            guest_mem::write_u32(t.base, start + 4, 0x0012_80e7);
+            // addi t1, zero, 7
+            guest_mem::write_u32(t.base, target, 0x0070_0313);
+        }
+        t.vm.pc = start;
+        t.vm.x[5] = target;
+        t.vm.status = abi::STATUS_OK;
+
+        let remaining = if use_cache {
+            tidemark_kernel::abi::thread_step(&mut t.vm as *mut _ as u32, 3)
+        } else {
+            unsafe {
+                tidemark_kernel::cpu::exec_at_base(&mut t.vm, 3, t.base, None, None, None, None)
+            }
+        };
+        assert_eq!(
+            remaining, 0,
+            "use_cache={use_cache} status={} pc=0x{:x} fault_addr=0x{:x}",
+            t.vm.status, t.vm.pc, t.vm.fault_addr
+        );
+        (t.vm.status, t.vm.pc - code, t.vm.x[1] - code, t.vm.x[6])
+    }
+
+    let no_cache = run(false);
+    let with_cache = run(true);
+    assert_eq!(with_cache, no_cache);
+    assert_eq!(with_cache.0, abi::STATUS_OK);
+    assert_eq!(with_cache.1, 0x24);
+    assert_eq!(with_cache.2, 10);
+    assert_eq!(with_cache.3, 7);
+}
+
+#[test]
+fn cached_exec_revalidates_pc_tags_after_index_collision() {
+    let mut t = TestVm::new();
+    let mut cache = alloc_block_cache();
+    let collision_stride = tidemark_kernel::cpu::block_cache::CACHE_SIZE as u64 * 2;
+    let code = mmap_exec(&mut t, collision_stride + 4096);
+    let pc_a = code;
+    let pc_b = code + collision_stride;
+
+    unsafe {
+        // addi a0, zero, 11
+        guest_mem::write_u32(t.base, pc_a, 0x00b0_0513);
+        // addi a0, zero, 22
+        guest_mem::write_u32(t.base, pc_b, 0x0160_0513);
+    }
+
+    for (pc, expected) in [(pc_a, 11), (pc_b, 22), (pc_a, 11)] {
+        t.vm.pc = pc;
+        t.vm.x[10] = 0;
+        t.vm.status = abi::STATUS_OK;
+
+        let remaining = unsafe {
+            tidemark_kernel::cpu::exec_at_base(
+                &mut t.vm,
+                1,
+                t.base,
+                Some(&mut cache),
+                None,
+                None,
+                None,
+            )
+        };
+        assert_eq!(remaining, 0);
+        assert_eq!(t.vm.status, abi::STATUS_OK);
+        assert_eq!(t.vm.pc, pc + 4);
+        assert_eq!(t.vm.x[10], expected);
+    }
 }
