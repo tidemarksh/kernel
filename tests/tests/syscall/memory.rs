@@ -405,6 +405,38 @@ fn mprotect_split_on_boundary_mismatch() {
 }
 
 #[test]
+fn mprotect_rejects_ranges_that_are_not_fully_mapped() {
+    let mut t = TestVm::new();
+    let a = t.sys_mmap(
+        0,
+        PAGE_SIZE,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    );
+    assert!(a > 0);
+
+    assert_eq!(
+        t.sys_mprotect(a as u64, PAGE_SIZE * 2, PROT_READ),
+        ENOMEM,
+    );
+    assert!(memory::guest_range_permitted(
+        &t.vm,
+        t.base,
+        a as u64,
+        8,
+        PROT_WRITE,
+    ));
+
+    assert_eq!(
+        t.sys_mprotect((a as u64) + PAGE_SIZE, PAGE_SIZE, PROT_READ),
+        ENOMEM,
+    );
+    assert_eq!(t.sys_munmap(a as u64, PAGE_SIZE), 0);
+}
+
+#[test]
 fn permission_cache_is_invalidated_by_address_space_changes() {
     let mut t = TestVm::new();
     let a = t.sys_mmap(
@@ -1078,4 +1110,18 @@ fn initial_stack_maps_guard_and_writable_stack() {
             0xDEAD_BEEF_CAFE_BABEu64
         );
     }
+}
+
+#[test]
+fn initial_stack_aligns_unaligned_guest_limit_down() {
+    let t = TestVm::new();
+    let guest_limit = 0x80_0010;
+    let aligned_limit = guest_limit & !(PAGE_SIZE - 1);
+    let stack_top = memory::map_initial_stack(t.base, guest_limit, 1024 * 1024);
+    assert_eq!(stack_top, (aligned_limit - PAGE_SIZE) as i64);
+
+    let guard_addr = aligned_limit - 1024 * 1024 - PAGE_SIZE / 2;
+    let stack_addr = aligned_limit - PAGE_SIZE - 64;
+    assert!(memory::is_prot_none(guard_addr));
+    assert!(!memory::is_prot_none(stack_addr));
 }

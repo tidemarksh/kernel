@@ -1270,7 +1270,12 @@ fn contract_execve_accepts_et_dyn_main_binary() {
     );
 
     let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
-    assert_eq!(ret, 0);
+    assert_eq!(
+        ret,
+        0,
+        "execve trace: {}",
+        tidemark_kernel::harness::support::describe_execve_stage_trace()
+    );
     assert_eq!(t.vm.status, STATUS_OK);
     assert_eq!(t.vm.pc, 0x1000);
 }

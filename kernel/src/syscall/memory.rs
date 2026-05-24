@@ -934,6 +934,7 @@ fn map_fixed_anonymous(base: u32, start: u64, length: u64, prot: i32, guest_limi
 /// Returns the logical stack top used for argv/env/auxv placement.
 pub fn map_initial_stack(base: u32, guest_limit: u64, stack_size: u64) -> i64 {
     let guest_limit = guest_limit.min(max_guest_addr_limit(base));
+    let guest_limit = page_align_down(guest_limit);
     let usable = page_align_up(stack_size.max(MIN_STACK_SIZE));
     if guest_limit <= usable + PAGE_SIZE {
         return ENOMEM;
@@ -1399,9 +1400,22 @@ pub fn sys_mprotect(_vm: &mut ThreadState, base: u32, addr: u64, length: u64, pr
     if addr & (PAGE_SIZE - 1) != 0 {
         return EINVAL;
     }
-    let len = (length + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
-    let end = addr + len;
+    if length == 0 {
+        return 0;
+    }
+    let Some(len) = length
+        .checked_add(PAGE_SIZE - 1)
+        .map(|value| value & !(PAGE_SIZE - 1))
+    else {
+        return ENOMEM;
+    };
+    let Some(end) = addr.checked_add(len) else {
+        return ENOMEM;
+    };
     let s = ms();
+    if !range_fully_mapped(s, addr, end) {
+        return ENOMEM;
+    }
 
     let original_vmas = s.vmas.clone();
     let mut rebuilt_vmas = Vec::with_capacity(original_vmas.len() + 2);
