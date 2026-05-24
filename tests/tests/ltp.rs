@@ -1,4 +1,4 @@
-use tidemark_kernel_tests::{ltp_gate, ltp_runner};
+use tidemark_kernel_tests::{ltp_gate, ltp_runner, support};
 
 fn run_ltp(binary: &str) -> Result<(), String> {
     let kernel_root = ltp_gate::resolve_kernel_root(None)?;
@@ -8,7 +8,43 @@ fn run_ltp(binary: &str) -> Result<(), String> {
     let (code, pc, output) = ltp_runner::run_named_elf_with_output(binary, &bytes)?;
     let output_text = String::from_utf8_lossy(&output);
     if output_text.contains("TBROK") || output_text.contains("TFAIL") {
-        return Err(format!("{binary} reported failure:\n{output_text}"));
+        let (sig, code, pc, ra, sp, gp, tp, s11, fault_pc, fault_addr) =
+            tidemark_kernel::harness::signal::last_default_signal();
+        let arg_regs = tidemark_kernel::harness::signal::last_default_signal_arg_regs();
+        let default_vm_ptr = tidemark_kernel::harness::signal::last_default_signal_vm_ptr();
+        return Err(format!(
+            "{} reported failure:\n{}\ndefault_signal(vm_ptr=0x{:x} sig={} code={} pc=0x{:x} ra=0x{:x} sp=0x{:x} gp=0x{:x} tp=0x{:x} s11=0x{:x} fault_pc=0x{:x} fault_addr=0x{:x} a0=0x{:x} a1=0x{:x} a2=0x{:x} a3=0x{:x} a4=0x{:x} a5=0x{:x} a6=0x{:x} a7=0x{:x})\ndefault_vm_identity={}\nltp_memory_probe={}\nprint_result_jump_table={}\nfault_exec_trace={}\ndefault_vm_exec_trace={}\nexec_trace_tail={}\nlast_jalr={}\nexternal_waits={}\nexternal_trace={}",
+            binary,
+            output_text,
+            default_vm_ptr,
+            sig,
+            code,
+            pc,
+            ra,
+            sp,
+            gp,
+            tp,
+            s11,
+            fault_pc,
+            fault_addr,
+            arg_regs[0],
+            arg_regs[1],
+            arg_regs[2],
+            arg_regs[3],
+            arg_regs[4],
+            arg_regs[5],
+            arg_regs[6],
+            arg_regs[7],
+            support::describe_ltp_vm_identity(default_vm_ptr),
+            support::describe_ltp_memory_probe(),
+            support::describe_current_guest_u32_words(0xa36e0, 16),
+            tidemark_kernel::harness::support::describe_fault_exec_trace_for_vm(default_vm_ptr),
+            tidemark_kernel::harness::support::describe_exec_trace_for_vm(default_vm_ptr),
+            tidemark_kernel::harness::support::describe_exec_trace_tail(),
+            tidemark_kernel::harness::support::describe_last_jalr_trace(),
+            tidemark_kernel::harness::support::describe_external_futex_waits(),
+            tidemark_kernel::harness::support::describe_external_futex_trace(),
+        ));
     }
     if output_text.contains("TCONF") || code == 32 {
         return Err(format!("{binary} TCONF\n{output_text}"));

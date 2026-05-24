@@ -39,6 +39,14 @@ pub fn last_default_signal() -> (u32, i32, u64, u64, u64, u64, u64, u64, u64, u6
     crate::syscall::signal::default_signal_trace()
 }
 
+pub fn last_default_signal_arg_regs() -> [u64; 8] {
+    crate::syscall::signal::default_signal_arg_regs()
+}
+
+pub fn last_default_signal_vm_ptr() -> u32 {
+    crate::syscall::signal::default_signal_vm_ptr()
+}
+
 pub fn last_trampoline_hit() -> (i32, u64, u32) {
     crate::syscall::signal::trampoline_trace_state()
 }

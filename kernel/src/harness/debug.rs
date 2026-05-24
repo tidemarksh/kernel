@@ -1565,6 +1565,8 @@ pub struct ExecTraceEntry {
     pub sp: u64,
     pub ra: u64,
     pub a0: u64,
+    pub a4: u64,
+    pub a5: u64,
     pub s11: u64,
 }
 
@@ -1756,6 +1758,8 @@ static mut EXEC_TRACE_RING: [ExecTraceEntry; CPU_EXEC_TRACE_CAP] = [ExecTraceEnt
     sp: 0,
     ra: 0,
     a0: 0,
+    a4: 0,
+    a5: 0,
     s11: 0,
 }; CPU_EXEC_TRACE_CAP];
 static mut EXEC_TRACE_RING_LEN: u32 = 0;
@@ -1776,6 +1780,8 @@ static mut LAST_FAULT_EXEC_TRACE: [ExecTraceEntry; FAULT_EXEC_TRACE_CAP] = [Exec
     sp: 0,
     ra: 0,
     a0: 0,
+    a4: 0,
+    a5: 0,
     s11: 0,
 }; FAULT_EXEC_TRACE_CAP];
 static mut LAST_FAULT_EXEC_TRACE_LEN: u32 = 0;
@@ -1791,6 +1797,8 @@ static mut LAST_SYNC_FAULT_EXEC_TRACE: [ExecTraceEntry; FAULT_EXEC_TRACE_CAP] = 
     sp: 0,
     ra: 0,
     a0: 0,
+    a4: 0,
+    a5: 0,
     s11: 0,
 };
     FAULT_EXEC_TRACE_CAP];
@@ -1807,6 +1815,8 @@ static mut LAST_THREAD_STEP_EXEC_TRACE: [ExecTraceEntry; FAULT_EXEC_TRACE_CAP] =
     sp: 0,
     ra: 0,
     a0: 0,
+    a4: 0,
+    a5: 0,
     s11: 0,
 };
     FAULT_EXEC_TRACE_CAP];
@@ -1823,6 +1833,8 @@ static mut LAST_BREAK_EXEC_TRACE: [ExecTraceEntry; FAULT_EXEC_TRACE_CAP] = [Exec
     sp: 0,
     ra: 0,
     a0: 0,
+    a4: 0,
+    a5: 0,
     s11: 0,
 }; FAULT_EXEC_TRACE_CAP];
 static mut LAST_BREAK_EXEC_TRACE_LEN: u32 = 0;
@@ -2007,6 +2019,48 @@ fn snapshot_fault_exec_trace_for_vm(vm_ptr: u32, epoch: u32) {
     }
 }
 
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn snapshot_recent_exec_trace_for_vm(vm_ptr: u32) {
+    if !RUNTIME_DEBUG_ENABLED {
+        return;
+    }
+    unsafe {
+        LAST_FAULT_EXEC_TRACE_VM_PTR = vm_ptr;
+        LAST_FAULT_EXEC_TRACE_EPOCH = current_exec_trace_epoch_for_vm(vm_ptr);
+        LAST_FAULT_EXEC_TRACE_LEN = 0;
+        if vm_ptr == 0 {
+            return;
+        }
+        let len = core::ptr::read(core::ptr::addr_of!(EXEC_TRACE_RING_LEN)) as usize;
+        if len == 0 {
+            return;
+        }
+        let next = core::ptr::read(core::ptr::addr_of!(EXEC_TRACE_RING_NEXT)) as usize;
+        let start = len.saturating_sub(CPU_EXEC_TRACE_CAP);
+        let mut out = 0usize;
+        for logical in start..len {
+            let slot = if len < CPU_EXEC_TRACE_CAP {
+                logical
+            } else {
+                (next + logical) % CPU_EXEC_TRACE_CAP
+            };
+            let entry = core::ptr::read(core::ptr::addr_of!(EXEC_TRACE_RING[slot]));
+            if entry.vm_ptr != vm_ptr {
+                continue;
+            }
+            if out == FAULT_EXEC_TRACE_CAP {
+                for idx in 1..FAULT_EXEC_TRACE_CAP {
+                    LAST_FAULT_EXEC_TRACE[idx - 1] = LAST_FAULT_EXEC_TRACE[idx];
+                }
+                out = FAULT_EXEC_TRACE_CAP - 1;
+            }
+            LAST_FAULT_EXEC_TRACE[out] = entry;
+            out += 1;
+        }
+        LAST_FAULT_EXEC_TRACE_LEN = out as u32;
+    }
+}
+
 fn snapshot_sync_fault_exec_trace_for_vm(vm_ptr: u32, epoch: u32) {
     unsafe {
         LAST_SYNC_FAULT_EXEC_TRACE_VM_PTR = vm_ptr;
@@ -2139,6 +2193,8 @@ pub(crate) fn record_exec_trace(
                 sp: x[2],
                 ra: x[1],
                 a0: x[10],
+                a4: x[14],
+                a5: x[15],
                 s11: x[27],
             },
         );
@@ -3006,6 +3062,8 @@ pub(crate) fn exec_trace_entry(index: u32) -> ExecTraceEntry {
             sp: 0,
             ra: 0,
             a0: 0,
+            a4: 0,
+            a5: 0,
             s11: 0,
         };
     }
@@ -3022,6 +3080,8 @@ pub(crate) fn exec_trace_entry(index: u32) -> ExecTraceEntry {
                 sp: 0,
                 ra: 0,
                 a0: 0,
+                a4: 0,
+                a5: 0,
                 s11: 0,
             };
         }
@@ -3071,6 +3131,8 @@ pub(crate) fn fault_exec_trace_entry_for_vm(vm_ptr: u32, index: u32) -> ExecTrac
             sp: 0,
             ra: 0,
             a0: 0,
+            a4: 0,
+            a5: 0,
             s11: 0,
         };
     }
@@ -3086,6 +3148,8 @@ pub(crate) fn fault_exec_trace_entry_for_vm(vm_ptr: u32, index: u32) -> ExecTrac
                 sp: 0,
                 ra: 0,
                 a0: 0,
+                a4: 0,
+                a5: 0,
                 s11: 0,
             };
         }
@@ -3120,6 +3184,8 @@ pub(crate) fn thread_step_exec_trace_entry_for_vm(vm_ptr: u32, index: u32) -> Ex
             sp: 0,
             ra: 0,
             a0: 0,
+            a4: 0,
+            a5: 0,
             s11: 0,
         };
     }
@@ -3136,6 +3202,8 @@ pub(crate) fn thread_step_exec_trace_entry_for_vm(vm_ptr: u32, index: u32) -> Ex
                 sp: 0,
                 ra: 0,
                 a0: 0,
+                a4: 0,
+                a5: 0,
                 s11: 0,
             };
         }
@@ -3170,6 +3238,8 @@ pub(crate) fn break_exec_trace_entry_for_vm(vm_ptr: u32, index: u32) -> ExecTrac
             sp: 0,
             ra: 0,
             a0: 0,
+            a4: 0,
+            a5: 0,
             s11: 0,
         };
     }
@@ -3185,6 +3255,8 @@ pub(crate) fn break_exec_trace_entry_for_vm(vm_ptr: u32, index: u32) -> ExecTrac
                 sp: 0,
                 ra: 0,
                 a0: 0,
+                a4: 0,
+                a5: 0,
                 s11: 0,
             };
         }
@@ -3219,6 +3291,8 @@ pub(crate) fn sync_fault_exec_trace_entry_for_vm(vm_ptr: u32, index: u32) -> Exe
             sp: 0,
             ra: 0,
             a0: 0,
+            a4: 0,
+            a5: 0,
             s11: 0,
         };
     }
@@ -3234,6 +3308,8 @@ pub(crate) fn sync_fault_exec_trace_entry_for_vm(vm_ptr: u32, index: u32) -> Exe
                 sp: 0,
                 ra: 0,
                 a0: 0,
+                a4: 0,
+                a5: 0,
                 s11: 0,
             };
         }
@@ -4294,6 +4370,8 @@ pub(crate) fn clear_cpu_trace() {
                 sp: 0,
                 ra: 0,
                 a0: 0,
+                a4: 0,
+                a5: 0,
                 s11: 0,
             }; FAULT_EXEC_TRACE_CAP],
         );
@@ -4315,6 +4393,8 @@ pub(crate) fn clear_cpu_trace() {
                 sp: 0,
                 ra: 0,
                 a0: 0,
+                a4: 0,
+                a5: 0,
                 s11: 0,
             }; FAULT_EXEC_TRACE_CAP],
         );
@@ -4339,6 +4419,8 @@ pub(crate) fn clear_cpu_trace() {
                 sp: 0,
                 ra: 0,
                 a0: 0,
+                a4: 0,
+                a5: 0,
                 s11: 0,
             }; FAULT_EXEC_TRACE_CAP],
         );
@@ -4357,6 +4439,8 @@ pub(crate) fn clear_cpu_trace() {
                 sp: 0,
                 ra: 0,
                 a0: 0,
+                a4: 0,
+                a5: 0,
                 s11: 0,
             }; FAULT_EXEC_TRACE_CAP],
         );

@@ -59,12 +59,7 @@ unsafe fn tidemark_page_cache_stat(_ino: u32, _out_ptr: u32) -> i32 {
 }
 
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-unsafe fn tidemark_page_cache_write(
-    _ino: u32,
-    _offset: u64,
-    _src_ptr: u32,
-    _src_len: u32,
-) -> i64 {
+unsafe fn tidemark_page_cache_write(_ino: u32, _offset: u64, _src_ptr: u32, _src_len: u32) -> i64 {
     ENOSYS
 }
 
@@ -452,7 +447,17 @@ fn grow_data_pool(needed: u32) -> bool {
 // =========================================================================
 
 pub fn lookup(parent_ino: u32, name: &[u8]) -> u32 {
+    if parent_ino as usize >= MAX_INODES {
+        return 0;
+    }
+    let ptr = memfs_ptr();
+    if ptr == 0 {
+        return 0;
+    }
     let h = fs();
+    if h.first_child.is_null() || h.dir_entries.is_null() {
+        return 0;
+    }
     unsafe {
         let mut idx = *h.first_child.add(parent_ino as usize);
         while idx != 0 {
@@ -966,9 +971,8 @@ pub fn write_file(ino: u32, offset: u64, data: &[u8]) -> i64 {
         if old_data_cap != 0 && old_size > 0 {
             let old_data_offset = inodes()[idx].data_offset as usize;
             let old_data_ptr = unsafe { fs().data.add(old_data_offset) as u32 };
-            let published = unsafe {
-                tidemark_page_cache_write(ino, 0, old_data_ptr, old_size as u32)
-            };
+            let published =
+                unsafe { tidemark_page_cache_write(ino, 0, old_data_ptr, old_size as u32) };
             if published != old_size as i64 {
                 old_published = false;
                 if external_required {
@@ -1283,14 +1287,23 @@ mod tests {
         let second = create_file(1, b"second.bin", 0o644);
         assert!(second > 0);
         let second_data = [0x42u8; 4096];
-        assert_eq!(write_file(second, 0, &second_data), second_data.len() as i64);
+        assert_eq!(
+            write_file(second, 0, &second_data),
+            second_data.len() as i64
+        );
 
         let mut first_read = [0u8; 4096];
-        assert_eq!(read_file(first, 0, &mut first_read), first_read.len() as i64);
+        assert_eq!(
+            read_file(first, 0, &mut first_read),
+            first_read.len() as i64
+        );
         assert_eq!(first_read, first_data);
 
         let mut second_read = [0u8; 4096];
-        assert_eq!(read_file(second, 0, &mut second_read), second_read.len() as i64);
+        assert_eq!(
+            read_file(second, 0, &mut second_read),
+            second_read.len() as i64
+        );
         assert_eq!(second_read, second_data);
     }
 }

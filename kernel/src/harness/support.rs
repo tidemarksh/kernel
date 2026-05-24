@@ -5,6 +5,8 @@ use alloc_crate::format;
 #[cfg(any(test, feature = "harness"))]
 use alloc_crate::string::String;
 #[cfg(any(test, feature = "harness"))]
+use alloc_crate::string::ToString;
+#[cfg(any(test, feature = "harness"))]
 use alloc_crate::vec;
 use alloc_crate::vec::Vec;
 
@@ -33,6 +35,66 @@ struct ExternalFutexWait {
     pid: i32,
     addr: u32,
     woken: bool,
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[derive(Clone, Copy)]
+struct ExternalFutexTraceEntry {
+    op: u32,
+    pid: i32,
+    addr: u32,
+    value: u32,
+}
+
+#[cfg(any(test, feature = "harness"))]
+const EXTERNAL_FUTEX_TRACE_CAP: usize = 128;
+
+#[cfg(any(test, feature = "harness"))]
+static mut EXTERNAL_FUTEX_TRACE: [ExternalFutexTraceEntry; EXTERNAL_FUTEX_TRACE_CAP] =
+    [ExternalFutexTraceEntry {
+        op: 0,
+        pid: 0,
+        addr: 0,
+        value: 0,
+    }; EXTERNAL_FUTEX_TRACE_CAP];
+
+#[cfg(any(test, feature = "harness"))]
+static mut EXTERNAL_FUTEX_TRACE_NEXT: u32 = 0;
+
+#[cfg(any(test, feature = "harness"))]
+static mut EXTERNAL_FUTEX_TRACE_LEN: u32 = 0;
+#[cfg(any(test, feature = "harness"))]
+static mut EXTERNAL_FUTEX_REG_COUNT: u32 = 0;
+#[cfg(any(test, feature = "harness"))]
+static mut EXTERNAL_FUTEX_WAKE_COUNT: u32 = 0;
+#[cfg(any(test, feature = "harness"))]
+static mut EXTERNAL_FUTEX_REQUEUE_COUNT: u32 = 0;
+#[cfg(any(test, feature = "harness"))]
+static mut EXTERNAL_FUTEX_TAKE_COUNT: u32 = 0;
+#[cfg(any(test, feature = "harness"))]
+static mut EXTERNAL_FUTEX_LAST_REG_PID: i32 = 0;
+#[cfg(any(test, feature = "harness"))]
+static mut EXTERNAL_FUTEX_LAST_REG_ADDR: u32 = 0;
+#[cfg(any(test, feature = "harness"))]
+static mut EXTERNAL_FUTEX_LAST_WAKE_ADDR: u32 = 0;
+#[cfg(any(test, feature = "harness"))]
+static mut EXTERNAL_FUTEX_LAST_WAKE_RESULT: u32 = 0;
+
+#[cfg(any(test, feature = "harness"))]
+fn record_external_futex_trace(op: u32, pid: i32, addr: u32, value: u32) {
+    unsafe {
+        if EXTERNAL_FUTEX_TRACE_LEN < EXTERNAL_FUTEX_TRACE_CAP as u32 {
+            let idx = EXTERNAL_FUTEX_TRACE_LEN as usize;
+            EXTERNAL_FUTEX_TRACE[idx] = ExternalFutexTraceEntry {
+                op,
+                pid,
+                addr,
+                value,
+            };
+            EXTERNAL_FUTEX_TRACE_LEN += 1;
+        }
+        EXTERNAL_FUTEX_TRACE_NEXT = EXTERNAL_FUTEX_TRACE_NEXT.saturating_add(1);
+    }
 }
 
 #[cfg(any(test, feature = "harness"))]
@@ -138,6 +200,16 @@ pub fn clear_external_futex_waits() {
             core::ptr::addr_of_mut!(EXTERNAL_FUTEX_WAITS),
             Some(Vec::new()),
         );
+        EXTERNAL_FUTEX_TRACE_NEXT = 0;
+        EXTERNAL_FUTEX_TRACE_LEN = 0;
+        EXTERNAL_FUTEX_REG_COUNT = 0;
+        EXTERNAL_FUTEX_WAKE_COUNT = 0;
+        EXTERNAL_FUTEX_REQUEUE_COUNT = 0;
+        EXTERNAL_FUTEX_TAKE_COUNT = 0;
+        EXTERNAL_FUTEX_LAST_REG_PID = 0;
+        EXTERNAL_FUTEX_LAST_REG_ADDR = 0;
+        EXTERNAL_FUTEX_LAST_WAKE_ADDR = 0;
+        EXTERNAL_FUTEX_LAST_WAKE_RESULT = 0;
     }
 }
 
@@ -147,6 +219,10 @@ pub fn register_external_futex_wait(pid: i32, addr: u32) {
         return;
     }
     unsafe {
+        EXTERNAL_FUTEX_REG_COUNT = EXTERNAL_FUTEX_REG_COUNT.saturating_add(1);
+        EXTERNAL_FUTEX_LAST_REG_PID = pid;
+        EXTERNAL_FUTEX_LAST_REG_ADDR = addr;
+        record_external_futex_trace(1, pid, addr, 0);
         let slot = &mut *core::ptr::addr_of_mut!(EXTERNAL_FUTEX_WAITS);
         if slot.is_none() {
             *slot = Some(Vec::new());
@@ -172,6 +248,7 @@ pub fn clear_external_futex_wait(pid: i32) {
         return;
     }
     unsafe {
+        record_external_futex_trace(2, pid, 0, 0);
         let slot = &mut *core::ptr::addr_of_mut!(EXTERNAL_FUTEX_WAITS);
         if let Some(waits) = slot.as_mut() {
             waits.retain(|wait| wait.pid != pid);
@@ -180,6 +257,10 @@ pub fn clear_external_futex_wait(pid: i32) {
 }
 
 pub fn wake_external_futex_waits(addr: u32, max_wake: u32) -> u32 {
+    wake_external_futex_waits_from_pid(0, addr, max_wake)
+}
+
+pub fn wake_external_futex_waits_from_pid(caller_pid: i32, addr: u32, max_wake: u32) -> u32 {
     if !HARNESS_RUNTIME_SUPPORT_ENABLED {
         return 0;
     }
@@ -204,7 +285,171 @@ pub fn wake_external_futex_waits(addr: u32, max_wake: u32) -> u32 {
                 break;
             }
         }
+        EXTERNAL_FUTEX_WAKE_COUNT = EXTERNAL_FUTEX_WAKE_COUNT.saturating_add(1);
+        EXTERNAL_FUTEX_LAST_WAKE_ADDR = addr;
+        EXTERNAL_FUTEX_LAST_WAKE_RESULT = woken;
+        record_external_futex_trace(3, caller_pid, addr, woken);
         woken
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn describe_external_futex_waits() -> String {
+    if !HARNESS_RUNTIME_SUPPORT_ENABLED {
+        return "disabled".to_string();
+    }
+    unsafe {
+        let slot = &*core::ptr::addr_of!(EXTERNAL_FUTEX_WAITS);
+        let Some(waits) = slot.as_ref() else {
+            return "none".to_string();
+        };
+        let mut parts = Vec::new();
+        for wait in waits.iter() {
+            parts.push(format!(
+                "pid={} addr=0x{:x} woken={}",
+                wait.pid, wait.addr, wait.woken
+            ));
+        }
+        format!("[{}]", parts.join(" | "))
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn describe_external_futex_trace() -> String {
+    unsafe {
+        let len = EXTERNAL_FUTEX_TRACE_LEN as usize;
+        let mut parts = Vec::new();
+        for idx in 0..len {
+            let entry = EXTERNAL_FUTEX_TRACE[idx];
+            let op = match entry.op {
+                1 => "reg",
+                2 => "clear",
+                3 => "wake",
+                4 => "take",
+                5 => "take_pid",
+                6 => "requeue",
+                _ => "?",
+            };
+            parts.push(format!(
+                "{}(pid={} addr=0x{:x} value={})",
+                op, entry.pid, entry.addr, entry.value
+            ));
+        }
+        let reg_count = EXTERNAL_FUTEX_REG_COUNT;
+        let wake_count = EXTERNAL_FUTEX_WAKE_COUNT;
+        let requeue_count = EXTERNAL_FUTEX_REQUEUE_COUNT;
+        let take_count = EXTERNAL_FUTEX_TAKE_COUNT;
+        let last_reg_pid = EXTERNAL_FUTEX_LAST_REG_PID;
+        let last_reg_addr = EXTERNAL_FUTEX_LAST_REG_ADDR;
+        let last_wake_addr = EXTERNAL_FUTEX_LAST_WAKE_ADDR;
+        let last_wake_result = EXTERNAL_FUTEX_LAST_WAKE_RESULT;
+        format!(
+            "counts(reg={} wake={} requeue={} take={} last_reg=pid{}@0x{:x} last_wake=0x{:x}/{}): {}",
+            reg_count,
+            wake_count,
+            requeue_count,
+            take_count,
+            last_reg_pid,
+            last_reg_addr,
+            last_wake_addr,
+            last_wake_result,
+            parts.join(" -> ")
+        )
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn describe_last_jalr_trace() -> String {
+    let entry = crate::harness::debug::last_jalr_trace();
+    format!(
+        "vm_ptr=0x{:x} pc=0x{:x} rd={} rs1={} rs1_value=0x{:x} target=0x{:x}",
+        entry.vm_ptr, entry.pc, entry.rd, entry.rs1, entry.rs1_value, entry.target
+    )
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn describe_fault_exec_trace_for_vm(vm_ptr: u32) -> String {
+    let len = crate::harness::debug::fault_exec_trace_len_for_vm(vm_ptr);
+    if len == 0 {
+        return format!("vm_ptr=0x{vm_ptr:x} len=0");
+    }
+    let start = len.saturating_sub(64);
+    let mut parts = Vec::new();
+    for idx in start..len {
+        let entry = crate::harness::debug::fault_exec_trace_entry_for_vm(vm_ptr, idx);
+        parts.push(format!(
+            "pc=0x{:x} raw=0x{:08x} step={} a0=0x{:x} a4=0x{:x} a5=0x{:x} ra=0x{:x} sp=0x{:x}",
+            entry.pc, entry.raw, entry.step, entry.a0, entry.a4, entry.a5, entry.ra, entry.sp
+        ));
+    }
+    format!("vm_ptr=0x{vm_ptr:x} len={len} [{}]", parts.join(" | "))
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn describe_execve_stage_trace() -> String {
+    let len = crate::harness::debug::execve_stage_trace_len();
+    if len == 0 {
+        return "len=0".to_string();
+    }
+    let start = len.saturating_sub(48);
+    let mut parts = Vec::new();
+    for idx in start..len {
+        let entry = crate::harness::debug::execve_stage_trace_entry(idx);
+        parts.push(format!(
+            "{}:0x{:x}/0x{:x}",
+            entry.stage, entry.value0, entry.value1
+        ));
+    }
+    format!("len={len} [{}]", parts.join(" | "))
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn describe_exec_trace_tail() -> String {
+    let len = crate::harness::debug::exec_trace_len();
+    if len == 0 {
+        return "len=0".to_string();
+    }
+    let start = len.saturating_sub(16);
+    let mut parts = Vec::new();
+    for idx in start..len {
+        let entry = crate::harness::debug::exec_trace_entry(idx);
+        parts.push(format!(
+            "vm=0x{:x} pc=0x{:x} raw=0x{:08x} step={} a0=0x{:x} a4=0x{:x} a5=0x{:x} ra=0x{:x} sp=0x{:x}",
+            entry.vm_ptr, entry.pc, entry.raw, entry.step, entry.a0, entry.a4, entry.a5, entry.ra, entry.sp
+        ));
+    }
+    format!("len={len} [{}]", parts.join(" | "))
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub fn describe_exec_trace_for_vm(vm_ptr: u32) -> String {
+    let len = crate::harness::debug::exec_trace_len();
+    if len == 0 {
+        return format!("vm_ptr=0x{vm_ptr:x} len=0");
+    }
+    let mut total = 0u32;
+    let mut parts = Vec::new();
+    for idx in 0..len {
+        let entry = crate::harness::debug::exec_trace_entry(idx);
+        if entry.vm_ptr != vm_ptr {
+            continue;
+        }
+        total = total.saturating_add(1);
+        if parts.len() == 32 {
+            parts.remove(0);
+        }
+        parts.push(format!(
+            "epoch={} pc=0x{:x} raw=0x{:08x} step={} a0=0x{:x} a4=0x{:x} a5=0x{:x} ra=0x{:x} sp=0x{:x}",
+            entry.epoch, entry.pc, entry.raw, entry.step, entry.a0, entry.a4, entry.a5, entry.ra, entry.sp
+        ));
+    }
+    if total == 0 {
+        format!("vm_ptr=0x{vm_ptr:x} matches=0 ring_len={len}")
+    } else {
+        format!(
+            "vm_ptr=0x{vm_ptr:x} matches={total} ring_len={len} [{}]",
+            parts.join(" | ")
+        )
     }
 }
 
@@ -233,6 +478,8 @@ pub fn requeue_external_futex_waits(addr: u32, new_addr: u32, max_requeue: u32) 
                 break;
             }
         }
+        EXTERNAL_FUTEX_REQUEUE_COUNT = EXTERNAL_FUTEX_REQUEUE_COUNT.saturating_add(1);
+        record_external_futex_trace(6, 0, addr, requeued);
         requeued
     }
 }
@@ -253,8 +500,11 @@ pub fn take_external_futex_wake(pid: i32, addr: u32) -> bool {
             .position(|wait| wait.pid == pid && wait.addr == addr && wait.woken)
         {
             waits.remove(idx);
+            EXTERNAL_FUTEX_TAKE_COUNT = EXTERNAL_FUTEX_TAKE_COUNT.saturating_add(1);
+            record_external_futex_trace(4, pid, addr, 1);
             true
         } else {
+            record_external_futex_trace(4, pid, addr, 0);
             false
         }
     }
@@ -276,6 +526,21 @@ pub fn has_external_futex_wait(pid: i32) -> bool {
 }
 
 #[cfg(any(test, feature = "harness"))]
+pub fn has_external_futex_wake(pid: i32) -> bool {
+    if !HARNESS_RUNTIME_SUPPORT_ENABLED {
+        return false;
+    }
+    unsafe {
+        let slot = &*core::ptr::addr_of!(EXTERNAL_FUTEX_WAITS);
+        let Some(waits) = slot.as_ref() else {
+            return false;
+        };
+
+        waits.iter().any(|wait| wait.pid == pid && wait.woken)
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
 pub fn take_external_futex_wake_for_pid(pid: i32) -> bool {
     if !HARNESS_RUNTIME_SUPPORT_ENABLED {
         return false;
@@ -287,9 +552,13 @@ pub fn take_external_futex_wake_for_pid(pid: i32) -> bool {
         };
 
         if let Some(idx) = waits.iter().position(|wait| wait.pid == pid && wait.woken) {
+            let addr = waits[idx].addr;
             waits.remove(idx);
+            EXTERNAL_FUTEX_TAKE_COUNT = EXTERNAL_FUTEX_TAKE_COUNT.saturating_add(1);
+            record_external_futex_trace(5, pid, addr, 1);
             true
         } else {
+            record_external_futex_trace(5, pid, 0, 0);
             false
         }
     }

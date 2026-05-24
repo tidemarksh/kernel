@@ -9,20 +9,263 @@ use tidemark_kernel::fs::memfs;
 use tidemark_kernel::guest_mem;
 use tidemark_kernel::types::*;
 
-const GUEST_RAM_SIZE: u32 = 0x100_0000;
+const GUEST_RAM_SIZE: u32 = 0x1000_0000;
 const GUEST_RAM_ALIGN: u32 = 0x20_0000;
-const GUEST_BASE_PADDING: u32 = 0x200_00000;
-// The LTP harness still uses std-backed Vec/String allocations after kernel
-// init (for example guest-memory snapshots during process handling). Keep
-// the kernel bump heap far enough above the WASI heap to avoid aliasing.
-const HOST_HEAP_PADDING: u32 = 0x800_0000;
+// The LTP harness uses std-backed Vec/Box allocations after guest setup
+// (notably process memory snapshots). On wasm32-wasip1 those allocations grow
+// below guest_base, so keep enough headroom before the guest window for
+// high-fanout process tests.
+const GUEST_BASE_PADDING: u32 = 0x4000_0000;
+// Keep the kernel bump heap far enough above the guest window to avoid aliasing
+// kernel-owned allocations with guest RAM.
+const HOST_HEAP_PADDING: u32 = 0x4000_0000;
 const GUEST_SNAPSHOT_CHUNK: usize = 64 * 1024;
 const TEST_MEMORY_PAGES: usize = 512; // 32 MiB
 const INITIAL_PID: i32 = 2;
 const INITIAL_PPID: i32 = 1;
 const MAX_VM_INSTRUCTIONS: i64 = 500_000_000;
+const SYNC_EFFECT_PROCESS_LIFECYCLE: u32 = 1 << 4;
 
 static mut TEST_GUEST_BASE: u32 = 0;
+
+#[derive(Clone, Copy)]
+struct LtpVmIdentityTrace {
+    vm_ptr: u32,
+    label: u32,
+    pid: i32,
+    ppid: i32,
+    tid: i32,
+    status: i32,
+    process_ptr: u32,
+    pc: u64,
+    sp: u64,
+}
+
+#[derive(Clone, Copy)]
+struct LtpMemoryProbeTrace {
+    label: u32,
+    pid: i32,
+    snapshot_len: usize,
+    snapshot_word: u32,
+    live_word: u32,
+}
+
+const LTP_VM_IDENTITY_TRACE_CAP: usize = 256;
+static mut LTP_VM_IDENTITY_TRACE: [LtpVmIdentityTrace; LTP_VM_IDENTITY_TRACE_CAP] =
+    [LtpVmIdentityTrace {
+        vm_ptr: 0,
+        label: 0,
+        pid: 0,
+        ppid: 0,
+        tid: 0,
+        status: 0,
+        process_ptr: 0,
+        pc: 0,
+        sp: 0,
+    }; LTP_VM_IDENTITY_TRACE_CAP];
+static mut LTP_VM_IDENTITY_TRACE_NEXT: u32 = 0;
+static mut LTP_VM_IDENTITY_TRACE_LEN: u32 = 0;
+
+pub(crate) const LTP_VM_ID_ROOT: u32 = 1;
+pub(crate) const LTP_VM_ID_SAVED_STEP: u32 = 2;
+pub(crate) const LTP_VM_ID_SPAWN: u32 = 3;
+pub(crate) const LTP_VM_ID_PLACEHOLDER: u32 = 4;
+const LTP_MEM_PROBE_SAVED_PRE_RESTORE: u32 = 1;
+const LTP_MEM_PROBE_SAVED_POST_RESTORE: u32 = 2;
+const LTP_MEM_PROBE_SAVED_PRE_RUN: u32 = 3;
+const LTP_MEM_PROBE_SPAWN_SNAPSHOT: u32 = 4;
+const LTP_MEM_PROBE_PARENT_SCRATCH_SPAWN: u32 = 5;
+const LTP_MEM_PROBE_DEFERRED_SERVICE_BEFORE: u32 = 6;
+const LTP_MEM_PROBE_DEFERRED_SERVICE_AFTER: u32 = 7;
+const LTP_MEM_PROBE_SPAWN_BEFORE_FLUSH: u32 = 8;
+const LTP_MEM_PROBE_SPAWN_AFTER_FLUSH: u32 = 9;
+const LTP_MEM_PROBE_PARENT_SCRATCH_CAPTURE: u32 = 10;
+const LTP_MEM_PROBE_PARENT_SCRATCH_AFTER_CHILD: u32 = 11;
+const LTP_MEM_PROBE_PARENT_SCRATCH_AFTER_RESTORE: u32 = 12;
+const LTP_MEM_PROBE_ADDR: usize = 0xd9000;
+const LTP_MEMORY_PROBE_TRACE_CAP: usize = 512;
+static mut LTP_MEMORY_PROBE_TRACE: [LtpMemoryProbeTrace; LTP_MEMORY_PROBE_TRACE_CAP] =
+    [LtpMemoryProbeTrace {
+        label: 0,
+        pid: 0,
+        snapshot_len: 0,
+        snapshot_word: 0,
+        live_word: 0,
+    }; LTP_MEMORY_PROBE_TRACE_CAP];
+static mut LTP_MEMORY_PROBE_TRACE_NEXT: u32 = 0;
+static mut LTP_MEMORY_PROBE_TRACE_LEN: u32 = 0;
+
+fn ltp_vm_identity_label(label: u32) -> &'static str {
+    match label {
+        LTP_VM_ID_ROOT => "root",
+        LTP_VM_ID_SAVED_STEP => "saved-step",
+        LTP_VM_ID_SPAWN => "spawn",
+        LTP_VM_ID_PLACEHOLDER => "placeholder",
+        _ => "unknown",
+    }
+}
+
+fn record_ltp_vm_identity_entry(entry: LtpVmIdentityTrace) {
+    unsafe {
+        let idx = (LTP_VM_IDENTITY_TRACE_NEXT as usize) % LTP_VM_IDENTITY_TRACE_CAP;
+        LTP_VM_IDENTITY_TRACE[idx] = entry;
+        LTP_VM_IDENTITY_TRACE_NEXT = ((idx + 1) % LTP_VM_IDENTITY_TRACE_CAP) as u32;
+        if LTP_VM_IDENTITY_TRACE_LEN < LTP_VM_IDENTITY_TRACE_CAP as u32 {
+            LTP_VM_IDENTITY_TRACE_LEN += 1;
+        }
+    }
+}
+
+fn ltp_memory_probe_label(label: u32) -> &'static str {
+    match label {
+        LTP_MEM_PROBE_SAVED_PRE_RESTORE => "saved-pre-restore",
+        LTP_MEM_PROBE_SAVED_POST_RESTORE => "saved-post-restore",
+        LTP_MEM_PROBE_SAVED_PRE_RUN => "saved-pre-run",
+        LTP_MEM_PROBE_SPAWN_SNAPSHOT => "spawn-snapshot",
+        LTP_MEM_PROBE_PARENT_SCRATCH_SPAWN => "parent-scratch-spawn",
+        LTP_MEM_PROBE_DEFERRED_SERVICE_BEFORE => "deferred-service-before",
+        LTP_MEM_PROBE_DEFERRED_SERVICE_AFTER => "deferred-service-after",
+        LTP_MEM_PROBE_SPAWN_BEFORE_FLUSH => "spawn-before-flush",
+        LTP_MEM_PROBE_SPAWN_AFTER_FLUSH => "spawn-after-flush",
+        LTP_MEM_PROBE_PARENT_SCRATCH_CAPTURE => "parent-scratch-capture",
+        LTP_MEM_PROBE_PARENT_SCRATCH_AFTER_CHILD => "parent-scratch-after-child",
+        LTP_MEM_PROBE_PARENT_SCRATCH_AFTER_RESTORE => "parent-scratch-after-restore",
+        _ => "unknown",
+    }
+}
+
+fn record_ltp_memory_probe(
+    label: u32,
+    pid: i32,
+    snapshot_len: usize,
+    snapshot_word: u32,
+    live_word: u32,
+) {
+    unsafe {
+        let idx = (LTP_MEMORY_PROBE_TRACE_NEXT as usize) % LTP_MEMORY_PROBE_TRACE_CAP;
+        LTP_MEMORY_PROBE_TRACE[idx] = LtpMemoryProbeTrace {
+            label,
+            pid,
+            snapshot_len,
+            snapshot_word,
+            live_word,
+        };
+        LTP_MEMORY_PROBE_TRACE_NEXT = ((idx + 1) % LTP_MEMORY_PROBE_TRACE_CAP) as u32;
+        if LTP_MEMORY_PROBE_TRACE_LEN < LTP_MEMORY_PROBE_TRACE_CAP as u32 {
+            LTP_MEMORY_PROBE_TRACE_LEN += 1;
+        }
+    }
+}
+
+fn record_ltp_thread_state_identity(
+    base: u32,
+    vm: &ThreadState,
+    fallback_pid: i32,
+    fallback_ppid: i32,
+    label: u32,
+) {
+    record_ltp_vm_identity_entry(LtpVmIdentityTrace {
+        vm_ptr: vm as *const ThreadState as u32,
+        label,
+        pid: process_pid_or(base, vm.process_ptr, fallback_pid),
+        ppid: process_ppid_or(base, vm.process_ptr, fallback_ppid),
+        tid: vm.tid,
+        status: vm.status,
+        process_ptr: vm.process_ptr,
+        pc: vm.pc,
+        sp: vm.x[2],
+    });
+}
+
+fn process_pid_or(base: u32, process_ptr: u32, fallback_pid: i32) -> i32 {
+    if process_ptr != 0 {
+        process_pid(base, process_ptr)
+    } else {
+        fallback_pid
+    }
+}
+
+fn process_ppid_or(base: u32, process_ptr: u32, fallback_ppid: i32) -> i32 {
+    if process_ptr != 0 {
+        process_ppid(base, process_ptr)
+    } else {
+        fallback_ppid
+    }
+}
+
+pub fn describe_ltp_vm_identity(vm_ptr: u32) -> String {
+    unsafe {
+        let len = LTP_VM_IDENTITY_TRACE_LEN;
+        let next = LTP_VM_IDENTITY_TRACE_NEXT as usize;
+        let mut matches = Vec::new();
+        for offset in 0..len as usize {
+            let slot = if (len as usize) < LTP_VM_IDENTITY_TRACE_CAP {
+                offset
+            } else {
+                (next + offset) % LTP_VM_IDENTITY_TRACE_CAP
+            };
+            let entry = LTP_VM_IDENTITY_TRACE[slot];
+            if entry.vm_ptr != vm_ptr {
+                continue;
+            }
+            if matches.len() == 16 {
+                matches.remove(0);
+            }
+            matches.push(format!(
+                "{} pid={} ppid={} tid={} status={} process_ptr=0x{:x} pc=0x{:x} sp=0x{:x}",
+                ltp_vm_identity_label(entry.label),
+                entry.pid,
+                entry.ppid,
+                entry.tid,
+                entry.status,
+                entry.process_ptr,
+                entry.pc,
+                entry.sp
+            ));
+        }
+        if matches.is_empty() {
+            format!("vm_ptr=0x{vm_ptr:x} not found")
+        } else {
+            format!("vm_ptr=0x{vm_ptr:x} [{}]", matches.join(" | "))
+        }
+    }
+}
+
+pub fn describe_ltp_memory_probe() -> String {
+    unsafe {
+        let len = LTP_MEMORY_PROBE_TRACE_LEN;
+        let next = LTP_MEMORY_PROBE_TRACE_NEXT as usize;
+        let mut parts = Vec::new();
+        for offset in 0..len {
+            let slot = if (len as usize) < LTP_MEMORY_PROBE_TRACE_CAP {
+                offset as usize
+            } else {
+                (next + offset as usize) % LTP_MEMORY_PROBE_TRACE_CAP
+            };
+            let entry = LTP_MEMORY_PROBE_TRACE[slot];
+            if entry.pid != 3 && offset < len.saturating_sub(16) {
+                continue;
+            }
+            if parts.len() == 32 {
+                parts.remove(0);
+            }
+            parts.push(format!(
+                "{} pid={} snapshot_len=0x{:x} snapshot[0x{:x}]=0x{:08x} live=0x{:08x}",
+                ltp_memory_probe_label(entry.label),
+                entry.pid,
+                entry.snapshot_len,
+                LTP_MEM_PROBE_ADDR,
+                entry.snapshot_word,
+                entry.live_word
+            ));
+        }
+        if parts.is_empty() {
+            "len=0".to_string()
+        } else {
+            parts.join(" | ")
+        }
+    }
+}
 
 fn saved_ctx_validation_enabled() -> bool {
     std::env::var_os("TIDEMARK_VALIDATE_SAVED_CTX").is_some()
@@ -40,6 +283,61 @@ pub(crate) fn cmp_requeue_shared_words(base: u32, futex_addr: u32) -> Option<(u3
             guest_mem::read_u32(base, futex_addr as u64 + 12),
         ))
     }
+}
+
+fn snapshot_probe_word(snapshot: &GuestMemorySnapshot) -> u32 {
+    if LTP_MEM_PROBE_ADDR + 4 > snapshot.len {
+        return 0xffff_fffe;
+    }
+    let mut word = [0u8; 4];
+    if snapshot.copy_out(LTP_MEM_PROBE_ADDR, &mut word).is_err() {
+        return 0xffff_fffd;
+    }
+    u32::from_le_bytes(word)
+}
+
+fn live_probe_word(base: u32) -> u32 {
+    unsafe { guest_mem::read_u32(base, LTP_MEM_PROBE_ADDR as u64) }
+}
+
+pub fn describe_current_guest_u32_words(start: u32, count: usize) -> String {
+    let base = unsafe { TEST_GUEST_BASE };
+    if base == 0 {
+        return "guest_base=0".to_string();
+    }
+    let limit = guest_window_size(base) as u64;
+    let mut parts = Vec::new();
+    for idx in 0..count {
+        let addr = start as u64 + (idx as u64) * 4;
+        if addr + 4 > limit {
+            parts.push(format!("0x{addr:x}=<out-of-range>"));
+            continue;
+        }
+        let value = unsafe { guest_mem::read_u32(base, addr) };
+        parts.push(format!("0x{addr:x}=0x{value:08x}"));
+    }
+    format!("guest_base=0x{base:x} {}", parts.join(" "))
+}
+
+pub fn describe_current_guest_u64_words(start: u64, count: usize) -> String {
+    let base = unsafe { TEST_GUEST_BASE };
+    if base == 0 {
+        return "guest_base=0".to_string();
+    }
+    let limit = guest_window_size(base) as u64;
+    let mut parts = Vec::new();
+    for idx in 0..count {
+        let addr = start.saturating_add((idx as u64) * 8);
+        if addr + 8 > limit
+            || !tidemark_kernel::syscall::memory::guest_range_accessible(base, addr, 8)
+        {
+            parts.push(format!("0x{addr:x}=<inaccessible>"));
+            continue;
+        }
+        let value = unsafe { guest_mem::read_u64(base, addr) };
+        parts.push(format!("0x{addr:x}=0x{value:016x}"));
+    }
+    format!("guest_base=0x{base:x} {}", parts.join(" "))
 }
 
 pub(crate) struct SavedProcessCtx {
@@ -63,12 +361,14 @@ pub(crate) struct SavedProcessCtx {
 // siblings that would otherwise repeat the same setup work.
 pub(crate) struct SavedWaiterTemplate {
     vm: ThreadState,
-    process_group: i32,
-    shared_overlay_key: i32,
     last_futex_addr: u32,
 }
 
 impl SavedProcessCtx {
+    pub(crate) fn record_vm_identity(&self, base: u32, label: u32) {
+        record_ltp_thread_state_identity(base, &self.vm, self.pid, self.parent_pid, label);
+    }
+
     pub(crate) fn normalize_process_leader_vm(&mut self) {
         if self.pid > 0 && self.vm.process_ptr != 0 && self.vm.tid <= 0 {
             self.vm.tid = self.pid;
@@ -103,6 +403,51 @@ impl SavedProcessCtx {
         self.vm.process_ptr
     }
 
+    pub(crate) fn describe_threads(&self, base: u32) -> String {
+        describe_process_threads(&self.vm, base)
+    }
+
+    pub(crate) fn describe_snapshot_threads(&self) -> String {
+        if self.vm.process_ptr == 0 || self.guest_memory.len == 0 {
+            return "snapshot unavailable".to_string();
+        }
+        let process_ptr = self.vm.process_ptr as usize;
+        let thread_count_off = process_ptr + core::mem::offset_of!(ProcessState, thread_count);
+        let thread_count = self
+            .guest_memory
+            .read_i32(thread_count_off)
+            .unwrap_or_default();
+        let threads_off = process_ptr + core::mem::offset_of!(ProcessState, threads);
+        let record_size = core::mem::size_of::<ThreadRecord>();
+        let mut parts = Vec::new();
+        for idx in 0..MAX_THREADS {
+            let off = threads_off + idx * record_size;
+            let mut bytes = [0u8; core::mem::size_of::<ThreadRecord>()];
+            if self.guest_memory.copy_out(off, &mut bytes).is_err() {
+                break;
+            }
+            let record =
+                unsafe { core::ptr::read_unaligned(bytes.as_ptr() as *const ThreadRecord) };
+            if matches!(record.state, THREAD_NONE | THREAD_DEAD) {
+                continue;
+            }
+            parts.push(format!(
+                "slot={} tid={} state={} thread_ptr=0x{:x} blocked=0x{:x} clear_child_tid=0x{:x}",
+                idx + 1,
+                record.tid,
+                record.state,
+                record.thread_ptr,
+                record.blocked_addr,
+                record.clear_child_tid,
+            ));
+        }
+        format!(
+            "snapshot_thread_count={} [{}]",
+            thread_count,
+            parts.join(" | ")
+        )
+    }
+
     pub(crate) fn guest_memory_len(&self) -> usize {
         self.guest_memory.len
     }
@@ -131,31 +476,47 @@ impl SavedProcessCtx {
     pub(crate) fn capture_waiter_template(&self) -> SavedWaiterTemplate {
         SavedWaiterTemplate {
             vm: unsafe { core::ptr::read(&self.vm as *const _) },
-            process_group: self.process_group,
-            shared_overlay_key: self.shared_overlay_key,
             last_futex_addr: self.last_futex_addr,
         }
     }
 
     pub(crate) fn from_waiter_template(
         template: &SavedWaiterTemplate,
-        pid: i32,
+        identity: &SavedProcessCtx,
         parent_pid: i32,
     ) -> Self {
-        let mut vm: ThreadState = unsafe { core::ptr::read(&template.vm as *const _) };
-        vm.tid = pid;
+        let mut vm: ThreadState = unsafe { core::ptr::read(&identity.vm as *const _) };
+        vm.status = template.vm.status;
+        vm.futex_wait_addr = template.vm.futex_wait_addr;
+        vm.futex_wait_timeout = template.vm.futex_wait_timeout;
+        vm.futex_wait_expected = template.vm.futex_wait_expected;
+        vm.futex_wait_bitset = template.vm.futex_wait_bitset;
+        vm.futex_wait_absolute = template.vm.futex_wait_absolute;
+        vm.futex_wait_flags = template.vm.futex_wait_flags;
+        vm.tid = identity.pid;
         vm.spawn_child_pid = 0;
         vm.spawn_kind = 0;
         vm.clone_pending = 0;
         vm.wait_pid = 0;
+        let futex_addr = if template.last_futex_addr != 0 {
+            template.last_futex_addr
+        } else {
+            vm.futex_wait_addr as u32
+        };
+        if vm.status == STATUS_FUTEX_WAIT && futex_addr != 0 {
+            tidemark_kernel::harness::support::register_external_futex_wait(
+                identity.pid,
+                futex_addr,
+            );
+        }
         Self {
-            pid,
+            pid: identity.pid,
             parent_pid,
-            process_group: template.process_group,
-            shared_overlay_key: template.shared_overlay_key,
+            process_group: identity.process_group,
+            shared_overlay_key: identity.shared_overlay_key,
             child_entries: Vec::new(),
             vm,
-            last_futex_addr: template.last_futex_addr,
+            last_futex_addr: futex_addr,
             waiter_placeholder: true,
             guest_memory: GuestMemorySnapshot::empty_box(),
             mm_state: tidemark_kernel::harness::support::snapshot_process_context_boxed(),
@@ -500,6 +861,15 @@ impl LtpSchedulerState {
         self.retain_exited_saved_children
     }
 
+    pub(crate) fn invalidate_current_snapshot(&mut self) {
+        self.current_snapshot_pid = 0;
+        self.current_snapshot_process_ptr = 0;
+        self.current_snapshot_pc = 0;
+        self.current_snapshot_sp = 0;
+        self.current_snapshot_wait_pid = 0;
+        self.guest_memory_scratch.len = 0;
+    }
+
     pub(crate) fn retire_exited_saved_child(&mut self, child: Box<SavedProcessCtx>) {
         self.retired_saved_children.push(child);
     }
@@ -530,7 +900,6 @@ impl LtpSchedulerState {
         self.shared_mapping_overlays.push((process_group, mappings));
     }
 
-    #[cfg(test)]
     pub(crate) fn deferred_clone_thread_count_for_process(&self, pid: i32) -> usize {
         count_deferred_clone_threads_for_process(&self.deferred_clone_threads, pid)
     }
@@ -596,6 +965,12 @@ struct HostHelperBinary {
 pub(crate) struct PreparedElfVm {
     pub base: u32,
     pub vm: Box<ThreadState>,
+}
+
+impl PreparedElfVm {
+    pub(crate) fn record_vm_identity(&self, label: u32) {
+        record_ltp_thread_state_identity(self.base, self.vm.as_ref(), 0, 0, label);
+    }
 }
 
 #[cfg(test)]
@@ -710,9 +1085,24 @@ impl GuestMemorySnapshot {
         }
     }
 
+    fn clone_from_snapshot(&mut self, other: &GuestMemorySnapshot) {
+        self.len = other.len;
+        while self.chunks.len() < other.chunks.len() {
+            self.chunks.push(None);
+        }
+        for idx in 0..other.chunks.len() {
+            self.chunks[idx] = other.chunks[idx]
+                .as_ref()
+                .map(|chunk| chunk.to_vec().into_boxed_slice());
+        }
+        for chunk in self.chunks.iter_mut().skip(other.chunks.len()) {
+            *chunk = None;
+        }
+    }
+
     fn restore(&self, base: u32) -> Result<(), String> {
         let mem_size = (core::arch::wasm32::memory_size(0) as usize).saturating_mul(65536);
-        let guest_limit = guest_window_size(base);
+        let guest_limit = linear_guest_window_size(base);
         let mut off = 0usize;
         let required_chunks = self.len.div_ceil(GUEST_SNAPSHOT_CHUNK);
         for chunk in self.chunks.iter().take(required_chunks) {
@@ -739,11 +1129,17 @@ impl GuestMemorySnapshot {
                 ));
             }
             unsafe {
-                let dst = (base + off as u32) as *mut u8;
-                if let Some(bytes) = chunk.as_ref() {
-                    core::ptr::copy(bytes.as_ptr(), dst, bytes.len());
-                } else {
-                    core::ptr::write_bytes(dst, 0, chunk_len);
+                let dst = (base as usize + off) as *mut u8;
+                let mut chunk_off = 0usize;
+                while chunk_off < chunk_len {
+                    let sub_len = (chunk_len - chunk_off).min(4096);
+                    let guest_off = off + chunk_off;
+                    if let Some(bytes) = chunk.as_ref() {
+                        core::ptr::copy(bytes.as_ptr().add(chunk_off), dst.add(chunk_off), sub_len);
+                    } else if guest_off < GUEST_RAM_SIZE as usize {
+                        core::ptr::write_bytes(dst.add(chunk_off), 0, sub_len);
+                    }
+                    chunk_off += sub_len;
                 }
             }
             off += chunk_len;
@@ -1205,6 +1601,10 @@ impl LocalBlockCache {
     fn cache_mut(&mut self) -> &mut tidemark_kernel::cpu::block_cache::BlockCache {
         &mut self.cache
     }
+
+    fn clear(&mut self) {
+        self.cache.clear();
+    }
 }
 
 impl Drop for LocalBlockCache {
@@ -1251,7 +1651,7 @@ fn process_pid_impl(base: u32, process_ptr: u32) -> i32 {
     unsafe { ((linear_ptr + pid_off as usize) as *const i32).read_unaligned() }
 }
 
-fn process_ppid(base: u32, process_ptr: u32) -> i32 {
+pub(crate) fn process_ppid(base: u32, process_ptr: u32) -> i32 {
     let Some(linear_ptr) = process_state_linear_ptr(base, process_ptr) else {
         return 0;
     };
@@ -1420,7 +1820,7 @@ pub(crate) fn proc_pid_stat_state_for_status(status: i32) -> u8 {
     }
 }
 
-fn describe_process_threads(vm: &ThreadState, base: u32) -> String {
+pub(crate) fn describe_process_threads(vm: &ThreadState, base: u32) -> String {
     if vm.process_ptr == 0 {
         return "process_ptr=0".to_string();
     }
@@ -1514,13 +1914,22 @@ pub(crate) fn guest_window_size(base: u32) -> usize {
     (GUEST_RAM_SIZE as usize).min(mem_size.saturating_sub(base as usize))
 }
 
+fn linear_guest_window_size(base: u32) -> usize {
+    let mem_size = (core::arch::wasm32::memory_size(0) as usize).saturating_mul(65536);
+    let wasm_window = mem_size.saturating_sub(base as usize);
+    let u32_window = ((u32::MAX as u64 + 1)
+        .saturating_sub(base as u64)
+        .min(usize::MAX as u64)) as usize;
+    wasm_window.min(u32_window)
+}
+
 fn current_guest_snapshot_len(base: u32) -> usize {
     let mut high = tidemark_kernel::syscall::memory::current_brk() as usize;
     let vma_len = tidemark_kernel::harness::memory::debug_vma_len();
     for idx in 0..vma_len {
         high = high.max(tidemark_kernel::harness::memory::debug_vma_end(idx) as usize);
     }
-    high.min(guest_window_size(base))
+    high.min(linear_guest_window_size(base))
 }
 
 fn current_guest_snapshot_len_with_vm_floor(base: u32, vm: &ThreadState) -> usize {
@@ -1532,7 +1941,7 @@ fn current_guest_snapshot_len_with_vm_floor(base: u32, vm: &ThreadState) -> usiz
     high = high.max(stack_end);
     let pc_end = (vm.pc as usize).saturating_add(0x1000);
     high = high.max(pc_end);
-    high.min(guest_window_size(base))
+    high.min(linear_guest_window_size(base))
 }
 
 fn snapshot_guest_memory(base: u32) -> Result<Box<GuestMemorySnapshot>, String> {
@@ -1643,6 +2052,11 @@ fn repair_current_main_thread_record(vm: &ThreadState, base: u32) {
     let ps_ptr = (base as u64 + vm.process_ptr as u64) as *mut ProcessState;
     unsafe {
         let ps = &mut *ps_ptr;
+        if ps.thread_count.load(std::sync::atomic::Ordering::Acquire) <= 1 {
+            for record in ps.threads.iter_mut() {
+                *record = ThreadRecord::empty();
+            }
+        }
         ps.threads[idx] =
             ThreadRecord::new(vm.tid, THREAD_RUNNING, vm_ptr, vm.clear_child_tid as u32, 0);
         ps.thread_count
@@ -1721,12 +2135,27 @@ fn run_vm_inner(
             && !skip_deferred_clone_service_once
             && !deferred_clone_threads.is_empty()
         {
-            let _ = service_ready_deferred_clone_threads(
+            let current_pid = vm_pid(vm, base);
+            record_ltp_memory_probe(
+                LTP_MEM_PROBE_DEFERRED_SERVICE_BEFORE,
+                current_pid,
+                deferred_clone_threads.len(),
+                0,
+                live_probe_word(base),
+            );
+            let progressed = service_ready_deferred_clone_threads(
                 base,
                 use_cache,
                 deferred_clone_threads,
-                vm_pid(vm, base),
+                current_pid,
             )?;
+            record_ltp_memory_probe(
+                LTP_MEM_PROBE_DEFERRED_SERVICE_AFTER,
+                current_pid,
+                deferred_clone_threads.len(),
+                progressed,
+                live_probe_word(base),
+            );
         }
         skip_deferred_clone_service_once = false;
         validate_process_thread_ptrs(vm, base)?;
@@ -1743,9 +2172,15 @@ fn run_vm_inner(
                 vm.process_ptr,
             ));
         }
-        if vm.x[2] >= guest_limit {
+        if vm.x[2] != 0
+            && !tidemark_kernel::syscall::memory::guest_range_accessible(
+                base,
+                vm.x[2].saturating_sub(8),
+                8,
+            )
+        {
             return Err(format!(
-                "vm.sp out of guest range pid={} sp=0x{:x} guest_limit=0x{:x} pc=0x{:x} process_ptr=0x{:x}",
+                "vm.sp inaccessible pid={} sp=0x{:x} guest_limit=0x{:x} pc=0x{:x} process_ptr=0x{:x}",
                 vm_pid(vm, base),
                 vm.x[2],
                 guest_limit,
@@ -1768,6 +2203,11 @@ fn run_vm_inner(
             )
         };
         total += (budget - rem) as i64;
+        if vm.completed_sync_effects & SYNC_EFFECT_PROCESS_LIFECYCLE != 0 {
+            if let Some(cache) = cache.as_mut() {
+                cache.clear();
+            }
+        }
 
         match vm.status {
             STATUS_OK => {
@@ -1834,9 +2274,10 @@ fn run_vm_inner(
             STATUS_FUTEX_WAIT if yield_blocked_status => {
                 refresh_proc_pid_stat(vm, base, b'S')?;
                 if vm.process_ptr != 0 && process_pid(base, vm.process_ptr) == vm.tid {
+                    let futex_addr = vm.futex_wait_addr as u32;
                     tidemark_kernel::harness::support::register_external_futex_wait(
                         process_pid(base, vm.process_ptr),
-                        vm.x[10] as u32,
+                        futex_addr,
                     );
                 }
                 return Ok(VmRunOutcome::Deferred(vm.pc));
@@ -2010,7 +2451,22 @@ fn prepare_process_spawn_body_with_parent_memory_scratch(
     preserve_live_shared_mappings: bool,
     parent_memory_scratch: &mut GuestMemorySnapshot,
 ) -> Result<PreparedProcessSpawn, String> {
+    let parent_pid = process_pid(base, process_ptr);
+    record_ltp_memory_probe(
+        LTP_MEM_PROBE_SPAWN_BEFORE_FLUSH,
+        parent_pid,
+        child_pid as usize,
+        0,
+        live_probe_word(base),
+    );
     tidemark_kernel::syscall::memory::flush_shared_mappings(base);
+    record_ltp_memory_probe(
+        LTP_MEM_PROBE_SPAWN_AFTER_FLUSH,
+        parent_pid,
+        child_pid as usize,
+        0,
+        live_probe_word(base),
+    );
     prepare_process_spawn_after_flush_with_parent_memory_scratch(
         parent_vm,
         base,
@@ -2096,6 +2552,13 @@ fn prepare_process_spawn_after_flush_with_parent_memory_scratch(
 
     let child_spawn =
         finalize_process_spawn_snapshot(child_vm, child_pid, parent_state.parent_pid, base)?;
+    record_ltp_memory_probe(
+        LTP_MEM_PROBE_PARENT_SCRATCH_AFTER_CHILD,
+        parent_state.parent_pid,
+        parent_memory_scratch.len,
+        snapshot_probe_word(parent_memory_scratch),
+        live_probe_word(base),
+    );
 
     let restored_pid = restore_process_context_parent_after_snapshot_from_scratch(
         parent_vm,
@@ -2105,6 +2568,13 @@ fn prepare_process_spawn_after_flush_with_parent_memory_scratch(
         parent_memory_scratch,
         preserve_live_shared_mappings,
     )?;
+    record_ltp_memory_probe(
+        LTP_MEM_PROBE_PARENT_SCRATCH_AFTER_RESTORE,
+        parent_state.parent_pid,
+        parent_memory_scratch.len,
+        snapshot_probe_word(parent_memory_scratch),
+        live_probe_word(base),
+    );
     if restored_pid != parent_state.parent_pid {
         return Err(format!(
             "process context restore corrupted parent pid: expected {}, got {}; snapshot_pid={} process_ptr=0x{:x}",
@@ -2149,6 +2619,13 @@ fn prepare_parent_snapshot_into_scratch(
 ) -> Result<PreparedParentScratchState, String> {
     let parent_pid = process_pid(base, process_ptr);
     parent_memory_scratch.recapture_into_scratch_for_vm(base, parent_vm);
+    record_ltp_memory_probe(
+        LTP_MEM_PROBE_PARENT_SCRATCH_CAPTURE,
+        parent_pid,
+        parent_memory_scratch.len,
+        snapshot_probe_word(parent_memory_scratch),
+        live_probe_word(base),
+    );
     let snapshot_parent_pid =
         prepare_parent_snapshot_validate_pid(parent_memory_scratch, process_ptr, parent_pid)?;
     let parent_mm_state = prepare_parent_mm_snapshot();
@@ -2316,6 +2793,13 @@ fn finalize_process_spawn_snapshot(
     ensure_shared_heap_sane("before process context child snapshot")?;
     probe_snapshot_chunk_alloc();
     let guest_memory = snapshot_guest_memory_for_vm(base, &child_vm)?;
+    record_ltp_memory_probe(
+        LTP_MEM_PROBE_SPAWN_SNAPSHOT,
+        child_pid,
+        guest_memory.len,
+        snapshot_probe_word(&guest_memory),
+        live_probe_word(base),
+    );
     let spawn = Box::new(SavedProcessCtx {
         pid: child_pid,
         parent_pid,
@@ -2542,10 +3026,16 @@ fn service_ready_deferred_clone_threads(
                 current_pid, child_ptr, child_vm.pc, guest_limit
             ));
         }
-        if child_vm.x[2] >= guest_limit {
+        if child_vm.x[2] != 0
+            && !tidemark_kernel::syscall::memory::guest_range_accessible(
+                base,
+                child_vm.x[2].saturating_sub(8),
+                8,
+            )
+        {
             return Err(format!(
-                "deferred clone child sp out of range owner_pid={} child_ptr=0x{:x} sp=0x{:x} guest_limit=0x{:x}",
-                current_pid, child_ptr, child_vm.x[2], guest_limit
+                "deferred clone child sp inaccessible owner_pid={} child_ptr=0x{:x} sp=0x{:x} guest_limit=0x{:x}",
+                current_pid, child_ptr, child_vm.x[2], guest_limit,
             ));
         }
 
@@ -2760,7 +3250,7 @@ pub(crate) fn prepare_elf_vm(elf_bytes: &[u8], use_cache: bool) -> Result<Prepar
             & !((GUEST_RAM_ALIGN - 1) as u64);
         let candidate_base = aligned.min(u32::MAX as u64) as u32;
         let base = if TEST_GUEST_BASE != 0 {
-            TEST_GUEST_BASE.max(candidate_base)
+            TEST_GUEST_BASE
         } else {
             candidate_base
         };
@@ -2920,6 +3410,7 @@ pub(crate) fn prepare_elf_vm(elf_bytes: &[u8], use_cache: bool) -> Result<Prepar
         vm.status = STATUS_OK;
         vm.tid = INITIAL_PID;
         vm.guest_base = base;
+        vm.guest_ram_limit = GUEST_RAM_SIZE;
 
         let ps_size = core::mem::size_of::<ProcessState>() as u64;
         let ps_align = core::mem::align_of::<ProcessState>() as u64;
@@ -3040,8 +3531,11 @@ pub(crate) fn step_prepared_elf_vm_for_ltp(
     scheduler: &mut LtpSchedulerState,
 ) -> Result<LtpVmOutcome, String> {
     let mut vm = unsafe { core::ptr::read(prepared.vm.as_ref()) };
+    record_ltp_thread_state_identity(prepared.base, &vm, 0, 0, LTP_VM_ID_ROOT);
     let outcome = run_vm_root_for_ltp(&mut vm, prepared.base, use_cache, scheduler)?;
+    record_ltp_thread_state_identity(prepared.base, &vm, 0, 0, LTP_VM_ID_ROOT);
     *prepared.vm = vm;
+    scheduler.invalidate_current_snapshot();
     Ok(match outcome {
         VmRunOutcome::Exited(code, pc) => LtpVmOutcome::Exited(code, pc),
         VmRunOutcome::Deferred(_) => LtpVmOutcome::Deferred,
@@ -3054,10 +3548,12 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
     saved: &mut SavedProcessCtx,
     use_cache: bool,
     scheduler: &mut LtpSchedulerState,
+    sibling_proc_stats: &[(i32, i32, u8, i32)],
     mut validate_siblings: impl FnMut(&str) -> Result<(), String>,
 ) -> Result<LtpVmOutcome, String> {
     validate_siblings("step_saved_process_ctx_for_ltp entry siblings")?;
     validate_saved_process_ctx(saved, "step_saved_process_ctx_for_ltp entry")?;
+    saved.record_vm_identity(current.base, LTP_VM_ID_SAVED_STEP);
     let mut saved_guest_memory =
         core::mem::replace(&mut saved.guest_memory, GuestMemorySnapshot::empty_box());
     let mut saved_mm_state = core::mem::replace(
@@ -3069,6 +3565,12 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
         let pre_restore_exited_children =
             tidemark_kernel::harness::process::debug_exited_children_for_parent(saved.pid);
         let current_child_proc_stats = capture_live_child_proc_stats(saved.pid);
+        let current_parent_proc_stat = if saved.parent_pid > 0 && saved.parent_pid != saved.pid {
+            read_live_proc_pid_stat(saved.parent_pid)
+                .map(|(ppid, state, pgrp)| (saved.parent_pid, ppid, state, pgrp))
+        } else {
+            None
+        };
         let current_pid = if current.vm.process_ptr != 0 {
             process_pid(base, current.vm.process_ptr)
         } else {
@@ -3099,6 +3601,13 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
                 &current_mm_state,
             );
         let mut exited_child_record: Option<(i32, i32, i32)> = None;
+        record_ltp_memory_probe(
+            LTP_MEM_PROBE_SAVED_PRE_RESTORE,
+            saved.pid,
+            saved_guest_memory.len,
+            snapshot_probe_word(&saved_guest_memory),
+            live_probe_word(base),
+        );
 
         tidemark_kernel::harness::support::restore_process_context_mm_only_from_guest_snapshot(
             base,
@@ -3113,6 +3622,13 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
                 })
             },
         )?;
+        record_ltp_memory_probe(
+            LTP_MEM_PROBE_SAVED_POST_RESTORE,
+            saved.pid,
+            saved_guest_memory.len,
+            snapshot_probe_word(&saved_guest_memory),
+            live_probe_word(base),
+        );
         validate_siblings("step_saved_process_ctx_for_ltp after restore saved mm")?;
         tidemark_kernel::harness::support::restore_live_shared_mapping_overlay(
             base,
@@ -3139,8 +3655,21 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
                 )
             },
         )?;
+        repair_current_main_thread_record(&saved.vm, base);
+        saved.record_vm_identity(base, LTP_VM_ID_SAVED_STEP);
         validate_siblings("step_saved_process_ctx_for_ltp after restore saved process state")?;
         for (pid, ppid, state, pgrp) in current_child_proc_stats.iter().copied() {
+            ensure_proc_pid_stat(pid, ppid, state, pgrp)?;
+        }
+        if let Some((pid, ppid, state, pgrp)) = current_parent_proc_stat {
+            if !sibling_proc_stats
+                .iter()
+                .any(|(sibling_pid, _, _, _)| *sibling_pid == pid)
+            {
+                ensure_proc_pid_stat(pid, ppid, state, pgrp)?;
+            }
+        }
+        for (pid, ppid, state, pgrp) in sibling_proc_stats.iter().copied() {
             ensure_proc_pid_stat(pid, ppid, state, pgrp)?;
         }
         for (pid, exited, wait_status) in saved.child_entries.iter().copied() {
@@ -3200,7 +3729,7 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
                     tidemark_kernel::syscall::process::resume_wait4(vm_ptr, base);
                 }
                 STATUS_FUTEX_WAIT => {
-                    let futex_addr = saved.vm.x[10] as u32;
+                    let futex_addr = saved.vm.futex_wait_addr as u32;
                     if futex_addr != 0 {
                         saved.last_futex_addr = futex_addr;
                     }
@@ -3253,6 +3782,34 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
                                 tidemark_kernel::harness::support::snapshot_process_context_boxed();
                             break LtpVmOutcome::Deferred;
                         }
+                    } else if saved.vm.futex_wait_timeout != 0 {
+                        if current.vm.status == STATUS_WAIT4
+                            && (saved.parent_pid <= 0
+                                || !tidemark_kernel::harness::support::has_external_futex_wake(
+                                    saved.parent_pid,
+                                ))
+                        {
+                            tidemark_kernel::harness::support::clear_external_futex_wait(saved.pid);
+                            consume_relative_futex_timeout(&saved.vm, base, Instant::now())?;
+                            tidemark_kernel::syscall::thread::resume_futex_wait_result(
+                                &mut saved.vm,
+                                base,
+                                ETIMEDOUT,
+                            );
+                        } else {
+                            if !tidemark_kernel::harness::support::has_external_futex_wait(
+                                saved.pid,
+                            ) {
+                                tidemark_kernel::harness::support::register_external_futex_wait(
+                                    saved.pid, futex_addr,
+                                );
+                            }
+                            refresh_proc_pid_stat(&saved.vm, base, b'S')?;
+                            saved_guest_memory.recapture_into_scratch_for_vm(base, &saved.vm);
+                            saved_mm_state =
+                                tidemark_kernel::harness::support::snapshot_process_context_boxed();
+                            break LtpVmOutcome::Deferred;
+                        }
                     } else {
                         if !tidemark_kernel::harness::support::has_external_futex_wait(saved.pid) {
                             tidemark_kernel::harness::support::register_external_futex_wait(
@@ -3289,6 +3846,13 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
             }
 
             validate_siblings("step_saved_process_ctx_for_ltp before run_vm_inner")?;
+            record_ltp_memory_probe(
+                LTP_MEM_PROBE_SAVED_PRE_RUN,
+                saved.pid,
+                saved_guest_memory.len,
+                snapshot_probe_word(&saved_guest_memory),
+                live_probe_word(base),
+            );
             let vm_outcome = run_vm_inner(
                 &mut saved.vm,
                 base,
@@ -3302,6 +3866,68 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
             validate_siblings("step_saved_process_ctx_for_ltp after run_vm_inner")?;
             match vm_outcome {
                 VmRunOutcome::Exited(child_exit, child_pc) => {
+                    if saved.vm.term_signal == SIGSEGV {
+                        let (sig, code, pc, ra, sp, gp, tp, s11, fault_pc, fault_addr) =
+                            tidemark_kernel::harness::signal::last_default_signal();
+                        let default_vm_ptr =
+                            tidemark_kernel::harness::signal::last_default_signal_vm_ptr();
+                        let (
+                            clone_tid,
+                            clone_flags,
+                            clone_pc,
+                            clone_sp,
+                            clone_tls,
+                            clone_child_tidptr,
+                        ) = tidemark_kernel::syscall::thread::last_clone_spawn_details();
+                        return Err(format!(
+                            "saved child killed by SIGSEGV pid={} ppid={} tid={} exit={} child_pc=0x{:x} fault_pc=0x{:x} fault_addr=0x{:x} regs(a0=0x{:x} a1=0x{:x} a2=0x{:x} a3=0x{:x} a4=0x{:x} a5=0x{:x} a6=0x{:x} a7=0x{:x} t3=0x{:x}) default_signal(vm_ptr=0x{:x} sig={} code={} pc=0x{:x} ra=0x{:x} sp=0x{:x} gp=0x{:x} tp=0x{:x} s11=0x{:x} fault_pc=0x{:x} fault_addr=0x{:x}) stack_words={} pc_words={} aux_fault_words={} tst_brk_handler_words={} fault_exec_trace={} execve_stage_trace={} ltp_memory_probe={} last_clone(tid={} flags=0x{:x} pc=0x{:x} sp=0x{:x} tls=0x{:x} child_tidptr=0x{:x})",
+                            saved.pid,
+                            saved.parent_pid,
+                            saved.vm.tid,
+                            child_exit,
+                            child_pc,
+                            saved.vm.fault_pc,
+                            saved.vm.fault_addr,
+                            saved.vm.x[10],
+                            saved.vm.x[11],
+                            saved.vm.x[12],
+                            saved.vm.x[13],
+                            saved.vm.x[14],
+                            saved.vm.x[15],
+                            saved.vm.x[16],
+                            saved.vm.x[17],
+                            saved.vm.x[28],
+                            default_vm_ptr,
+                            sig,
+                            code,
+                            pc,
+                            ra,
+                            sp,
+                            gp,
+                            tp,
+                            s11,
+                            fault_pc,
+                            fault_addr,
+                            describe_current_guest_u64_words(sp, 24),
+                            describe_current_guest_u32_words(
+                                fault_pc.saturating_sub(16) as u32,
+                                16
+                            ),
+                            describe_current_guest_u64_words(fault_addr.saturating_sub(16), 8),
+                            describe_current_guest_u32_words(0xd91c0, 4),
+                            tidemark_kernel::harness::support::describe_fault_exec_trace_for_vm(
+                                default_vm_ptr,
+                            ),
+                            tidemark_kernel::harness::support::describe_execve_stage_trace(),
+                            describe_ltp_memory_probe(),
+                            clone_tid,
+                            clone_flags,
+                            clone_pc,
+                            clone_sp,
+                            clone_tls,
+                            clone_child_tidptr,
+                        ));
+                    }
                     tidemark_kernel::harness::support::clear_external_futex_wait(saved.pid);
                     let wait_status = child_wait_status(&saved.vm, child_exit);
                     let parent_pid = if saved.parent_pid > 0 {
@@ -3333,7 +3959,7 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
                     {
                         tidemark_kernel::harness::support::register_external_futex_wait(
                             saved.pid,
-                            saved.vm.x[10] as u32,
+                            saved.vm.futex_wait_addr as u32,
                         );
                     }
                     refresh_proc_pid_stat(&saved.vm, base, b'S')?;
@@ -3347,8 +3973,16 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
                         &spawn,
                         "step_saved_process_ctx_for_ltp spawn outcome",
                     )?;
+                    record_ltp_memory_probe(
+                        LTP_MEM_PROBE_PARENT_SCRATCH_SPAWN,
+                        saved.pid,
+                        scheduler.parent_memory_scratch.len,
+                        snapshot_probe_word(scheduler.parent_memory_scratch.as_ref()),
+                        live_probe_word(base),
+                    );
                     refresh_proc_pid_stat(&saved.vm, base, b'R')?;
-                    saved_guest_memory.recapture_into_scratch_for_vm(base, &saved.vm);
+                    saved_guest_memory
+                        .clone_from_snapshot(scheduler.parent_memory_scratch.as_ref());
                     saved_mm_state =
                         tidemark_kernel::harness::support::snapshot_process_context_boxed();
                     break LtpVmOutcome::ProcessSpawn(spawn);

@@ -713,7 +713,7 @@ pub fn sys_sched_yield(vm: &mut ThreadState) -> i32 {
     vm.fault_pc = 0;
     vm.x[10] = 0;
     vm.status = abi::STATUS_SLEEP;
-    abi::STATUS_SLEEP
+    0
 }
 
 /// sched_getaffinity: expose a single online CPU.

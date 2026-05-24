@@ -20,14 +20,14 @@ use core::sync::atomic::Ordering;
 
 #[cfg(any(test, all(target_arch = "wasm32", feature = "harness")))]
 #[inline(always)]
-fn wake_external_waiters(addr: u32, max_wake: u32) -> u32 {
-    crate::harness::support::wake_external_futex_waits(addr, max_wake)
+fn wake_external_waiters(caller_pid: i32, addr: u32, max_wake: u32) -> u32 {
+    crate::harness::support::wake_external_futex_waits_from_pid(caller_pid, addr, max_wake)
 }
 
 #[cfg(not(any(test, all(target_arch = "wasm32", feature = "harness"))))]
 #[inline(always)]
-fn wake_external_waiters(addr: u32, max_wake: u32) -> u32 {
-    let _ = (addr, max_wake);
+fn wake_external_waiters(caller_pid: i32, addr: u32, max_wake: u32) -> u32 {
+    let _ = (caller_pid, addr, max_wake);
     0
 }
 
@@ -53,10 +53,13 @@ const ROBUST_LIST_LIMIT: u32 = 2048;
 #[derive(Clone, Copy)]
 struct CloneSpawnTrace {
     tid: i32,
+    flags: u64,
     pc: u64,
     ra: u64,
     gp: u64,
     sp: u64,
+    tls: u64,
+    child_tidptr: u64,
     s11: u64,
     stack_m32: u64,
     stack_m24: u64,
@@ -66,10 +69,13 @@ struct CloneSpawnTrace {
 
 static mut LAST_CLONE_SPAWN: CloneSpawnTrace = CloneSpawnTrace {
     tid: 0,
+    flags: 0,
     pc: 0,
     ra: 0,
     gp: 0,
     sp: 0,
+    tls: 0,
+    child_tidptr: 0,
     s11: 0,
     stack_m32: 0,
     stack_m24: 0,
@@ -104,6 +110,13 @@ pub fn last_clone_spawn() -> (i32, u64, u64, u64, u64, u64, u64, u64, u64, u64) 
             t.stack_m16,
             t.stack_m8,
         )
+    }
+}
+
+pub fn last_clone_spawn_details() -> (i32, u64, u64, u64, u64, u64) {
+    unsafe {
+        let t = LAST_CLONE_SPAWN;
+        (t.tid, t.flags, t.pc, t.sp, t.tls, t.child_tidptr)
     }
 }
 
@@ -301,6 +314,9 @@ fn mark_robust_futex_owner_died(
         }
     };
 
+    if !crate::syscall::memory::guest_range_accessible(base, futex_addr, 4) {
+        return;
+    }
     let owner = unsafe { guest_mem::read_u32(base, futex_addr) };
     if owner & FUTEX_TID_MASK != owner_tid {
         return;
@@ -323,6 +339,9 @@ fn cleanup_robust_futexes(process_ptr: u32, base: u32, owner_tid: u32, robust_he
     if process_ptr == 0 || owner_tid == 0 || robust_head == 0 {
         return;
     }
+    if !crate::syscall::memory::guest_range_accessible(base, robust_head, ROBUST_LIST_HEAD_LEN) {
+        return;
+    }
 
     let first = unsafe { guest_mem::read_u64(base, robust_head) };
     let futex_offset = unsafe { guest_mem::read_u64(base, robust_head + 8) as i64 };
@@ -331,6 +350,9 @@ fn cleanup_robust_futexes(process_ptr: u32, base: u32, owner_tid: u32, robust_he
     let mut entry = first;
     let mut walked = 0;
     while entry != 0 && entry != robust_head && walked < ROBUST_LIST_LIMIT {
+        if !crate::syscall::memory::guest_range_accessible(base, entry, 8) {
+            break;
+        }
         mark_robust_futex_owner_died(process_ptr, base, owner_tid, entry, futex_offset);
         entry = unsafe { guest_mem::read_u64(base, entry) };
         walked += 1;
@@ -902,10 +924,13 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
 
         LAST_CLONE_SPAWN = CloneSpawnTrace {
             tid: child.tid,
+            flags: parent.clone_flags,
             pc: child.pc,
             ra: child.x[1],
             gp: child.x[3],
             sp: child.x[2],
+            tls: parent.clone_tls,
+            child_tidptr: parent.clone_child_tidptr,
             s11: child.x[27],
             stack_m32: if child.x[2] >= 32 {
                 guest_mem::read_u64(base, child.x[2] - 32)
@@ -1057,7 +1082,9 @@ pub fn sys_futex(
             // Deferred process children are not represented by live
             // ThreadRecord slots while the harness runner keeps the parent
             // executing, so external waiters must be counted separately.
-            let external = wake_external_waiters(addr as u32, val.min(u32::MAX as u64) as u32);
+            let caller_pid = crate::syscall::process::current_process_pid(vm, base);
+            let external =
+                wake_external_waiters(caller_pid, addr as u32, val.min(u32::MAX as u64) as u32);
             (local + external) as i64
         }
         FUTEX_CMP_REQUEUE => {
@@ -1080,7 +1107,8 @@ pub fn sys_futex(
                 wake_count,
                 FUTEX_BITSET_MATCH_ANY,
             );
-            let external_wake = wake_external_waiters(addr as u32, wake_count);
+            let caller_pid = crate::syscall::process::current_process_pid(vm, base);
+            let external_wake = wake_external_waiters(caller_pid, addr as u32, wake_count);
 
             let local_requeue = requeue_futex_waiters_by_process_ptr(
                 vm.process_ptr,

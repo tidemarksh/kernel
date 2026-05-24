@@ -51,7 +51,7 @@ fn close_range_closes_or_marks_fd_range() {
 }
 
 #[test]
-fn close_shared_fd_only_drops_last_process_reference() {
+fn close_shared_fd_drops_one_reference_per_descriptor() {
     let mut t = TestVm::new();
     let fd = t.sys_dup(1);
     assert_eq!(fd, 3);
@@ -61,7 +61,7 @@ fn close_shared_fd_only_drops_last_process_reference() {
         fd_table::get_ofd_by_id(ofd_id)
             .expect("stdout OFD should exist")
             .refcount,
-        1
+        2
     );
 
     assert_eq!(t.sys_close(fd), 0);
@@ -87,7 +87,7 @@ fn retain_fds_for_fork_counts_distinct_ofds_once() {
         fd_table::get_ofd_by_id(ofd_id)
             .expect("stdout OFD should exist")
             .refcount,
-        1
+        2
     );
 
     fd_table::retain_fds_for_fork(t.base, &t.vm);
@@ -95,7 +95,7 @@ fn retain_fds_for_fork_counts_distinct_ofds_once() {
         fd_table::get_ofd_by_id(ofd_id)
             .expect("stdout OFD should still exist")
             .refcount,
-        2
+        4
     );
 }
 
@@ -124,6 +124,7 @@ fn deferred_pipe_cleanup_separates_last_close_from_backend_close() {
     let pipe_idx = fd_table::get_ofd_by_id(ofd_id)
         .expect("pipe OFD should exist")
         .ino;
+    let generation = pipe::pipe_generation(pipe_idx);
     let slot = pipe::slot_addr(pipe_idx);
 
     let cleanup = fd_table::release_ofd_id_deferred(ofd_id);
@@ -131,6 +132,7 @@ fn deferred_pipe_cleanup_separates_last_close_from_backend_close() {
         cleanup,
         Some(BackendCleanup::Pipe {
             pipe_idx,
+            generation,
             is_read_end: true,
             ofd_id,
         })

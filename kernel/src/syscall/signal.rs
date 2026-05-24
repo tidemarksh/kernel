@@ -97,6 +97,7 @@ struct SignalTrace {
 #[derive(Clone, Copy)]
 #[cfg_attr(not(any(test, feature = "harness")), allow(dead_code))]
 struct DefaultSignalTrace {
+    vm_ptr: u32,
     sig: u32,
     sig_info_code: i32,
     pc: u64,
@@ -107,6 +108,7 @@ struct DefaultSignalTrace {
     s11: u64,
     fault_pc: u64,
     fault_addr: u64,
+    arg_regs: [u64; 8],
 }
 
 #[derive(Clone, Copy)]
@@ -145,6 +147,7 @@ static mut LAST_SIGRETURN: SignalTrace = SignalTrace {
     s11: 0,
 };
 static mut LAST_DEFAULT_SIGNAL: DefaultSignalTrace = DefaultSignalTrace {
+    vm_ptr: 0,
     sig: 0,
     sig_info_code: 0,
     pc: 0,
@@ -155,6 +158,7 @@ static mut LAST_DEFAULT_SIGNAL: DefaultSignalTrace = DefaultSignalTrace {
     s11: 0,
     fault_pc: 0,
     fault_addr: 0,
+    arg_regs: [0; 8],
 };
 static mut LAST_TRAMPOLINE_PC: u64 = 0;
 static mut LAST_TRAMPOLINE_HIT_TID: i32 = 0;
@@ -175,6 +179,7 @@ static mut SIGNAL_DELIVERY_RING: [SignalTrace; SIGNAL_TRACE_RING_CAP] = [SignalT
 static mut SIGNAL_DELIVERY_RING_LEN: u32 = 0;
 static mut SIGNAL_DELIVERY_RING_NEXT: u32 = 0;
 static mut DEFAULT_SIGNAL_RING: [DefaultSignalTrace; SIGNAL_TRACE_RING_CAP] = [DefaultSignalTrace {
+    vm_ptr: 0,
     sig: 0,
     sig_info_code: 0,
     pc: 0,
@@ -185,6 +190,7 @@ static mut DEFAULT_SIGNAL_RING: [DefaultSignalTrace; SIGNAL_TRACE_RING_CAP] = [D
     s11: 0,
     fault_pc: 0,
     fault_addr: 0,
+    arg_regs: [0; 8],
 };
     SIGNAL_TRACE_RING_CAP];
 static mut DEFAULT_SIGNAL_RING_LEN: u32 = 0;
@@ -298,6 +304,16 @@ pub(crate) fn default_signal_trace() -> (u32, i32, u64, u64, u64, u64, u64, u64,
 }
 
 #[cfg(any(test, feature = "harness"))]
+pub(crate) fn default_signal_arg_regs() -> [u64; 8] {
+    unsafe { LAST_DEFAULT_SIGNAL.arg_regs }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn default_signal_vm_ptr() -> u32 {
+    unsafe { LAST_DEFAULT_SIGNAL.vm_ptr }
+}
+
+#[cfg(any(test, feature = "harness"))]
 pub(crate) fn trampoline_trace_state() -> (i32, u64, u32) {
     unsafe {
         (
@@ -334,6 +350,7 @@ pub(crate) fn reset_trace_state() {
             s11: 0,
         };
         LAST_DEFAULT_SIGNAL = DefaultSignalTrace {
+            vm_ptr: 0,
             sig: 0,
             sig_info_code: 0,
             pc: 0,
@@ -344,6 +361,7 @@ pub(crate) fn reset_trace_state() {
             s11: 0,
             fault_pc: 0,
             fault_addr: 0,
+            arg_regs: [0; 8],
         };
         LAST_TRAMPOLINE_PC = 0;
         LAST_TRAMPOLINE_HIT_TID = 0;
@@ -357,7 +375,11 @@ pub(crate) fn reset_trace_state() {
 }
 
 fn record_default_signal(vm: &ThreadState, sig: usize) {
+    #[cfg(any(test, feature = "harness"))]
+    crate::harness::debug::snapshot_recent_exec_trace_for_vm(vm as *const ThreadState as u32);
+
     let trace = DefaultSignalTrace {
+        vm_ptr: vm as *const ThreadState as u32,
         sig: sig as u32,
         sig_info_code: vm.sig_info_code,
         pc: vm.pc,
@@ -368,6 +390,9 @@ fn record_default_signal(vm: &ThreadState, sig: usize) {
         s11: vm.x[27],
         fault_pc: vm.fault_pc,
         fault_addr: vm.fault_addr,
+        arg_regs: [
+            vm.x[10], vm.x[11], vm.x[12], vm.x[13], vm.x[14], vm.x[15], vm.x[16], vm.x[17],
+        ],
     };
     unsafe {
         LAST_DEFAULT_SIGNAL = trace;
@@ -391,7 +416,7 @@ pub fn note_pc(vm: &ThreadState, pc: u64) {
 
 #[inline(always)]
 pub fn is_current_sigreturn_trampoline(sp: u64, pc: u64) -> bool {
-    sp != 0 && pc == sp + SIGFRAME_OFF_TRAMPOLINE
+    sp != 0 && pc.checked_sub(sp) == Some(SIGFRAME_OFF_TRAMPOLINE)
 }
 
 pub fn signal_action_table_bytes() -> u32 {

@@ -29,6 +29,7 @@ fn ring_buffer_dispatch_write() {
         tidemark_kernel::guest_mem::write_bytes(t.base, data_addr, data);
     }
 
+    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
     let idx = submit_request(
         ring_base,
         FS_OP_WRITE,
@@ -39,10 +40,10 @@ fn ring_buffer_dispatch_write() {
         0,
         0,
         0,
+        vm_ptr,
     );
     assert!(idx >= 0);
 
-    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
     process_requests(ring_base, vm_ptr, t.base);
 
     let result = read_completion(ring_base);
@@ -64,10 +65,21 @@ fn ring_buffer_dispatch_mkdir() {
     let path = b"/ringdir";
     let path_addr = t.write_path(0xB000, path);
 
-    let idx = submit_request(ring_base, FS_OP_MKDIR, -100, 0, 0, 0, path_addr, 0, 0o755);
+    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
+    let idx = submit_request(
+        ring_base,
+        FS_OP_MKDIR,
+        -100,
+        0,
+        0,
+        0,
+        path_addr,
+        0,
+        0o755,
+        vm_ptr,
+    );
     assert!(idx >= 0);
 
-    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
     process_requests(ring_base, vm_ptr, t.base);
 
     let result = read_completion(ring_base);
@@ -88,6 +100,7 @@ fn ring_buffer_dispatch_mkdir_respects_dirfd() {
     assert!(dirfd >= 3);
 
     let path_addr = t.write_path(0xB100, b"child");
+    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
     let idx = submit_request(
         ring_base,
         FS_OP_MKDIR,
@@ -98,10 +111,10 @@ fn ring_buffer_dispatch_mkdir_respects_dirfd() {
         path_addr,
         0,
         0o755,
+        vm_ptr,
     );
     assert!(idx >= 0);
 
-    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
     process_requests(ring_base, vm_ptr, t.base);
 
     let result = read_completion(ring_base);
@@ -123,6 +136,7 @@ fn ring_buffer_dispatch_rename() {
 
     let old_addr = t.write_path(0xB200, b"/old.txt");
     let new_addr = t.write_path(0xB300, b"/new.txt");
+    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
     let idx = submit_request(
         ring_base,
         FS_OP_RENAME,
@@ -133,10 +147,10 @@ fn ring_buffer_dispatch_rename() {
         old_addr,
         0,
         0,
+        vm_ptr,
     );
     assert!(idx >= 0);
 
-    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
     process_requests(ring_base, vm_ptr, t.base);
 
     let result = read_completion(ring_base);

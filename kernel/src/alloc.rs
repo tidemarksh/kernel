@@ -9,6 +9,35 @@ use core::alloc::{GlobalAlloc, Layout};
 static mut HEAP_BASE: u32 = 0;
 static mut HEAP_PTR: u32 = 0;
 
+#[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
+const WASI_ARENA_SIZE: usize = 256 * 1024 * 1024;
+#[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
+static mut WASI_ARENA_PTR: u32 = 0;
+#[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
+static mut WASI_ARENA_END: u32 = 0;
+
+#[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
+unsafe fn ensure_wasi_arena() -> bool {
+    if unsafe { WASI_ARENA_PTR } != 0 {
+        return true;
+    }
+    let Ok(layout) = Layout::from_size_align(WASI_ARENA_SIZE, 16) else {
+        return false;
+    };
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) } as u32;
+    if ptr == 0 {
+        return false;
+    }
+    let Some(end) = ptr.checked_add(WASI_ARENA_SIZE as u32) else {
+        return false;
+    };
+    unsafe {
+        WASI_ARENA_PTR = ptr;
+        WASI_ARENA_END = end;
+    }
+    true
+}
+
 #[cold]
 fn invalid_heap_range(op: &str, ptr: u32, size: u32, mem_size: u64) -> u32 {
     #[cfg(any(test, feature = "harness"))]
@@ -74,9 +103,35 @@ pub unsafe fn init(base: u32) {
 /// The caller must ensure no live allocations from the previous harness state
 /// will be accessed after rewinding the bump allocator.
 pub unsafe fn reset(base: u32) {
-    unsafe {
-        HEAP_BASE = base;
-        HEAP_PTR = base;
+    #[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
+    {
+        let _ = base;
+        if !unsafe { ensure_wasi_arena() } {
+            invalid_heap_range("reset(wasi arena)", base, 0, 0);
+            return;
+        }
+        unsafe {
+            HEAP_BASE = WASI_ARENA_PTR;
+            HEAP_PTR = WASI_ARENA_PTR;
+        }
+        return;
+    }
+
+    #[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
+    {
+        let mem_size = (core::arch::wasm32::memory_size(0) as u64) * 65536;
+        if base as u64 > mem_size {
+            let pages_needed = (base as u64 - mem_size).div_ceil(65536) as usize;
+            let result = core::arch::wasm32::memory_grow(0, pages_needed);
+            if result == usize::MAX {
+                invalid_heap_range("reset", base, 0, mem_size);
+                return;
+            }
+        }
+        unsafe {
+            HEAP_BASE = base;
+            HEAP_PTR = base;
+        }
     }
 }
 
@@ -84,6 +139,35 @@ pub unsafe fn reset(base: u32) {
 ///
 /// # Safety
 /// Caller must ensure the WASM linear memory is large enough.
+#[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
+pub unsafe fn alloc(size: u32, align: u32) -> u32 {
+    let Some(align_mask) = align.checked_sub(1) else {
+        return 0;
+    };
+    if align == 0 || align & align_mask != 0 {
+        return 0;
+    };
+    if !unsafe { ensure_wasi_arena() } {
+        return 0;
+    }
+    let current = unsafe { HEAP_PTR };
+    let Some(aligned) = current
+        .checked_add(align_mask)
+        .map(|value| value & !align_mask)
+    else {
+        return 0;
+    };
+    let Some(end) = aligned.checked_add(size) else {
+        return 0;
+    };
+    if end > unsafe { WASI_ARENA_END } {
+        return 0;
+    }
+    unsafe { HEAP_PTR = end };
+    aligned
+}
+
+#[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
 pub unsafe fn alloc(size: u32, align: u32) -> u32 {
     if let Some(ptr) = crate::syscall::process::shared_heap_alloc(size, align) {
         if ptr != 0 {
@@ -163,18 +247,32 @@ pub fn heap_used() -> u32 {
 
 /// Return the heap base address.
 pub fn heap_base() -> u32 {
-    if let Some(base) = crate::syscall::process::shared_heap_base() {
-        return base;
+    #[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
+    unsafe {
+        HEAP_BASE
     }
-    unsafe { HEAP_BASE }
+    #[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
+    {
+        if let Some(base) = crate::syscall::process::shared_heap_base() {
+            return base;
+        }
+        unsafe { HEAP_BASE }
+    }
 }
 
 /// Return current heap pointer (first unallocated byte).
 pub fn heap_ptr() -> u32 {
-    if let Some(ptr) = crate::syscall::process::shared_heap_ptr() {
-        return ptr;
+    #[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
+    unsafe {
+        HEAP_PTR
     }
-    unsafe { HEAP_PTR }
+    #[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
+    {
+        if let Some(ptr) = crate::syscall::process::shared_heap_ptr() {
+            return ptr;
+        }
+        unsafe { HEAP_PTR }
+    }
 }
 
 pub fn attach_heap_state(base: u32, ptr: u32) {
