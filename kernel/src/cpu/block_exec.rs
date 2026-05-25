@@ -8,7 +8,7 @@
 //! direct-mapped block cache.
 
 use super::block_cache::BlockEntry;
-use super::fault::{AccessOutcome, ensure_guest_access};
+use super::fault::{ensure_guest_access, AccessOutcome};
 use super::integer::{div_i64, divu_64, mulh, mulhsu, mulhu, rem_i64, remu_64};
 use crate::abi;
 use crate::guest_mem;
@@ -157,12 +157,12 @@ pub(super) unsafe fn exec_simple_load_scan_loop<const FIRST_CONSUMED: bool>(
                     }
                     let val: u64 = match f3 {
                         0 => unsafe { guest_mem::read_u8_unchecked(base, addr) as i8 as u64 },
-                        1 => unsafe { guest_mem::read_u16_unchecked(base, addr) as i16 as u64 },
-                        2 => unsafe { guest_mem::read_u32_unchecked(base, addr) as i32 as u64 },
-                        3 => unsafe { guest_mem::read_u64_unchecked(base, addr) },
+                        1 => unsafe { guest_mem::read_u16_seqlock(base, addr) as i16 as u64 },
+                        2 => unsafe { guest_mem::read_u32_seqlock(base, addr) as i32 as u64 },
+                        3 => unsafe { guest_mem::read_u64_seqlock(base, addr) },
                         4 => unsafe { guest_mem::read_u8_unchecked(base, addr) as u64 },
-                        5 => unsafe { guest_mem::read_u16_unchecked(base, addr) as u64 },
-                        6 => unsafe { guest_mem::read_u32_unchecked(base, addr) as u64 },
+                        5 => unsafe { guest_mem::read_u16_seqlock(base, addr) as u64 },
+                        6 => unsafe { guest_mem::read_u32_seqlock(base, addr) as u64 },
                         _ => 0,
                     };
                     if rd != 0 {
@@ -401,7 +401,11 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                     }
                     7 => {
                         let (u1, u2) = (v1 as u32, v2 as u32);
-                        if u2 == 0 { v1 } else { (u1 % u2) as i32 }
+                        if u2 == 0 {
+                            v1
+                        } else {
+                            (u1 % u2) as i32
+                        }
                     }
                     _ => 0,
                 };
@@ -433,12 +437,12 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                 }
                 let val: u64 = match f3 {
                     0 => unsafe { guest_mem::read_u8_unchecked(base, addr) as i8 as u64 },
-                    1 => unsafe { guest_mem::read_u16_unchecked(base, addr) as i16 as u64 },
-                    2 => unsafe { guest_mem::read_u32_unchecked(base, addr) as i32 as u64 },
-                    3 => unsafe { guest_mem::read_u64_unchecked(base, addr) },
+                    1 => unsafe { guest_mem::read_u16_seqlock(base, addr) as i16 as u64 },
+                    2 => unsafe { guest_mem::read_u32_seqlock(base, addr) as i32 as u64 },
+                    3 => unsafe { guest_mem::read_u64_seqlock(base, addr) },
                     4 => unsafe { guest_mem::read_u8_unchecked(base, addr) as u64 },
-                    5 => unsafe { guest_mem::read_u16_unchecked(base, addr) as u64 },
-                    6 => unsafe { guest_mem::read_u32_unchecked(base, addr) as u64 },
+                    5 => unsafe { guest_mem::read_u16_seqlock(base, addr) as u64 },
+                    6 => unsafe { guest_mem::read_u32_seqlock(base, addr) as u64 },
                     _ => 0,
                 };
                 if rd != 0 {

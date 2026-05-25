@@ -282,16 +282,6 @@ pub unsafe fn read_u16(base: u32, addr: u64) -> u16 {
     unsafe { ((base + addr as u32) as *const u16).read_unaligned() }
 }
 
-/// Read an unaligned little-endian `u16` after guest access was validated.
-///
-/// # Safety
-/// `base + addr..base + addr + 2` must be readable guest memory.
-#[inline(always)]
-pub(crate) unsafe fn read_u16_unchecked(base: u32, addr: u64) -> u16 {
-    record_access(addr, 2, ACCESS_READ);
-    unsafe { ((base + addr as u32) as *const u16).read_unaligned() }
-}
-
 /// Read a `u32` from guest memory.
 ///
 /// # Safety
@@ -304,17 +294,6 @@ pub unsafe fn read_u32(base: u32, addr: u64) -> u32 {
     unsafe { (ptr as *const u32).read_unaligned() }
 }
 
-/// Read a `u32` after guest access was validated.
-///
-/// # Safety
-/// `base + addr..base + addr + 4` must be readable guest memory.
-#[inline(always)]
-pub(crate) unsafe fn read_u32_unchecked(base: u32, addr: u64) -> u32 {
-    record_access(addr, 4, ACCESS_READ);
-    let ptr = (base + addr as u32) as usize;
-    unsafe { (ptr as *const u32).read_unaligned() }
-}
-
 /// Read a `u64` from guest memory.
 ///
 /// # Safety
@@ -323,17 +302,6 @@ pub(crate) unsafe fn read_u32_unchecked(base: u32, addr: u64) -> u32 {
 pub unsafe fn read_u64(base: u32, addr: u64) -> u64 {
     record_access(addr, 8, ACCESS_READ);
     check_range(base, addr, 8, "guest_mem::read_u64");
-    let ptr = (base + addr as u32) as usize;
-    unsafe { (ptr as *const u64).read_unaligned() }
-}
-
-/// Read a `u64` after guest access was validated.
-///
-/// # Safety
-/// `base + addr..base + addr + 8` must be readable guest memory.
-#[inline(always)]
-pub(crate) unsafe fn read_u64_unchecked(base: u32, addr: u64) -> u64 {
-    record_access(addr, 8, ACCESS_READ);
     let ptr = (base + addr as u32) as usize;
     unsafe { (ptr as *const u64).read_unaligned() }
 }
