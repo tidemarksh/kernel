@@ -1729,7 +1729,7 @@ pub fn sys_getdents64(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, buf_si
     let mut entry_index = 0u64;
     let mut buffer_full = false;
 
-    memfs::readdir(dir_ino, |name, ino| {
+    let readdir_result = memfs::readdir(dir_ino, |name, ino| {
         if buffer_full {
             return;
         }
@@ -1755,6 +1755,9 @@ pub fn sys_getdents64(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, buf_si
             }
         }
     });
+    if readdir_result < 0 {
+        return readdir_result;
+    }
 
     fd_table::set_offset(base, vm, fd, entry_index);
     offset as i64

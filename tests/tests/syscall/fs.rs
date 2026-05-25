@@ -270,6 +270,17 @@ fn getdents64_advances_directory_offset() {
 }
 
 #[test]
+fn getdents64_on_regular_file_returns_enotdir() {
+    let mut t = TestVm::new();
+
+    let fd = t.sys_openat(b"/not-a-dir.txt", O_CREAT | O_RDWR);
+    assert!(fd >= 3);
+
+    let dents_buf = t.scratch + 0x5400;
+    assert_eq!(t.sys_getdents64(fd, dents_buf, 128), ENOTDIR);
+}
+
+#[test]
 fn getdents64_zero_fills_record_padding_after_names() {
     let mut t = TestVm::new();
 
