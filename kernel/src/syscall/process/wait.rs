@@ -22,6 +22,18 @@ const WEXITED: u64 = 4;
 const WAIT_KIND_WAIT4: u32 = 1;
 const WAIT_KIND_WAITID: u32 = 2;
 
+fn parent_has_exited_child(parent_pid: i32) -> bool {
+    children().iter().any(|child| {
+        child.pid > 0 && child.parent_pid == parent_pid && child.exited
+    })
+}
+
+fn discard_sigchld_if_no_other_exited_child(parent_pid: i32) {
+    if !parent_has_exited_child(parent_pid) {
+        crate::syscall::signal::clear_process_signal(parent_pid, SIGCHLD);
+    }
+}
+
 /// wait4: wait for child process state change.
 /// https://man7.org/linux/man-pages/man2/wait4.2.html
 pub fn sys_wait4(
@@ -60,6 +72,7 @@ pub fn sys_wait4(
             let wait_status = c.wait_status as u32;
             *c = empty_child_entry();
             super::remove_process_entry(child_pid);
+            discard_sigchld_if_no_other_exited_child(caller_pid);
 
             if wstatus_addr != 0 {
                 unsafe { guest_mem::write_u32(base, wstatus_addr, wait_status) };

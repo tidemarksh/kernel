@@ -1401,6 +1401,17 @@ pub fn queue_process_signal(pid: i32, sig: i32) {
     process_pending()[idx] |= 1u64 << (sig - 1);
 }
 
+pub fn clear_process_signal(pid: i32, sig: i32) {
+    if pid <= 0 || sig <= 0 || sig as usize >= MAX_SIGNALS {
+        return;
+    }
+    let idx = (pid - 1) as usize;
+    if idx >= MAX_PROCESSES {
+        return;
+    }
+    process_pending()[idx] &= !(1u64 << (sig - 1));
+}
+
 fn wake_current_process_futex_waiters(vm: &mut ThreadState, base: u32) {
     vm.sig_info_code = SI_USER;
     if let Some(ps) = process_state_from_vm(vm, base) {

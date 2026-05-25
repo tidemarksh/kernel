@@ -2357,9 +2357,33 @@ fn semantics_wait4_reaps_late_exit_record_seeded_with_explicit_parent_pid() {
     let wstatus_addr = t.scratch + 0x1300;
 
     write_process_ids(&t, 2, 1);
+    signal::init_for_process(2);
     process_impl::record_child_exit_for_parent(2, 7, 5 << 8);
 
     let ret = process_impl::sys_wait4(&mut t.vm, t.base, 7, wstatus_addr, 0, 0);
     assert_eq!(ret, 7);
     assert_eq!(unsafe { guest_mem::read_u32(t.base, wstatus_addr) }, 5 << 8);
+}
+
+#[test]
+fn semantics_wait4_reap_discards_pending_sigchld_when_no_other_child_status_is_available() {
+    let mut t = TestVm::new();
+    let wstatus_addr = t.scratch + 0x1400;
+    let pending_addr = t.scratch + 0x1410;
+    let sigchld_bit = 1u64 << (SIGCHLD - 1);
+
+    write_process_ids(&t, 2, 1);
+    signal::init_for_process(2);
+    t.vm.sig_mask = sigchld_bit;
+    process_impl::record_child_exit_for_parent(2, 7, 5 << 8);
+
+    assert_eq!(signal::sys_rt_sigpending(&t.vm, t.base, pending_addr, 8), 0);
+    assert_eq!(unsafe { guest_mem::read_u64(t.base, pending_addr) } & sigchld_bit, sigchld_bit);
+
+    let ret = process_impl::sys_wait4(&mut t.vm, t.base, 7, wstatus_addr, 0, 0);
+
+    assert_eq!(ret, 7);
+    assert_eq!(unsafe { guest_mem::read_u32(t.base, wstatus_addr) }, 5 << 8);
+    assert_eq!(signal::sys_rt_sigpending(&t.vm, t.base, pending_addr, 8), 0);
+    assert_eq!(unsafe { guest_mem::read_u64(t.base, pending_addr) } & sigchld_bit, 0);
 }
