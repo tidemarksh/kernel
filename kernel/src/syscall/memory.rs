@@ -471,6 +471,7 @@ fn discard_execve_guest_address_space(base: u32) {
     }
     for (start, end) in ranges {
         if end > start {
+            crate::tracepoints::record_execve_stage(370, start, end);
             unsafe {
                 guest_mem::zero_mem(base, start, (end - start) as usize);
             }
