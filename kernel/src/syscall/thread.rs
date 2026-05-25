@@ -195,6 +195,24 @@ fn thread_state_from_record_ptr(thread_ptr: u32) -> Option<*mut ThreadState> {
     Some(absolute as *mut ThreadState)
 }
 
+fn matching_thread_state_from_record(
+    record: &ThreadRecord,
+    base: u32,
+    process_ptr: u32,
+) -> Option<*mut ThreadState> {
+    let thread_ptr = thread_state_from_record_ptr(record.thread_ptr)?;
+    unsafe {
+        let thread = &*thread_ptr;
+        if thread.guest_base != base
+            || thread.process_ptr != process_ptr
+            || thread.tid != record.tid
+        {
+            return None;
+        }
+    }
+    Some(thread_ptr)
+}
+
 fn clear_tid_and_wake(process_ptr: u32, base: u32, addr: u64) -> u32 {
     if addr == 0 {
         return 0;
@@ -448,14 +466,17 @@ pub fn discard_other_threads_for_exec(vm: &ThreadState, base: u32) -> u32 {
             if record.state == THREAD_NONE || record.state == THREAD_DEAD {
                 continue;
             }
-            let has_valid_thread =
-                record.tid > 0 && thread_state_from_record_ptr(record.thread_ptr).is_some();
-            if !has_valid_thread {
+            let thread_vm = if record.tid > 0 {
+                matching_thread_state_from_record(record, base, vm.process_ptr)
+            } else {
+                None
+            };
+            if thread_vm.is_none() {
                 *record = ThreadRecord::empty();
                 discarded += 1;
                 continue;
             }
-            if let Some(thread_vm) = thread_state_from_record_ptr(record.thread_ptr) {
+            if let Some(thread_vm) = thread_vm {
                 crate::fs::fd_table::clear_blocked_ofd_pin(&mut *thread_vm);
             }
             if record.clear_child_tid != 0 {
