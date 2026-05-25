@@ -2,14 +2,14 @@ use tidemark_kernel::abi::{
     self, CLONE_FS, CLONE_SIGHAND, CLONE_THREAD, CLONE_VM, EINTR, O_NONBLOCK, SIGABRT, SIGALRM,
     SIGURG, STATUS_FAULT, STATUS_OK, SYS_RT_SIGRETURN, SYS_SIGNALFD4, SYS_TGKILL,
 };
-use tidemark_kernel::harness::signal as signal_harness;
 use tidemark_kernel::harness::TestVm;
+use tidemark_kernel::harness::signal as signal_harness;
 use tidemark_kernel::syscall::epoll;
 use tidemark_kernel::syscall::signal;
 use tidemark_kernel::syscall::thread as thread_impl;
 use tidemark_kernel::types::{
-    ProcessState, SigAction, ThreadState, SIG_DFL, SIG_IGN, THREAD_BLOCKED_FUTEX, THREAD_DEAD,
-    THREAD_NONE,
+    ProcessState, SIG_DFL, SIG_IGN, SigAction, THREAD_BLOCKED_FUTEX, THREAD_DEAD, THREAD_NONE,
+    ThreadState,
 };
 
 const SA_SIGINFO: u64 = 0x00000004;
@@ -837,6 +837,37 @@ fn synchronous_sigsegv_handler_entry_preserves_s11() {
     assert_eq!(t.vm.pc, handler);
     assert_eq!(t.vm.x[27], orig_s11);
     assert_eq!(signal_harness::last_signal_delivery().7, orig_s11);
+}
+
+#[test]
+fn synchronous_sigsegv_handler_entry_passes_signal_arguments() {
+    let mut t = TestVm::new();
+    let handler = 0x88_000;
+    let act_addr = t.scratch;
+    t.vm.pc = 0x1234;
+    t.vm.x[1] = 0x4567;
+    t.vm.x[2] = 0x9fff0;
+
+    write_sigaction(t.base, act_addr, handler, SA_SIGINFO, 0);
+    assert_eq!(
+        signal::sys_rt_sigaction(&mut t.vm, t.base, abi::SIGSEGV as u64, act_addr, 0, 8),
+        0
+    );
+
+    signal::queue_sigsegv(&mut t.vm, 0x1234, 0x5678, false);
+
+    assert!(signal::check_pending(&mut t.vm, t.base));
+    let frame_base = t.vm.x[2];
+    assert_eq!(t.vm.pc, handler);
+    assert_eq!(t.vm.x[10], abi::SIGSEGV as u64);
+    assert_eq!(t.vm.x[11], frame_base + SIGFRAME_OFF_SIGINFO);
+    assert_eq!(t.vm.x[12], frame_base + SIGFRAME_OFF_UCONTEXT);
+    assert_eq!(
+        unsafe {
+            tidemark_kernel::guest_mem::read_u32(t.base, frame_base + SIGFRAME_OFF_SIGINFO + 0)
+        },
+        abi::SIGSEGV as u32
+    );
 }
 
 #[test]
