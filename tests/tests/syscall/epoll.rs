@@ -483,6 +483,34 @@ fn epoll_pwait_reports_ready_eventfd() {
 }
 
 #[test]
+fn epoll_ctl_adds_cloexec_eventfd_after_cloexec_epoll_create() {
+    let mut t = TestVm::new();
+    let epfd = epoll::sys_epoll_create1(&mut t.vm, t.base, O_CLOEXEC as u64);
+    assert!(epfd >= 3);
+    let efd = pipe::sys_eventfd2(&mut t.vm, t.base, 0, (O_NONBLOCK | O_CLOEXEC) as u64);
+    assert!(efd >= 3);
+    assert_ne!(epfd, efd);
+
+    let event_addr = t.scratch + 0x2000;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, event_addr, EPOLLIN);
+        tidemark_kernel::guest_mem::write_u64(t.base, event_addr + 8, 0xfeed);
+    }
+
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            efd as u64,
+            event_addr,
+        ),
+        0
+    );
+}
+
+#[test]
 fn epoll_pwait_reports_ready_timerfd() {
     let mut t = TestVm::new();
     let tfd = time::sys_timerfd_create(&mut t.vm, t.base, 1, O_NONBLOCK as u64);

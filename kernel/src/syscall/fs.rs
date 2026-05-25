@@ -1777,25 +1777,45 @@ pub fn sys_lseek(vm: &mut ThreadState, base: u32, fd: u64, offset: i64, whence: 
         Some(o) => o,
         None => return EBADF,
     };
+    if matches!(
+        ofd.fd_type,
+        FD_TYPE_STDOUT
+            | FD_TYPE_STDERR
+            | FD_TYPE_PIPE
+            | FD_TYPE_EPOLL
+            | FD_TYPE_SOCKET
+            | FD_TYPE_EVENTFD
+            | FD_TYPE_TIMERFD
+            | FD_TYPE_PTY_MASTER
+            | FD_TYPE_PTY_SLAVE
+            | FD_TYPE_INOTIFY
+            | FD_TYPE_SIGNALFD
+    ) {
+        return ESPIPE;
+    }
     let current_offset = if ofd.fd_type == FD_TYPE_FILE {
         (ofd.offset as u64).max(fd_table::get_offset_floor_by_id(ofd_id))
     } else {
         ofd.offset as u64
     };
 
-    let new_offset = match whence {
-        0 => offset as u64,                           // SEEK_SET
-        1 => (current_offset as i64 + offset) as u64, // SEEK_CUR
+    let new_offset_i64 = match whence {
+        0 => offset,                         // SEEK_SET
+        1 => current_offset as i64 + offset, // SEEK_CUR
         2 => {
             // SEEK_END
             let st = memfs::stat(ofd.ino);
             match st {
-                Some(s) => (s.size as i64 + offset) as u64,
+                Some(s) => s.size as i64 + offset,
                 None => return EINVAL,
             }
         }
         _ => return EINVAL,
     };
+    if new_offset_i64 < 0 {
+        return EINVAL;
+    }
+    let new_offset = new_offset_i64 as u64;
 
     fd_table::set_offset(base, vm, fd, new_offset);
     mark_fork_shared_ofd_sync_effect(vm);
