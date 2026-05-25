@@ -22,8 +22,8 @@
 use crate::abi::*;
 use crate::guest_mem;
 use crate::types::{
-    MAX_SIGNALS, ProcessState, SIG_DFL, SIG_IGN, SigAction, THREAD_BLOCKED_FUTEX, THREAD_DEAD,
-    THREAD_NONE, ThreadRecord, ThreadState,
+    ProcessState, SigAction, ThreadRecord, ThreadState, MAX_SIGNALS, SIG_DFL, SIG_IGN,
+    THREAD_BLOCKED_FUTEX, THREAD_DEAD, THREAD_NONE,
 };
 
 // SA flags (https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/signal-defs.h)
@@ -1401,30 +1401,83 @@ pub fn queue_process_signal(pid: i32, sig: i32) {
     process_pending()[idx] |= 1u64 << (sig - 1);
 }
 
-/// Queue a process-directed signal. Delivery happens when the target process
-/// next reaches a signal check boundary.
-pub fn send_signal_to_pid(vm: &mut ThreadState, base: u32, pid: i32, sig: i32) -> i64 {
-    if pid <= 0 || sig <= 0 || sig as usize >= MAX_SIGNALS {
-        return EINVAL;
+fn wake_current_process_futex_waiters(vm: &mut ThreadState, base: u32) {
+    vm.sig_info_code = SI_USER;
+    if let Some(ps) = process_state_from_vm(vm, base) {
+        for index in 0..ps.threads.len() {
+            let record = unsafe { read_thread_record(core::ptr::addr_of!(ps.threads[index])) };
+            if record.state != THREAD_BLOCKED_FUTEX || record.blocked_addr == 0 {
+                continue;
+            }
+            // FUTEX_WAIT may wake spuriously. Prefer waking blocked threads
+            // over directly reading another worker's ThreadState.
+            crate::syscall::thread::notify_futex_addr(base, record.blocked_addr, 1);
+        }
+    }
+}
+
+fn signal_process_if_present(pid: i32, sig: i32) -> bool {
+    if pid <= 0 {
+        return false;
     }
     let idx = (pid - 1) as usize;
     if idx >= MAX_PROCESSES || sig_slots()[idx].is_null() {
-        return ESRCH;
+        return false;
     }
-    queue_process_signal(pid, sig);
-    if pid == pid_from_vm(vm, base) {
-        vm.sig_info_code = SI_USER;
-        if let Some(ps) = process_state_from_vm(vm, base) {
-            for index in 0..ps.threads.len() {
-                let record = unsafe { read_thread_record(core::ptr::addr_of!(ps.threads[index])) };
-                if record.state != THREAD_BLOCKED_FUTEX || record.blocked_addr == 0 {
-                    continue;
-                }
-                // FUTEX_WAIT may wake spuriously. Prefer waking blocked threads
-                // over directly reading another worker's ThreadState.
-                crate::syscall::thread::notify_futex_addr(base, record.blocked_addr, 1);
+    if sig != 0 {
+        queue_process_signal(pid, sig);
+    }
+    true
+}
+
+/// Queue a process-directed signal. Delivery happens when the target process
+/// next reaches a signal check boundary.
+pub fn send_signal_to_pid(vm: &mut ThreadState, base: u32, pid: i32, sig: i32) -> i64 {
+    if sig < 0 || sig as usize >= MAX_SIGNALS {
+        return EINVAL;
+    }
+    let current_pid = pid_from_vm(vm, base);
+    if pid > 0 {
+        if !signal_process_if_present(pid, sig) {
+            return ESRCH;
+        }
+        if sig != 0 && pid == current_pid {
+            wake_current_process_futex_waiters(vm, base);
+        }
+        return 0;
+    }
+
+    let mut delivered = false;
+    if pid == 0 {
+        let pgid = crate::syscall::process::current_process_pgid(vm, base);
+        for target_pid in 1..=MAX_PROCESSES as i32 {
+            if crate::syscall::process::process_pgid(target_pid) == pgid
+                && signal_process_if_present(target_pid, sig)
+            {
+                delivered = true;
             }
         }
+    } else if pid == -1 {
+        for target_pid in 1..=MAX_PROCESSES as i32 {
+            if target_pid != 1 && signal_process_if_present(target_pid, sig) {
+                delivered = true;
+            }
+        }
+    } else {
+        let pgid = -pid;
+        for target_pid in 1..=MAX_PROCESSES as i32 {
+            if crate::syscall::process::process_pgid(target_pid) == pgid
+                && signal_process_if_present(target_pid, sig)
+            {
+                delivered = true;
+            }
+        }
+    }
+    if !delivered {
+        return ESRCH;
+    }
+    if sig != 0 {
+        wake_current_process_futex_waiters(vm, base);
     }
     0
 }

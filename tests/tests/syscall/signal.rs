@@ -2,14 +2,14 @@ use tidemark_kernel::abi::{
     self, CLONE_FS, CLONE_SIGHAND, CLONE_THREAD, CLONE_VM, EINTR, O_NONBLOCK, SIGABRT, SIGALRM,
     SIGURG, STATUS_FAULT, STATUS_OK, SYS_RT_SIGRETURN, SYS_SIGNALFD4, SYS_TGKILL,
 };
-use tidemark_kernel::harness::TestVm;
 use tidemark_kernel::harness::signal as signal_harness;
+use tidemark_kernel::harness::TestVm;
 use tidemark_kernel::syscall::epoll;
 use tidemark_kernel::syscall::signal;
 use tidemark_kernel::syscall::thread as thread_impl;
 use tidemark_kernel::types::{
-    ProcessState, SIG_DFL, SIG_IGN, SigAction, THREAD_BLOCKED_FUTEX, THREAD_DEAD, THREAD_NONE,
-    ThreadState,
+    ProcessState, SigAction, ThreadState, SIG_DFL, SIG_IGN, THREAD_BLOCKED_FUTEX, THREAD_DEAD,
+    THREAD_NONE,
 };
 
 const SA_SIGINFO: u64 = 0x00000004;
@@ -330,6 +330,36 @@ fn send_signal_to_pid_queues_process_pending_signal() {
         signal::send_signal_to_pid(&mut t.vm, t.base, 42, SIGALRM),
         0
     );
+    assert_eq!(t.vm.sig_pending, 0);
+
+    let delivered = signal::check_pending(&mut t.vm, t.base);
+    assert!(delivered);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.sig_pending & (1u64 << (SIGALRM - 1)), 0);
+}
+
+#[test]
+fn kill_sig_zero_for_current_pid_checks_without_queuing_signal() {
+    let mut t = TestVm::new();
+    let pid = signal::pid_from_vm(&t.vm, t.base);
+
+    assert_eq!(signal::send_signal_to_pid(&mut t.vm, t.base, pid, 0), 0);
+    assert_eq!(t.vm.sig_pending, 0);
+    assert!(!signal::check_pending(&mut t.vm, t.base));
+    assert_eq!(t.vm.status, STATUS_OK);
+}
+
+#[test]
+fn kill_pid_zero_targets_current_process_group() {
+    let mut t = TestVm::new();
+    let ign_addr = t.scratch + 0x100;
+    write_sigaction(t.base, ign_addr, SIG_IGN, 0, 0);
+    assert_eq!(
+        signal::sys_rt_sigaction(&mut t.vm, t.base, SIGALRM as u64, ign_addr, 0, 8),
+        0
+    );
+
+    assert_eq!(signal::send_signal_to_pid(&mut t.vm, t.base, 0, SIGALRM), 0);
     assert_eq!(t.vm.sig_pending, 0);
 
     let delivered = signal::check_pending(&mut t.vm, t.base);
