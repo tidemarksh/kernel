@@ -1,4 +1,4 @@
-use super::state::current_dir_ino;
+use super::state::{current_dir_ino, set_current_dir_ino};
 use super::{AT_FDCWD, MAX_PATH_SYMLINK_FOLLOWS};
 use crate::abi::*;
 use crate::fs::{fd_table, memfs};
@@ -150,6 +150,38 @@ pub(super) fn resolve_at(
 
     let dir_ino = dirfd_base_ino(vm, dirfd, base)?;
     resolve_path_with_errno(dir_ino, path)
+}
+
+pub fn sys_getcwd(vm: &ThreadState, base: u32, buf: u64, size: u64) -> i64 {
+    let mut path = [0u8; 512];
+    let len = memfs::write_path(current_dir_ino(base, vm), &mut path);
+    if len == 0 {
+        return ENOENT;
+    }
+    if len as u64 + 1 > size {
+        return ERANGE;
+    }
+    unsafe {
+        guest_mem::write_bytes(base, buf, &path[..len]);
+        guest_mem::write_u8(base, buf + len as u64, 0);
+    }
+    (len as i64) + 1
+}
+
+pub fn sys_chdir(vm: &mut ThreadState, base: u32, path_addr: u64) -> i64 {
+    let ino = match resolve_at(vm, AT_FDCWD as u64, path_addr, base) {
+        Ok(ino) => ino,
+        Err(errno) => return errno,
+    };
+    let st = match memfs::stat(ino) {
+        Some(st) => st,
+        None => return ENOENT,
+    };
+    if st.mode & memfs::S_IFMT != memfs::S_IFDIR {
+        return ENOTDIR;
+    }
+    set_current_dir_ino(base, vm, ino);
+    0
 }
 
 pub(super) fn split_parent_name(path: &[u8]) -> (u32, &[u8]) {

@@ -35,11 +35,6 @@
 //! };
 //! https://man7.org/linux/man-pages/man2/getdents.2.html
 
-use crate::abi::*;
-use crate::fs::{fd_table, memfs};
-use crate::guest_mem;
-use crate::types::ThreadState;
-
 mod getdents;
 mod lseek;
 mod meta;
@@ -74,6 +69,7 @@ pub use mount::{sys_chroot, sys_mount, sys_umount2};
 pub use mutation::{sys_mkdirat, sys_renameat, sys_renameat2, sys_unlinkat};
 pub use open::sys_openat;
 use path::resolve_at;
+pub use path::{sys_chdir, sys_getcwd};
 pub use pending::{
     dispatch_fstat, dispatch_ftruncate, dispatch_getdents64, dispatch_lseek, dispatch_mkdirat,
     dispatch_openat, dispatch_pwrite64, dispatch_renameat2, dispatch_truncate, dispatch_unlinkat,
@@ -84,44 +80,7 @@ pub use pending::{
 pub(crate) use read_write::PIPE_READ_EOF_SYNC_RETRY_MARKER;
 pub use read_write::{sys_pread64, sys_pwrite64, sys_read, sys_readv, sys_write};
 pub(crate) use state::sys_umask;
-use state::{current_dir_ino, set_current_dir_ino};
 pub use xattr::{
     sys_fgetxattr, sys_flistxattr, sys_fremovexattr, sys_fsetxattr, sys_getxattr, sys_listxattr,
     sys_removexattr, sys_setxattr,
 };
-
-// =========================================================================
-// Path resolution helper
-// =========================================================================
-
-pub fn sys_getcwd(vm: &ThreadState, base: u32, buf: u64, size: u64) -> i64 {
-    let mut path = [0u8; 512];
-    let len = memfs::write_path(current_dir_ino(base, vm), &mut path);
-    if len == 0 {
-        return ENOENT;
-    }
-    if len as u64 + 1 > size {
-        return ERANGE;
-    }
-    unsafe {
-        guest_mem::write_bytes(base, buf, &path[..len]);
-        guest_mem::write_u8(base, buf + len as u64, 0);
-    }
-    (len as i64) + 1
-}
-
-pub fn sys_chdir(vm: &mut ThreadState, base: u32, path_addr: u64) -> i64 {
-    let ino = match resolve_at(vm, AT_FDCWD as u64, path_addr, base) {
-        Ok(ino) => ino,
-        Err(errno) => return errno,
-    };
-    let st = match memfs::stat(ino) {
-        Some(st) => st,
-        None => return ENOENT,
-    };
-    if st.mode & memfs::S_IFMT != memfs::S_IFDIR {
-        return ENOTDIR;
-    }
-    set_current_dir_ino(base, vm, ino);
-    0
-}
