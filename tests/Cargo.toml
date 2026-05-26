@@ -62,7 +62,7 @@ path = "tests/fs/memfs.rs"
 
 [[test]]
 name = "fs_fd_table"
-path = "tests/fs/fd_table.rs"
+path = "tests/fs/fd_table/mod.rs"
 
 [[test]]
 name = "fs_ring_buffer"
