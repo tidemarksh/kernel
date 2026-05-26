@@ -8,6 +8,7 @@ use tidemark_kernel::types::{
 
 const FUTEX_WAITERS: u32 = 0x8000_0000;
 const FUTEX_OWNER_DIED: u32 = 0x4000_0000;
+const SS_DISABLE: i32 = 2;
 const SIGFRAME_SIZE: u64 = 1136;
 const SIGFRAME_OFF_TRAMPOLINE: u64 = SIGFRAME_SIZE - 8;
 fn write_sigaction(base: u32, addr: u64, handler: u64, flags: u64, mask: u64) {
@@ -171,7 +172,7 @@ fn contract_spawn_from_clone_initializes_child_thread_state() {
     assert_eq!(child.sig_pending, 0);
     assert_eq!(child.sigaltstack_sp, 0);
     assert_eq!(child.sigaltstack_size, 0);
-    assert_eq!(child.sigaltstack_flags, 0);
+    assert_eq!(child.sigaltstack_flags, SS_DISABLE);
 
     let written_tid = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, child_tidptr) };
     assert_eq!(written_tid, ret as u32);

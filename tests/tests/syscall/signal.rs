@@ -1,6 +1,6 @@
 use tidemark_kernel::abi::{
     self, CLONE_FS, CLONE_SIGHAND, CLONE_THREAD, CLONE_VM, EINTR, O_NONBLOCK, SIGABRT, SIGALRM,
-    SIGURG, STATUS_FAULT, STATUS_OK, SYS_RT_SIGRETURN, SYS_SIGNALFD4, SYS_TGKILL,
+    SIGCHLD, SIGURG, STATUS_FAULT, STATUS_OK, SYS_RT_SIGRETURN, SYS_SIGNALFD4, SYS_TGKILL,
 };
 use tidemark_kernel::harness::TestVm;
 use tidemark_kernel::harness::signal as signal_harness;
@@ -336,6 +336,42 @@ fn send_signal_to_pid_queues_process_pending_signal() {
     assert!(delivered);
     assert_eq!(t.vm.status, STATUS_OK);
     assert_eq!(t.vm.sig_pending & (1u64 << (SIGALRM - 1)), 0);
+}
+
+#[test]
+fn blocked_process_pending_signal_stays_process_pending_until_unblocked_thread_delivers() {
+    let mut t = TestVm::new();
+    let sigchld_bit = 1u64 << (SIGCHLD - 1);
+    let act_addr = t.scratch + 0x100;
+    let pending_addr = t.scratch + 0x180;
+    write_sigaction(t.base, act_addr, 0x12345, 0, 0);
+    assert_eq!(
+        signal::sys_rt_sigaction(&mut t.vm, t.base, SIGCHLD as u64, act_addr, 0, 8),
+        0
+    );
+
+    t.vm.sig_mask = sigchld_bit;
+    t.vm.pc = 0x4000;
+    t.vm.x[2] = t.scratch + 0x4000;
+    signal::queue_process_signal(42, SIGCHLD);
+
+    assert!(!signal::check_pending(&mut t.vm, t.base));
+    assert_eq!(t.vm.sig_pending & sigchld_bit, 0);
+    assert_eq!(signal::sys_rt_sigpending(&t.vm, t.base, pending_addr, 8), 0);
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, pending_addr) } & sigchld_bit,
+        sigchld_bit
+    );
+
+    t.vm.sig_mask = 0;
+    assert!(signal::check_pending(&mut t.vm, t.base));
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.sig_pending & sigchld_bit, 0);
+    assert_eq!(signal::sys_rt_sigpending(&t.vm, t.base, pending_addr, 8), 0);
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, pending_addr) } & sigchld_bit,
+        0
+    );
 }
 
 #[test]

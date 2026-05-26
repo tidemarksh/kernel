@@ -93,6 +93,18 @@ pub extern "C" fn thread_sig_pending(vm_ptr: u32) -> u64 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn thread_pending_signal_interrupts_blocked_syscall(vm_ptr: u32) -> i32 {
+    unsafe {
+        let vm = &*(vm_ptr as *const ThreadState);
+        if crate::syscall::signal::pending_signal_interrupts_blocked_syscall(vm, vm.guest_base) {
+            1
+        } else {
+            0
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn thread_sp(vm_ptr: u32) -> u64 {
     unsafe { (*(vm_ptr as *const ThreadState)).x[2] }
 }

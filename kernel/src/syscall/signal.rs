@@ -22,8 +22,8 @@
 use crate::abi::*;
 use crate::guest_mem;
 use crate::types::{
-    ProcessState, SigAction, ThreadRecord, ThreadState, MAX_SIGNALS, SIG_DFL, SIG_IGN,
-    THREAD_BLOCKED_FUTEX, THREAD_DEAD, THREAD_NONE,
+    MAX_SIGNALS, ProcessState, SIG_DFL, SIG_IGN, SigAction, THREAD_BLOCKED_FUTEX, THREAD_DEAD,
+    THREAD_NONE, ThreadRecord, ThreadState,
 };
 
 // SA flags (https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/signal-defs.h)
@@ -39,7 +39,7 @@ const SIG_SETMASK: u64 = 2;
 
 // sigaltstack flags
 const SS_ONSTACK: i32 = 1;
-const SS_DISABLE: i32 = 2;
+pub(crate) const SS_DISABLE: i32 = 2;
 const SI_USER: i32 = 0;
 const SI_TKILL: i32 = -6;
 const ILL_ILLOPC: i32 = 1;
@@ -1302,13 +1302,20 @@ pub fn patch_current_signal_frame_a0(vm: &ThreadState, base: u32, value: i64) ->
 /// Called after each syscall returns. Returns true if a signal was delivered.
 pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
     let pid = pid_from_vm(vm, base);
-    if pid > 0 {
+    let process_pending_bits = if pid > 0 {
         let idx = (pid - 1) as usize;
         if idx < MAX_PROCESSES {
-            vm.sig_pending |= process_pending()[idx];
-            process_pending()[idx] = 0;
+            process_pending()[idx]
+        } else {
+            0
         }
-    }
+    } else {
+        0
+    };
+    let process_pending_deliverable = process_pending_bits & !vm.sig_mask;
+    // Process-directed signals remain pending for the process until a thread
+    // that does not block the signal actually accepts delivery. Do not move
+    // blocked process-pending signals into this thread.
     take_thread_pending_signals(vm, base);
 
     let synchronous = if vm.sig_info_code != 0 {
@@ -1316,7 +1323,8 @@ pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
     } else {
         0
     };
-    let deliverable = (vm.sig_pending & !vm.sig_mask) | synchronous;
+    let thread_pending_deliverable = vm.sig_pending & !vm.sig_mask;
+    let deliverable = thread_pending_deliverable | process_pending_deliverable | synchronous;
     if deliverable == 0 {
         return false;
     }
@@ -1327,8 +1335,19 @@ pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
         return false;
     }
 
-    // Clear from pending
-    vm.sig_pending &= !(1u64 << (sig - 1));
+    // Clear from the pending set that supplied this delivery. Prefer
+    // thread-directed pending state when both sets contain the same standard
+    // signal, matching the fact that thread and process pending sets are
+    // separate.
+    let bit = 1u64 << (sig - 1);
+    if (thread_pending_deliverable | synchronous) & bit != 0 {
+        vm.sig_pending &= !bit;
+    } else if pid > 0 {
+        let idx = (pid - 1) as usize;
+        if idx < MAX_PROCESSES {
+            process_pending()[idx] &= !bit;
+        }
+    }
 
     let action = sigactions_for(pid)
         .map(|table| table[sig])

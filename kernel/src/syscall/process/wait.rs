@@ -23,9 +23,9 @@ const WAIT_KIND_WAIT4: u32 = 1;
 const WAIT_KIND_WAITID: u32 = 2;
 
 fn parent_has_exited_child(parent_pid: i32) -> bool {
-    children().iter().any(|child| {
-        child.pid > 0 && child.parent_pid == parent_pid && child.exited
-    })
+    children()
+        .iter()
+        .any(|child| child.pid > 0 && child.parent_pid == parent_pid && child.exited)
 }
 
 fn discard_sigchld_if_no_other_exited_child(parent_pid: i32) {

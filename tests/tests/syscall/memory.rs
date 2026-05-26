@@ -417,16 +417,9 @@ fn mprotect_rejects_ranges_that_are_not_fully_mapped() {
     );
     assert!(a > 0);
 
-    assert_eq!(
-        t.sys_mprotect(a as u64, PAGE_SIZE * 2, PROT_READ),
-        ENOMEM,
-    );
+    assert_eq!(t.sys_mprotect(a as u64, PAGE_SIZE * 2, PROT_READ), ENOMEM,);
     assert!(memory::guest_range_permitted(
-        &t.vm,
-        t.base,
-        a as u64,
-        8,
-        PROT_WRITE,
+        &t.vm, t.base, a as u64, 8, PROT_WRITE,
     ));
 
     assert_eq!(

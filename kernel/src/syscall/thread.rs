@@ -886,7 +886,7 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
         child.sig_info_code = 0;
         child.sigaltstack_sp = 0;
         child.sigaltstack_size = 0;
-        child.sigaltstack_flags = 0;
+        child.sigaltstack_flags = crate::syscall::signal::SS_DISABLE;
         child.lr_addr = u64::MAX;
         child.lr_val = 0;
         child.lr_gen = 0;

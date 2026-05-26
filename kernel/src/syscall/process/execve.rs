@@ -1070,7 +1070,7 @@ fn complete_execve_in_place_inner(
     vm.tls_base = elf_result.tls_base;
     vm.sigaltstack_sp = 0;
     vm.sigaltstack_size = 0;
-    vm.sigaltstack_flags = 0;
+    vm.sigaltstack_flags = crate::syscall::signal::SS_DISABLE;
     vm.clear_child_tid = 0;
     vm.robust_list_head = 0;
     vm.robust_list_len = 0;

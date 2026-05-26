@@ -8,7 +8,7 @@
 //! direct-mapped block cache.
 
 use super::block_cache::BlockEntry;
-use super::fault::{ensure_guest_access, AccessOutcome};
+use super::fault::{AccessOutcome, ensure_guest_access};
 use super::integer::{div_i64, divu_64, mulh, mulhsu, mulhu, rem_i64, remu_64};
 use crate::abi;
 use crate::guest_mem;
@@ -401,11 +401,7 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                     }
                     7 => {
                         let (u1, u2) = (v1 as u32, v2 as u32);
-                        if u2 == 0 {
-                            v1
-                        } else {
-                            (u1 % u2) as i32
-                        }
+                        if u2 == 0 { v1 } else { (u1 % u2) as i32 }
                     }
                     _ => 0,
                 };

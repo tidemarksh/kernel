@@ -21,6 +21,7 @@ const WNOWAIT: u64 = 0x01000000;
 const WEXITED: u64 = 4;
 const P_PID: u32 = 1;
 const ECHILD: i64 = -10;
+const SS_DISABLE: i32 = 2;
 
 fn write_process_ids(t: &TestVm, pid: i32, ppid: i32) {
     let ps_ptr = t.vm.process_ptr as u64;
@@ -1138,6 +1139,7 @@ fn semantics_execve_clears_alt_stack() {
 
     assert_eq!(t.vm.sigaltstack_sp, 0);
     assert_eq!(t.vm.sigaltstack_size, 0);
+    assert_eq!(t.vm.sigaltstack_flags, SS_DISABLE);
 }
 
 #[test]
@@ -2378,12 +2380,18 @@ fn semantics_wait4_reap_discards_pending_sigchld_when_no_other_child_status_is_a
     process_impl::record_child_exit_for_parent(2, 7, 5 << 8);
 
     assert_eq!(signal::sys_rt_sigpending(&t.vm, t.base, pending_addr, 8), 0);
-    assert_eq!(unsafe { guest_mem::read_u64(t.base, pending_addr) } & sigchld_bit, sigchld_bit);
+    assert_eq!(
+        unsafe { guest_mem::read_u64(t.base, pending_addr) } & sigchld_bit,
+        sigchld_bit
+    );
 
     let ret = process_impl::sys_wait4(&mut t.vm, t.base, 7, wstatus_addr, 0, 0);
 
     assert_eq!(ret, 7);
     assert_eq!(unsafe { guest_mem::read_u32(t.base, wstatus_addr) }, 5 << 8);
     assert_eq!(signal::sys_rt_sigpending(&t.vm, t.base, pending_addr, 8), 0);
-    assert_eq!(unsafe { guest_mem::read_u64(t.base, pending_addr) } & sigchld_bit, 0);
+    assert_eq!(
+        unsafe { guest_mem::read_u64(t.base, pending_addr) } & sigchld_bit,
+        0
+    );
 }
