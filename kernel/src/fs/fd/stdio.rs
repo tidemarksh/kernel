@@ -1,7 +1,7 @@
+use super::alloc::{open_pipe, open_pty_slave};
 use super::close::sys_close;
 use super::entry::get_process_state;
 use crate::abi::{O_RDONLY, O_WRONLY};
-use crate::fs::fd_table::{open_pipe, open_pty_slave};
 use crate::types::ThreadState;
 
 /// Initialize stdin/stdout/stderr bridges for a new process.
