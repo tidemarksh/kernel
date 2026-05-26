@@ -68,6 +68,37 @@ static mut GUEST_WRITE_OVERLAP_TRACE: [GuestWriteOverlapTraceEntry; GUEST_WRITE_
 static mut GUEST_WRITE_OVERLAP_TRACE_LEN: u32 = 0;
 static mut GUEST_WRITE_OVERLAP_TRACE_NEXT: u32 = 0;
 
+const MEMORY_PERMIT_PROT_SLOTS: usize = 8;
+const MEMORY_PERMIT_OUTCOME_CACHE_HIT: u32 = 1;
+const MEMORY_PERMIT_OUTCOME_COVER_HIT: u32 = 2;
+const MEMORY_PERMIT_OUTCOME_DENIED: u32 = 3;
+
+static mut MEMORY_PERMIT_CHECKS: u64 = 0;
+static mut MEMORY_PERMIT_CACHE_HITS: u64 = 0;
+static mut MEMORY_PERMIT_COVER_HITS: u64 = 0;
+static mut MEMORY_PERMIT_DENIED: u64 = 0;
+static mut MEMORY_PERMIT_CHECKS_BY_PROT: [u64; MEMORY_PERMIT_PROT_SLOTS] =
+    [0; MEMORY_PERMIT_PROT_SLOTS];
+static mut MEMORY_PERMIT_CACHE_HITS_BY_PROT: [u64; MEMORY_PERMIT_PROT_SLOTS] =
+    [0; MEMORY_PERMIT_PROT_SLOTS];
+static mut MEMORY_PERMIT_COVER_HITS_BY_PROT: [u64; MEMORY_PERMIT_PROT_SLOTS] =
+    [0; MEMORY_PERMIT_PROT_SLOTS];
+static mut MEMORY_PERMIT_DENIED_BY_PROT: [u64; MEMORY_PERMIT_PROT_SLOTS] =
+    [0; MEMORY_PERMIT_PROT_SLOTS];
+
+#[inline(always)]
+unsafe fn memory_permit_add(ptr: *mut u64, delta: u64) {
+    unsafe {
+        let value = core::ptr::read(ptr);
+        core::ptr::write(ptr, value.wrapping_add(delta));
+    }
+}
+
+#[inline(always)]
+fn memory_permit_prot_slot(prot: u32) -> usize {
+    (prot as usize) & (MEMORY_PERMIT_PROT_SLOTS - 1)
+}
+
 #[cfg(any(test, feature = "harness"))]
 pub(crate) fn clear_memory_trace() {
     if !RUNTIME_DEBUG_ENABLED {
@@ -204,6 +235,45 @@ pub(crate) fn record_guest_write_overlap(
     }
 }
 
+pub(crate) fn record_guest_range_permit_check(prot: u32, outcome: u32) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (prot, outcome);
+        return;
+    }
+    unsafe {
+        let slot = memory_permit_prot_slot(prot);
+        memory_permit_add(core::ptr::addr_of_mut!(MEMORY_PERMIT_CHECKS), 1);
+        memory_permit_add(
+            core::ptr::addr_of_mut!(MEMORY_PERMIT_CHECKS_BY_PROT[slot]),
+            1,
+        );
+        match outcome {
+            MEMORY_PERMIT_OUTCOME_CACHE_HIT => {
+                memory_permit_add(core::ptr::addr_of_mut!(MEMORY_PERMIT_CACHE_HITS), 1);
+                memory_permit_add(
+                    core::ptr::addr_of_mut!(MEMORY_PERMIT_CACHE_HITS_BY_PROT[slot]),
+                    1,
+                );
+            }
+            MEMORY_PERMIT_OUTCOME_COVER_HIT => {
+                memory_permit_add(core::ptr::addr_of_mut!(MEMORY_PERMIT_COVER_HITS), 1);
+                memory_permit_add(
+                    core::ptr::addr_of_mut!(MEMORY_PERMIT_COVER_HITS_BY_PROT[slot]),
+                    1,
+                );
+            }
+            MEMORY_PERMIT_OUTCOME_DENIED => {
+                memory_permit_add(core::ptr::addr_of_mut!(MEMORY_PERMIT_DENIED), 1);
+                memory_permit_add(
+                    core::ptr::addr_of_mut!(MEMORY_PERMIT_DENIED_BY_PROT[slot]),
+                    1,
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
 #[inline(always)]
 pub(crate) fn guest_write_overlap_enabled() -> bool {
     if !RUNTIME_DEBUG_ENABLED {
@@ -320,5 +390,85 @@ pub(crate) fn guest_write_overlap_trace_entry(index: u32) -> GuestWriteOverlapTr
             (next + index as usize) % GUEST_WRITE_OVERLAP_TRACE_CAP
         };
         core::ptr::read(core::ptr::addr_of!(GUEST_WRITE_OVERLAP_TRACE[slot]))
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn memory_permit_checks() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(MEMORY_PERMIT_CHECKS)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn memory_permit_cache_hits() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(MEMORY_PERMIT_CACHE_HITS)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn memory_permit_cover_hits() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(MEMORY_PERMIT_COVER_HITS)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn memory_permit_denied() -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(MEMORY_PERMIT_DENIED)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn memory_permit_checks_by_prot(prot: u32) -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe {
+        core::ptr::read(core::ptr::addr_of!(
+            MEMORY_PERMIT_CHECKS_BY_PROT[memory_permit_prot_slot(prot)]
+        ))
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn memory_permit_cache_hits_by_prot(prot: u32) -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe {
+        core::ptr::read(core::ptr::addr_of!(
+            MEMORY_PERMIT_CACHE_HITS_BY_PROT[memory_permit_prot_slot(prot)]
+        ))
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn memory_permit_cover_hits_by_prot(prot: u32) -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe {
+        core::ptr::read(core::ptr::addr_of!(
+            MEMORY_PERMIT_COVER_HITS_BY_PROT[memory_permit_prot_slot(prot)]
+        ))
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn memory_permit_denied_by_prot(prot: u32) -> u64 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe {
+        core::ptr::read(core::ptr::addr_of!(
+            MEMORY_PERMIT_DENIED_BY_PROT[memory_permit_prot_slot(prot)]
+        ))
     }
 }
