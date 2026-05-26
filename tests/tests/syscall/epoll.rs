@@ -858,7 +858,7 @@ fn epoll_pwait_reports_rd_hup_after_shutdown_read() {
         0
     );
 
-    let client_idx = socket::inject_http_connection(0, 0x5000, b"GET / HTTP/1.0\r\n\r\n");
+    let client_idx = socket::inject_external_connection_by_port(0x5000, b"request");
     assert!(client_idx >= 0);
     let client_fd = fd_table::open_socket(&mut t.vm, t.base, client_idx as u32, 0);
     assert!(client_fd >= 0);

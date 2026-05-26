@@ -5,9 +5,9 @@
 //!            https://man7.org/linux/man-pages/man7/socket.7.html
 //!            https://man7.org/linux/man-pages/man7/unix.7.html
 //!
-//! Socket state is kernel Worker managed (allocated via alloc.rs).
-//! For HTTP preview, the runtime can inject a virtual client connection into a
-//! listening socket. Data then moves through the shared net ring buffers.
+//! Socket state is kernel Worker managed (allocated via alloc.rs). External
+//! endpoints use generic external-peer hooks rather than endpoint-named socket
+//! semantics.
 //!
 mod address;
 mod connect;
@@ -19,8 +19,8 @@ mod state;
 
 pub use address::{connect_peer_addr, connect_peer_addr_for_fd, sys_getpeername, sys_getsockname};
 pub use connect::{
-    resume_connect_result, resume_connect_result_for_fd, sys_accept4, sys_bind, sys_connect,
-    sys_listen,
+    inject_external_connection_by_port, resume_connect_result, resume_connect_result_for_fd,
+    sys_accept4, sys_bind, sys_connect, sys_listen,
 };
 pub use create::{sys_socket, sys_socketpair};
 pub use options::{sys_getsockopt, sys_setsockopt};
@@ -29,7 +29,8 @@ pub use poll::{
 };
 use poll::{socket_recv_timeout_ms_for_slot, socket_send_timeout_ms_for_slot};
 pub use send_recv::{
-    socket_read, socket_write, sys_recvfrom, sys_recvmsg, sys_sendmsg, sys_sendto, sys_shutdown,
+    read_external_connection_data, socket_read, socket_write, sys_recvfrom, sys_recvmsg,
+    sys_sendmsg, sys_sendto, sys_shutdown,
 };
 
 use state::{
@@ -44,13 +45,13 @@ use state::{
     socket_table, thread_connect_target_fd,
 };
 pub use state::{
-    attach_socket_state, close_external_peer_for_fd, close_http_connection,
+    attach_socket_state, close_connection_slot, close_external_peer_for_fd,
     commit_external_connect_for_fd, debug_external_outbound_available_for_fd,
     debug_socket_external_peer, debug_socket_idx_for_fd, debug_socket_peer_idx,
     debug_socket_read_bytes, debug_socket_read_count, debug_socket_read_last_after,
     debug_socket_read_last_before, debug_socket_read_last_fd, debug_socket_read_last_result,
     debug_socket_recv_available, debug_socket_recv_buf_idx, debug_socket_state, debug_socket_type,
     drain_external_outbound_for_fd, force_shutdown_for_fd, init, inject_external_inbound_for_fd,
-    inject_http_connection, is_slot_used, mark_external_peer_for_fd, read_http_response,
-    socket_close, socket_table_bytes, socket_table_ptr, socket_used, thread_connect_fd,
+    is_slot_used, mark_external_peer_for_fd, socket_close, socket_table_bytes, socket_table_ptr,
+    socket_used, thread_connect_fd,
 };

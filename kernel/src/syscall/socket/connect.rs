@@ -1,10 +1,11 @@
+use super::address::port_from_sockaddr;
 use super::{
     ACCEPT_QUEUE_SIZE, DEFAULT_SOCKET_BUFFER, INVALID_BUF_IDX, INVALID_PEER_IDX, SOCK_STATE_BOUND,
     SOCK_STATE_CONNECTED, SOCK_STATE_CONNECTING, SOCK_STATE_IDLE, SOCK_STATE_LISTENING,
     SOCKADDR_STORAGE_LEN, SocketSlot, alloc_socket_cookie, alloc_socket_recv_buffer,
     alloc_socket_slot, ensure_external_peer, ensure_socket_recv_buffer,
     free_recv_buffer_if_unreferenced, free_socket_slot, get_socket_idx, is_slot_used,
-    socket_recv_timeout_ms_for_slot, socket_send_timeout_ms_for_slot, socket_table,
+    shutdown_slot, socket_recv_timeout_ms_for_slot, socket_send_timeout_ms_for_slot, socket_table,
     thread_connect_target_fd,
 };
 use crate::abi::*;
@@ -82,6 +83,139 @@ pub(super) fn remove_socket_from_accept_queues(socket_idx: u32) {
         }
         let _ = accept_queue_remove(listener, socket_idx);
     }
+}
+
+pub fn inject_external_connection_by_port(port: u16, inbound: &[u8]) -> i32 {
+    let listener_idx = socket_table()
+        .iter()
+        .enumerate()
+        .find(|(_, slot)| {
+            slot.state == SOCK_STATE_LISTENING
+                && port_from_sockaddr(&slot.local_addr, slot.local_len) == port
+        })
+        .map(|(idx, _)| idx);
+
+    let Some(listener_idx) = listener_idx else {
+        return -1;
+    };
+
+    let Some(server_idx) = alloc_socket_slot().map(|idx| idx as usize) else {
+        return -2;
+    };
+    let Some(client_idx) = alloc_socket_slot().map(|idx| idx as usize) else {
+        shutdown_slot(server_idx);
+        return -2;
+    };
+    let Some(server_recv) = alloc_socket_recv_buffer() else {
+        shutdown_slot(server_idx);
+        shutdown_slot(client_idx);
+        return -2;
+    };
+    let Some(client_recv) = alloc_socket_recv_buffer() else {
+        crate::net::ring_buffer::free_buffer(server_recv as u32);
+        shutdown_slot(server_idx);
+        shutdown_slot(client_idx);
+        return -2;
+    };
+
+    let listener_local_addr = socket_table()[listener_idx].local_addr;
+    let listener_local_len = socket_table()[listener_idx].local_len;
+    let listener_domain = socket_table()[listener_idx].domain;
+    let listener_type = socket_table()[listener_idx].sock_type;
+    let listener_protocol = socket_table()[listener_idx].protocol;
+
+    socket_table()[server_idx] = SocketSlot {
+        domain: listener_domain,
+        sock_type: listener_type,
+        protocol: listener_protocol,
+        state: SOCK_STATE_CONNECTED,
+        owner_pid: 0,
+        owner_uid: 0,
+        owner_gid: 0,
+        local_addr: listener_local_addr,
+        local_len: listener_local_len,
+        peer_addr: [0; SOCKADDR_STORAGE_LEN],
+        peer_len: 0,
+        peer_idx: client_idx as i32,
+        peer_pid: 0,
+        peer_uid: 0,
+        peer_gid: 0,
+        external_peer: 0,
+        recv_buf_idx: server_recv,
+        last_error: 0,
+        so_cookie: alloc_socket_cookie(),
+        so_reuseaddr: 0,
+        so_reuseport: 0,
+        so_keepalive: 0,
+        so_oobinline: 0,
+        so_nocheck: 0,
+        so_bsdcompat: 0,
+        so_broadcast: 0,
+        so_sndbuf: DEFAULT_SOCKET_BUFFER,
+        so_rcvbuf: DEFAULT_SOCKET_BUFFER,
+        so_rcvlowat: 1,
+        so_rcvtimeo_sec: 0,
+        so_rcvtimeo_usec: 0,
+        so_sndtimeo_sec: 0,
+        so_sndtimeo_usec: 0,
+        tcp_nodelay: 0,
+        shutdown_mask: 0,
+        accept_head: 0,
+        accept_tail: 0,
+        accept_queue: [-1; ACCEPT_QUEUE_SIZE],
+    };
+    socket_table()[client_idx] = SocketSlot {
+        domain: listener_domain,
+        sock_type: listener_type,
+        protocol: listener_protocol,
+        state: SOCK_STATE_CONNECTED,
+        owner_pid: 0,
+        owner_uid: 0,
+        owner_gid: 0,
+        local_addr: [0; SOCKADDR_STORAGE_LEN],
+        local_len: 0,
+        peer_addr: listener_local_addr,
+        peer_len: listener_local_len,
+        peer_idx: server_idx as i32,
+        peer_pid: 0,
+        peer_uid: 0,
+        peer_gid: 0,
+        external_peer: 0,
+        recv_buf_idx: client_recv,
+        last_error: 0,
+        so_cookie: alloc_socket_cookie(),
+        so_reuseaddr: 0,
+        so_reuseport: 0,
+        so_keepalive: 0,
+        so_oobinline: 0,
+        so_nocheck: 0,
+        so_bsdcompat: 0,
+        so_broadcast: 0,
+        so_sndbuf: DEFAULT_SOCKET_BUFFER,
+        so_rcvbuf: DEFAULT_SOCKET_BUFFER,
+        so_rcvlowat: 1,
+        so_rcvtimeo_sec: 0,
+        so_rcvtimeo_usec: 0,
+        so_sndtimeo_sec: 0,
+        so_sndtimeo_usec: 0,
+        tcp_nodelay: 0,
+        shutdown_mask: 0,
+        accept_head: 0,
+        accept_tail: 0,
+        accept_queue: [-1; ACCEPT_QUEUE_SIZE],
+    };
+
+    if !inbound.is_empty() {
+        let _ = crate::net::ring_buffer::write(server_recv as u32, inbound);
+    }
+
+    if !accept_queue_push(&mut socket_table()[listener_idx], server_idx as u32) {
+        shutdown_slot(server_idx);
+        shutdown_slot(client_idx);
+        return -3;
+    }
+
+    client_idx as i32
 }
 
 fn unix_addr_eq(slot: &SocketSlot, addr: &[u8], len: usize) -> bool {

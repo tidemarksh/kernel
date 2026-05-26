@@ -1,6 +1,4 @@
-use super::address::port_from_sockaddr;
-use super::connect::{accept_queue_len, accept_queue_push, remove_socket_from_accept_queues};
-use super::send_recv::slot_peer_is_closed;
+use super::connect::{accept_queue_len, remove_socket_from_accept_queues};
 use crate::abi::*;
 use crate::alloc;
 use crate::fs::fd_table;
@@ -875,160 +873,7 @@ pub(super) fn ensure_socket_recv_buffer(idx: usize) -> Result<(), i64> {
     Ok(())
 }
 
-pub fn inject_http_connection(vm_ptr: u32, port: u16, request: &[u8]) -> i32 {
-    let _ = vm_ptr;
-
-    let listener_idx = socket_table()
-        .iter()
-        .enumerate()
-        .find(|(_, slot)| {
-            slot.state == SOCK_STATE_LISTENING
-                && port_from_sockaddr(&slot.local_addr, slot.local_len) == port
-        })
-        .map(|(idx, _)| idx);
-
-    let Some(listener_idx) = listener_idx else {
-        return -1;
-    };
-
-    let Some(server_idx) = alloc_socket_slot().map(|idx| idx as usize) else {
-        return -2;
-    };
-    let Some(client_idx) = alloc_socket_slot().map(|idx| idx as usize) else {
-        shutdown_slot(server_idx);
-        return -2;
-    };
-    let Some(server_recv) = alloc_socket_recv_buffer() else {
-        shutdown_slot(server_idx);
-        shutdown_slot(client_idx);
-        return -2;
-    };
-    let Some(client_recv) = alloc_socket_recv_buffer() else {
-        crate::net::ring_buffer::free_buffer(server_recv as u32);
-        shutdown_slot(server_idx);
-        shutdown_slot(client_idx);
-        return -2;
-    };
-
-    let listener_local_addr = socket_table()[listener_idx].local_addr;
-    let listener_local_len = socket_table()[listener_idx].local_len;
-    let listener_domain = socket_table()[listener_idx].domain;
-    let listener_type = socket_table()[listener_idx].sock_type;
-    let listener_protocol = socket_table()[listener_idx].protocol;
-
-    socket_table()[server_idx] = SocketSlot {
-        domain: listener_domain,
-        sock_type: listener_type,
-        protocol: listener_protocol,
-        state: SOCK_STATE_CONNECTED,
-        owner_pid: 0,
-        owner_uid: 0,
-        owner_gid: 0,
-        local_addr: listener_local_addr,
-        local_len: listener_local_len,
-        peer_addr: [0; SOCKADDR_STORAGE_LEN],
-        peer_len: 0,
-        peer_idx: client_idx as i32,
-        peer_pid: 0,
-        peer_uid: 0,
-        peer_gid: 0,
-        external_peer: 0,
-        recv_buf_idx: server_recv,
-        last_error: 0,
-        so_cookie: alloc_socket_cookie(),
-        so_reuseaddr: 0,
-        so_reuseport: 0,
-        so_keepalive: 0,
-        so_oobinline: 0,
-        so_nocheck: 0,
-        so_bsdcompat: 0,
-        so_broadcast: 0,
-        so_sndbuf: DEFAULT_SOCKET_BUFFER,
-        so_rcvbuf: DEFAULT_SOCKET_BUFFER,
-        so_rcvlowat: 1,
-        so_rcvtimeo_sec: 0,
-        so_rcvtimeo_usec: 0,
-        so_sndtimeo_sec: 0,
-        so_sndtimeo_usec: 0,
-        tcp_nodelay: 0,
-        shutdown_mask: 0,
-        accept_head: 0,
-        accept_tail: 0,
-        accept_queue: [-1; ACCEPT_QUEUE_SIZE],
-    };
-    socket_table()[client_idx] = SocketSlot {
-        domain: listener_domain,
-        sock_type: listener_type,
-        protocol: listener_protocol,
-        state: SOCK_STATE_CONNECTED,
-        owner_pid: 0,
-        owner_uid: 0,
-        owner_gid: 0,
-        local_addr: [0; SOCKADDR_STORAGE_LEN],
-        local_len: 0,
-        peer_addr: listener_local_addr,
-        peer_len: listener_local_len,
-        peer_idx: server_idx as i32,
-        peer_pid: 0,
-        peer_uid: 0,
-        peer_gid: 0,
-        external_peer: 0,
-        recv_buf_idx: client_recv,
-        last_error: 0,
-        so_cookie: alloc_socket_cookie(),
-        so_reuseaddr: 0,
-        so_reuseport: 0,
-        so_keepalive: 0,
-        so_oobinline: 0,
-        so_nocheck: 0,
-        so_bsdcompat: 0,
-        so_broadcast: 0,
-        so_sndbuf: DEFAULT_SOCKET_BUFFER,
-        so_rcvbuf: DEFAULT_SOCKET_BUFFER,
-        so_rcvlowat: 1,
-        so_rcvtimeo_sec: 0,
-        so_rcvtimeo_usec: 0,
-        so_sndtimeo_sec: 0,
-        so_sndtimeo_usec: 0,
-        tcp_nodelay: 0,
-        shutdown_mask: 0,
-        accept_head: 0,
-        accept_tail: 0,
-        accept_queue: [-1; ACCEPT_QUEUE_SIZE],
-    };
-
-    if !request.is_empty() {
-        let _ = crate::net::ring_buffer::write(server_recv as u32, request);
-    }
-
-    if !accept_queue_push(&mut socket_table()[listener_idx], server_idx as u32) {
-        shutdown_slot(server_idx);
-        shutdown_slot(client_idx);
-        return -3;
-    }
-
-    client_idx as i32
-}
-
-pub fn read_http_response(_vm_ptr: u32, conn_id: i32, dst: &mut [u8]) -> i32 {
-    if conn_id < 0 || conn_id as usize >= MAX_SOCKETS || !is_slot_used(conn_id as u32) {
-        return -1;
-    }
-    let idx = conn_id as usize;
-    let slot = &socket_table()[idx];
-    if slot.recv_buf_idx < 0 {
-        return -1;
-    }
-
-    let n = crate::net::ring_buffer::read(slot.recv_buf_idx as u32, dst);
-    if n > 0 {
-        return n as i32;
-    }
-
-    if slot_peer_is_closed(idx) { -1 } else { 0 }
-}
-
-pub fn close_http_connection(_vm_ptr: u32, conn_id: i32) {
+pub fn close_connection_slot(conn_id: i32) {
     if conn_id < 0 || conn_id as usize >= MAX_SOCKETS || !is_slot_used(conn_id as u32) {
         return;
     }
@@ -1043,8 +888,8 @@ pub fn close_http_connection(_vm_ptr: u32, conn_id: i32) {
 mod tests {
     use super::super::poll::{EPOLLIN, EPOLLOUT};
     use super::super::{
-        connect_peer_addr, poll_revents_ofd, resume_connect_result, sys_accept4, sys_bind,
-        sys_connect, sys_listen, sys_socket,
+        connect_peer_addr, inject_external_connection_by_port, poll_revents_ofd,
+        resume_connect_result, sys_accept4, sys_bind, sys_connect, sys_listen, sys_socket,
     };
     use super::*;
     use crate::harness::TestVm;
@@ -1064,7 +909,7 @@ mod tests {
         let listener_idx = fd_table::get_ofd(t.base, &t.vm, fd as u64)
             .expect("listener OFD should exist")
             .ino;
-        let client_idx = inject_http_connection(0, 0x5000, b"GET / HTTP/1.0\r\n\r\n");
+        let client_idx = inject_external_connection_by_port(0x5000, b"request");
         assert!(client_idx >= 0);
 
         let listener = &socket_table()[listener_idx as usize];
@@ -1101,7 +946,7 @@ mod tests {
         let listener_idx = fd_table::get_ofd(t.base, &t.vm, fd as u64)
             .expect("listener OFD should exist")
             .ino;
-        let client_idx = inject_http_connection(0, 0x5000, b"GET / HTTP/1.0\r\n\r\n");
+        let client_idx = inject_external_connection_by_port(0x5000, b"request");
         assert!(client_idx >= 0);
 
         let listener = &socket_table()[listener_idx as usize];

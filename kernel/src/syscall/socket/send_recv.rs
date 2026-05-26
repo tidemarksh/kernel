@@ -82,6 +82,24 @@ pub(super) fn slot_peer_is_closed(idx: usize) -> bool {
     peer.state == SOCK_STATE_SHUTDOWN || peer.state == SOCK_STATE_IDLE
 }
 
+pub fn read_external_connection_data(conn_id: i32, dst: &mut [u8]) -> i32 {
+    if conn_id < 0 || conn_id as usize >= MAX_SOCKETS || !is_slot_used(conn_id as u32) {
+        return -1;
+    }
+    let idx = conn_id as usize;
+    let slot = &socket_table()[idx];
+    if slot.recv_buf_idx < 0 {
+        return -1;
+    }
+
+    let n = crate::net::ring_buffer::read(slot.recv_buf_idx as u32, dst);
+    if n > 0 {
+        return n as i32;
+    }
+
+    if slot_peer_is_closed(idx) { -1 } else { 0 }
+}
+
 /// sendto(fd, buf, len, flags, dest_addr, addrlen) -> STATUS_SOCKET_SEND
 #[allow(clippy::too_many_arguments)]
 pub fn sys_sendto(
