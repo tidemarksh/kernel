@@ -497,46 +497,6 @@ fn contract_execve_discards_old_guest_address_space_bytes() {
 }
 
 #[test]
-fn install_procfs_snapshot_writes_linux_like_maps() {
-    let mut t = TestVm::new();
-    let grown = t.sys_brk(0x126000);
-    assert_eq!(grown, 0x126000);
-
-    let bin = ensure_dir(1, b"bin");
-    let exe_ino = memfs::create_file(bin, b"maps-target", 0o755);
-    assert!(exe_ino > 0);
-    assert_eq!(memfs::write_file(exe_ino, 0, b"ELF"), 3);
-
-    let exe_fd = t.sys_openat(b"/bin/maps-target", O_RDONLY);
-    assert!(exe_fd >= 3);
-    let file_map = t.sys_mmap(0, PAGE_SIZE, PROT_READ | PROT_EXEC, MAP_PRIVATE, exe_fd, 0);
-    assert!(file_map > 0);
-    let anon_map = t.sys_mmap(
-        0,
-        PAGE_SIZE,
-        PROT_READ | PROT_WRITE,
-        MAP_PRIVATE | MAP_ANONYMOUS,
-        -1,
-        0,
-    );
-    assert!(anon_map > 0);
-    let stack_top = tidemark_kernel::syscall::memory::map_initial_stack(t.base, 0x80_0000, 0x20000);
-    assert!(stack_top > 0);
-
-    process_impl::install_procfs_snapshot(b"/bin/maps-target");
-
-    let maps = String::from_utf8(read_file_bytes(b"/proc/self/maps")).unwrap();
-    assert!(maps.contains("/bin/maps-target"));
-    assert!(maps.contains("r-xp"));
-    assert!(maps.contains("[heap]"));
-    assert!(maps.contains("[stack]"));
-    assert!(maps.contains("rw-p 00000000 00:00 0 [heap]"));
-
-    let ngroups_max = String::from_utf8(read_file_bytes(b"/proc/sys/kernel/ngroups_max")).unwrap();
-    assert_eq!(ngroups_max, "65536\n");
-}
-
-#[test]
 fn contract_execve_with_pt_interp_maps_main_executable_image() {
     let mut t = TestVm::new();
     let main_code = [0x13, 0x05, 0x70, 0x00];

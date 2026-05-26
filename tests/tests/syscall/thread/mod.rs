@@ -1,6 +1,6 @@
 mod support;
 
 mod clone;
+mod exit;
 mod futex;
-mod lifecycle;
-mod robust_list;
+mod robust_futex;

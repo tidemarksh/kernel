@@ -1,7 +1,7 @@
 use super::support::*;
 
 #[test]
-fn contract_runtime_notesleep_futex_return_path_preserves_go_worker_context() {
+fn contract_futex_wait_return_path_preserves_thread_context() {
     let mut t = TestVm::new();
     let notesleep_page = t.sys_mmap(
         0x2a000,
@@ -30,7 +30,7 @@ fn contract_runtime_notesleep_futex_return_path_preserves_go_worker_context() {
         0,
     );
     assert_eq!(futex_page, 0x83000);
-    let cgo_yield_page = t.sys_mmap(
+    let wake_check_page = t.sys_mmap(
         0xbdc000,
         0x1000,
         PROT_READ | PROT_WRITE,
@@ -38,7 +38,7 @@ fn contract_runtime_notesleep_futex_return_path_preserves_go_worker_context() {
         -1,
         0,
     );
-    assert_eq!(cgo_yield_page, 0xbdc000);
+    assert_eq!(wake_check_page, 0xbdc000);
     tidemark_kernel::syscall::memory::register_elf_load_segment(
         0x2a000,
         0x2b000,
@@ -56,7 +56,7 @@ fn contract_runtime_notesleep_futex_return_path_preserves_go_worker_context() {
     );
 
     unsafe {
-        // runtime.notesleep tail around the futexsleep call and loop.
+        // Synthetic caller tail around the futex wait call and loop.
         tidemark_kernel::guest_mem::write_u16(t.base, 0x2a482, 0x72a2); // ld t0,40(sp)
         tidemark_kernel::guest_mem::write_u32(t.base, 0x2a484, 0x0302_b383); // ld t2,48(t0)
         tidemark_kernel::guest_mem::write_u32(t.base, 0x2a488, 0x1003_8aa3); // sb zero,277(t2)
@@ -71,7 +71,7 @@ fn contract_runtime_notesleep_futex_return_path_preserves_go_worker_context() {
         tidemark_kernel::guest_mem::write_u32(t.base, 0x2a4a4, 0x1072_8aa3); // sb t2,277(t0)
         tidemark_kernel::guest_mem::write_u16(t.base, 0x2a4a8, 0x4581); // li a1,0
         tidemark_kernel::guest_mem::write_u16(t.base, 0x2a4aa, 0x861a); // mv a2,t1
-        tidemark_kernel::guest_mem::write_u32(t.base, 0x2a4ac, 0x18c2_30ef); // jal runtime.futexsleep
+        tidemark_kernel::guest_mem::write_u32(t.base, 0x2a4ac, 0x18c2_30ef); // jal futex_wait
         tidemark_kernel::guest_mem::write_u32(t.base, 0x2a4b0, 0x00bb_2297); // auipc t0,...
         tidemark_kernel::guest_mem::write_u32(t.base, 0x2a4b4, 0x6282_b283); // ld t0,1576(t0)
         tidemark_kernel::guest_mem::write_u32(t.base, 0x2a4b8, 0x0002_b283); // ld t0,0(t0)
@@ -86,7 +86,7 @@ fn contract_runtime_notesleep_futex_return_path_preserves_go_worker_context() {
         tidemark_kernel::guest_mem::write_u16(t.base, 0x2a4ce, 0x6145); // addi sp,sp,48
         tidemark_kernel::guest_mem::write_u32(t.base, 0x2a4d0, 0x0000_8067); // ret
 
-        // runtime.futexsleep fast path.
+        // Synthetic futex wait fast path.
         tidemark_kernel::guest_mem::write_u32(t.base, 0x4d638, 0xfc11_3023); // sd ra,-64(sp)
         tidemark_kernel::guest_mem::write_u16(t.base, 0x4d63c, 0x7139); // addi sp,sp,-64
         tidemark_kernel::guest_mem::write_u16(t.base, 0x4d63e, 0xe006); // sd ra,0(sp)
@@ -96,17 +96,17 @@ fn contract_runtime_notesleep_futex_return_path_preserves_go_worker_context() {
         tidemark_kernel::guest_mem::write_u16(t.base, 0x4d648, 0x4701); // li a4,0
         tidemark_kernel::guest_mem::write_u16(t.base, 0x4d64a, 0x4781); // li a5,0
         tidemark_kernel::guest_mem::write_u32(t.base, 0x4d64c, 0x0800_0593); // li a1,128
-        tidemark_kernel::guest_mem::write_u32(t.base, 0x4d650, 0x4b13_50ef); // jal runtime.futex
+        tidemark_kernel::guest_mem::write_u32(t.base, 0x4d650, 0x4b13_50ef); // jal futex syscall wrapper
         tidemark_kernel::guest_mem::write_u16(t.base, 0x4d654, 0x6082); // ld ra,0(sp)
         tidemark_kernel::guest_mem::write_u16(t.base, 0x4d656, 0x6121); // addi sp,sp,64
         tidemark_kernel::guest_mem::write_u32(t.base, 0x4d658, 0x0000_8067); // ret
 
-        // runtime.futex
+        // Synthetic futex syscall wrapper.
         tidemark_kernel::guest_mem::write_u32(t.base, 0x83300, 0x0620_0893); // li a7,98
         tidemark_kernel::guest_mem::write_u32(t.base, 0x83304, 0x0000_0073); // ecall
         tidemark_kernel::guest_mem::write_u32(t.base, 0x83308, 0x0000_8067); // ret
 
-        // cgo_yield points at a null function pointer so notesleep loops back.
+        // The wake-check function pointer is null, so the caller loops back.
         tidemark_kernel::guest_mem::write_u64(t.base, 0xbdcad8, 0xbdcb00);
         tidemark_kernel::guest_mem::write_u64(t.base, 0xbdcb00, 0);
     }
@@ -175,7 +175,7 @@ fn contract_runtime_notesleep_futex_return_path_preserves_go_worker_context() {
 }
 
 #[test]
-fn contract_runtime_notesleep_futex_wake_return_path_preserves_go_worker_context() {
+fn contract_futex_wake_return_path_preserves_thread_context() {
     let mut t = TestVm::new();
     let notesleep_page = t.sys_mmap(
         0x2a000,
@@ -204,7 +204,7 @@ fn contract_runtime_notesleep_futex_wake_return_path_preserves_go_worker_context
         0,
     );
     assert_eq!(futex_page, 0x83000);
-    let cgo_yield_page = t.sys_mmap(
+    let wake_check_page = t.sys_mmap(
         0xbdc000,
         0x1000,
         PROT_READ | PROT_WRITE,
@@ -212,7 +212,7 @@ fn contract_runtime_notesleep_futex_wake_return_path_preserves_go_worker_context
         -1,
         0,
     );
-    assert_eq!(cgo_yield_page, 0xbdc000);
+    assert_eq!(wake_check_page, 0xbdc000);
     let caller_page = t.sys_mmap(
         0x2b000,
         0x1000,
@@ -239,7 +239,7 @@ fn contract_runtime_notesleep_futex_wake_return_path_preserves_go_worker_context
     );
 
     unsafe {
-        // runtime.notesleep tail around the futexsleep call and wake check.
+        // Synthetic caller tail around the futex wait call and wake check.
         tidemark_kernel::guest_mem::write_u16(t.base, 0x2a482, 0x72a2); // ld t0,40(sp)
         tidemark_kernel::guest_mem::write_u32(t.base, 0x2a484, 0x0302_b383); // ld t2,48(t0)
         tidemark_kernel::guest_mem::write_u32(t.base, 0x2a488, 0x1003_8aa3); // sb zero,277(t2)
@@ -254,7 +254,7 @@ fn contract_runtime_notesleep_futex_wake_return_path_preserves_go_worker_context
         tidemark_kernel::guest_mem::write_u32(t.base, 0x2a4a4, 0x1072_8aa3); // sb t2,277(t0)
         tidemark_kernel::guest_mem::write_u16(t.base, 0x2a4a8, 0x4581); // li a1,0
         tidemark_kernel::guest_mem::write_u16(t.base, 0x2a4aa, 0x861a); // mv a2,t1
-        tidemark_kernel::guest_mem::write_u32(t.base, 0x2a4ac, 0x18c2_30ef); // jal runtime.futexsleep
+        tidemark_kernel::guest_mem::write_u32(t.base, 0x2a4ac, 0x18c2_30ef); // jal futex_wait
         tidemark_kernel::guest_mem::write_u32(t.base, 0x2a4b0, 0x00bb_2297); // auipc t0,...
         tidemark_kernel::guest_mem::write_u32(t.base, 0x2a4b4, 0x6282_b283); // ld t0,1576(t0)
         tidemark_kernel::guest_mem::write_u32(t.base, 0x2a4b8, 0x0002_b283); // ld t0,0(t0)
@@ -269,7 +269,7 @@ fn contract_runtime_notesleep_futex_wake_return_path_preserves_go_worker_context
         tidemark_kernel::guest_mem::write_u16(t.base, 0x2a4ce, 0x6145); // addi sp,sp,48
         tidemark_kernel::guest_mem::write_u32(t.base, 0x2a4d0, 0x0000_8067); // ret
 
-        // runtime.futexsleep fast path.
+        // Synthetic futex wait fast path.
         tidemark_kernel::guest_mem::write_u32(t.base, 0x4d638, 0xfc11_3023); // sd ra,-64(sp)
         tidemark_kernel::guest_mem::write_u16(t.base, 0x4d63c, 0x7139); // addi sp,sp,-64
         tidemark_kernel::guest_mem::write_u16(t.base, 0x4d63e, 0xe006); // sd ra,0(sp)
@@ -279,17 +279,17 @@ fn contract_runtime_notesleep_futex_wake_return_path_preserves_go_worker_context
         tidemark_kernel::guest_mem::write_u16(t.base, 0x4d648, 0x4701); // li a4,0
         tidemark_kernel::guest_mem::write_u16(t.base, 0x4d64a, 0x4781); // li a5,0
         tidemark_kernel::guest_mem::write_u32(t.base, 0x4d64c, 0x0800_0593); // li a1,128
-        tidemark_kernel::guest_mem::write_u32(t.base, 0x4d650, 0x4b13_50ef); // jal runtime.futex
+        tidemark_kernel::guest_mem::write_u32(t.base, 0x4d650, 0x4b13_50ef); // jal futex syscall wrapper
         tidemark_kernel::guest_mem::write_u16(t.base, 0x4d654, 0x6082); // ld ra,0(sp)
         tidemark_kernel::guest_mem::write_u16(t.base, 0x4d656, 0x6121); // addi sp,sp,64
         tidemark_kernel::guest_mem::write_u32(t.base, 0x4d658, 0x0000_8067); // ret
 
-        // runtime.futex
+        // Synthetic futex syscall wrapper.
         tidemark_kernel::guest_mem::write_u32(t.base, 0x83300, 0x0620_0893); // li a7,98
         tidemark_kernel::guest_mem::write_u32(t.base, 0x83304, 0x0000_0073); // ecall
         tidemark_kernel::guest_mem::write_u32(t.base, 0x83308, 0x0000_8067); // ret
 
-        // cgo_yield points at a non-zero function pointer so notesleep exits after wake.
+        // The wake-check function pointer is non-zero, so the caller exits after wake.
         tidemark_kernel::guest_mem::write_u64(t.base, 0xbdcad8, 0xbdcb00);
         tidemark_kernel::guest_mem::write_u64(t.base, 0xbdcb00, 1);
 

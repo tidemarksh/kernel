@@ -92,7 +92,7 @@ fn contract_spawn_from_clone_initializes_child_thread_state() {
 }
 
 #[test]
-fn contract_spawn_from_clone_preserves_go_clone_child_entry_contract() {
+fn contract_spawn_from_clone_preserves_child_entry_stack_contract() {
     let mut t = TestVm::new();
     t.vm.tid = 1;
     t.vm.pc = 0x83336;
@@ -144,7 +144,7 @@ fn contract_spawn_from_clone_preserves_go_clone_child_entry_contract() {
 }
 
 #[test]
-fn contract_spawn_from_clone_first_thread_step_preserves_go_child_gettid_path() {
+fn contract_spawn_from_clone_first_thread_step_preserves_child_gettid_path() {
     let mut t = TestVm::new();
     let entry_pc = 0x10002u64;
     t.vm.tid = 1;
@@ -162,16 +162,8 @@ fn contract_spawn_from_clone_first_thread_step_preserves_go_child_gettid_path() 
     );
     assert_eq!(mapped, 0x10000);
 
-    // Primary source:
-    // /usr/lib/go/src/runtime/sys_linux_riscv64.s
-    // runtime.clone.abi0 child continuation:
-    //   beq zero,a0, ...
-    //   sentinel check at -32(sp)
-    //   gettid (A7=178)
-    //   load fn/g/mp from stack
-    //   sd tid -> 64(mp)
-    //   sd mp -> 48(g)
-    //   mv s11,g
+    // Synthetic RISC-V child continuation:
+    // beq zero,a0, sentinel check, gettid, load child context from stack.
     unsafe {
         tidemark_kernel::guest_mem::write_u32(t.base, entry_pc, 0x00a0_0563);
         tidemark_kernel::guest_mem::write_u32(t.base, entry_pc + 0x0a, 0xfe01_3283);

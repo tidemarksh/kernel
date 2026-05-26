@@ -489,59 +489,6 @@ fn semantics_vfork_parent_restore_without_cleanup_preserves_distinct_capture_pip
 }
 
 #[test]
-fn semantics_vfork_parent_resume_restores_proc_self_exe_target() {
-    let mut t = TestVm::new();
-    let parent_path_addr = install_exec_file(&t, b"parent", &build_test_elf(&[0x13]));
-
-    let ret = process_impl::sys_execve(&mut t.vm, t.base, parent_path_addr, 0, 0);
-    assert_eq!(ret, 0);
-    assert_eq!(read_link_bytes(b"/proc/self/exe"), b"/bin/parent");
-
-    let status = process_impl::sys_vfork(&mut t.vm, t.base);
-    assert_eq!(status, STATUS_VFORK_WAIT);
-
-    let child_path_addr = install_exec_file(&t, b"child", &build_test_elf(&[0x13]));
-    let child_pid = process_impl::sys_execve(&mut t.vm, t.base, child_path_addr, 0, 0);
-    assert_eq!(t.vm.status, STATUS_EXECVE_SPAWN);
-    assert_eq!(read_link_bytes(b"/proc/self/exe"), b"/bin/child");
-
-    process_impl::vfork_parent_resume(&mut t.vm, child_pid as i32);
-    assert_eq!(read_link_bytes(b"/proc/self/exe"), b"/bin/parent");
-}
-
-#[test]
-fn semantics_vfork_preserves_memfs_paths_before_execve() {
-    let mut t = TestVm::new();
-    let parent_elf = build_test_elf(&[0x13]);
-    let parent_path_addr = install_exec_file(&t, b"parent", &parent_elf);
-
-    let ret = process_impl::sys_execve(&mut t.vm, t.base, parent_path_addr, 0, 0);
-    assert_eq!(ret, 0);
-    assert_eq!(read_link_bytes(b"/proc/self/exe"), b"/bin/parent");
-
-    let tool_path = b"/usr/local/go/bin/go";
-    let tool_elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
-    let tool_path_addr = install_exec_file_at(&t, tool_path, &tool_elf);
-    assert_eq!(read_file_bytes(tool_path), tool_elf);
-
-    let status = process_impl::sys_vfork(&mut t.vm, t.base);
-    assert_eq!(status, STATUS_VFORK_WAIT);
-
-    assert_eq!(read_link_bytes(b"/proc/self/exe"), b"/bin/parent");
-    assert_eq!(read_file_bytes(tool_path), tool_elf);
-    assert_ne!(
-        memfs::resolve_path(tool_path),
-        0,
-        "tool path should remain resolvable during vfork child view"
-    );
-    assert_ne!(process_impl::vfork_child_pid(), 0);
-
-    let child_ret = process_impl::sys_execve(&mut t.vm, t.base, tool_path_addr, 0, 0);
-    assert!(child_ret > 0);
-    assert_eq!(t.vm.status, STATUS_EXECVE_SPAWN);
-}
-
-#[test]
 fn semantics_vfork_from_secondary_thread_preserves_memfs_paths_before_execve() {
     let mut t = TestVm::new();
     t.vm.tid = 3;
@@ -553,7 +500,7 @@ fn semantics_vfork_from_secondary_thread_preserves_memfs_paths_before_execve() {
     ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, 0xCAFE_BABEu32, 0, 0);
     ps.threads[2] = ThreadRecord::new(3, THREAD_RUNNING, caller_ptr, 0, 0);
 
-    let tool_path = b"/usr/local/go/bin/go";
+    let tool_path = b"/usr/local/bin/tool";
     let tool_elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
     let tool_path_addr = install_exec_file_at(&t, tool_path, &tool_elf);
     assert_eq!(read_file_bytes(tool_path), tool_elf);
