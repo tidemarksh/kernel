@@ -1,4 +1,4 @@
-use super::{RUNTIME_DEBUG_ENABLED, current_execve_stage};
+use super::{RUNTIME_DEBUG_ENABLED, process::current_execve_stage};
 
 #[repr(C)]
 #[derive(Clone, Copy)]
