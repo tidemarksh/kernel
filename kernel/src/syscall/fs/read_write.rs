@@ -1,16 +1,14 @@
 use crate::abi::*;
 use crate::fs::{fd_table, memfs};
 use crate::guest_mem;
+use crate::syscall::sync_effects::{
+    mark_fork_shared_ofd_sync_effect, mark_pipe_sync_effect, mark_process_memfs_sync_effect,
+    mark_socket_sync_effect,
+};
 use crate::syscall::{pipe, signal, socket};
 use crate::types::{OpenFileDesc, ThreadState};
 
 const EVENTFD_COUNTER_MAX: u64 = u64::MAX - 1;
-const SYNC_EFFECT_PIPE_STATE: u32 = 1 << 0;
-const SYNC_EFFECT_SOCKET_STATE: u32 = 1 << 1;
-const SYNC_EFFECT_EPOLL_STATE: u32 = 1 << 2;
-const SYNC_EFFECT_EPOLL_DEPENDENT_OFD_STATE: u32 = 1 << 3;
-const SYNC_EFFECT_FORK_SHARED_OFD_STATE: u32 = 1 << 6;
-const SYNC_EFFECT_PROCESS_MEMFS: u32 = 1 << 7;
 pub(crate) const PIPE_READ_EOF_SYNC_RETRY_MARKER: u64 = 0x7069_7065_454f_4652;
 const PIPE_EPIPE_SYNC_RETRY_MARKER: u64 = 0x7069_7065_4550_4950;
 
@@ -409,37 +407,12 @@ fn trace_pipe_open_state(ofd: &OpenFileDesc) -> (i32, i32) {
     }
 }
 
-fn mark_process_memfs_sync_effect(vm: &mut ThreadState) {
-    vm.completed_sync_effects |= SYNC_EFFECT_PROCESS_MEMFS;
-}
-
 fn flush_shared_guest_write(vm: &mut ThreadState, base: u32, guest_addr: u64, len: u64) {
     if len == 0 {
         return;
     }
     if crate::syscall::memory::flush_shared_mappings_for_guest_write(base, guest_addr, len) {
         mark_process_memfs_sync_effect(vm);
-    }
-}
-
-pub(super) fn mark_fork_shared_ofd_sync_effect(vm: &mut ThreadState) {
-    vm.completed_sync_effects |= SYNC_EFFECT_FORK_SHARED_OFD_STATE;
-}
-
-fn mark_socket_sync_effect(vm: &mut ThreadState) {
-    vm.completed_sync_effects |=
-        SYNC_EFFECT_SOCKET_STATE | SYNC_EFFECT_EPOLL_STATE | SYNC_EFFECT_EPOLL_DEPENDENT_OFD_STATE;
-}
-
-fn mark_pipe_sync_effect(vm: &mut ThreadState, pipe_slot: u32, write_effect: bool) {
-    vm.completed_sync_effects |= SYNC_EFFECT_PIPE_STATE;
-    if pipe_slot > 0 && pipe_slot < 64 {
-        vm.completed_pipe_sync_slots |= 1u64 << pipe_slot;
-        if write_effect {
-            vm.completed_pipe_sync_write_slots |= 1u64 << pipe_slot;
-        } else {
-            vm.completed_pipe_sync_read_slots |= 1u64 << pipe_slot;
-        }
     }
 }
 

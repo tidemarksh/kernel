@@ -1,6 +1,6 @@
-use super::read_write::mark_fork_shared_ofd_sync_effect;
 use crate::abi::*;
 use crate::fs::{fd_table, memfs};
+use crate::syscall::sync_effects::mark_fork_shared_ofd_sync_effect;
 use crate::types::ThreadState;
 
 // =========================================================================

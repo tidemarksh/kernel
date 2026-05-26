@@ -10,6 +10,37 @@ const SYNC_EFFECT_EPOLL_DEPENDENT_OFD_STATE: u32 = 1 << 3;
 const SYNC_EFFECT_PROCESS_LIFECYCLE: u32 = 1 << 4;
 const SYNC_EFFECT_SIGNAL_WAITERS: u32 = 1 << 5;
 const SYNC_EFFECT_FORK_SHARED_OFD_STATE: u32 = 1 << 6;
+const SYNC_EFFECT_PROCESS_MEMFS: u32 = 1 << 7;
+
+pub(in crate::syscall) fn mark_process_memfs_sync_effect(vm: &mut ThreadState) {
+    vm.completed_sync_effects |= SYNC_EFFECT_PROCESS_MEMFS;
+}
+
+pub(in crate::syscall) fn mark_fork_shared_ofd_sync_effect(vm: &mut ThreadState) {
+    vm.completed_sync_effects |= SYNC_EFFECT_FORK_SHARED_OFD_STATE;
+}
+
+pub(in crate::syscall) fn mark_socket_sync_effect(vm: &mut ThreadState) {
+    vm.completed_sync_effects |=
+        SYNC_EFFECT_SOCKET_STATE | SYNC_EFFECT_EPOLL_STATE | SYNC_EFFECT_EPOLL_DEPENDENT_OFD_STATE;
+}
+
+pub(in crate::syscall) fn mark_pipe_sync_effect(
+    vm: &mut ThreadState,
+    pipe_slot: u32,
+    write_effect: bool,
+) {
+    vm.completed_sync_effects |= SYNC_EFFECT_PIPE_STATE;
+    if pipe_slot > 0 && pipe_slot < 64 {
+        vm.completed_pipe_sync_slots |= 1u64 << pipe_slot;
+        if write_effect {
+            vm.completed_pipe_sync_write_slots |= 1u64 << pipe_slot;
+        } else {
+            vm.completed_pipe_sync_read_slots |= 1u64 << pipe_slot;
+        }
+    }
+}
+
 pub(super) fn mark_completed_syscall_sync_effects(
     vm: &mut ThreadState,
     base: u32,
