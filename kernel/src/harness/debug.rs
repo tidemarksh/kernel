@@ -3,6 +3,7 @@ mod memory;
 mod process;
 mod signal;
 mod socket;
+mod thread;
 
 pub use fd::{FdSyscallTraceEntry, PathSyscallTraceEntry};
 pub(crate) use fd::{
@@ -29,6 +30,7 @@ pub(crate) use process::{
 };
 pub(crate) use signal::record_sync_signal_trace;
 pub(crate) use socket::record_epoll_wait;
+pub(crate) use thread::{record_futex_resume_trace, record_thread_count};
 
 const RUNTIME_DEBUG_ENABLED: bool = cfg!(any(test, feature = "harness"));
 
@@ -172,17 +174,6 @@ pub(crate) fn clear_syscall_trace() {
         core::ptr::write(core::ptr::addr_of_mut!(SYSCALL_TRACE_RING_NEXT), 0);
         core::ptr::write(core::ptr::addr_of_mut!(COMPLETED_SYNC_EFFECTS), 0);
     }
-}
-
-pub(crate) fn record_thread_count(
-    kind: u32,
-    vm_ptr: u32,
-    tid: i32,
-    process_ptr: u32,
-    before: u32,
-    after: u32,
-) {
-    let _ = (kind, vm_ptr, tid, process_ptr, before, after);
 }
 
 pub(crate) fn record_syscall(
@@ -1987,10 +1978,6 @@ pub(crate) fn record_fault_dispatch_trace(
             );
         }
     }
-}
-
-pub(crate) fn record_futex_resume_trace(vm: &crate::types::ThreadState, phase: u32) {
-    let _ = (vm, phase);
 }
 
 #[cfg(any(test, feature = "harness"))]
