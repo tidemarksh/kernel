@@ -53,7 +53,7 @@ pub fn sys_dup3(vm: &mut ThreadState, base: u32, oldfd: u64, newfd: u64, flags: 
         crate::fs::fd_table::retain_ofd_id(entry.ofd_id);
         if old_new.ofd_id != 0 {
             clear_fd_entry_ptr(old_new_ptr);
-            crate::fs::fd_table::release_process_fd_ref(base, vm, old_new.ofd_id);
+            super::close::release_process_fd_ref(base, vm, old_new.ofd_id);
         }
 
         let cloexec = if (flags as i32 & O_CLOEXEC) != 0 {

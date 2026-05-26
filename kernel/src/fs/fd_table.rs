@@ -63,8 +63,6 @@ pub(crate) const OPEN_ACCESS_MODE_MASK: i32 = 0x3;
 const F_RDLCK: u16 = 0;
 const F_WRLCK: u16 = 1;
 const F_UNLCK: u16 = 2;
-const CLOSE_RANGE_UNSHARE: u64 = 1 << 1;
-const CLOSE_RANGE_CLOEXEC: u64 = 1 << 2;
 const LOCK_SH: u32 = 0x1;
 const LOCK_EX: u32 = 0x2;
 const LOCK_NB: u32 = 0x4;
@@ -74,13 +72,16 @@ pub const FD_CLOEXEC: u32 = 1;
 const EFD_SEMAPHORE: i32 = 0x1;
 
 pub use super::fd::backend_cleanup::BackendCleanup;
+pub use super::fd::close::{
+    close_all_for_process, close_all_for_process_without_backend_cleanup, release_ofd_id,
+    release_ofd_id_deferred, sys_close, sys_close_range,
+};
 pub use super::fd::dup::{sys_dup, sys_dup3};
 use super::fd::entry::{
-    clear_fd_entry_ptr, find_free_fd, get_fd_entry, get_process_state, load_fd_entry_ptr,
-    store_fd_entry_ptr,
+    find_free_fd, get_fd_entry, get_process_state, load_fd_entry_ptr, store_fd_entry_ptr,
 };
 pub use super::fd::entry::{load_process_fd_entry, store_process_fd_entry};
-use super::fd::ofd::{alloc as alloc_ofd, clear as clear_ofd, table as ofd_table};
+use super::fd::ofd::{alloc as alloc_ofd, table as ofd_table};
 pub use super::fd::ofd::{
     attach_ofd_table_ptr, get_ofd_by_id, get_offset_by_id, get_offset_floor_by_id, init,
     is_ofd_reserved, ofd_reserved_bytes, ofd_reserved_ptr, ofd_table_bytes, ofd_table_ptr,
@@ -188,77 +189,6 @@ pub fn restore_blocked_fd_entry(base: u32, vm: &ThreadState, saved: Option<(u32,
 
         store_fd_entry_ptr(core::ptr::addr_of_mut!((*ps).fd_table[fd]), saved);
     }
-}
-
-/// Drop one fd reference to an OFD and report the backend cleanup that must run
-/// when this was the final fd hold.
-///
-/// The OFD slot itself is cleared immediately; callers may run the returned
-/// backend cleanup locally today or defer it to the canonical owner kernel.
-pub fn release_ofd_id_deferred(ofd_id: u32) -> Option<BackendCleanup> {
-    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
-        return None;
-    }
-    let slot = ofd_id as usize;
-    let ofd = &mut ofd_table()[slot];
-    if ofd.refcount <= 0 {
-        return None;
-    }
-    ofd.refcount -= 1;
-    if ofd.refcount > 0 {
-        return None;
-    }
-    if is_ofd_reserved(ofd_id) {
-        return None;
-    }
-
-    crate::syscall::epoll::release_interest_for_ofd(ofd_id);
-    let cleanup = super::fd::backend_cleanup::for_ofd(ofd_id, ofd);
-    clear_ofd(ofd);
-    set_offset_floor_by_id(ofd_id, 0);
-    cleanup
-}
-
-/// Drop one fd reference to an OFD and run backend cleanup on last close.
-pub fn release_ofd_id(ofd_id: u32) {
-    if let Some(cleanup) = release_ofd_id_deferred(ofd_id) {
-        run_backend_cleanup(cleanup);
-    }
-}
-
-fn count_process_fd_refs(base: u32, vm: &ThreadState, ofd_id: u32) -> i32 {
-    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
-        return 0;
-    }
-    unsafe {
-        let ps = get_process_state(base, vm);
-        if ps.is_null() {
-            return 0;
-        }
-
-        let mut refs = 0;
-        for fd in 0..MAX_FDS {
-            let entry = load_fd_entry_ptr(core::ptr::addr_of!((*ps).fd_table[fd]));
-            if entry.ofd_id == ofd_id {
-                refs += 1;
-            }
-        }
-        refs
-    }
-}
-
-pub(in crate::fs) fn release_process_fd_ref(base: u32, vm: &ThreadState, ofd_id: u32) {
-    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
-        return;
-    }
-    let remaining_refs = count_process_fd_refs(base, vm, ofd_id);
-    if remaining_refs > 0 {
-        let ofd = &mut ofd_table()[ofd_id as usize];
-        if ofd.fd_type != 0 && ofd.refcount <= remaining_refs {
-            ofd.refcount = remaining_refs + 1;
-        }
-    }
-    release_ofd_id(ofd_id);
 }
 
 pub fn inode_has_write_open(ino: u32) -> bool {
@@ -814,83 +744,6 @@ pub fn sys_flock(vm: &mut ThreadState, base: u32, fd: u64, operation: u64) -> i6
     }
 }
 
-/// close(fd)
-pub fn sys_close(vm: &mut ThreadState, base: u32, fd: u64) -> i64 {
-    unsafe {
-        if fd as usize >= MAX_FDS {
-            return EBADF;
-        }
-
-        let ps = get_process_state(base, vm);
-        if ps.is_null() {
-            return EBADF;
-        }
-
-        let entry_ptr = core::ptr::addr_of_mut!((*ps).fd_table[fd as usize]);
-        let entry = load_fd_entry_ptr(entry_ptr);
-        if entry.ofd_id == 0 || entry.ofd_id as usize >= MAX_FDS {
-            return EBADF;
-        }
-
-        let ofd_id = entry.ofd_id;
-        clear_fd_entry_ptr(entry_ptr);
-        release_process_fd_ref(base, vm, ofd_id);
-
-        vm.socket_timeout_ms = -1;
-        0
-    }
-}
-
-/// close_range(first, last, flags) closes or marks close-on-exec for an fd range.
-///
-/// Tidemark does not have per-thread fd-table sharing, so CLOSE_RANGE_UNSHARE
-/// has no extra work here beyond applying the requested range operation.
-pub fn sys_close_range(vm: &mut ThreadState, base: u32, first: u64, last: u64, flags: u64) -> i64 {
-    if first > last {
-        return EINVAL;
-    }
-    let supported_flags = CLOSE_RANGE_UNSHARE | CLOSE_RANGE_CLOEXEC;
-    if flags & !supported_flags != 0 {
-        return EINVAL;
-    }
-
-    unsafe {
-        let ps = get_process_state(base, vm);
-        if ps.is_null() {
-            return EBADF;
-        }
-
-        let start = first.min(MAX_FDS as u64) as usize;
-        let end = last.min((MAX_FDS - 1) as u64) as usize;
-        if start >= MAX_FDS {
-            return 0;
-        }
-
-        for fd in start..=end {
-            let entry_ptr = core::ptr::addr_of_mut!((*ps).fd_table[fd]);
-            let entry = load_fd_entry_ptr(entry_ptr);
-            if entry.ofd_id == 0 || entry.ofd_id as usize >= MAX_FDS {
-                continue;
-            }
-            if flags & CLOSE_RANGE_CLOEXEC != 0 {
-                store_fd_entry_ptr(
-                    entry_ptr,
-                    FdEntry {
-                        ofd_id: entry.ofd_id,
-                        fd_flags: entry.fd_flags | FD_CLOEXEC,
-                    },
-                );
-                continue;
-            }
-            clear_fd_entry_ptr(entry_ptr);
-            release_process_fd_ref(base, vm, entry.ofd_id);
-        }
-    }
-
-    vm.socket_timeout_ms = -1;
-    0
-}
-
 // =========================================================================
 // FS integration: open_file, get_ofd, advance_offset, set_offset
 // =========================================================================
@@ -998,54 +851,6 @@ pub fn retain_fds_for_fork(base: u32, vm: &ThreadState) {
                 continue;
             }
             retain_ofd_id(entry.ofd_id);
-        }
-    }
-}
-
-/// Drop every fd reference still held by this process.
-pub fn close_all_for_process(base: u32, vm: &ThreadState) {
-    unsafe {
-        let ps = get_process_state(base, vm);
-        if ps.is_null() {
-            return;
-        }
-
-        for index in 0..MAX_FDS {
-            let entry_ptr = core::ptr::addr_of_mut!((*ps).fd_table[index]);
-            let entry = load_fd_entry_ptr(entry_ptr);
-            let ofd_id = entry.ofd_id;
-            clear_fd_entry_ptr(entry_ptr);
-            let ofd_idx = ofd_id as usize;
-            if ofd_id == 0 || ofd_idx >= MAX_FDS {
-                continue;
-            }
-            release_ofd_id(ofd_id);
-        }
-    }
-}
-
-/// Drop every fd reference still held by this process without
-/// mutating backend control planes. Used by runtime-owned vfork restore paths:
-/// the canonical owner kernel already accounts for pipe/epoll/socket cleanup,
-/// but the local kernel must still forget the transient child fd holds so later
-/// parent-local close semantics do not retain stale references.
-pub fn close_all_for_process_without_backend_cleanup(base: u32, vm: &ThreadState) {
-    unsafe {
-        let ps = get_process_state(base, vm);
-        if ps.is_null() {
-            return;
-        }
-
-        for index in 0..MAX_FDS {
-            let entry_ptr = core::ptr::addr_of_mut!((*ps).fd_table[index]);
-            let entry = load_fd_entry_ptr(entry_ptr);
-            let ofd_id = entry.ofd_id;
-            clear_fd_entry_ptr(entry_ptr);
-            let ofd_idx = ofd_id as usize;
-            if ofd_id == 0 || ofd_idx >= MAX_FDS {
-                continue;
-            }
-            let _ = release_ofd_id_deferred(ofd_id);
         }
     }
 }
