@@ -10,7 +10,7 @@ tidemark-kernel = { path = "../kernel", features = ["harness"] }
 
 [[test]]
 name = "abi_exports"
-path = "tests/abi/exports.rs"
+path = "tests/abi/exports/mod.rs"
 
 [[test]]
 name = "syscall_time"
