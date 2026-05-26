@@ -1,4 +1,4 @@
-use super::{RUNTIME_DEBUG_ENABLED, sample_process_pid_bytes};
+use super::{RUNTIME_DEBUG_ENABLED, process::sample_process_pid_bytes};
 
 const FD_SYSCALL_TRACE_CAP: usize = 1024;
 const PATH_SYSCALL_TRACE_CAP: usize = 128;
