@@ -9,11 +9,16 @@
 //! For HTTP preview, the runtime can inject a virtual client connection into a
 //! listening socket. Data then moves through the shared net ring buffers.
 //!
+mod address;
+
 use crate::abi::*;
 use crate::alloc;
 use crate::fs::fd_table;
 use crate::guest_mem;
 use crate::types::{OpenFileDesc, ThreadState};
+
+use address::port_from_sockaddr;
+pub use address::{connect_peer_addr, connect_peer_addr_for_fd, sys_getpeername, sys_getsockname};
 
 // Socket states
 const SOCK_STATE_IDLE: u32 = 0;
@@ -32,7 +37,7 @@ const SHUT_RD_MASK: u32 = 1 << 0;
 const SHUT_WR_MASK: u32 = 1 << 1;
 
 // Covers sockaddr_in, sockaddr_in6, and Linux sockaddr_un (sun_path[108]).
-const SOCKADDR_STORAGE_LEN: usize = 128;
+pub(super) const SOCKADDR_STORAGE_LEN: usize = 128;
 const ACCEPT_QUEUE_SIZE: usize = 16;
 const INVALID_BUF_IDX: i32 = -1;
 const INVALID_PEER_IDX: i32 = -1;
@@ -142,7 +147,7 @@ static mut SOCKET_READ_LAST_RESULT: [i64; MAX_SOCKETS] = [0; MAX_SOCKETS];
 static mut SOCKET_READ_LAST_BEFORE: [u32; MAX_SOCKETS] = [0; MAX_SOCKETS];
 static mut SOCKET_READ_LAST_AFTER: [u32; MAX_SOCKETS] = [0; MAX_SOCKETS];
 
-fn socket_table() -> &'static mut [SocketSlot; MAX_SOCKETS] {
+pub(super) fn socket_table() -> &'static mut [SocketSlot; MAX_SOCKETS] {
     unsafe {
         let p = core::ptr::read(core::ptr::addr_of!(SOCKET_TABLE_PTR));
         &mut *p
@@ -453,7 +458,7 @@ pub fn socket_send_timeout_ms_for_fd(base: u32, vm: &ThreadState, fd: u64) -> i6
 }
 
 /// Look up the socket index for an FD. Returns None if the FD is not a socket.
-fn get_socket_idx(base: u32, vm: &ThreadState, fd: u64) -> Option<u32> {
+pub(super) fn get_socket_idx(base: u32, vm: &ThreadState, fd: u64) -> Option<u32> {
     let ofd = fd_table::get_ofd(base, vm, fd)?;
     if ofd.fd_type != FD_TYPE_SOCKET {
         return None;
@@ -461,7 +466,7 @@ fn get_socket_idx(base: u32, vm: &ThreadState, fd: u64) -> Option<u32> {
     Some(ofd.ino)
 }
 
-fn thread_connect_target_fd(vm: &ThreadState) -> u64 {
+pub(super) fn thread_connect_target_fd(vm: &ThreadState) -> u64 {
     if vm.blocked_ofd_id != 0 {
         vm.blocked_fd as u64
     } else {
@@ -471,25 +476,6 @@ fn thread_connect_target_fd(vm: &ThreadState) -> u64 {
 
 pub fn thread_connect_fd(vm: &ThreadState) -> i32 {
     thread_connect_target_fd(vm) as i32
-}
-
-pub fn connect_peer_addr_for_fd(base: u32, vm: &ThreadState, fd: u64, dst: &mut [u8]) -> i32 {
-    let Some(idx) = get_socket_idx(base, vm, fd).map(|value| value as usize) else {
-        return ENOTSOCK as i32;
-    };
-    let slot = &socket_table()[idx];
-    if slot.state != SOCK_STATE_CONNECTING {
-        return EINVAL as i32;
-    }
-    let len = (slot.peer_len as usize)
-        .min(dst.len())
-        .min(SOCKADDR_STORAGE_LEN);
-    dst[..len].copy_from_slice(&slot.peer_addr[..len]);
-    len as i32
-}
-
-pub fn connect_peer_addr(vm: &ThreadState, dst: &mut [u8]) -> i32 {
-    connect_peer_addr_for_fd(vm.guest_base, vm, thread_connect_target_fd(vm), dst)
 }
 
 fn ensure_external_peer(idx: usize) -> Result<(), i64> {
@@ -893,13 +879,6 @@ pub fn inject_external_inbound_for_fd(base: u32, vm: &ThreadState, fd: u64, src:
         return ENOMEM as i32;
     }
     crate::net::ring_buffer::write(socket_table()[idx].recv_buf_idx as u32, src) as i32
-}
-
-fn port_from_sockaddr(addr: &[u8], len: u32) -> u16 {
-    if len < 4 {
-        return 0;
-    }
-    u16::from_be_bytes([addr[2], addr[3]])
 }
 
 fn accept_queue_len(slot: &SocketSlot) -> usize {
@@ -2583,78 +2562,6 @@ pub fn sys_getsockopt(
         }
         _ => ENOPROTOOPT,
     }
-}
-
-// =========================================================================
-// getsockname(2) / getpeername(2)
-// =========================================================================
-
-/// getsockname(fd, addr, addrlen) -> 0 or error
-pub fn sys_getsockname(
-    vm: &mut ThreadState,
-    base: u32,
-    fd: u64,
-    addr: u64,
-    addrlen_ptr: u64,
-) -> i64 {
-    let idx = match get_socket_idx(base, vm, fd) {
-        Some(i) => i,
-        None => return ENOTSOCK,
-    };
-
-    let slot = &socket_table()[idx as usize];
-
-    if slot.local_len == 0 {
-        // No address bound; return a zeroed sockaddr with the right family
-        // struct sockaddr { u16 sa_family; ... }
-        let family_bytes = (slot.domain as u16).to_le_bytes();
-        unsafe {
-            guest_mem::write_bytes(base, addr, &family_bytes);
-            // Zero out the rest up to the addrlen the caller provided
-            let caller_len = guest_mem::read_u32(base, addrlen_ptr);
-            if caller_len > 2 {
-                let zero_len = (caller_len as usize - 2).min(SOCKADDR_STORAGE_LEN - 2);
-                let zeros = [0u8; SOCKADDR_STORAGE_LEN];
-                guest_mem::write_bytes(base, addr + 2, &zeros[..zero_len]);
-            }
-            // Write actual length (2 for just the family)
-            guest_mem::write_u32(base, addrlen_ptr, 2);
-        }
-        return 0;
-    }
-
-    let len = slot.local_len as usize;
-    unsafe {
-        guest_mem::write_bytes(base, addr, &slot.local_addr[..len]);
-        guest_mem::write_u32(base, addrlen_ptr, len as u32);
-    }
-    0
-}
-
-/// getpeername(fd, addr, addrlen) -> 0 or error
-pub fn sys_getpeername(
-    vm: &mut ThreadState,
-    base: u32,
-    fd: u64,
-    addr: u64,
-    addrlen_ptr: u64,
-) -> i64 {
-    let idx = match get_socket_idx(base, vm, fd) {
-        Some(i) => i,
-        None => return ENOTSOCK,
-    };
-
-    let slot = &socket_table()[idx as usize];
-    if slot.peer_len == 0 {
-        return ENOTCONN;
-    }
-
-    let len = slot.peer_len as usize;
-    unsafe {
-        guest_mem::write_bytes(base, addr, &slot.peer_addr[..len]);
-        guest_mem::write_u32(base, addrlen_ptr, len as u32);
-    }
-    0
 }
 
 // =========================================================================
