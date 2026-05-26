@@ -267,127 +267,127 @@ pub extern "C" fn debug_memory_syscall_trace_entry_process_ptr(index: u32) -> u3
 #[cfg(not(any(test, feature = "harness")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_len() -> u32 {
-    crate::syscall::fd_syscall_trace_len()
+    crate::syscall::trace::fd::len()
 }
 
 #[cfg(not(any(test, feature = "harness")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_vm_ptr(index: u32) -> u32 {
-    crate::syscall::fd_syscall_trace_entry(index).vm_ptr
+    crate::syscall::trace::fd::entry(index).vm_ptr
 }
 
 #[cfg(not(any(test, feature = "harness")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_nr(index: u32) -> u64 {
-    crate::syscall::fd_syscall_trace_entry(index).nr
+    crate::syscall::trace::fd::entry(index).nr
 }
 
 #[cfg(not(any(test, feature = "harness")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_arg0(index: u32) -> u64 {
-    crate::syscall::fd_syscall_trace_entry(index).arg0
+    crate::syscall::trace::fd::entry(index).arg0
 }
 
 #[cfg(not(any(test, feature = "harness")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_arg0_ofd_id(index: u32) -> u32 {
-    crate::syscall::fd_syscall_trace_entry(index).arg0_ofd_id
+    crate::syscall::trace::fd::entry(index).arg0_ofd_id
 }
 
 #[cfg(not(any(test, feature = "harness")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_arg0_ofd_type(index: u32) -> i32 {
-    crate::syscall::fd_syscall_trace_entry(index).arg0_ofd_type
+    crate::syscall::trace::fd::entry(index).arg0_ofd_type
 }
 
 #[cfg(not(any(test, feature = "harness")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_arg0_ofd_offset(index: u32) -> i64 {
-    crate::syscall::fd_syscall_trace_entry(index).arg0_ofd_offset
+    crate::syscall::trace::fd::entry(index).arg0_ofd_offset
 }
 
 #[cfg(not(any(test, feature = "harness")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_arg0_ofd_host_fd(index: u32) -> i32 {
-    crate::syscall::fd_syscall_trace_entry(index).arg0_ofd_host_fd
+    crate::syscall::trace::fd::entry(index).arg0_ofd_host_fd
 }
 
 #[cfg(not(any(test, feature = "harness")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_arg0_ofd_status_flags(index: u32) -> i32 {
-    crate::syscall::fd_syscall_trace_entry(index).arg0_ofd_status_flags
+    crate::syscall::trace::fd::entry(index).arg0_ofd_status_flags
 }
 
 #[cfg(not(any(test, feature = "harness")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_arg0_ofd_ino(index: u32) -> u32 {
-    crate::syscall::fd_syscall_trace_entry(index).arg0_ofd_ino
+    crate::syscall::trace::fd::entry(index).arg0_ofd_ino
 }
 
 #[cfg(not(any(test, feature = "harness")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_arg0_inode_mode(index: u32) -> u32 {
-    crate::syscall::fd_syscall_trace_entry(index).arg0_inode_mode
+    crate::syscall::trace::fd::entry(index).arg0_inode_mode
 }
 
 #[cfg(not(any(test, feature = "harness")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_arg0_pipe_generation(index: u32) -> u32 {
-    crate::syscall::fd_syscall_trace_entry(index).arg0_pipe_generation
+    crate::syscall::trace::fd::entry(index).arg0_pipe_generation
 }
 
 #[cfg(not(any(test, feature = "harness")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_arg1(index: u32) -> u64 {
-    crate::syscall::fd_syscall_trace_entry(index).arg1
+    crate::syscall::trace::fd::entry(index).arg1
 }
 
 #[cfg(not(any(test, feature = "harness")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_arg2(index: u32) -> u64 {
-    crate::syscall::fd_syscall_trace_entry(index).arg2
+    crate::syscall::trace::fd::entry(index).arg2
 }
 
 #[cfg(not(any(test, feature = "harness")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_arg2_ofd_id(index: u32) -> u32 {
-    crate::syscall::fd_syscall_trace_entry(index).arg2_ofd_id
+    crate::syscall::trace::fd::entry(index).arg2_ofd_id
 }
 
 #[cfg(not(any(test, feature = "harness")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_arg2_ofd_type(index: u32) -> i32 {
-    crate::syscall::fd_syscall_trace_entry(index).arg2_ofd_type
+    crate::syscall::trace::fd::entry(index).arg2_ofd_type
 }
 
 #[cfg(not(any(test, feature = "harness")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_arg3(index: u32) -> u64 {
-    crate::syscall::fd_syscall_trace_entry(index).arg3
+    crate::syscall::trace::fd::entry(index).arg3
 }
 
 #[cfg(not(any(test, feature = "harness")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_result(index: u32) -> i64 {
-    crate::syscall::fd_syscall_trace_entry(index).result
+    crate::syscall::trace::fd::entry(index).result
 }
 
 #[cfg(not(any(test, feature = "harness")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_status(index: u32) -> i32 {
-    crate::syscall::fd_syscall_trace_entry(index).status
+    crate::syscall::trace::fd::entry(index).status
 }
 
 #[cfg(not(any(test, feature = "harness")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_pid_sample0(index: u32) -> u64 {
-    crate::syscall::fd_syscall_trace_entry(index).pid_sample0
+    crate::syscall::trace::fd::entry(index).pid_sample0
 }
 
 #[cfg(not(any(test, feature = "harness")))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_fd_syscall_trace_pid_sample1(index: u32) -> u64 {
-    crate::syscall::fd_syscall_trace_entry(index).pid_sample1
+    crate::syscall::trace::fd::entry(index).pid_sample1
 }
 
 #[cfg(not(any(test, feature = "harness")))]
