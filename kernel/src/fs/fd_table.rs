@@ -74,31 +74,7 @@ const LOCK_UN: u32 = 0x8;
 pub const FD_CLOEXEC: u32 = 1;
 const EFD_SEMAPHORE: i32 = 0x1;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BackendCleanup {
-    Pipe {
-        pipe_idx: u32,
-        generation: u32,
-        is_read_end: bool,
-        ofd_id: u32,
-    },
-    Epoll {
-        epoll_idx: u32,
-    },
-    Socket {
-        socket_idx: u32,
-    },
-    Timerfd {
-        timerfd_idx: u32,
-    },
-    Signalfd {
-        signalfd_idx: u32,
-    },
-    Pty {
-        pty_idx: u32,
-        is_master: bool,
-    },
-}
+pub use super::fd::backend_cleanup::BackendCleanup;
 
 /// Pointer to OFD table in kernel Worker linear memory.
 static mut OFD_TABLE_PTR: *mut [OpenFileDesc; MAX_FDS] = core::ptr::null_mut();
@@ -314,43 +290,6 @@ unsafe fn alloc_ofd(fd_type: i32, status_flags: i32) -> u32 {
     0
 }
 
-fn backend_cleanup_for_ofd(ofd_id: u32, ofd: &OpenFileDesc) -> Option<BackendCleanup> {
-    if ofd.fd_type == FD_TYPE_PIPE {
-        Some(BackendCleanup::Pipe {
-            pipe_idx: ofd.ino,
-            generation: ofd.offset as u32,
-            is_read_end: ofd.host_fd >= 0,
-            ofd_id,
-        })
-    } else if ofd.fd_type == FD_TYPE_EPOLL {
-        Some(BackendCleanup::Epoll { epoll_idx: ofd.ino })
-    } else if ofd.fd_type == FD_TYPE_SOCKET {
-        Some(BackendCleanup::Socket {
-            socket_idx: ofd.ino,
-        })
-    } else if ofd.fd_type == FD_TYPE_TIMERFD {
-        Some(BackendCleanup::Timerfd {
-            timerfd_idx: ofd.ino,
-        })
-    } else if ofd.fd_type == FD_TYPE_SIGNALFD {
-        Some(BackendCleanup::Signalfd {
-            signalfd_idx: ofd.ino,
-        })
-    } else if ofd.fd_type == FD_TYPE_PTY_MASTER {
-        Some(BackendCleanup::Pty {
-            pty_idx: ofd.ino,
-            is_master: true,
-        })
-    } else if ofd.fd_type == FD_TYPE_PTY_SLAVE {
-        Some(BackendCleanup::Pty {
-            pty_idx: ofd.ino,
-            is_master: false,
-        })
-    } else {
-        None
-    }
-}
-
 fn clear_ofd(ofd: &mut OpenFileDesc) {
     ofd.fd_type = 0;
     ofd.host_fd = -1;
@@ -362,41 +301,7 @@ fn clear_ofd(ofd: &mut OpenFileDesc) {
 }
 
 pub fn run_backend_cleanup(cleanup: BackendCleanup) {
-    match cleanup {
-        BackendCleanup::Pipe {
-            pipe_idx,
-            generation,
-            is_read_end,
-            ofd_id,
-        } => {
-            if !crate::syscall::pipe::pipe_generation_matches(pipe_idx, generation) {
-                return;
-            }
-            let outcome = crate::syscall::pipe::pipe_close_outcome(pipe_idx, is_read_end);
-            crate::tracepoints::record_pipe_close_event(
-                pipe_idx,
-                is_read_end,
-                ofd_id,
-                outcome.read_open,
-                outcome.write_open,
-            );
-        }
-        BackendCleanup::Epoll { epoll_idx } => {
-            crate::syscall::epoll::close_epoll(epoll_idx);
-        }
-        BackendCleanup::Socket { socket_idx } => {
-            crate::syscall::socket::socket_close(socket_idx);
-        }
-        BackendCleanup::Timerfd { timerfd_idx } => {
-            crate::syscall::time::close_timerfd(timerfd_idx);
-        }
-        BackendCleanup::Signalfd { signalfd_idx } => {
-            crate::syscall::signal::close_signalfd(signalfd_idx);
-        }
-        BackendCleanup::Pty { pty_idx, is_master } => {
-            crate::syscall::pty::pty_close(pty_idx, is_master);
-        }
-    }
+    super::fd::backend_cleanup::run(cleanup);
 }
 
 /// Increment the OFD refcount for an additional file descriptor reference.
@@ -521,7 +426,7 @@ pub fn release_ofd_id_deferred(ofd_id: u32) -> Option<BackendCleanup> {
     }
 
     crate::syscall::epoll::release_interest_for_ofd(ofd_id);
-    let cleanup = backend_cleanup_for_ofd(ofd_id, ofd);
+    let cleanup = super::fd::backend_cleanup::for_ofd(ofd_id, ofd);
     clear_ofd(ofd);
     set_offset_floor_by_id(ofd_id, 0);
     cleanup
