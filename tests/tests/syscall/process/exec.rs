@@ -1,0 +1,705 @@
+use super::*;
+
+#[test]
+fn contract_execve_completes_in_place_without_spawn() {
+    let mut t = TestVm::new();
+    let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    let path_addr = install_exec_file(&t, b"test", &elf);
+    assert_ne!(memfs::resolve_path(b"/bin/test"), 0);
+    assert_eq!(t.guest_mem(path_addr, 10), b"/bin/test\0");
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.spawn_kind, SPAWN_KIND_NONE);
+    assert_eq!(t.vm.spawn_child_pid, 0);
+    assert_eq!(t.vm.pc, 0x1000);
+}
+
+#[test]
+fn contract_execve_initializes_tp_from_pt_tls() {
+    let mut t = TestVm::new();
+    let elf = build_test_elf_with_tls(&[0x13, 0x05, 0x70, 0x00], &[0x41, 0x42, 0x43, 0x44], 0x20);
+    let path_addr = install_exec_file(&t, b"test_tls", &elf);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.tls_base, 0x3000);
+    assert_eq!(t.vm.x[4], 0x3000);
+}
+
+#[test]
+fn contract_execve_preserves_host_stdio_slots() {
+    let mut t = TestVm::new();
+    let ps_addr = t.vm.process_ptr as u64;
+    let stdin_pipe_off = core::mem::offset_of!(ProcessState, stdin_pipe_slot) as u64;
+    let stdout_pipe_off = core::mem::offset_of!(ProcessState, stdout_pipe_slot) as u64;
+    let stderr_pipe_off = core::mem::offset_of!(ProcessState, stderr_pipe_slot) as u64;
+    let old_stdin = unsafe { guest_mem::read_u32(t.base, ps_addr + stdin_pipe_off) };
+    let old_stdout = unsafe { guest_mem::read_u32(t.base, ps_addr + stdout_pipe_off) };
+    let old_stderr = unsafe { guest_mem::read_u32(t.base, ps_addr + stderr_pipe_off) };
+    assert!(old_stdin != 0 && old_stdout != 0 && old_stderr != 0);
+
+    let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    let path_addr = install_exec_file(&t, b"test", &elf);
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+
+    let new_ps_addr = t.vm.process_ptr as u64;
+    let new_stdin = unsafe { guest_mem::read_u32(t.base, new_ps_addr + stdin_pipe_off) };
+    let new_stdout = unsafe { guest_mem::read_u32(t.base, new_ps_addr + stdout_pipe_off) };
+    let new_stderr = unsafe { guest_mem::read_u32(t.base, new_ps_addr + stderr_pipe_off) };
+    assert_eq!(new_stdin, old_stdin);
+    assert_eq!(new_stdout, old_stdout);
+    assert_eq!(new_stderr, old_stderr);
+}
+
+#[test]
+fn semantics_execve_discards_other_threads_on_success() {
+    let mut t = TestVm::new();
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    ps.thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
+    ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, 0xFEED_BEEFu32, 0, 0);
+    let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    let path_addr = install_exec_file(&t, b"test", &elf);
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+    assert_eq!(
+        ps.thread_count.load(core::sync::atomic::Ordering::Acquire),
+        1
+    );
+    assert_eq!(ps.threads[0].state, THREAD_RUNNING);
+    assert_eq!(ps.threads[1].state, THREAD_NONE);
+}
+
+#[test]
+fn semantics_execve_clears_alt_stack() {
+    let mut t = TestVm::new();
+    t.vm.sigaltstack_sp = 0x5000;
+    t.vm.sigaltstack_size = 8192;
+
+    let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    let path_addr = install_exec_file(&t, b"test", &elf);
+    process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+
+    assert_eq!(t.vm.sigaltstack_sp, 0);
+    assert_eq!(t.vm.sigaltstack_size, 0);
+    assert_eq!(t.vm.sigaltstack_flags, SS_DISABLE);
+}
+
+#[test]
+fn semantics_execve_preserves_signal_mask_and_pending() {
+    let mut t = TestVm::new();
+    t.vm.sig_mask = (1u64 << (SIGALRM - 1)) | (1u64 << (SIGTERM - 1));
+    t.vm.sig_pending = 1u64 << (SIGCHLD - 1);
+
+    let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    let path_addr = install_exec_file(&t, b"test", &elf);
+    process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+
+    assert_eq!(
+        t.vm.sig_mask,
+        (1u64 << (SIGALRM - 1)) | (1u64 << (SIGTERM - 1))
+    );
+    assert_eq!(t.vm.sig_pending, 1u64 << (SIGCHLD - 1));
+}
+
+#[test]
+fn contract_execve_with_pt_interp_enters_interpreter_and_sets_auxv() {
+    let mut t = TestVm::new();
+    t.vm.sig_mask = 1u64 << (SIGTERM - 1);
+    t.vm.sig_pending = 1u64 << (SIGCHLD - 1);
+    let main_elf = build_test_elf_with_interp(&[0x13, 0x05, 0x70, 0x00], b"/lib/ld-test.so");
+    let interp_elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    install_exec_file_at(&t, b"/lib/ld-test.so", &interp_elf);
+    let path_addr = install_exec_file_at(&t, b"/bin/test_interp", &main_elf);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x3000);
+    assert_eq!(t.vm.sig_mask, 1u64 << (SIGTERM - 1));
+    assert_eq!(t.vm.sig_pending, 1u64 << (SIGCHLD - 1));
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_ENTRY),
+        Some(0x1200)
+    );
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_BASE),
+        Some(0x2000)
+    );
+    assert!(find_auxv_value(&t, tidemark_kernel::elf::AT_PHDR).is_some());
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_HWCAP),
+        Some(0x112D)
+    );
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_CLKTCK),
+        Some(100)
+    );
+}
+
+#[test]
+fn contract_execve_with_pt_interp_follows_symlink_path() {
+    let mut t = TestVm::new();
+    let main_elf = build_test_elf_with_interp(&[0x13, 0x05, 0x70, 0x00], b"/lib/ld-test.so");
+    let interp_elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    install_exec_file_at(&t, b"/usr/lib/ld-test.so", &interp_elf);
+    assert_ne!(memfs::create_symlink(1, b"lib", b"usr/lib"), 0);
+    let path_addr = install_exec_file_at(&t, b"/bin/test_interp_symlink", &main_elf);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.pc, 0x3000);
+}
+
+#[test]
+fn contract_execve_with_pt_interp_preserves_executable_tls_base() {
+    let mut t = TestVm::new();
+    let main_elf = build_test_elf_with_interp_and_tls(
+        &[0x13, 0x05, 0x70, 0x00],
+        b"/lib/ld-test.so",
+        &[0x41, 0x42, 0x43, 0x44],
+        0x20,
+    );
+    let interp_elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    install_exec_file_at(&t, b"/lib/ld-test.so", &interp_elf);
+    let path_addr = install_exec_file_at(&t, b"/bin/test_interp_tls", &main_elf);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x5000);
+    assert_eq!(t.vm.tls_base, 0x3000);
+    assert_eq!(t.vm.x[4], 0x3000);
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_ENTRY),
+        Some(0x1300)
+    );
+}
+
+#[test]
+fn contract_execve_with_pt_interp_preserves_biased_dynamic_tls_base() {
+    let mut t = TestVm::new();
+    let main_elf = build_test_elf_dyn_with_interp_and_tls(
+        &[0x13, 0x05, 0x70, 0x00],
+        b"/lib/ld-test.so",
+        &[0x41, 0x42, 0x43, 0x44],
+        0x20,
+    );
+    let interp_elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    install_exec_file_at(&t, b"/lib/ld-test.so", &interp_elf);
+    let path_addr = install_exec_file_at(&t, b"/bin/test_dyn_interp_tls", &main_elf);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x6000);
+    assert_eq!(t.vm.tls_base, 0x4000);
+    assert_eq!(t.vm.x[4], 0x4000);
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_ENTRY),
+        Some(0x2300)
+    );
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_BASE),
+        Some(0x5000)
+    );
+}
+
+#[test]
+fn contract_execve_accepts_et_dyn_main_binary() {
+    let mut t = TestVm::new();
+    let path_addr = install_exec_file(
+        &t,
+        b"test-dyn",
+        &build_test_elf_dyn(&[0x13, 0x05, 0x70, 0x00]),
+    );
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(
+        ret,
+        0,
+        "execve trace: {}",
+        tidemark_kernel::harness::support::describe_execve_stage_trace()
+    );
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x1000);
+}
+
+#[test]
+fn contract_execve_with_pt_interp_accepts_et_dyn_interpreter() {
+    let mut t = TestVm::new();
+    let main_elf = build_test_elf_with_interp(&[0x13, 0x05, 0x70, 0x00], b"/lib/ld-test.so");
+    let interp_elf = build_test_elf_dyn(&[0x13, 0x05, 0x70, 0x00]);
+    install_exec_file_at(&t, b"/lib/ld-test.so", &interp_elf);
+    let path_addr = install_exec_file_at(&t, b"/bin/test_dyn_interp", &main_elf);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x3000);
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_ENTRY),
+        Some(0x1200)
+    );
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_BASE),
+        Some(0x2000)
+    );
+    let mut code = [0u8; 4];
+    unsafe {
+        tidemark_kernel::guest_mem::read_bytes(t.base, t.vm.pc, &mut code);
+    }
+    assert_eq!(code, [0x13, 0x05, 0x70, 0x00]);
+}
+
+#[test]
+fn contract_execve_with_pt_interp_accepts_et_dyn_two_load_interpreter() {
+    let mut t = TestVm::new();
+    let main_elf = build_test_elf_with_interp(&[0x13, 0x05, 0x70, 0x00], b"/lib/ld-test.so");
+    let interp_elf =
+        build_test_elf_dyn_two_loads(&[0x13, 0x05, 0x70, 0x00], &[0xaa, 0xbb, 0xcc, 0xdd]);
+    install_exec_file_at(&t, b"/lib/ld-test.so", &interp_elf);
+    let path_addr = install_exec_file_at(&t, b"/bin/test_dyn_two_load_interp", &main_elf);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x3000);
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_ENTRY),
+        Some(0x1200)
+    );
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_BASE),
+        Some(0x2000)
+    );
+}
+
+#[test]
+fn contract_execve_interpreter_script_enters_interpreter_and_rewrites_argv() {
+    let mut t = TestVm::new();
+    let interp_elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    install_exec_file_at(&t, b"/bin/interp", &interp_elf);
+    let path_addr = install_exec_file_at(&t, b"/bin/script", b"#!/bin/interp\nexit 0\n");
+    let argv_addr = write_strvec(&t, 0x400, &[b"/bin/script", b"arg1"]);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, argv_addr, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x1000);
+
+    let argc = unsafe { guest_mem::read_u64(t.base, t.vm.x[2]) };
+    assert_eq!(argc, 3);
+    let argv0 = unsafe { guest_mem::read_u64(t.base, t.vm.x[2] + 8) };
+    let argv1 = unsafe { guest_mem::read_u64(t.base, t.vm.x[2] + 16) };
+    let argv2 = unsafe { guest_mem::read_u64(t.base, t.vm.x[2] + 24) };
+    let mut buf = [0u8; 32];
+    let len0 = unsafe { guest_mem::read_cstr(t.base, argv0, &mut buf) };
+    assert_eq!(&buf[..len0], b"/bin/interp");
+    let len1 = unsafe { guest_mem::read_cstr(t.base, argv1, &mut buf) };
+    assert_eq!(&buf[..len1], b"/bin/script");
+    let len2 = unsafe { guest_mem::read_cstr(t.base, argv2, &mut buf) };
+    assert_eq!(&buf[..len2], b"arg1");
+}
+
+#[test]
+fn contract_execve_with_pt_interp_biases_et_dyn_main_executable() {
+    let mut t = TestVm::new();
+    let main_code = [0x13, 0x05, 0x70, 0x00];
+    let main_elf = build_test_elf_dyn_with_interp(&main_code, b"/lib/ld-test.so");
+    let interp_elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    install_exec_file_at(&t, b"/lib/ld-test.so", &interp_elf);
+    let path_addr = install_exec_file_at(&t, b"/bin/test_dyn_main_interp", &main_elf);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x4000);
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_ENTRY),
+        Some(0x2200)
+    );
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_PHDR),
+        Some(0x2040)
+    );
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_BASE),
+        Some(0x3000)
+    );
+
+    let mut interp = [0u8; 32];
+    let interp_len = unsafe { tidemark_kernel::guest_mem::read_cstr(t.base, 0x2100, &mut interp) };
+    assert_eq!(&interp[..interp_len], b"/lib/ld-test.so");
+
+    let mut code = [0u8; 4];
+    unsafe {
+        tidemark_kernel::guest_mem::read_bytes(t.base, 0x2200, &mut code);
+    }
+    assert_eq!(code, main_code);
+}
+
+#[test]
+fn contract_execve_with_pt_interp_biases_et_dyn_two_load_main_executable() {
+    let mut t = TestVm::new();
+    let main_code = [0x13, 0x05, 0x70, 0x00];
+    let main_data = [0xaa, 0xbb, 0xcc, 0xdd];
+    let main_elf =
+        build_test_elf_dyn_with_interp_two_loads(&main_code, &main_data, b"/lib/ld-test.so");
+    let interp_elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    install_exec_file_at(&t, b"/lib/ld-test.so", &interp_elf);
+    let path_addr = install_exec_file_at(&t, b"/bin/test_dyn_two_load_main_interp", &main_elf);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x6000);
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_ENTRY),
+        Some(0x2200)
+    );
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_PHDR),
+        Some(0x2040)
+    );
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_BASE),
+        Some(0x5000)
+    );
+
+    let mut data = [0u8; 4];
+    unsafe {
+        tidemark_kernel::guest_mem::read_bytes(t.base, 0x4000, &mut data);
+    }
+    assert_eq!(data, main_data);
+}
+
+#[test]
+fn contract_execve_with_pt_interp_preserves_biased_main_dynamic_section() {
+    let mut t = TestVm::new();
+    let main_elf = build_test_elf_dyn_with_interp_dynamic(
+        &[0x13, 0x05, 0x70, 0x00],
+        &[0xaa, 0xbb, 0xcc, 0xdd],
+        b"/lib/ld-test.so",
+    );
+    let interp_elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    install_exec_file_at(&t, b"/lib/ld-test.so", &interp_elf);
+    let path_addr = install_exec_file_at(&t, b"/bin/test_dyn_dynamic_interp", &main_elf);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x6000);
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_ENTRY),
+        Some(0x2200)
+    );
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_PHDR),
+        Some(0x2040)
+    );
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_BASE),
+        Some(0x5000)
+    );
+
+    let dyn_base = 0x4020u64;
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, dyn_base) },
+        7
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, dyn_base + 8) },
+        0x3300
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, dyn_base + 16) },
+        8
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, dyn_base + 24) },
+        24
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, dyn_base + 32) },
+        0x6fff_ffff
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, dyn_base + 40) },
+        5
+    );
+}
+
+#[test]
+fn contract_execve_with_pt_interp_zero_fills_interpreter_brk_padding() {
+    let mut t = TestVm::new();
+    let main_code = [0x13, 0x05, 0x70, 0x00];
+    let main_elf = build_test_elf_with_interp(&main_code, b"/lib/ld-test.so");
+    let interp_elf = build_test_elf_dyn_low(&[0x13, 0x06, 0x80, 0x00]);
+    install_exec_file_at(&t, b"/lib/ld-test.so", &interp_elf);
+    let path_addr = install_exec_file_at(&t, b"/bin/test_pad", &main_elf);
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_bytes(t.base, 0x2ff0, &[0xa5; 16]);
+    }
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+
+    let mut padding = [0u8; 16];
+    unsafe {
+        tidemark_kernel::guest_mem::read_bytes(t.base, 0x2ff0, &mut padding);
+    }
+    assert_eq!(padding, [0u8; 16]);
+}
+
+#[test]
+fn contract_execve_discards_old_guest_address_space_bytes() {
+    let mut t = TestVm::new();
+    let old_brk = t.sys_brk(0x126000);
+    assert_eq!(old_brk, 0x126000);
+    let anon_map = t.sys_mmap(
+        0,
+        PAGE_SIZE,
+        PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS,
+        -1,
+        0,
+    );
+    assert!(anon_map > 0);
+    unsafe {
+        guest_mem::write_bytes(t.base, 0x125000, &[0xa5; 16]);
+        guest_mem::write_bytes(t.base, anon_map as u64, &[0x5a; 16]);
+    }
+
+    let code = [0x13, 0x05, 0x70, 0x00];
+    let elf = build_test_elf(&code);
+    let path_addr = install_exec_file_at(&t, b"/bin/test_exec_clear", &elf);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+
+    let mut old_brk_bytes = [0u8; 16];
+    let mut old_map_bytes = [0u8; 16];
+    unsafe {
+        guest_mem::read_bytes(t.base, 0x125000, &mut old_brk_bytes);
+        guest_mem::read_bytes(t.base, anon_map as u64, &mut old_map_bytes);
+    }
+    assert_eq!(old_brk_bytes, [0u8; 16]);
+    assert_eq!(old_map_bytes, [0u8; 16]);
+}
+
+#[test]
+fn install_procfs_snapshot_writes_linux_like_maps() {
+    let mut t = TestVm::new();
+    let grown = t.sys_brk(0x126000);
+    assert_eq!(grown, 0x126000);
+
+    let bin = ensure_dir(1, b"bin");
+    let exe_ino = memfs::create_file(bin, b"maps-target", 0o755);
+    assert!(exe_ino > 0);
+    assert_eq!(memfs::write_file(exe_ino, 0, b"ELF"), 3);
+
+    let exe_fd = t.sys_openat(b"/bin/maps-target", O_RDONLY);
+    assert!(exe_fd >= 3);
+    let file_map = t.sys_mmap(0, PAGE_SIZE, PROT_READ | PROT_EXEC, MAP_PRIVATE, exe_fd, 0);
+    assert!(file_map > 0);
+    let anon_map = t.sys_mmap(
+        0,
+        PAGE_SIZE,
+        PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS,
+        -1,
+        0,
+    );
+    assert!(anon_map > 0);
+    let stack_top = tidemark_kernel::syscall::memory::map_initial_stack(t.base, 0x80_0000, 0x20000);
+    assert!(stack_top > 0);
+
+    process_impl::install_procfs_snapshot(b"/bin/maps-target");
+
+    let maps = String::from_utf8(read_file_bytes(b"/proc/self/maps")).unwrap();
+    assert!(maps.contains("/bin/maps-target"));
+    assert!(maps.contains("r-xp"));
+    assert!(maps.contains("[heap]"));
+    assert!(maps.contains("[stack]"));
+    assert!(maps.contains("rw-p 00000000 00:00 0 [heap]"));
+
+    let ngroups_max = String::from_utf8(read_file_bytes(b"/proc/sys/kernel/ngroups_max")).unwrap();
+    assert_eq!(ngroups_max, "65536\n");
+}
+
+#[test]
+fn contract_execve_with_pt_interp_maps_main_executable_image() {
+    let mut t = TestVm::new();
+    let main_code = [0x13, 0x05, 0x70, 0x00];
+    let main_elf = build_test_elf_with_interp(&main_code, b"/lib/ld-test.so");
+    let interp_elf = build_test_elf_dyn_low(&[0x13, 0x06, 0x80, 0x00]);
+    install_exec_file_at(&t, b"/lib/ld-test.so", &interp_elf);
+    let path_addr = install_exec_file_at(&t, b"/bin/test_main_mapped", &main_elf);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x2040);
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_ENTRY),
+        Some(0x1200)
+    );
+    assert_eq!(
+        find_auxv_value(&t, tidemark_kernel::elf::AT_BASE),
+        Some(0x2000)
+    );
+
+    let mut interp = [0u8; 32];
+    let interp_len = unsafe { tidemark_kernel::guest_mem::read_cstr(t.base, 0x1100, &mut interp) };
+    assert_eq!(&interp[..interp_len], b"/lib/ld-test.so");
+
+    let mut code = [0u8; 4];
+    unsafe {
+        tidemark_kernel::guest_mem::read_bytes(t.base, 0x1200, &mut code);
+    }
+    assert_eq!(code, main_code);
+}
+
+#[test]
+fn semantics_execve_in_place_reload_rebuilds_process_state() {
+    let mut t = TestVm::new();
+    let mapped = tidemark_kernel::syscall::memory::sys_mmap(
+        &mut t.vm,
+        t.base,
+        0,
+        PAGE_SIZE,
+        PROT_NONE as u64,
+        (MAP_PRIVATE | MAP_ANONYMOUS) as u64,
+        -1,
+        0,
+    );
+    assert!(mapped >= 0);
+    assert!(tidemark_kernel::syscall::memory::has_prot_none());
+
+    t.memfs.create_file(b"keep.txt", b"payload");
+    let kept_fd = t.sys_openat(b"/keep.txt", O_RDONLY);
+    assert_eq!(kept_fd, 3);
+    let cloexec_fd = t.sys_dup(kept_fd as u64);
+    assert_eq!(cloexec_fd, 4);
+    assert_eq!(t.sys_fcntl(cloexec_fd as u64, 2, 1), 0);
+
+    let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    let path_addr = install_exec_file(&t, b"test", &elf);
+    let argv_addr = write_strvec(&t, 0x400, &[b"/bin/test", b"arg1"]);
+    let envp_addr = write_strvec(&t, 0x800, &[b"KEY=VALUE"]);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, argv_addr, envp_addr);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x1000);
+    assert_eq!(t.vm.tid, 1);
+    assert!(!tidemark_kernel::syscall::memory::range_has_prot_none(
+        mapped as u64,
+        PAGE_SIZE
+    ));
+
+    let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+    assert_eq!(ps.pid, 42);
+    let kept_entry = unsafe {
+        guest_mem::read_u32(
+            t.base,
+            t.vm.process_ptr as u64 + 3 * core::mem::size_of::<FdEntry>() as u64,
+        )
+    };
+    let cloexec_entry = unsafe {
+        guest_mem::read_u32(
+            t.base,
+            t.vm.process_ptr as u64 + 4 * core::mem::size_of::<FdEntry>() as u64,
+        )
+    };
+    assert_ne!(kept_entry, 0);
+    assert_eq!(cloexec_entry, 0);
+
+    let argc = unsafe { guest_mem::read_u64(t.base, t.vm.x[2]) };
+    assert_eq!(argc, 2);
+    let argv0 = unsafe { guest_mem::read_u64(t.base, t.vm.x[2] + 8) };
+    let argv1 = unsafe { guest_mem::read_u64(t.base, t.vm.x[2] + 16) };
+    let env0 = unsafe { guest_mem::read_u64(t.base, t.vm.x[2] + 32) };
+    let mut buf = [0u8; 32];
+    let len0 = unsafe { guest_mem::read_cstr(t.base, argv0, &mut buf) };
+    assert_eq!(&buf[..len0], b"/bin/test");
+    let len1 = unsafe { guest_mem::read_cstr(t.base, argv1, &mut buf) };
+    assert_eq!(&buf[..len1], b"arg1");
+    let env_len = unsafe { guest_mem::read_cstr(t.base, env0, &mut buf) };
+    assert_eq!(&buf[..env_len], b"KEY=VALUE");
+    assert!(argv0 > t.vm.x[2]);
+    assert!(argv1 > t.vm.x[2]);
+    assert!(env0 > t.vm.x[2]);
+}
+
+#[test]
+fn semantics_execve_clears_blocked_resume_scratch() {
+    let mut t = TestVm::new();
+    let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+    let stdout_ofd = ps.fd_table[1].ofd_id;
+    assert!(stdout_ofd > 0);
+
+    tidemark_kernel::fs::fd_table::retain_ofd_id(stdout_ofd);
+    t.vm.blocked_fd = 1;
+    t.vm.blocked_ofd_id = stdout_ofd;
+    t.vm.futex_wait_addr = 0x1234;
+    t.vm.futex_wait_timeout = 0x5678;
+    t.vm.futex_wait_expected = 0x9abc;
+    t.vm.epoll_timeout_ms = 99;
+
+    let before =
+        tidemark_kernel::fs::fd_table::get_ofd_by_id(stdout_ofd).expect("stdout OFD should exist");
+    assert_eq!(before.refcount, 2);
+
+    let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    let path_addr = install_exec_file(&t, b"test", &elf);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.blocked_fd, 0);
+    assert_eq!(t.vm.blocked_ofd_id, 0);
+    assert_eq!(t.vm.futex_wait_addr, 0);
+    assert_eq!(t.vm.futex_wait_timeout, 0);
+    assert_eq!(t.vm.futex_wait_expected, 0);
+    assert_eq!(t.vm.epoll_timeout_ms, 0);
+
+    let after = tidemark_kernel::fs::fd_table::get_ofd_by_id(stdout_ofd)
+        .expect("stdout OFD should survive execve");
+    assert_eq!(after.refcount, 1);
+}
+
+#[test]
+fn semantics_execve_failure_preserves_thread_group_and_altstack() {
+    let mut t = TestVm::new();
+    let ps_before = t.vm.process_ptr;
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    ps.thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
+    ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, 0xFEED_BEEFu32, 0, 0);
+    t.vm.sigaltstack_sp = 0x7000;
+    t.vm.sigaltstack_size = 4096;
+
+    let path_addr = install_exec_file(&t, b"bad", b"not-an-elf");
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, ENOEXEC);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.process_ptr, ps_before);
+    assert_eq!(t.vm.sigaltstack_sp, 0x7000);
+    assert_eq!(t.vm.sigaltstack_size, 4096);
+
+    let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+    assert_eq!(
+        ps.thread_count.load(core::sync::atomic::Ordering::Acquire),
+        2
+    );
+    assert_eq!(ps.threads[1].state, THREAD_RUNNING);
+}
