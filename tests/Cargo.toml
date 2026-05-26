@@ -26,7 +26,7 @@ path = "tests/syscall/pipe.rs"
 
 [[test]]
 name = "syscall_fs"
-path = "tests/syscall/fs.rs"
+path = "tests/syscall/fs/mod.rs"
 
 [[test]]
 name = "syscall_epoll"
