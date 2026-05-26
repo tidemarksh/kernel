@@ -1,4 +1,4 @@
-use super::{pid_from_vm, process_pending, sig_slots, sigactions_for};
+use super::{pending::process_pending, pid_from_vm, sig_slots, sigactions_for};
 use crate::abi::*;
 use crate::guest_mem;
 use crate::types::{MAX_SIGNALS, SIG_DFL, SIG_IGN, SigAction, ThreadState};

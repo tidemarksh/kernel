@@ -1,6 +1,6 @@
 use super::{
-    SI_USER, peek_thread_pending_signals, pid_from_vm, process_pending, sanitized_signal_mask,
-    take_thread_pending_signals,
+    SI_USER, pending::peek_thread_pending_signals, pending::process_pending,
+    pending::take_thread_pending_signals, pid_from_vm, sanitized_signal_mask,
 };
 use crate::abi::*;
 use crate::guest_mem;
