@@ -74,6 +74,7 @@ pub const FD_CLOEXEC: u32 = 1;
 const EFD_SEMAPHORE: i32 = 0x1;
 
 pub use super::fd::backend_cleanup::BackendCleanup;
+pub use super::fd::dup::{sys_dup, sys_dup3};
 use super::fd::entry::{
     clear_fd_entry_ptr, find_free_fd, get_fd_entry, get_process_state, load_fd_entry_ptr,
     store_fd_entry_ptr,
@@ -246,7 +247,7 @@ fn count_process_fd_refs(base: u32, vm: &ThreadState, ofd_id: u32) -> i32 {
     }
 }
 
-fn release_process_fd_ref(base: u32, vm: &ThreadState, ofd_id: u32) {
+pub(in crate::fs) fn release_process_fd_ref(base: u32, vm: &ThreadState, ofd_id: u32) {
     if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
         return;
     }
@@ -641,73 +642,6 @@ fn flock_conflicts(held_mode: u32, requested_mode: u32) -> bool {
 // =========================================================================
 // syscall implementations
 // =========================================================================
-
-/// dup(oldfd) → newfd
-pub fn sys_dup(vm: &mut ThreadState, base: u32, oldfd: u64) -> i64 {
-    unsafe {
-        let entry = match get_fd_entry(base, vm, oldfd) {
-            Some(entry) => entry,
-            None => return EBADF,
-        };
-        let newfd = match find_free_fd(base, vm, 0) {
-            Some(fd) => fd,
-            None => return EMFILE,
-        };
-        let ps = get_process_state(base, vm);
-        retain_ofd_id(entry.ofd_id);
-        store_fd_entry_ptr(
-            core::ptr::addr_of_mut!((*ps).fd_table[newfd]),
-            FdEntry {
-                ofd_id: entry.ofd_id,
-                fd_flags: 0, // dup clears FD_CLOEXEC
-            },
-        );
-        newfd as i64
-    }
-}
-
-/// dup3(oldfd, newfd, flags) → newfd
-pub fn sys_dup3(vm: &mut ThreadState, base: u32, oldfd: u64, newfd: u64, flags: u64) -> i64 {
-    unsafe {
-        if oldfd == newfd {
-            return EINVAL;
-        }
-        if newfd as usize >= MAX_FDS {
-            return EBADF;
-        }
-
-        let entry = match get_fd_entry(base, vm, oldfd) {
-            Some(entry) => entry,
-            None => return EBADF,
-        };
-
-        let ps = get_process_state(base, vm);
-
-        // dup3 atomically replaces newfd. Retain oldfd's OFD before closing
-        // newfd so aliasing descriptors do not drop the shared OFD to zero.
-        let old_new_ptr = core::ptr::addr_of_mut!((*ps).fd_table[newfd as usize]);
-        let old_new = load_fd_entry_ptr(old_new_ptr);
-        retain_ofd_id(entry.ofd_id);
-        if old_new.ofd_id != 0 {
-            clear_fd_entry_ptr(old_new_ptr);
-            release_process_fd_ref(base, vm, old_new.ofd_id);
-        }
-
-        let cloexec = if (flags as i32 & O_CLOEXEC) != 0 {
-            FD_CLOEXEC
-        } else {
-            0
-        };
-        store_fd_entry_ptr(
-            core::ptr::addr_of_mut!((*ps).fd_table[newfd as usize]),
-            FdEntry {
-                ofd_id: entry.ofd_id,
-                fd_flags: cloexec,
-            },
-        );
-        newfd as i64
-    }
-}
 
 /// fcntl(fd, cmd, arg)
 pub fn sys_fcntl(vm: &mut ThreadState, base: u32, fd: u64, cmd: u64, arg: u64) -> i64 {
