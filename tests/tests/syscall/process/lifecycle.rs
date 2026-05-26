@@ -1,4 +1,4 @@
-use super::*;
+use super::support::*;
 
 #[test]
 fn contract_reset_process_lifecycle_reinitializes_thread_registry() {

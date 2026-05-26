@@ -1,4 +1,4 @@
-use super::*;
+use super::support::*;
 
 #[test]
 fn contract_fork_returns_status_execve_spawn() {

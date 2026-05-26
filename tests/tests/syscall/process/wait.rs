@@ -1,4 +1,4 @@
-use super::*;
+use super::support::*;
 
 #[test]
 fn semantics_waitid_wnowait_reports_without_reaping() {

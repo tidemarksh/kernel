@@ -1,4 +1,4 @@
-use super::*;
+use super::support::*;
 
 #[test]
 fn contract_execve_completes_in_place_without_spawn() {

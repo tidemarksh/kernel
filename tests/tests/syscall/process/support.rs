@@ -1,29 +1,31 @@
-use std::sync::atomic::Ordering;
-use std::vec;
-use std::vec::Vec;
-use tidemark_kernel::abi::*;
-use tidemark_kernel::elf::AT_NULL;
-use tidemark_kernel::fs::memfs;
-use tidemark_kernel::guest_mem;
-use tidemark_kernel::harness::TestVm;
-use tidemark_kernel::syscall::process as process_impl;
-use tidemark_kernel::syscall::signal;
-use tidemark_kernel::syscall::thread as thread_impl;
-use tidemark_kernel::types::{FdEntry, ProcessState, THREAD_NONE, THREAD_RUNNING, ThreadRecord};
+pub(super) use std::sync::atomic::Ordering;
+pub(super) use std::vec;
+pub(super) use std::vec::Vec;
+pub(super) use tidemark_kernel::abi::*;
+pub(super) use tidemark_kernel::elf::AT_NULL;
+pub(super) use tidemark_kernel::fs::memfs;
+pub(super) use tidemark_kernel::guest_mem;
+pub(super) use tidemark_kernel::harness::TestVm;
+pub(super) use tidemark_kernel::syscall::process as process_impl;
+pub(super) use tidemark_kernel::syscall::signal;
+pub(super) use tidemark_kernel::syscall::thread as thread_impl;
+pub(super) use tidemark_kernel::types::{
+    FdEntry, ProcessState, THREAD_NONE, THREAD_RUNNING, ThreadRecord,
+};
 
-const EPOLL_CTL_ADD: u64 = 1;
-const EPOLL_CTL_DEL: u64 = 2;
-const EPOLLIN: u32 = 0x001;
-const WNOHANG: u64 = 1;
-const WUNTRACED: u64 = 2;
-const WCONTINUED: u64 = 8;
-const WNOWAIT: u64 = 0x01000000;
-const WEXITED: u64 = 4;
-const P_PID: u32 = 1;
-const ECHILD: i64 = -10;
-const SS_DISABLE: i32 = 2;
+pub(super) const EPOLL_CTL_ADD: u64 = 1;
+pub(super) const EPOLL_CTL_DEL: u64 = 2;
+pub(super) const EPOLLIN: u32 = 0x001;
+pub(super) const WNOHANG: u64 = 1;
+pub(super) const WUNTRACED: u64 = 2;
+pub(super) const WCONTINUED: u64 = 8;
+pub(super) const WNOWAIT: u64 = 0x01000000;
+pub(super) const WEXITED: u64 = 4;
+pub(super) const P_PID: u32 = 1;
+pub(super) const ECHILD: i64 = -10;
+pub(super) const SS_DISABLE: i32 = 2;
 
-fn write_process_ids(t: &TestVm, pid: i32, ppid: i32) {
+pub(super) fn write_process_ids(t: &TestVm, pid: i32, ppid: i32) {
     let ps_ptr = t.vm.process_ptr as u64;
     let pid_off = core::mem::offset_of!(ProcessState, pid) as u64;
     let ppid_off = core::mem::offset_of!(ProcessState, ppid) as u64;
@@ -33,7 +35,7 @@ fn write_process_ids(t: &TestVm, pid: i32, ppid: i32) {
     }
 }
 
-fn ensure_dir(parent: u32, name: &[u8]) -> u32 {
+pub(super) fn ensure_dir(parent: u32, name: &[u8]) -> u32 {
     let ino = memfs::lookup(parent, name);
     if ino != 0 {
         ino
@@ -42,7 +44,7 @@ fn ensure_dir(parent: u32, name: &[u8]) -> u32 {
     }
 }
 
-fn read_file_bytes(path: &[u8]) -> Vec<u8> {
+pub(super) fn read_file_bytes(path: &[u8]) -> Vec<u8> {
     let ino = memfs::resolve_path(path);
     assert_ne!(ino, 0, "missing memfs path: {:?}", path);
     let size = memfs::stat(ino).unwrap().size as usize;
@@ -52,7 +54,7 @@ fn read_file_bytes(path: &[u8]) -> Vec<u8> {
     buf
 }
 
-fn read_link_bytes(path: &[u8]) -> Vec<u8> {
+pub(super) fn read_link_bytes(path: &[u8]) -> Vec<u8> {
     let ino = memfs::resolve_path(path);
     assert_ne!(ino, 0, "missing symlink path: {:?}", path);
     let mut buf = vec![0u8; 512];
@@ -61,7 +63,7 @@ fn read_link_bytes(path: &[u8]) -> Vec<u8> {
     buf
 }
 
-fn build_test_elf(code: &[u8]) -> Vec<u8> {
+pub(super) fn build_test_elf(code: &[u8]) -> Vec<u8> {
     fn put_u16(buf: &mut [u8], off: usize, value: u16) {
         buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
     }
@@ -100,7 +102,7 @@ fn build_test_elf(code: &[u8]) -> Vec<u8> {
     elf
 }
 
-fn build_test_elf_with_tls(code: &[u8], tls_init: &[u8], tls_memsz: u64) -> Vec<u8> {
+pub(super) fn build_test_elf_with_tls(code: &[u8], tls_init: &[u8], tls_memsz: u64) -> Vec<u8> {
     fn put_u16(buf: &mut [u8], off: usize, value: u16) {
         buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
     }
@@ -165,7 +167,7 @@ fn build_test_elf_with_tls(code: &[u8], tls_init: &[u8], tls_memsz: u64) -> Vec<
     elf
 }
 
-fn build_test_elf_with_interp(code: &[u8], interp_path: &[u8]) -> Vec<u8> {
+pub(super) fn build_test_elf_with_interp(code: &[u8], interp_path: &[u8]) -> Vec<u8> {
     fn put_u16(buf: &mut [u8], off: usize, value: u16) {
         buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
     }
@@ -223,7 +225,7 @@ fn build_test_elf_with_interp(code: &[u8], interp_path: &[u8]) -> Vec<u8> {
     elf
 }
 
-fn build_test_elf_with_interp_and_tls(
+pub(super) fn build_test_elf_with_interp_and_tls(
     code: &[u8],
     interp_path: &[u8],
     tls_init: &[u8],
@@ -304,13 +306,13 @@ fn build_test_elf_with_interp_and_tls(
     elf
 }
 
-fn build_test_elf_dyn_with_interp(code: &[u8], interp_path: &[u8]) -> Vec<u8> {
+pub(super) fn build_test_elf_dyn_with_interp(code: &[u8], interp_path: &[u8]) -> Vec<u8> {
     let mut elf = build_test_elf_with_interp(code, interp_path);
     elf[16..18].copy_from_slice(&3u16.to_le_bytes());
     elf
 }
 
-fn build_test_elf_dyn_with_interp_and_tls(
+pub(super) fn build_test_elf_dyn_with_interp_and_tls(
     code: &[u8],
     interp_path: &[u8],
     tls_init: &[u8],
@@ -321,7 +323,7 @@ fn build_test_elf_dyn_with_interp_and_tls(
     elf
 }
 
-fn build_test_elf_dyn(code: &[u8]) -> Vec<u8> {
+pub(super) fn build_test_elf_dyn(code: &[u8]) -> Vec<u8> {
     fn put_u16(buf: &mut [u8], off: usize, value: u16) {
         buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
     }
@@ -360,7 +362,7 @@ fn build_test_elf_dyn(code: &[u8]) -> Vec<u8> {
     elf
 }
 
-fn build_test_elf_dyn_low(code: &[u8]) -> Vec<u8> {
+pub(super) fn build_test_elf_dyn_low(code: &[u8]) -> Vec<u8> {
     fn put_u16(buf: &mut [u8], off: usize, value: u16) {
         buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
     }
@@ -400,7 +402,7 @@ fn build_test_elf_dyn_low(code: &[u8]) -> Vec<u8> {
     elf
 }
 
-fn build_test_elf_dyn_two_loads(code: &[u8], data: &[u8]) -> Vec<u8> {
+pub(super) fn build_test_elf_dyn_two_loads(code: &[u8], data: &[u8]) -> Vec<u8> {
     fn put_u16(buf: &mut [u8], off: usize, value: u16) {
         buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
     }
@@ -455,7 +457,7 @@ fn build_test_elf_dyn_two_loads(code: &[u8], data: &[u8]) -> Vec<u8> {
     elf
 }
 
-fn build_test_elf_dyn_with_interp_two_loads(
+pub(super) fn build_test_elf_dyn_with_interp_two_loads(
     code: &[u8],
     data: &[u8],
     interp_path: &[u8],
@@ -526,7 +528,11 @@ fn build_test_elf_dyn_with_interp_two_loads(
     elf
 }
 
-fn build_test_elf_dyn_with_interp_dynamic(code: &[u8], data: &[u8], interp_path: &[u8]) -> Vec<u8> {
+pub(super) fn build_test_elf_dyn_with_interp_dynamic(
+    code: &[u8],
+    data: &[u8],
+    interp_path: &[u8],
+) -> Vec<u8> {
     fn put_u16(buf: &mut [u8], off: usize, value: u16) {
         buf[off..off + 2].copy_from_slice(&value.to_le_bytes());
     }
@@ -613,7 +619,7 @@ fn build_test_elf_dyn_with_interp_dynamic(code: &[u8], data: &[u8], interp_path:
     elf
 }
 
-fn install_exec_file(t: &TestVm, name: &[u8], elf_bytes: &[u8]) -> u64 {
+pub(super) fn install_exec_file(t: &TestVm, name: &[u8], elf_bytes: &[u8]) -> u64 {
     let bin = ensure_dir(1, b"bin");
     let ino = match memfs::lookup(bin, name) {
         0 => memfs::create_file(bin, name, 0o755),
@@ -631,7 +637,7 @@ fn install_exec_file(t: &TestVm, name: &[u8], elf_bytes: &[u8]) -> u64 {
     path_addr
 }
 
-fn install_exec_file_at(t: &TestVm, path: &[u8], elf_bytes: &[u8]) -> u64 {
+pub(super) fn install_exec_file_at(t: &TestVm, path: &[u8], elf_bytes: &[u8]) -> u64 {
     let trimmed = path.strip_prefix(b"/").unwrap_or(path);
     let mut parts = trimmed.split(|b| *b == b'/').peekable();
     let mut parent = 1u32;
@@ -657,7 +663,7 @@ fn install_exec_file_at(t: &TestVm, path: &[u8], elf_bytes: &[u8]) -> u64 {
     path_addr
 }
 
-fn find_auxv_value(t: &TestVm, tag: u64) -> Option<u64> {
+pub(super) fn find_auxv_value(t: &TestVm, tag: u64) -> Option<u64> {
     let argc = unsafe { guest_mem::read_u64(t.base, t.vm.x[2]) };
     let mut cursor = t.vm.x[2] + 8;
     cursor += argc * 8 + 8;
@@ -679,7 +685,7 @@ fn find_auxv_value(t: &TestVm, tag: u64) -> Option<u64> {
     None
 }
 
-fn write_strvec(t: &TestVm, offset: u64, values: &[&[u8]]) -> u64 {
+pub(super) fn write_strvec(t: &TestVm, offset: u64, values: &[&[u8]]) -> u64 {
     if values.is_empty() {
         return 0;
     }
@@ -699,16 +705,5 @@ fn write_strvec(t: &TestVm, offset: u64, values: &[&[u8]]) -> u64 {
     vec_addr
 }
 
-const SIGINFO_OFF_SI_PID: u64 = 16;
-const SIGINFO_OFF_SI_STATUS: u64 = 24;
-
-#[path = "process/exec.rs"]
-mod exec;
-#[path = "process/fork.rs"]
-mod fork;
-#[path = "process/lifecycle.rs"]
-mod lifecycle;
-#[path = "process/vfork.rs"]
-mod vfork;
-#[path = "process/wait.rs"]
-mod wait;
+pub(super) const SIGINFO_OFF_SI_PID: u64 = 16;
+pub(super) const SIGINFO_OFF_SI_STATUS: u64 = 24;

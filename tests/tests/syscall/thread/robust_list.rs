@@ -1,4 +1,4 @@
-use super::*;
+use super::support::*;
 
 #[test]
 fn contract_get_robust_list_reports_current_registration() {

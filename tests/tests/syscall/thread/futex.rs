@@ -1,4 +1,4 @@
-use super::*;
+use super::support::*;
 
 #[test]
 fn contract_runtime_notesleep_futex_return_path_preserves_go_worker_context() {

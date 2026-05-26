@@ -1,17 +1,17 @@
-use tidemark_kernel::abi::*;
-use tidemark_kernel::harness::TestVm;
-use tidemark_kernel::syscall::signal;
-use tidemark_kernel::syscall::thread as thread_impl;
-use tidemark_kernel::types::{
+pub(super) use tidemark_kernel::abi::*;
+pub(super) use tidemark_kernel::harness::TestVm;
+pub(super) use tidemark_kernel::syscall::signal;
+pub(super) use tidemark_kernel::syscall::thread as thread_impl;
+pub(super) use tidemark_kernel::types::{
     ProcessState, THREAD_BLOCKED_FUTEX, THREAD_NONE, THREAD_RUNNING, ThreadRecord, ThreadState,
 };
 
-const FUTEX_WAITERS: u32 = 0x8000_0000;
-const FUTEX_OWNER_DIED: u32 = 0x4000_0000;
-const SS_DISABLE: i32 = 2;
-const SIGFRAME_SIZE: u64 = 1136;
-const SIGFRAME_OFF_TRAMPOLINE: u64 = SIGFRAME_SIZE - 8;
-fn write_sigaction(base: u32, addr: u64, handler: u64, flags: u64, mask: u64) {
+pub(super) const FUTEX_WAITERS: u32 = 0x8000_0000;
+pub(super) const FUTEX_OWNER_DIED: u32 = 0x4000_0000;
+pub(super) const SS_DISABLE: i32 = 2;
+pub(super) const SIGFRAME_SIZE: u64 = 1136;
+pub(super) const SIGFRAME_OFF_TRAMPOLINE: u64 = SIGFRAME_SIZE - 8;
+pub(super) fn write_sigaction(base: u32, addr: u64, handler: u64, flags: u64, mask: u64) {
     unsafe {
         tidemark_kernel::guest_mem::write_u64(base, addr, handler);
         tidemark_kernel::guest_mem::write_u64(base, addr + 8, flags);
@@ -19,7 +19,7 @@ fn write_sigaction(base: u32, addr: u64, handler: u64, flags: u64, mask: u64) {
     }
 }
 
-fn install_current_thread_record(t: &mut TestVm) {
+pub(super) fn install_current_thread_record(t: &mut TestVm) {
     let vm_ptr = (&mut t.vm as *mut ThreadState) as u32;
     let tid = t.vm.tid;
     unsafe {
@@ -29,12 +29,3 @@ fn install_current_thread_record(t: &mut TestVm) {
             .store(1, std::sync::atomic::Ordering::Release);
     }
 }
-
-#[path = "thread/clone.rs"]
-mod clone;
-#[path = "thread/futex.rs"]
-mod futex;
-#[path = "thread/lifecycle.rs"]
-mod lifecycle;
-#[path = "thread/robust_list.rs"]
-mod robust_list;

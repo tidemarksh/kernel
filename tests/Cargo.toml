@@ -42,11 +42,11 @@ path = "tests/syscall/memory.rs"
 
 [[test]]
 name = "syscall_process"
-path = "tests/syscall/process.rs"
+path = "tests/syscall/process/mod.rs"
 
 [[test]]
 name = "syscall_thread"
-path = "tests/syscall/thread.rs"
+path = "tests/syscall/thread/mod.rs"
 
 [[test]]
 name = "syscall_signal"
