@@ -48,7 +48,7 @@ pub use super::fd::alloc::{
     open_devnull, open_epoll, open_eventfd, open_file, open_pipe, open_pty_master, open_pty_slave,
     open_signalfd, open_socket, open_timerfd,
 };
-pub use super::fd::backend_cleanup::BackendCleanup;
+pub use super::fd::backend_cleanup::{BackendCleanup, run as run_backend_cleanup};
 pub use super::fd::close::{
     close_all_for_process, close_all_for_process_without_backend_cleanup, release_ofd_id,
     release_ofd_id_deferred, sys_close, sys_close_range,
@@ -67,7 +67,3 @@ pub use super::fd::ofd::{
     set_offset_floor_by_id, set_pipe_epipe_synced, unreserve_ofd_id,
 };
 pub use super::fd::stdio::{init_stdio, use_pipe_stdio};
-
-pub fn run_backend_cleanup(cleanup: BackendCleanup) {
-    super::fd::backend_cleanup::run(cleanup);
-}

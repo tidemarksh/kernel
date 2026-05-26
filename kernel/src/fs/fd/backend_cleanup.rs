@@ -64,7 +64,7 @@ pub(in crate::fs) fn for_ofd(ofd_id: u32, ofd: &OpenFileDesc) -> Option<BackendC
     }
 }
 
-pub(in crate::fs) fn run(cleanup: BackendCleanup) {
+pub fn run(cleanup: BackendCleanup) {
     match cleanup {
         BackendCleanup::Pipe {
             pipe_idx,
