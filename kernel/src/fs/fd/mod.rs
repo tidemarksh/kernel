@@ -4,3 +4,4 @@ pub(in crate::fs) mod dup;
 pub(in crate::fs) mod entry;
 pub(in crate::fs) mod fcntl;
 pub(in crate::fs) mod ofd;
+pub(in crate::fs) mod stdio;
