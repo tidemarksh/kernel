@@ -12,17 +12,24 @@
 mod address;
 mod create;
 mod options;
+mod poll;
 
 use crate::abi::*;
 use crate::alloc;
 use crate::fs::fd_table;
 use crate::guest_mem;
-use crate::types::{OpenFileDesc, ThreadState};
+use crate::types::ThreadState;
 
 use address::port_from_sockaddr;
 pub use address::{connect_peer_addr, connect_peer_addr_for_fd, sys_getpeername, sys_getsockname};
 pub use create::{sys_socket, sys_socketpair};
 pub use options::{sys_getsockopt, sys_setsockopt};
+#[cfg(test)]
+use poll::{EPOLLIN, EPOLLOUT};
+pub use poll::{
+    poll_revents, poll_revents_ofd, socket_recv_timeout_ms_for_fd, socket_send_timeout_ms_for_fd,
+};
+use poll::{socket_recv_timeout_ms_for_slot, socket_send_timeout_ms_for_slot};
 
 // Socket states
 const SOCK_STATE_IDLE: u32 = 0;
@@ -32,11 +39,6 @@ const SOCK_STATE_CONNECTED: u32 = 3;
 const SOCK_STATE_CONNECTING: u32 = 4;
 const SOCK_STATE_SHUTDOWN: u32 = 5;
 
-const EPOLLIN: u32 = 0x001;
-const EPOLLOUT: u32 = 0x004;
-const EPOLLERR: u32 = 0x008;
-const EPOLLHUP: u32 = 0x010;
-const EPOLLRDHUP: u32 = 0x2000;
 const SHUT_RD_MASK: u32 = 1 << 0;
 const SHUT_WR_MASK: u32 = 1 << 1;
 
@@ -58,16 +60,6 @@ const MSGHDR_FLAGS_OFF: u64 = 48;
 const IOVEC_SIZE: u64 = 16;
 const MAX_MSG_IOV: u64 = 1024;
 const MSG_NOSIGNAL: u64 = 0x4000;
-
-fn timeout_to_millis(sec: u64, usec: u64) -> i64 {
-    if sec == 0 && usec == 0 {
-        return -1;
-    }
-    let millis = sec
-        .saturating_mul(1000)
-        .saturating_add(usec.saturating_add(999) / 1000);
-    millis.min(i64::MAX as u64) as i64
-}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -411,28 +403,6 @@ pub fn socket_close(socket_idx: u32) {
     if socket_idx < MAX_SOCKETS as u32 {
         shutdown_slot(socket_idx as usize);
     }
-}
-
-fn socket_recv_timeout_ms_for_slot(slot: &SocketSlot) -> i64 {
-    timeout_to_millis(slot.so_rcvtimeo_sec, slot.so_rcvtimeo_usec)
-}
-
-fn socket_send_timeout_ms_for_slot(slot: &SocketSlot) -> i64 {
-    timeout_to_millis(slot.so_sndtimeo_sec, slot.so_sndtimeo_usec)
-}
-
-pub fn socket_recv_timeout_ms_for_fd(base: u32, vm: &ThreadState, fd: u64) -> i64 {
-    let Some(idx) = get_socket_idx(base, vm, fd).map(|value| value as usize) else {
-        return -1;
-    };
-    socket_recv_timeout_ms_for_slot(&socket_table()[idx])
-}
-
-pub fn socket_send_timeout_ms_for_fd(base: u32, vm: &ThreadState, fd: u64) -> i64 {
-    let Some(idx) = get_socket_idx(base, vm, fd).map(|value| value as usize) else {
-        return -1;
-    };
-    socket_send_timeout_ms_for_slot(&socket_table()[idx])
 }
 
 /// Look up the socket index for an FD. Returns None if the FD is not a socket.
@@ -931,7 +901,7 @@ fn remove_socket_from_accept_queues(socket_idx: u32) {
     }
 }
 
-fn socket_recv_available(idx: usize) -> usize {
+pub(super) fn socket_recv_available(idx: usize) -> usize {
     let slot = &socket_table()[idx];
     if slot.recv_buf_idx < 0 {
         return 0;
@@ -955,7 +925,7 @@ fn record_socket_read_debug(idx: usize, fd: u64, before: usize, result: i64, aft
     }
 }
 
-fn socket_send_space(idx: usize) -> usize {
+pub(super) fn socket_send_space(idx: usize) -> usize {
     let mut peer_idx = socket_table()[idx].peer_idx;
     if peer_idx < 0 || !is_slot_used(peer_idx as u32) {
         if ensure_external_peer_for_connected_socket(idx).is_err() {
@@ -973,7 +943,7 @@ fn socket_send_space(idx: usize) -> usize {
     crate::net::ring_buffer::space(peer.recv_buf_idx as u32)
 }
 
-fn slot_peer_is_closed(idx: usize) -> bool {
+pub(super) fn slot_peer_is_closed(idx: usize) -> bool {
     let slot = &socket_table()[idx];
     if slot.external_peer != 0 && slot.state == SOCK_STATE_CONNECTED {
         return false;
@@ -1846,51 +1816,6 @@ pub fn socket_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, len: u64
     } else {
         EAGAIN
     }
-}
-
-pub fn poll_revents(base: u32, vm: &ThreadState, fd: u64, interest: u32) -> u32 {
-    let ofd = match fd_table::get_ofd(base, vm, fd) {
-        Some(ofd) => ofd,
-        None => return EPOLLERR,
-    };
-    poll_revents_ofd(&ofd, interest)
-}
-
-pub fn poll_revents_ofd(ofd: &OpenFileDesc, interest: u32) -> u32 {
-    if ofd.fd_type != FD_TYPE_SOCKET {
-        return EPOLLERR;
-    }
-    let idx = ofd.ino as usize;
-    if idx >= MAX_SOCKETS {
-        return EPOLLERR;
-    }
-    let slot = &socket_table()[idx];
-    let mut revents = 0u32;
-
-    if slot.state == SOCK_STATE_LISTENING {
-        if accept_queue_len(slot) > 0 {
-            revents |= EPOLLIN;
-        }
-    } else {
-        if socket_recv_available(idx) > 0 {
-            revents |= EPOLLIN;
-        }
-    }
-
-    if slot.state == SOCK_STATE_CONNECTED || slot.state == SOCK_STATE_SHUTDOWN {
-        if slot.shutdown_mask & SHUT_RD_MASK != 0 {
-            revents |= EPOLLRDHUP;
-        }
-        if slot_peer_is_closed(idx) {
-            revents |= EPOLLHUP;
-        }
-
-        if socket_send_space(idx) > 0 {
-            revents |= EPOLLOUT;
-        }
-    }
-
-    revents & (interest | EPOLLERR | EPOLLHUP)
 }
 
 pub fn inject_http_connection(vm_ptr: u32, port: u16, request: &[u8]) -> i32 {
