@@ -869,7 +869,7 @@ static mut LAST_THREAD_STEP_PHASE: ThreadStepPhaseSummary = ThreadStepPhaseSumma
     s11: 0,
 };
 const THREAD_STEP_VM_TRACE_CAP: usize = 16;
-const THREAD_STEP_TRACE_CAP: usize = 64;
+pub(crate) const THREAD_STEP_TRACE_CAP: usize = 64;
 static mut THREAD_STEP_TRACE_BY_VM: [ThreadStepTraceSummary; THREAD_STEP_VM_TRACE_CAP] =
     [ThreadStepTraceSummary {
         vm_ptr: 0,
