@@ -6,9 +6,11 @@ pub(crate) use fd::{
     fd_syscall_trace_entry, fd_syscall_trace_len, path_syscall_trace_entry, path_syscall_trace_len,
     path_syscall_trace_path_ptr, record_fd_syscall, record_path_syscall,
 };
-pub use memory::MemoryTraceSummary;
+pub use memory::{GuestWriteOverlapTraceEntry, GuestWriteWatchRegion, MemoryTraceSummary};
 pub(crate) use memory::{
-    clear_memory_trace, memory_trace_entry, memory_trace_len, memory_trace_summary,
+    clear_guest_write_watch_trace, clear_memory_trace, configure_guest_write_watch,
+    guest_write_overlap_enabled, guest_write_overlap_trace_entry, guest_write_overlap_trace_len,
+    memory_trace_entry, memory_trace_len, memory_trace_summary, record_guest_write_overlap,
     record_memory_syscall,
 };
 
@@ -136,43 +138,6 @@ static mut EXECVE_STAGE_TRACE: [ExecveStageTraceEntry; EXECVE_STAGE_TRACE_CAP] =
 static mut EXECVE_STAGE_TRACE_LEN: u32 = 0;
 static mut EXECVE_STAGE_TRACE_NEXT: u32 = 0;
 
-const GUEST_WRITE_WATCH_CAP: usize = 2;
-const GUEST_WRITE_OVERLAP_TRACE_CAP: usize = 32;
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct GuestWriteWatchRegion {
-    pub start: u64,
-    pub end: u64,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct GuestWriteOverlapTraceEntry {
-    pub slot: u32,
-    pub op: u32,
-    pub addr: u64,
-    pub len: u32,
-    pub sample_len: u32,
-    pub sample: u64,
-    pub execve_stage: u32,
-}
-
-static mut GUEST_WRITE_WATCH: [GuestWriteWatchRegion; GUEST_WRITE_WATCH_CAP] =
-    [GuestWriteWatchRegion { start: 0, end: 0 }; GUEST_WRITE_WATCH_CAP];
-static mut GUEST_WRITE_OVERLAP_TRACE: [GuestWriteOverlapTraceEntry; GUEST_WRITE_OVERLAP_TRACE_CAP] =
-    [GuestWriteOverlapTraceEntry {
-        slot: 0,
-        op: 0,
-        addr: 0,
-        len: 0,
-        sample_len: 0,
-        sample: 0,
-        execve_stage: 0,
-    }; GUEST_WRITE_OVERLAP_TRACE_CAP];
-static mut GUEST_WRITE_OVERLAP_TRACE_LEN: u32 = 0;
-static mut GUEST_WRITE_OVERLAP_TRACE_NEXT: u32 = 0;
-
 #[cfg(any(test, feature = "harness"))]
 pub(crate) fn clear_syscall_trace() {
     if !RUNTIME_DEBUG_ENABLED {
@@ -253,146 +218,6 @@ pub(crate) fn record_thread_count(
     after: u32,
 ) {
     let _ = (kind, vm_ptr, tid, process_ptr, before, after);
-}
-
-#[cfg(any(test, feature = "harness"))]
-pub(crate) fn clear_guest_write_watch_trace() {
-    if !RUNTIME_DEBUG_ENABLED {
-        return;
-    }
-    unsafe {
-        core::ptr::write(
-            core::ptr::addr_of_mut!(GUEST_WRITE_WATCH),
-            [GuestWriteWatchRegion { start: 0, end: 0 }; GUEST_WRITE_WATCH_CAP],
-        );
-        core::ptr::write(
-            core::ptr::addr_of_mut!(GUEST_WRITE_OVERLAP_TRACE),
-            [GuestWriteOverlapTraceEntry {
-                slot: 0,
-                op: 0,
-                addr: 0,
-                len: 0,
-                sample_len: 0,
-                sample: 0,
-                execve_stage: 0,
-            }; GUEST_WRITE_OVERLAP_TRACE_CAP],
-        );
-        core::ptr::write(core::ptr::addr_of_mut!(GUEST_WRITE_OVERLAP_TRACE_LEN), 0);
-        core::ptr::write(core::ptr::addr_of_mut!(GUEST_WRITE_OVERLAP_TRACE_NEXT), 0);
-    }
-}
-
-#[cfg(any(test, feature = "harness"))]
-pub(crate) fn configure_guest_write_watch(slot: u32, start: u64, end: u64) {
-    if !RUNTIME_DEBUG_ENABLED {
-        let _ = (slot, start, end);
-        return;
-    }
-    if slot as usize >= GUEST_WRITE_WATCH_CAP {
-        return;
-    }
-    unsafe {
-        GUEST_WRITE_WATCH[slot as usize] = GuestWriteWatchRegion { start, end };
-    }
-}
-
-pub(crate) fn record_guest_write_overlap(
-    addr: u64,
-    len: u32,
-    op: u32,
-    sample: u64,
-    sample_len: u32,
-) {
-    if !RUNTIME_DEBUG_ENABLED || len == 0 {
-        let _ = (addr, len, op, sample, sample_len);
-        return;
-    }
-    let end = addr.saturating_add(len as u64);
-    unsafe {
-        for slot in 0..GUEST_WRITE_WATCH_CAP {
-            let region = GUEST_WRITE_WATCH[slot];
-            if region.start >= region.end {
-                continue;
-            }
-            if end <= region.start || addr >= region.end {
-                continue;
-            }
-            let next = GUEST_WRITE_OVERLAP_TRACE_NEXT as usize % GUEST_WRITE_OVERLAP_TRACE_CAP;
-            GUEST_WRITE_OVERLAP_TRACE[next] = GuestWriteOverlapTraceEntry {
-                slot: slot as u32,
-                op,
-                addr,
-                len,
-                sample_len,
-                sample,
-                execve_stage: LAST_EXECVE_STAGE,
-            };
-            GUEST_WRITE_OVERLAP_TRACE_NEXT = GUEST_WRITE_OVERLAP_TRACE_NEXT.wrapping_add(1);
-            GUEST_WRITE_OVERLAP_TRACE_LEN =
-                (GUEST_WRITE_OVERLAP_TRACE_LEN + 1).min(GUEST_WRITE_OVERLAP_TRACE_CAP as u32);
-        }
-    }
-}
-
-#[inline(always)]
-pub(crate) fn guest_write_overlap_enabled() -> bool {
-    if !RUNTIME_DEBUG_ENABLED {
-        return false;
-    }
-    unsafe {
-        for slot in 0..GUEST_WRITE_WATCH_CAP {
-            let region = GUEST_WRITE_WATCH[slot];
-            if region.start < region.end {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-#[cfg(any(test, feature = "harness"))]
-pub(crate) fn guest_write_overlap_trace_len() -> u32 {
-    if !RUNTIME_DEBUG_ENABLED {
-        return 0;
-    }
-    unsafe { core::ptr::read(core::ptr::addr_of!(GUEST_WRITE_OVERLAP_TRACE_LEN)) }
-}
-
-#[cfg(any(test, feature = "harness"))]
-pub(crate) fn guest_write_overlap_trace_entry(index: u32) -> GuestWriteOverlapTraceEntry {
-    if !RUNTIME_DEBUG_ENABLED {
-        return GuestWriteOverlapTraceEntry {
-            slot: 0,
-            op: 0,
-            addr: 0,
-            len: 0,
-            sample_len: 0,
-            sample: 0,
-            execve_stage: 0,
-        };
-    }
-    unsafe {
-        let len = core::ptr::read(core::ptr::addr_of!(GUEST_WRITE_OVERLAP_TRACE_LEN));
-        if index >= len {
-            return GuestWriteOverlapTraceEntry {
-                slot: 0,
-                op: 0,
-                addr: 0,
-                len: 0,
-                sample_len: 0,
-                sample: 0,
-                execve_stage: 0,
-            };
-        }
-        let next = core::ptr::read(core::ptr::addr_of!(GUEST_WRITE_OVERLAP_TRACE_NEXT)) as usize;
-        let len_usize = len as usize;
-        let slot = if len_usize < GUEST_WRITE_OVERLAP_TRACE_CAP {
-            index as usize
-        } else {
-            (next + index as usize) % GUEST_WRITE_OVERLAP_TRACE_CAP
-        };
-        core::ptr::read(core::ptr::addr_of!(GUEST_WRITE_OVERLAP_TRACE[slot]))
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -677,6 +502,10 @@ pub(crate) fn record_execve_stage(stage: u32, value0: u64, value1: u64) {
             );
         }
     }
+}
+
+pub(super) fn current_execve_stage() -> u32 {
+    unsafe { core::ptr::read(core::ptr::addr_of!(LAST_EXECVE_STAGE)) }
 }
 
 pub(crate) fn record_execve_error(errno: i64) {
