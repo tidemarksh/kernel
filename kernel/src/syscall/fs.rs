@@ -41,6 +41,7 @@ use crate::guest_mem;
 use crate::types::ThreadState;
 
 mod getdents;
+mod lseek;
 mod meta;
 mod mutation;
 mod open;
@@ -62,6 +63,7 @@ pub const FS_EFFECT_MEMFS_MUTATION: u32 = 1 << 0;
 pub const FS_EFFECT_SHARED_OFD_STATE: u32 = 1 << 1;
 pub const FS_EFFECT_MEMFS_FILE_DATA: u32 = 1 << 2;
 pub use getdents::sys_getdents64;
+pub use lseek::sys_lseek;
 pub use meta::{
     sys_faccessat, sys_fchmod, sys_fchmodat, sys_fchown, sys_fchownat, sys_fstat, sys_ftruncate,
     sys_newfstatat, sys_readlinkat, sys_statfs, sys_truncate, sys_utimensat,
@@ -77,7 +79,6 @@ pub use pending::{
     pending_request_target_ino, process_pending_requests, resume_from_fs,
 };
 pub(crate) use read_write::PIPE_READ_EOF_SYNC_RETRY_MARKER;
-use read_write::mark_fork_shared_ofd_sync_effect;
 pub use read_write::{sys_pread64, sys_pwrite64, sys_read, sys_readv, sys_write};
 pub(crate) use state::sys_umask;
 use state::{current_dir_ino, set_current_dir_ino};
@@ -233,50 +234,4 @@ pub fn sys_fremovexattr(vm: &ThreadState, base: u32, fd: u64) -> i64 {
         return EBADF;
     }
     ENODATA
-}
-
-// =========================================================================
-// lseek
-// =========================================================================
-
-/// lseek: reposition OFD offset. Supports SEEK_SET (0), SEEK_CUR (1), SEEK_END (2).
-pub fn sys_lseek(vm: &mut ThreadState, base: u32, fd: u64, offset: i64, whence: u64) -> i64 {
-    let ofd_id = match fd_table::get_ofd_id(base, vm, fd) {
-        Some(id) => id,
-        None => return EBADF,
-    };
-    let ofd = match fd_table::get_ofd(base, vm, fd) {
-        Some(o) => o,
-        None => return EBADF,
-    };
-    if fd_table::is_nonseekable_fd_type(ofd.fd_type) {
-        return ESPIPE;
-    }
-    let current_offset = if ofd.fd_type == FD_TYPE_FILE {
-        (ofd.offset as u64).max(fd_table::get_offset_floor_by_id(ofd_id))
-    } else {
-        ofd.offset as u64
-    };
-
-    let new_offset_i64 = match whence {
-        0 => offset,                         // SEEK_SET
-        1 => current_offset as i64 + offset, // SEEK_CUR
-        2 => {
-            // SEEK_END
-            let st = memfs::stat(ofd.ino);
-            match st {
-                Some(s) => s.size as i64 + offset,
-                None => return EINVAL,
-            }
-        }
-        _ => return EINVAL,
-    };
-    if new_offset_i64 < 0 {
-        return EINVAL;
-    }
-    let new_offset = new_offset_i64 as u64;
-
-    fd_table::set_offset(base, vm, fd, new_offset);
-    mark_fork_shared_ofd_sync_effect(vm);
-    new_offset as i64
 }
