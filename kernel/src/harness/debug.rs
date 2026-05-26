@@ -1,5 +1,6 @@
 mod fd;
 mod memory;
+mod signal;
 
 pub use fd::{FdSyscallTraceEntry, PathSyscallTraceEntry};
 pub(crate) use fd::{
@@ -16,6 +17,7 @@ pub(crate) use memory::{
     memory_trace_summary, record_guest_range_permit_check, record_guest_write_overlap,
     record_memory_syscall,
 };
+pub(crate) use signal::record_sync_signal_trace;
 
 const RUNTIME_DEBUG_ENABLED: bool = cfg!(any(test, feature = "harness"));
 
@@ -2243,20 +2245,6 @@ pub(crate) fn record_fault_dispatch_trace(
             );
         }
     }
-}
-
-pub(crate) fn record_sync_signal_trace(
-    vm: &crate::types::ThreadState,
-    local_pc: u64,
-    local_ra: u64,
-    local_sp: u64,
-    local_s11: u64,
-    local_a0: u64,
-    fault_addr: u64,
-) {
-    let _ = (
-        vm, local_pc, local_ra, local_sp, local_s11, local_a0, fault_addr,
-    );
 }
 
 pub(crate) fn record_futex_resume_trace(vm: &crate::types::ThreadState, phase: u32) {
