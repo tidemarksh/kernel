@@ -50,7 +50,7 @@ path = "tests/syscall/thread/mod.rs"
 
 [[test]]
 name = "syscall_signal"
-path = "tests/syscall/signal.rs"
+path = "tests/syscall/signal/mod.rs"
 
 [[test]]
 name = "syscall_resource"
