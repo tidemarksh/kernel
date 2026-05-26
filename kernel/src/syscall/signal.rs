@@ -20,6 +20,7 @@
 //! https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/signal.h
 
 mod actions;
+mod frame;
 mod signalfd;
 
 use crate::abi::*;
@@ -32,7 +33,13 @@ use crate::types::{
 pub use actions::{
     fork_from_parent, init_for_process, reassign_process_pid, reset_on_execve, sys_rt_sigaction,
 };
+pub use frame::{is_current_sigreturn_trampoline, patch_current_signal_frame_a0};
 pub use signalfd::{close_signalfd, signalfd_is_readable, signalfd_read, sys_signalfd4};
+
+use frame::{
+    MCONTEXT_OFF_FCSR, MCONTEXT_OFF_FREGS, MCONTEXT_OFF_REGS, SIGFRAME_OFF_ALTSTACK_FLAGS,
+    SIGFRAME_OFF_UCONTEXT, UCONTEXT_OFF_MCONTEXT, UCONTEXT_OFF_SIGMASK, push_signal_frame,
+};
 
 // SA flags (https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/signal-defs.h)
 const SA_ONSTACK: u64 = 0x08000000;
@@ -400,11 +407,6 @@ pub fn note_pc(vm: &ThreadState, pc: u64) {
     }
 }
 
-#[inline(always)]
-pub fn is_current_sigreturn_trampoline(sp: u64, pc: u64) -> bool {
-    sp != 0 && pc.checked_sub(sp) == Some(SIGFRAME_OFF_TRAMPOLINE)
-}
-
 pub fn signal_action_table_bytes() -> u32 {
     core::mem::size_of::<[SigAction; MAX_SIGNALS]>() as u32
 }
@@ -552,6 +554,34 @@ pub(crate) fn sanitized_signal_mask(mask: u64) -> u64 {
     mask & !unblockable
 }
 
+pub(super) fn record_signal_delivery_trace(
+    vm: &ThreadState,
+    sig: usize,
+    frame_base: u64,
+    trampoline_pc: u64,
+) {
+    unsafe {
+        let trace = SignalTrace {
+            vm_ptr: vm as *const ThreadState as u32,
+            sig: sig as u32,
+            frame_base,
+            pc: vm.pc,
+            ra: vm.x[1],
+            sp: vm.x[2],
+            gp: vm.x[3],
+            tp: vm.x[4],
+            s11: vm.x[27],
+        };
+        LAST_SIGNAL_DELIVERY = trace;
+        SIGNAL_DELIVERY_RING[SIGNAL_DELIVERY_RING_NEXT as usize] = trace;
+        SIGNAL_DELIVERY_RING_NEXT = (SIGNAL_DELIVERY_RING_NEXT + 1) % SIGNAL_TRACE_RING_CAP as u32;
+        if SIGNAL_DELIVERY_RING_LEN < SIGNAL_TRACE_RING_CAP as u32 {
+            SIGNAL_DELIVERY_RING_LEN += 1;
+        }
+        LAST_TRAMPOLINE_PC = trampoline_pc;
+    }
+}
+
 fn peek_thread_pending_signals(vm: &ThreadState, base: u32) -> u64 {
     let Some(ps) = process_state_from_vm(vm, base) else {
         return 0;
@@ -697,204 +727,6 @@ pub fn sys_sigaltstack(vm: &mut ThreadState, base: u32, ss_addr: u64, old_ss_add
     0
 }
 
-/// Signal frame layout on guest stack (RISC-V rt_sigframe).
-///
-/// Linux delivers signal handler arguments in registers, but the RISC-V ABI
-/// also gives the callee stack home slots for those arguments. Keep both the
-/// register arguments and their stack homes (`sp+8`, `sp+16`, `sp+24`) valid
-/// so any conforming handler entry sequence observes a complete call frame.
-const SIGFRAME_OFF_ABI_SIGNO: u64 = 8;
-const SIGFRAME_OFF_ABI_SIGINFO_PTR: u64 = 16;
-const SIGFRAME_OFF_ABI_UCONTEXT_PTR: u64 = 24;
-const SIGINFO_SIZE: u64 = 128;
-const SIGINFO_OFF_SIGNO: u64 = 0;
-const SIGINFO_OFF_ERRNO: u64 = 4;
-const SIGINFO_OFF_CODE: u64 = 8;
-const SIGINFO_OFF_ADDR: u64 = 16;
-
-const UCONTEXT_OFF_FLAGS: u64 = 0;
-const UCONTEXT_OFF_LINK: u64 = 8;
-const UCONTEXT_OFF_STACK: u64 = 16;
-const UCONTEXT_STACK_OFF_SP: u64 = 0;
-const UCONTEXT_STACK_OFF_FLAGS: u64 = 8;
-const UCONTEXT_STACK_OFF_SIZE: u64 = 16;
-const UCONTEXT_OFF_SIGMASK: u64 = 40;
-const UCONTEXT_SIGMASK_WORDS: u64 = 16;
-const UCONTEXT_OFF_RESERVED_PAD: u64 = 168;
-const UCONTEXT_OFF_MCONTEXT: u64 = 176;
-const MCONTEXT_OFF_REGS: u64 = 0;
-const MCONTEXT_OFF_FREGS: u64 = 256;
-const MCONTEXT_FREGS_BYTES: u64 = 528;
-const MCONTEXT_OFF_FCSR: u64 = 256;
-const UCONTEXT_SIZE: u64 = UCONTEXT_OFF_MCONTEXT + MCONTEXT_OFF_FREGS + MCONTEXT_FREGS_BYTES;
-
-const SIGFRAME_OFF_SIGINFO: u64 = 32;
-const SIGFRAME_OFF_UCONTEXT: u64 = SIGFRAME_OFF_SIGINFO + SIGINFO_SIZE;
-const SIGFRAME_OFF_ALTSTACK_FLAGS: u64 = SIGFRAME_OFF_UCONTEXT + UCONTEXT_SIZE;
-const SIGFRAME_OFF_TRAMPOLINE: u64 = SIGFRAME_OFF_ALTSTACK_FLAGS + 8;
-const SIGFRAME_SIZE: u64 = SIGFRAME_OFF_TRAMPOLINE + 8;
-
-/// RISC-V machine code: li a7, 139 (SYS_RT_SIGRETURN); ecall
-/// addi x17, x0, 139 → 0x08b00893
-/// ecall              → 0x00000073
-const TRAMPOLINE_CODE: [u8; 8] = [
-    0x93, 0x08, 0xb0, 0x08, // addi x17, x0, 139
-    0x73, 0x00, 0x00, 0x00, // ecall
-];
-
-/// Push a signal frame onto the guest stack and redirect execution to the handler.
-///
-/// Stack layout after push:
-///   sp → [signal frame (544 bytes)]
-///   ra → trampoline address (within the frame)
-///   a0 → signal number
-///   pc → handler address
-///
-/// When the handler returns (via ra), it executes the trampoline which
-/// calls SYS_RT_SIGRETURN to restore the saved context.
-fn push_signal_frame(vm: &mut ThreadState, base: u32, sig: usize, action: &SigAction) -> bool {
-    // Choose stack: use sigaltstack if SA_ONSTACK and stack is configured
-    let use_altstack = action.flags & SA_ONSTACK != 0
-        && vm.sigaltstack_flags != SS_DISABLE
-        && vm.sigaltstack_size > 0
-        && vm.sigaltstack_flags & SS_ONSTACK == 0;
-    let sp = if use_altstack {
-        vm.sigaltstack_sp + vm.sigaltstack_size
-    } else {
-        vm.x[2]
-    };
-
-    // Align down to 16 bytes, then reserve frame
-    let Some(frame_base) = sp.checked_sub(SIGFRAME_SIZE).map(|value| value & !15) else {
-        return false;
-    };
-    let siginfo_base = frame_base + SIGFRAME_OFF_SIGINFO;
-    let ucontext_base = frame_base + SIGFRAME_OFF_UCONTEXT;
-    let regs_base = ucontext_base + UCONTEXT_OFF_MCONTEXT + MCONTEXT_OFF_REGS;
-    let fpregs_base = ucontext_base + UCONTEXT_OFF_MCONTEXT + MCONTEXT_OFF_FREGS;
-    let saved_altstack_flags = vm.sigaltstack_flags as u64;
-
-    unsafe {
-        guest_mem::zero_mem(base, frame_base, SIGFRAME_SIZE as usize);
-
-        guest_mem::write_u32(base, siginfo_base + SIGINFO_OFF_SIGNO, sig as u32);
-        guest_mem::write_u32(base, siginfo_base + SIGINFO_OFF_ERRNO, 0);
-        guest_mem::write_u32(
-            base,
-            siginfo_base + SIGINFO_OFF_CODE,
-            vm.sig_info_code as u32,
-        );
-        let sig_addr = match sig as i32 {
-            SIGILL | SIGBUS | SIGFPE | SIGSEGV => vm.fault_addr,
-            _ => 0,
-        };
-        guest_mem::write_u64(base, siginfo_base + SIGINFO_OFF_ADDR, sig_addr);
-
-        guest_mem::write_u64(base, ucontext_base + UCONTEXT_OFF_FLAGS, 0);
-        guest_mem::write_u64(base, ucontext_base + UCONTEXT_OFF_LINK, 0);
-        guest_mem::write_u64(
-            base,
-            ucontext_base + UCONTEXT_OFF_STACK + UCONTEXT_STACK_OFF_SP,
-            vm.sigaltstack_sp,
-        );
-        guest_mem::write_u32(
-            base,
-            ucontext_base + UCONTEXT_OFF_STACK + UCONTEXT_STACK_OFF_FLAGS,
-            vm.sigaltstack_flags as u32,
-        );
-        guest_mem::write_u64(
-            base,
-            ucontext_base + UCONTEXT_OFF_STACK + UCONTEXT_STACK_OFF_SIZE,
-            vm.sigaltstack_size,
-        );
-        guest_mem::write_u64(base, ucontext_base + UCONTEXT_OFF_SIGMASK, vm.sig_mask);
-        for word in 1..UCONTEXT_SIGMASK_WORDS {
-            guest_mem::write_u64(base, ucontext_base + UCONTEXT_OFF_SIGMASK + word * 8, 0);
-        }
-        guest_mem::write_u64(base, ucontext_base + UCONTEXT_OFF_RESERVED_PAD, 0);
-
-        guest_mem::write_u64(base, regs_base, vm.pc);
-        for i in 1..32 {
-            guest_mem::write_u64(base, regs_base + (i as u64) * 8, vm.x[i as usize]);
-        }
-        for i in 0..32 {
-            guest_mem::write_u64(base, fpregs_base + i * 8, vm.f[i as usize]);
-        }
-        guest_mem::write_u32(base, fpregs_base + MCONTEXT_OFF_FCSR, vm.fcsr);
-        guest_mem::write_u64(base, frame_base + SIGFRAME_OFF_ABI_SIGNO, sig as u64);
-        guest_mem::write_u64(
-            base,
-            frame_base + SIGFRAME_OFF_ABI_SIGINFO_PTR,
-            siginfo_base,
-        );
-        guest_mem::write_u64(
-            base,
-            frame_base + SIGFRAME_OFF_ABI_UCONTEXT_PTR,
-            ucontext_base,
-        );
-        guest_mem::write_u64(
-            base,
-            frame_base + SIGFRAME_OFF_ALTSTACK_FLAGS,
-            saved_altstack_flags,
-        );
-        guest_mem::write_bytes(base, frame_base + SIGFRAME_OFF_TRAMPOLINE, &TRAMPOLINE_CODE);
-    }
-
-    // Block signals specified in sa_mask during handler execution
-    let unblockable = (1u64 << (SIGKILL - 1)) | (1u64 << (SIGSTOP - 1));
-    vm.sig_mask |= action.mask & !unblockable;
-
-    // If SA_NODEFER is not set, also block the delivered signal
-    if action.flags & SA_NODEFER == 0 {
-        vm.sig_mask |= (1u64 << (sig - 1)) & !unblockable;
-    }
-
-    // If SA_RESETHAND, reset disposition to SIG_DFL
-    if action.flags & SA_RESETHAND != 0 {
-        let pid = pid_from_vm(vm, base);
-        if let Some(table) = sigactions_for(pid) {
-            table[sig] = SigAction {
-                handler: SIG_DFL,
-                flags: 0,
-                mask: 0,
-            };
-        }
-    }
-    if use_altstack {
-        vm.sigaltstack_flags |= SS_ONSTACK;
-    }
-
-    unsafe {
-        let trace = SignalTrace {
-            vm_ptr: vm as *const ThreadState as u32,
-            sig: sig as u32,
-            frame_base,
-            pc: vm.pc,
-            ra: vm.x[1],
-            sp: vm.x[2],
-            gp: vm.x[3],
-            tp: vm.x[4],
-            s11: vm.x[27],
-        };
-        LAST_SIGNAL_DELIVERY = trace;
-        SIGNAL_DELIVERY_RING[SIGNAL_DELIVERY_RING_NEXT as usize] = trace;
-        SIGNAL_DELIVERY_RING_NEXT = (SIGNAL_DELIVERY_RING_NEXT + 1) % SIGNAL_TRACE_RING_CAP as u32;
-        if SIGNAL_DELIVERY_RING_LEN < SIGNAL_TRACE_RING_CAP as u32 {
-            SIGNAL_DELIVERY_RING_LEN += 1;
-        }
-        LAST_TRAMPOLINE_PC = frame_base + SIGFRAME_OFF_TRAMPOLINE;
-    }
-
-    // Set up registers for handler entry
-    vm.x[2] = frame_base;
-    vm.x[1] = frame_base + SIGFRAME_OFF_TRAMPOLINE;
-    vm.x[10] = sig as u64;
-    vm.x[11] = siginfo_base;
-    vm.x[12] = ucontext_base;
-    vm.pc = action.handler;
-    true
-}
-
 /// rt_sigreturn: restore state from signal frame on stack.
 /// The frame is at the current sp (x2).
 pub fn sys_rt_sigreturn(vm: &mut ThreadState, base: u32) {
@@ -930,21 +762,6 @@ pub fn sys_rt_sigreturn(vm: &mut ThreadState, base: u32) {
         LAST_TRAMPOLINE_PC = 0;
         SIGRETURN_COUNT = SIGRETURN_COUNT.wrapping_add(1);
     }
-}
-
-/// Patch the currently active signal frame so rt_sigreturn restores a
-/// different a0 result to user code. This is used for interrupted blocking
-/// syscalls that must become -EINTR after the handler returns.
-pub fn patch_current_signal_frame_a0(vm: &ThreadState, base: u32, value: i64) -> bool {
-    let frame_base = vm.x[2];
-    if frame_base == 0 || vm.x[1] != frame_base + SIGFRAME_OFF_TRAMPOLINE {
-        return false;
-    }
-    let regs_base = frame_base + SIGFRAME_OFF_UCONTEXT + UCONTEXT_OFF_MCONTEXT + MCONTEXT_OFF_REGS;
-    unsafe {
-        guest_mem::write_u64(base, regs_base + (10u64 * 8), value as u64);
-    }
-    true
 }
 
 /// Check and deliver pending signals at syscall return boundary.
