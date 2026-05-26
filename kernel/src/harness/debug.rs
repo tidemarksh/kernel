@@ -1,6 +1,7 @@
 mod fd;
 mod memory;
 mod signal;
+mod socket;
 
 pub use fd::{FdSyscallTraceEntry, PathSyscallTraceEntry};
 pub(crate) use fd::{
@@ -18,6 +19,7 @@ pub(crate) use memory::{
     record_memory_syscall,
 };
 pub(crate) use signal::record_sync_signal_trace;
+pub(crate) use socket::record_epoll_wait;
 
 const RUNTIME_DEBUG_ENABLED: bool = cfg!(any(test, feature = "harness"));
 
@@ -187,31 +189,6 @@ pub(crate) fn clear_syscall_trace() {
         core::ptr::write(core::ptr::addr_of_mut!(SYSCALL_TRACE_RING_NEXT), 0);
         core::ptr::write(core::ptr::addr_of_mut!(COMPLETED_SYNC_EFFECTS), 0);
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn record_epoll_wait(
-    vm_ptr: u32,
-    epfd: u64,
-    ofd_id: u32,
-    ofd_type: i32,
-    epoll_idx: u32,
-    epoll_ptr: u32,
-    epoll_count: u32,
-    result: i64,
-    reason: u32,
-) {
-    let _ = (
-        vm_ptr,
-        epfd,
-        ofd_id,
-        ofd_type,
-        epoll_idx,
-        epoll_ptr,
-        epoll_count,
-        result,
-        reason,
-    );
 }
 
 pub(crate) fn record_thread_count(
