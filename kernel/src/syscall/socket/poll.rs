@@ -1,5 +1,5 @@
 use super::{
-    SOCK_STATE_CONNECTED, SOCK_STATE_LISTENING, SOCK_STATE_SHUTDOWN, accept_queue_len,
+    SOCK_STATE_CONNECTED, SOCK_STATE_LISTENING, SOCK_STATE_SHUTDOWN, connect::accept_queue_len,
     get_socket_idx, slot_peer_is_closed, socket_recv_available, socket_send_space, socket_table,
 };
 use crate::abi::*;
