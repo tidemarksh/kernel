@@ -4438,6 +4438,116 @@ mod tests {
     }
 }
 
+pub fn write_process_ids(t: &tidemark_kernel::harness::TestVm, pid: i32, ppid: i32) {
+    let ps_ptr = t.vm.process_ptr as u64;
+    let pid_off = core::mem::offset_of!(ProcessState, pid) as u64;
+    let ppid_off = core::mem::offset_of!(ProcessState, ppid) as u64;
+    unsafe {
+        guest_mem::write_u32(t.base, ps_ptr + pid_off, pid as u32);
+        guest_mem::write_u32(t.base, ps_ptr + ppid_off, ppid as u32);
+    }
+}
+
+pub fn ensure_memfs_dir(parent: u32, name: &[u8]) -> u32 {
+    let ino = memfs::lookup(parent, name);
+    if ino != 0 {
+        ino
+    } else {
+        memfs::create_dir(parent, name, 0o755)
+    }
+}
+
+pub fn install_memfs_file_at(path: &[u8], bytes: &[u8], mode: u32) -> u32 {
+    let trimmed = path.strip_prefix(b"/").unwrap_or(path);
+    let mut parts = trimmed.split(|b| *b == b'/').peekable();
+    let mut parent = 1u32;
+    let mut final_name = b"".as_slice();
+    while let Some(part) = parts.next() {
+        if parts.peek().is_some() {
+            parent = ensure_memfs_dir(parent, part);
+        } else {
+            final_name = part;
+        }
+    }
+    let ino = match memfs::lookup(parent, final_name) {
+        0 => memfs::create_file(parent, final_name, mode),
+        ino => ino,
+    };
+    assert_ne!(ino, 0);
+    assert_eq!(memfs::truncate(ino, 0), 0);
+    assert_eq!(memfs::write_file(ino, 0, bytes), bytes.len() as i64);
+    ino
+}
+
+pub fn install_exec_file_at(
+    t: &tidemark_kernel::harness::TestVm,
+    path: &[u8],
+    elf_bytes: &[u8],
+) -> u64 {
+    install_memfs_file_at(path, elf_bytes, 0o755);
+    let mut c_path = Vec::from(path);
+    c_path.push(0);
+    let path_addr = t.scratch;
+    t.write_mem(path_addr, &c_path);
+    path_addr
+}
+
+pub fn install_exec_file(
+    t: &tidemark_kernel::harness::TestVm,
+    name: &[u8],
+    elf_bytes: &[u8],
+) -> u64 {
+    let mut path = Vec::from(&b"/bin/"[..]);
+    path.extend_from_slice(name);
+    install_exec_file_at(t, &path, elf_bytes)
+}
+
+pub fn find_auxv_value(base: u32, sp: u64, tag: u64) -> Option<u64> {
+    let argc = unsafe { guest_mem::read_u64(base, sp) };
+    let mut cursor = sp + 8;
+    cursor += argc * 8 + 8;
+    while unsafe { guest_mem::read_u64(base, cursor) } != 0 {
+        cursor += 8;
+    }
+    cursor += 8;
+    for _ in 0..32 {
+        let aux_tag = unsafe { guest_mem::read_u64(base, cursor) };
+        let aux_val = unsafe { guest_mem::read_u64(base, cursor + 8) };
+        if aux_tag == tidemark_kernel::elf::AT_NULL {
+            return None;
+        }
+        if aux_tag == tag {
+            return Some(aux_val);
+        }
+        cursor += 16;
+    }
+    None
+}
+
+pub fn find_vm_auxv_value(t: &tidemark_kernel::harness::TestVm, tag: u64) -> Option<u64> {
+    find_auxv_value(t.base, t.vm.x[2], tag)
+}
+
+pub fn write_strvec(t: &tidemark_kernel::harness::TestVm, offset: u64, values: &[&[u8]]) -> u64 {
+    if values.is_empty() {
+        return 0;
+    }
+    let vec_addr = t.scratch + offset;
+    let mut data_cursor = vec_addr + ((values.len() + 1) as u64) * 8;
+    for (idx, value) in values.iter().enumerate() {
+        unsafe {
+            guest_mem::write_u64(t.base, vec_addr + (idx as u64) * 8, data_cursor);
+            guest_mem::write_bytes(t.base, data_cursor, value);
+            guest_mem::write_u8(t.base, data_cursor + value.len() as u64, 0);
+        }
+        data_cursor += value.len() as u64 + 1;
+    }
+    unsafe {
+        guest_mem::write_u64(t.base, vec_addr + (values.len() as u64) * 8, 0);
+    }
+    vec_addr
+}
+
 // Shared synthetic ELF builders for kernel integration tests.
 pub fn build_test_elf(code: &[u8]) -> Vec<u8> {
     fn put_u16(buf: &mut [u8], off: usize, value: u16) {
