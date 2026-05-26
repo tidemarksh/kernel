@@ -34,7 +34,7 @@ path = "tests/syscall/epoll.rs"
 
 [[test]]
 name = "syscall_socket"
-path = "tests/syscall/socket.rs"
+path = "tests/syscall/socket/mod.rs"
 
 [[test]]
 name = "syscall_memory"
