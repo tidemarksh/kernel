@@ -22,6 +22,7 @@
 mod actions;
 mod frame;
 mod signalfd;
+mod sigreturn;
 
 use crate::abi::*;
 use crate::guest_mem;
@@ -35,11 +36,9 @@ pub use actions::{
 };
 pub use frame::{is_current_sigreturn_trampoline, patch_current_signal_frame_a0};
 pub use signalfd::{close_signalfd, signalfd_is_readable, signalfd_read, sys_signalfd4};
+pub use sigreturn::sys_rt_sigreturn;
 
-use frame::{
-    MCONTEXT_OFF_FCSR, MCONTEXT_OFF_FREGS, MCONTEXT_OFF_REGS, SIGFRAME_OFF_ALTSTACK_FLAGS,
-    SIGFRAME_OFF_UCONTEXT, UCONTEXT_OFF_MCONTEXT, UCONTEXT_OFF_SIGMASK, push_signal_frame,
-};
+use frame::push_signal_frame;
 
 // SA flags (https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/signal-defs.h)
 const SA_ONSTACK: u64 = 0x08000000;
@@ -582,6 +581,24 @@ pub(super) fn record_signal_delivery_trace(
     }
 }
 
+pub(super) fn record_sigreturn_trace(vm: &ThreadState, frame_base: u64) {
+    unsafe {
+        LAST_SIGRETURN = SignalTrace {
+            vm_ptr: vm as *const ThreadState as u32,
+            sig: 0,
+            frame_base,
+            pc: vm.pc,
+            ra: vm.x[1],
+            sp: vm.x[2],
+            gp: vm.x[3],
+            tp: vm.x[4],
+            s11: vm.x[27],
+        };
+        LAST_TRAMPOLINE_PC = 0;
+        SIGRETURN_COUNT = SIGRETURN_COUNT.wrapping_add(1);
+    }
+}
+
 fn peek_thread_pending_signals(vm: &ThreadState, base: u32) -> u64 {
     let Some(ps) = process_state_from_vm(vm, base) else {
         return 0;
@@ -725,43 +742,6 @@ pub fn sys_sigaltstack(vm: &mut ThreadState, base: u32, ss_addr: u64, old_ss_add
         }
     }
     0
-}
-
-/// rt_sigreturn: restore state from signal frame on stack.
-/// The frame is at the current sp (x2).
-pub fn sys_rt_sigreturn(vm: &mut ThreadState, base: u32) {
-    let frame_base = vm.x[2];
-    let ucontext_base = frame_base + SIGFRAME_OFF_UCONTEXT;
-    let regs_base = ucontext_base + UCONTEXT_OFF_MCONTEXT + MCONTEXT_OFF_REGS;
-    let fpregs_base = ucontext_base + UCONTEXT_OFF_MCONTEXT + MCONTEXT_OFF_FREGS;
-
-    unsafe {
-        vm.sig_mask = guest_mem::read_u64(base, ucontext_base + UCONTEXT_OFF_SIGMASK);
-        vm.pc = guest_mem::read_u64(base, regs_base);
-        vm.x[0] = 0;
-        for i in 1..32 {
-            vm.x[i as usize] = guest_mem::read_u64(base, regs_base + (i as u64) * 8);
-        }
-        for i in 0..32 {
-            vm.f[i as usize] = guest_mem::read_u64(base, fpregs_base + i * 8);
-        }
-        vm.fcsr = guest_mem::read_u32(base, fpregs_base + MCONTEXT_OFF_FCSR);
-        vm.sigaltstack_flags =
-            guest_mem::read_u64(base, frame_base + SIGFRAME_OFF_ALTSTACK_FLAGS) as i32;
-        LAST_SIGRETURN = SignalTrace {
-            vm_ptr: vm as *const ThreadState as u32,
-            sig: 0,
-            frame_base,
-            pc: vm.pc,
-            ra: vm.x[1],
-            sp: vm.x[2],
-            gp: vm.x[3],
-            tp: vm.x[4],
-            s11: vm.x[27],
-        };
-        LAST_TRAMPOLINE_PC = 0;
-        SIGRETURN_COUNT = SIGRETURN_COUNT.wrapping_add(1);
-    }
 }
 
 /// Check and deliver pending signals at syscall return boundary.
