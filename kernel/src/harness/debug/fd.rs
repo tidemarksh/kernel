@@ -272,6 +272,47 @@ pub(crate) fn record_path_syscall(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn record_write_attempt(
+    fd: u64,
+    nr: u64,
+    buf_addr: u64,
+    count: u64,
+    result: i64,
+    ofd_id: u32,
+    ofd_type: i32,
+    ofd_ino: u32,
+    status_flags: i32,
+    pipe_read_open: i32,
+    pipe_write_open: i32,
+    bytes: Option<&[u8]>,
+) {
+    let _ = (
+        fd,
+        nr,
+        buf_addr,
+        count,
+        result,
+        ofd_id,
+        ofd_type,
+        ofd_ino,
+        status_flags,
+        pipe_read_open,
+        pipe_write_open,
+        bytes,
+    );
+}
+
+pub(crate) fn record_pipe_close_event(
+    pipe_idx: u32,
+    is_read_end: bool,
+    ofd_id: u32,
+    read_open: i32,
+    write_open: i32,
+) {
+    let _ = (pipe_idx, is_read_end, ofd_id, read_open, write_open);
+}
+
 #[cfg(any(test, feature = "harness"))]
 pub(crate) fn path_syscall_trace_len() -> u32 {
     if !RUNTIME_DEBUG_ENABLED {

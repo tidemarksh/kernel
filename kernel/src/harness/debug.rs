@@ -6,7 +6,8 @@ mod socket;
 pub use fd::{FdSyscallTraceEntry, PathSyscallTraceEntry};
 pub(crate) use fd::{
     fd_syscall_trace_entry, fd_syscall_trace_len, path_syscall_trace_entry, path_syscall_trace_len,
-    path_syscall_trace_path_ptr, record_fd_syscall, record_path_syscall,
+    path_syscall_trace_path_ptr, record_fd_syscall, record_path_syscall, record_pipe_close_event,
+    record_write_attempt,
 };
 pub use memory::{GuestWriteOverlapTraceEntry, GuestWriteWatchRegion, MemoryTraceSummary};
 pub(crate) use memory::{
@@ -200,47 +201,6 @@ pub(crate) fn record_thread_count(
     after: u32,
 ) {
     let _ = (kind, vm_ptr, tid, process_ptr, before, after);
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn record_write_attempt(
-    fd: u64,
-    nr: u64,
-    buf_addr: u64,
-    count: u64,
-    result: i64,
-    ofd_id: u32,
-    ofd_type: i32,
-    ofd_ino: u32,
-    status_flags: i32,
-    pipe_read_open: i32,
-    pipe_write_open: i32,
-    bytes: Option<&[u8]>,
-) {
-    let _ = (
-        fd,
-        nr,
-        buf_addr,
-        count,
-        result,
-        ofd_id,
-        ofd_type,
-        ofd_ino,
-        status_flags,
-        pipe_read_open,
-        pipe_write_open,
-        bytes,
-    );
-}
-
-pub(crate) fn record_pipe_close_event(
-    pipe_idx: u32,
-    is_read_end: bool,
-    ofd_id: u32,
-    read_open: i32,
-    write_open: i32,
-) {
-    let _ = (pipe_idx, is_read_end, ofd_id, read_open, write_open);
 }
 
 pub(crate) fn record_syscall(
