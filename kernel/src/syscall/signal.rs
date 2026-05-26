@@ -20,6 +20,7 @@
 //! https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/signal.h
 
 mod actions;
+mod defaults;
 mod frame;
 mod pending;
 mod signalfd;
@@ -52,7 +53,7 @@ pub(crate) use trace::{
 
 use frame::push_signal_frame;
 use pending::{peek_thread_pending_signals, process_pending, take_thread_pending_signals};
-use trace::{record_default_signal, record_signal_delivery_trace, record_sigreturn_trace};
+use trace::{record_signal_delivery_trace, record_sigreturn_trace};
 
 // SA flags (https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/signal-defs.h)
 const SA_ONSTACK: u64 = 0x08000000;
@@ -229,7 +230,7 @@ pub fn pending_signal_interrupts_blocked_syscall(vm: &ThreadState, base: u32) ->
 
     match action.handler {
         SIG_IGN => false,
-        SIG_DFL => !matches!(sig as i32, SIGCHLD | SIGURG | SIGWINCH | SIGCONT),
+        SIG_DFL => defaults::default_action_interrupts_blocked_syscall(sig),
         _ => (action.flags & SA_RESTART) == 0,
     }
 }
@@ -331,35 +332,12 @@ pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
         });
 
     match action.handler {
-        0 => {
-            // SIG_DFL: default action
-            match sig as i32 {
-                SIGCHLD | SIGURG | SIGWINCH => {} // ignore by default
-                SIGCONT => {}                     // ignore (no job control)
-                _ => {
-                    record_default_signal(vm, sig);
-                    crate::syscall::thread::terminate_process_with_reason(
-                        vm,
-                        base,
-                        128 + sig as i32,
-                        sig as i32,
-                        crate::syscall::thread::TERMINATE_REASON_DEFAULT_SIGNAL,
-                    );
-                }
-            }
-        }
+        0 => defaults::apply_default_action(vm, base, sig),
         1 => {} // SIG_IGN: ignore
         _handler_addr => {
             // User handler: push signal frame and redirect to handler
             if !push_signal_frame(vm, base, sig, &action) {
-                record_default_signal(vm, sig);
-                crate::syscall::thread::terminate_process_with_reason(
-                    vm,
-                    base,
-                    128 + sig as i32,
-                    sig as i32,
-                    crate::syscall::thread::TERMINATE_REASON_DEFAULT_SIGNAL,
-                );
+                defaults::terminate_with_default_action(vm, base, sig);
             }
         }
     }
