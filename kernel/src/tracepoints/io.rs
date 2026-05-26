@@ -1,5 +1,5 @@
 #[cfg(any(test, all(target_arch = "wasm32", feature = "harness")))]
-pub(crate) use crate::harness::debug::{
+pub(crate) use crate::harness::trace::{
     record_epoll_wait, record_fd_syscall, record_memory_syscall, record_path_syscall,
     record_pipe_close_event, record_write_attempt,
 };

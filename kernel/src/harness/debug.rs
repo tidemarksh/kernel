@@ -6,38 +6,26 @@ mod signal;
 mod socket;
 mod thread;
 
-pub use fd::{FdSyscallTraceEntry, PathSyscallTraceEntry};
 pub(crate) use fd::{
     fd_syscall_trace_entry, fd_syscall_trace_len, path_syscall_trace_entry, path_syscall_trace_len,
-    path_syscall_trace_path_ptr, record_fd_syscall, record_path_syscall, record_pipe_close_event,
-    record_write_attempt,
+    path_syscall_trace_path_ptr,
 };
-pub use memory::{GuestWriteOverlapTraceEntry, GuestWriteWatchRegion, MemoryTraceSummary};
 pub(crate) use memory::{
-    clear_guest_write_watch_trace, clear_memory_trace, configure_guest_write_watch,
-    guest_write_overlap_enabled, guest_write_overlap_trace_entry, guest_write_overlap_trace_len,
-    memory_permit_cache_hits, memory_permit_cache_hits_by_prot, memory_permit_checks,
-    memory_permit_checks_by_prot, memory_permit_cover_hits, memory_permit_cover_hits_by_prot,
-    memory_permit_denied, memory_permit_denied_by_prot, memory_trace_entry, memory_trace_len,
-    memory_trace_summary, record_guest_range_permit_check, record_guest_write_overlap,
-    record_memory_syscall,
+    guest_write_overlap_trace_entry, guest_write_overlap_trace_len, memory_permit_cache_hits,
+    memory_permit_cache_hits_by_prot, memory_permit_checks, memory_permit_checks_by_prot,
+    memory_permit_cover_hits, memory_permit_cover_hits_by_prot, memory_permit_denied,
+    memory_permit_denied_by_prot, memory_trace_entry, memory_trace_len, memory_trace_summary,
 };
 pub(crate) use process::*;
-pub use process::{ExecveStageTraceEntry, RiscvSyscallTraceEntry, SyscallTraceSummary};
-pub(crate) use signal::record_sync_signal_trace;
-pub(crate) use socket::record_epoll_wait;
 pub(crate) use thread::*;
-pub use thread::{
-    BlockMissSample, CloneStartupTraceEntry, ExecTraceEntry, FaultDispatchTraceSummary,
-    JalrTraceSummary, RegWriteTraceSummary, ThreadStepEntryTraceSummary, ThreadStepPhaseSummary,
-    ThreadStepTraceSummary, ZeroRegTraceSummary,
-};
-
-const RUNTIME_DEBUG_ENABLED: bool = cfg!(any(test, feature = "harness"));
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::harness::trace::{
+        clear_cpu_trace, clear_memory_trace, record_memory_syscall, record_thread_step_entry_trace,
+        record_thread_step_phase, record_thread_step_trace, THREAD_STEP_TRACE_CAP,
+    };
 
     fn make_thread_state(
         tid: i32,

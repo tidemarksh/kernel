@@ -28,5 +28,5 @@ pub(crate) use io::{
 pub(crate) use runtime::{
     record_fault_dispatch_trace, record_futex_resume_trace, record_sync_signal_trace,
     record_syscall, record_thread_count, record_thread_step_entry_trace, record_thread_step_phase,
-    record_thread_step_trace,
+    record_thread_step_trace, snapshot_recent_exec_trace_for_vm,
 };

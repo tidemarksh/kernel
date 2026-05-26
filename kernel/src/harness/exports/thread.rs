@@ -92,7 +92,7 @@ pub extern "C" fn thread_stack_minus(vm_ptr: u32, byte_offset: u32) -> u64 {
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_clear_cpu_trace() {
-    crate::harness::debug::clear_cpu_trace();
+    crate::harness::trace::clear_cpu_trace();
 }
 
 #[cfg(any(test, feature = "harness"))]

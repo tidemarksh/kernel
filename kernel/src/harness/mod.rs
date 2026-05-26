@@ -6,6 +6,7 @@ pub mod process;
 pub mod resource;
 pub mod signal;
 pub mod support;
+pub(crate) mod trace;
 
 use crate::abi::*;
 use crate::fs;

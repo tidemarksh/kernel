@@ -49,13 +49,13 @@ pub extern "C" fn debug_memory_permit_denied_by_prot(prot: u32) -> u64 {
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_clear_guest_write_watch_trace() {
-    crate::harness::debug::clear_guest_write_watch_trace();
+    crate::harness::trace::clear_guest_write_watch_trace();
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_configure_guest_write_watch(slot: u32, start: u64, end: u64) {
-    crate::harness::debug::configure_guest_write_watch(slot, start, end);
+    crate::harness::trace::configure_guest_write_watch(slot, start, end);
 }
 
 #[cfg(any(test, feature = "harness"))]

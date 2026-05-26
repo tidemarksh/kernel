@@ -241,7 +241,7 @@ pub(crate) fn reset_trace_state() {
 
 pub(super) fn record_default_signal(vm: &ThreadState, sig: usize) {
     #[cfg(any(test, feature = "harness"))]
-    crate::harness::debug::snapshot_recent_exec_trace_for_vm(vm as *const ThreadState as u32);
+    crate::tracepoints::snapshot_recent_exec_trace_for_vm(vm as *const ThreadState as u32);
 
     let trace = DefaultSignalTrace {
         vm_ptr: vm as *const ThreadState as u32,

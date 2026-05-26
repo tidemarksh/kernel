@@ -1,8 +1,8 @@
 #[cfg(any(test, all(target_arch = "wasm32", feature = "harness")))]
-pub(crate) use crate::harness::debug::{
+pub(crate) use crate::harness::trace::{
     record_fault_dispatch_trace, record_futex_resume_trace, record_sync_signal_trace,
     record_syscall, record_thread_count, record_thread_step_entry_trace, record_thread_step_phase,
-    record_thread_step_trace,
+    record_thread_step_trace, snapshot_recent_exec_trace_for_vm,
 };
 
 macro_rules! noop_tracepoint {
@@ -54,4 +54,5 @@ noop_tracepoint! {
     fn record_thread_step_entry_trace(vm: &crate::types::ThreadState, budget: i32) {}
     fn record_thread_step_phase(vm: &crate::types::ThreadState, phase: u32, budget: i32, remaining: i32) {}
     fn record_thread_step_trace(vm: &crate::types::ThreadState, budget: i32, remaining: i32) {}
+    fn snapshot_recent_exec_trace_for_vm(vm_ptr: u32) {}
 }

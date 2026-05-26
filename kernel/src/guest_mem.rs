@@ -999,9 +999,9 @@ mod tests {
         unsafe {
             super::init(core::ptr::null(), core::ptr::null(), core::ptr::null());
         }
-        crate::harness::debug::clear_guest_write_watch_trace();
-        crate::harness::debug::record_execve_stage(716, 0, 0);
-        crate::harness::debug::configure_guest_write_watch(0, 0x2000, 0x2010);
+        crate::harness::trace::clear_guest_write_watch_trace();
+        crate::harness::trace::record_execve_stage(716, 0, 0);
+        crate::harness::trace::configure_guest_write_watch(0, 0x2000, 0x2010);
         unsafe {
             super::write_u32(0, 0x2004, 0x1122_3344);
         }
@@ -1014,6 +1014,6 @@ mod tests {
         assert_eq!(entry.sample_len, 4);
         assert_eq!(entry.sample, 0x1122_3344);
         assert_eq!(entry.execve_stage, 716);
-        crate::harness::debug::clear_guest_write_watch_trace();
+        crate::harness::trace::clear_guest_write_watch_trace();
     }
 }

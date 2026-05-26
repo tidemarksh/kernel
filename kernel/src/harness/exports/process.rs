@@ -1,7 +1,7 @@
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_clear_syscall_trace() {
-    crate::harness::debug::clear_syscall_trace();
+    crate::harness::trace::clear_syscall_trace();
 }
 
 #[cfg(any(test, feature = "harness"))]
