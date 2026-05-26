@@ -1043,8 +1043,8 @@ pub fn close_http_connection(_vm_ptr: u32, conn_id: i32) {
 mod tests {
     use super::super::poll::{EPOLLIN, EPOLLOUT};
     use super::super::{
-        connect_peer_addr, poll_revents_ofd, resume_connect_result, sys_bind, sys_connect,
-        sys_listen, sys_socket,
+        connect_peer_addr, poll_revents_ofd, resume_connect_result, sys_accept4, sys_bind,
+        sys_connect, sys_listen, sys_socket,
     };
     use super::*;
     use crate::harness::TestVm;
