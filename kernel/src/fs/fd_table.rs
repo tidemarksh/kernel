@@ -56,6 +56,7 @@ pub use super::fd::close::{
 pub use super::fd::dup::{sys_dup, sys_dup3};
 pub use super::fd::entry::{load_process_fd_entry, store_process_fd_entry};
 pub use super::fd::fcntl::{sys_fcntl, sys_flock};
+pub use super::fd::nonseekable::is_nonseekable_fd_type;
 pub use super::fd::ofd::{
     advance_offset, attach_ofd_table_ptr, blocked_status_uses_ofd_pin, clear_blocked_ofd_pin,
     get_ofd, get_ofd_by_id, get_ofd_id, get_offset, get_offset_by_id, get_offset_floor_by_id, init,
