@@ -1,7 +1,99 @@
-use super::{pending::process_pending, pid_from_vm, sig_slots, sigactions_for};
+use super::{ProcessSignalStateImage, pending::process_pending, pid_from_vm};
 use crate::abi::*;
 use crate::guest_mem;
 use crate::types::{MAX_SIGNALS, SIG_DFL, SIG_IGN, SigAction, ThreadState};
+
+/// Per-process signal disposition tables, allocated in kernel Worker linear memory.
+/// Each process gets its own [SigAction; MAX_SIGNALS] table, indexed by PID.
+///
+/// Signal dispositions are process-wide (shared by all threads in a process).
+/// On execve, caught signals (handler != SIG_DFL and != SIG_IGN) are reset to SIG_DFL.
+///
+/// Semantics: https://man7.org/linux/man-pages/man2/rt_sigaction.2.html
+/// execve reset: https://man7.org/linux/man-pages/man2/execve.2.html
+///
+/// SIG_SLOTS_PTR is an array of MAX_PROCESSES pointers, each pointing to a
+/// per-process table.
+static mut SIG_SLOTS_PTR: *mut [*mut [SigAction; MAX_SIGNALS]; MAX_PROCESSES] =
+    core::ptr::null_mut();
+
+#[inline(always)]
+pub(super) fn sig_slots() -> &'static mut [*mut [SigAction; MAX_SIGNALS]; MAX_PROCESSES] {
+    unsafe {
+        let p = core::ptr::read(core::ptr::addr_of!(SIG_SLOTS_PTR));
+        &mut *p
+    }
+}
+
+pub(super) fn init_action_tables() {
+    unsafe {
+        core::ptr::write(
+            core::ptr::addr_of_mut!(SIG_SLOTS_PTR),
+            core::ptr::null_mut(),
+        );
+        let size = core::mem::size_of::<[*mut [SigAction; MAX_SIGNALS]; MAX_PROCESSES]>() as u32;
+        let align = core::mem::align_of::<*mut [SigAction; MAX_SIGNALS]>() as u32;
+        let ptr = crate::alloc::alloc_zeroed(size, align);
+        if ptr == 0 {
+            core::arch::wasm32::unreachable();
+        }
+        core::ptr::write(
+            core::ptr::addr_of_mut!(SIG_SLOTS_PTR),
+            ptr as *mut [*mut [SigAction; MAX_SIGNALS]; MAX_PROCESSES],
+        );
+    }
+}
+
+pub fn sig_slots_ptr() -> u32 {
+    unsafe { core::ptr::read(core::ptr::addr_of!(SIG_SLOTS_PTR)) as u32 }
+}
+
+pub fn signal_slots_bytes() -> u32 {
+    core::mem::size_of::<[*mut [SigAction; MAX_SIGNALS]; MAX_PROCESSES]>() as u32
+}
+
+pub fn signal_action_table_bytes() -> u32 {
+    core::mem::size_of::<[SigAction; MAX_SIGNALS]>() as u32
+}
+
+pub(super) fn attach_signal_action_state(sig_slots_ptr: u32) {
+    unsafe {
+        core::ptr::write(
+            core::ptr::addr_of_mut!(SIG_SLOTS_PTR),
+            sig_slots_ptr as *mut [*mut [SigAction; MAX_SIGNALS]; MAX_PROCESSES],
+        );
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(super) fn capture_signal_action_state_into(image: &mut ProcessSignalStateImage) {
+    for (idx, slot) in sig_slots().iter().enumerate() {
+        image.sig_slots[idx] = *slot as u32;
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(super) fn restore_signal_action_state_from(image: &ProcessSignalStateImage) {
+    for (idx, slot) in sig_slots().iter_mut().enumerate() {
+        *slot = image.sig_slots[idx] as *mut [SigAction; MAX_SIGNALS];
+    }
+}
+
+#[inline(always)]
+pub(super) fn sigactions_for(pid: i32) -> Option<&'static mut [SigAction; MAX_SIGNALS]> {
+    if pid <= 0 {
+        return None;
+    }
+    let idx = (pid - 1) as usize;
+    if idx >= MAX_PROCESSES {
+        return None;
+    }
+    let slot = sig_slots()[idx];
+    if slot.is_null() {
+        return None;
+    }
+    unsafe { Some(&mut *slot) }
+}
 
 /// Allocate a new signal disposition table for a process.
 pub fn init_for_process(pid: i32) {

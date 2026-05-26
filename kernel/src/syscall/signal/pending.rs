@@ -1,4 +1,4 @@
-use super::{SI_USER, pid_from_vm, sig_slots};
+use super::{SI_USER, actions::sig_slots, pid_from_vm};
 use crate::abi::*;
 use crate::guest_mem;
 use crate::types::{

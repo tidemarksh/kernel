@@ -1,10 +1,16 @@
-use super::{
-    SA_NODEFER, SA_ONSTACK, SA_RESETHAND, SS_DISABLE, SS_ONSTACK, pid_from_vm,
-    record_signal_delivery_trace, sigactions_for,
-};
+use super::{actions::sigactions_for, pid_from_vm, record_signal_delivery_trace};
 use crate::abi::*;
 use crate::guest_mem;
 use crate::types::{SIG_DFL, SigAction, ThreadState};
+
+// SA flags (https://github.com/torvalds/linux/blob/v6.12/include/uapi/asm-generic/signal-defs.h)
+const SA_ONSTACK: u64 = 0x08000000;
+const SA_NODEFER: u64 = 0x40000000;
+const SA_RESETHAND: u64 = 0x80000000;
+
+// sigaltstack flags
+const SS_ONSTACK: i32 = 1;
+pub(crate) const SS_DISABLE: i32 = 2;
 
 /// Signal frame layout on guest stack (RISC-V rt_sigframe).
 ///
@@ -203,4 +209,41 @@ pub fn patch_current_signal_frame_a0(vm: &ThreadState, base: u32, value: i64) ->
         guest_mem::write_u64(base, regs_base + (10u64 * 8), value as u64);
     }
     true
+}
+
+/// sigaltstack: get/set alternate signal stack.
+/// ss in a0, old_ss in a1.
+pub fn sys_sigaltstack(vm: &mut ThreadState, base: u32, ss_addr: u64, old_ss_addr: u64) -> i64 {
+    unsafe {
+        // Write old stack
+        if old_ss_addr != 0 {
+            guest_mem::write_u64(base, old_ss_addr, vm.sigaltstack_sp);
+            guest_mem::write_u32(base, old_ss_addr + 8, vm.sigaltstack_flags as u32);
+            guest_mem::write_u64(base, old_ss_addr + 16, vm.sigaltstack_size);
+        }
+
+        // Read new stack
+        if ss_addr != 0 {
+            let flags = guest_mem::read_i32(base, ss_addr + 8);
+            if flags & !(SS_ONSTACK | SS_DISABLE) != 0 {
+                return EINVAL;
+            }
+
+            if flags & SS_DISABLE != 0 {
+                vm.sigaltstack_sp = 0;
+                vm.sigaltstack_size = 0;
+                vm.sigaltstack_flags = SS_DISABLE;
+            } else {
+                let sp = guest_mem::read_u64(base, ss_addr);
+                let size = guest_mem::read_u64(base, ss_addr + 16);
+                if size < 2048 {
+                    return ENOMEM;
+                } // MINSIGSTKSZ
+                vm.sigaltstack_sp = sp;
+                vm.sigaltstack_size = size;
+                vm.sigaltstack_flags = flags;
+            }
+        }
+    }
+    0
 }
