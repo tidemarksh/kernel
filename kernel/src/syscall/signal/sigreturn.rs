@@ -2,7 +2,7 @@ use super::frame::{
     MCONTEXT_OFF_FCSR, MCONTEXT_OFF_FREGS, MCONTEXT_OFF_REGS, SIGFRAME_OFF_ALTSTACK_FLAGS,
     SIGFRAME_OFF_UCONTEXT, UCONTEXT_OFF_MCONTEXT, UCONTEXT_OFF_SIGMASK,
 };
-use super::record_sigreturn_trace;
+use super::trace::record_sigreturn_trace;
 use crate::guest_mem;
 use crate::types::ThreadState;
 

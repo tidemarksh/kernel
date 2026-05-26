@@ -55,8 +55,6 @@ pub(crate) use trace::{
     signal_delivery_trace, signal_delivery_trace_for_vm, sigreturn_trace, trampoline_trace_state,
 };
 
-use trace::{record_signal_delivery_trace, record_sigreturn_trace};
-
 pub(super) const SI_USER: i32 = 0;
 
 #[cfg(any(test, feature = "harness"))]

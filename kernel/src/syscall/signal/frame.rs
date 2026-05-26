@@ -1,4 +1,4 @@
-use super::{actions::sigactions_for, pid_from_vm, record_signal_delivery_trace};
+use super::{actions::sigactions_for, pid_from_vm, trace::record_signal_delivery_trace};
 use crate::abi::*;
 use crate::guest_mem;
 use crate::types::{SIG_DFL, SigAction, ThreadState};
