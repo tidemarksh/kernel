@@ -28,6 +28,7 @@ mod signalfd;
 mod sigreturn;
 mod trace;
 
+#[cfg(any(test, feature = "harness"))]
 pub(crate) use actions::{
     SignalActionStateImage, capture_signal_action_state_into, restore_signal_action_state_from,
 };
@@ -40,6 +41,7 @@ pub use delivery::{check_pending, pending_signal_interrupts_blocked_syscall};
 pub(crate) use frame::SS_DISABLE;
 pub use frame::{is_current_sigreturn_trampoline, patch_current_signal_frame_a0, sys_sigaltstack};
 pub(crate) use pending::sanitized_signal_mask;
+#[cfg(any(test, feature = "harness"))]
 pub(crate) use pending::{
     ProcessPendingStateImage, capture_process_pending_state_into,
     restore_process_pending_state_from,
