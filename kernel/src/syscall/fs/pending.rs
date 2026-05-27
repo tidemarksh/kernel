@@ -3,14 +3,15 @@ use super::path::{
     trim_trailing_slashes,
 };
 use super::state::process_fs_ring_base;
-use super::{
-    AT_FDCWD, FS_EFFECT_MEMFS_FILE_DATA, FS_EFFECT_MEMFS_MUTATION, FS_EFFECT_SHARED_OFD_STATE,
-    MAX_PATH_SYMLINK_FOLLOWS, PENDING_FS_PATH_MAX, sys_fstat, sys_write,
-};
+use super::{AT_FDCWD, MAX_PATH_SYMLINK_FOLLOWS, PENDING_FS_PATH_MAX, sys_fstat, sys_write};
 use crate::abi::*;
 use crate::fs::{fd_table, memfs, ring_buffer};
 use crate::guest_mem;
 use crate::types::ThreadState;
+
+pub const FS_EFFECT_MEMFS_MUTATION: u32 = 1 << 0;
+pub const FS_EFFECT_SHARED_OFD_STATE: u32 = 1 << 1;
+pub const FS_EFFECT_MEMFS_FILE_DATA: u32 = 1 << 2;
 
 #[allow(clippy::too_many_arguments)]
 fn submit_fs_request(

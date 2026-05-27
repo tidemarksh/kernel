@@ -56,9 +56,6 @@ const TMPFS_MAGIC: u64 = 0x0102_1994;
 const S_IFIFO: u32 = 0o010000;
 const S_IFSOCK: u32 = 0o140000;
 const MAX_PATH_SYMLINK_FOLLOWS: u32 = 40;
-pub const FS_EFFECT_MEMFS_MUTATION: u32 = 1 << 0;
-pub const FS_EFFECT_SHARED_OFD_STATE: u32 = 1 << 1;
-pub const FS_EFFECT_MEMFS_FILE_DATA: u32 = 1 << 2;
 pub use getdents::sys_getdents64;
 pub use lseek::sys_lseek;
 pub use meta::{
@@ -71,6 +68,7 @@ pub use open::sys_openat;
 use path::resolve_at;
 pub use path::{sys_chdir, sys_getcwd};
 pub use pending::{
+    FS_EFFECT_MEMFS_FILE_DATA, FS_EFFECT_MEMFS_MUTATION, FS_EFFECT_SHARED_OFD_STATE,
     dispatch_fstat, dispatch_ftruncate, dispatch_getdents64, dispatch_lseek, dispatch_mkdirat,
     dispatch_openat, dispatch_pwrite64, dispatch_renameat2, dispatch_truncate, dispatch_unlinkat,
     dispatch_write, pending_request_absolute_path, pending_request_effects, pending_request_opcode,
