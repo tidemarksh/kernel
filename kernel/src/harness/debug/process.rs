@@ -1,4 +1,4 @@
-pub(crate) use crate::harness::trace::{
+pub(crate) use super::format::process::{
     completed_sync_effects, execve_error_errno, execve_error_stage, execve_error_value0,
     execve_error_value1, execve_stage, execve_stage_trace_entry, execve_stage_trace_len,
     execve_value0, execve_value1, riscv_syscall_trace_entry, riscv_syscall_trace_len,
