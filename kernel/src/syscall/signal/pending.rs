@@ -1,4 +1,4 @@
-use super::{SI_USER, actions::sig_slots, pid_from_vm};
+use super::actions::sig_slots;
 use crate::abi::*;
 use crate::guest_mem;
 use crate::types::{
@@ -11,12 +11,28 @@ const SIG_BLOCK: u64 = 0;
 const SIG_UNBLOCK: u64 = 1;
 const SIG_SETMASK: u64 = 2;
 
+pub(super) const SI_USER: i32 = 0;
 const SI_TKILL: i32 = -6;
 const ILL_ILLOPC: i32 = 1;
 const SEGV_MAPERR: i32 = 1;
 const SEGV_ACCERR: i32 = 2;
 
 static mut PROCESS_PENDING_PTR: *mut [u64; MAX_PROCESSES] = core::ptr::null_mut();
+
+#[cfg(any(test, feature = "harness"))]
+#[derive(Clone, Copy)]
+pub(crate) struct ProcessPendingStateImage {
+    process_pending: [u64; MAX_PROCESSES],
+}
+
+#[cfg(any(test, feature = "harness"))]
+impl ProcessPendingStateImage {
+    pub(crate) fn empty() -> Self {
+        Self {
+            process_pending: [0; MAX_PROCESSES],
+        }
+    }
+}
 
 #[inline(always)]
 pub(super) fn process_pending() -> &'static mut [u64; MAX_PROCESSES] {
@@ -34,7 +50,7 @@ pub fn process_pending_bytes() -> u32 {
     core::mem::size_of::<[u64; MAX_PROCESSES]>() as u32
 }
 
-pub(super) fn attach_process_pending_state(process_pending_ptr: u32) {
+pub fn attach_process_pending_state(process_pending_ptr: u32) {
     unsafe {
         core::ptr::write(
             core::ptr::addr_of_mut!(PROCESS_PENDING_PTR),
@@ -44,12 +60,12 @@ pub(super) fn attach_process_pending_state(process_pending_ptr: u32) {
 }
 
 #[cfg(any(test, feature = "harness"))]
-pub(super) fn capture_process_pending_state_into(image: &mut super::ProcessSignalStateImage) {
+pub(crate) fn capture_process_pending_state_into(image: &mut ProcessPendingStateImage) {
     image.process_pending = *process_pending();
 }
 
 #[cfg(any(test, feature = "harness"))]
-pub(super) fn restore_process_pending_state_from(image: &super::ProcessSignalStateImage) {
+pub(crate) fn restore_process_pending_state_from(image: &ProcessPendingStateImage) {
     *process_pending() = image.process_pending;
 }
 
@@ -76,6 +92,19 @@ pub(super) fn init() {
 pub(crate) fn sanitized_signal_mask(mask: u64) -> u64 {
     let unblockable = (1u64 << (SIGKILL - 1)) | (1u64 << (SIGSTOP - 1));
     mask & !unblockable
+}
+
+/// Read PID from ProcessState in guest Memory via ThreadState.process_ptr.
+#[inline(always)]
+pub fn pid_from_vm(vm: &ThreadState, base: u32) -> i32 {
+    let ps_ptr = vm.process_ptr;
+    if ps_ptr == 0 {
+        return 1;
+    }
+    unsafe {
+        let pid_offset = core::mem::offset_of!(crate::types::ProcessState, pid);
+        guest_mem::read_i32(base, ps_ptr as u64 + pid_offset as u64)
+    }
 }
 
 fn process_state_from_vm(vm: &ThreadState, base: u32) -> Option<&'static mut ProcessState> {

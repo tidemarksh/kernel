@@ -1,4 +1,4 @@
-use super::{ProcessSignalStateImage, pending::process_pending, pid_from_vm};
+use super::pending::{pid_from_vm, process_pending};
 use crate::abi::*;
 use crate::guest_mem;
 use crate::types::{MAX_SIGNALS, SIG_DFL, SIG_IGN, SigAction, ThreadState};
@@ -16,6 +16,21 @@ use crate::types::{MAX_SIGNALS, SIG_DFL, SIG_IGN, SigAction, ThreadState};
 /// per-process table.
 static mut SIG_SLOTS_PTR: *mut [*mut [SigAction; MAX_SIGNALS]; MAX_PROCESSES] =
     core::ptr::null_mut();
+
+#[cfg(any(test, feature = "harness"))]
+#[derive(Clone, Copy)]
+pub(crate) struct SignalActionStateImage {
+    sig_slots: [u32; MAX_PROCESSES],
+}
+
+#[cfg(any(test, feature = "harness"))]
+impl SignalActionStateImage {
+    pub(crate) fn empty() -> Self {
+        Self {
+            sig_slots: [0; MAX_PROCESSES],
+        }
+    }
+}
 
 #[inline(always)]
 pub(super) fn sig_slots() -> &'static mut [*mut [SigAction; MAX_SIGNALS]; MAX_PROCESSES] {
@@ -56,7 +71,7 @@ pub fn signal_action_table_bytes() -> u32 {
     core::mem::size_of::<[SigAction; MAX_SIGNALS]>() as u32
 }
 
-pub(super) fn attach_signal_action_state(sig_slots_ptr: u32) {
+pub fn attach_signal_action_state(sig_slots_ptr: u32) {
     unsafe {
         core::ptr::write(
             core::ptr::addr_of_mut!(SIG_SLOTS_PTR),
@@ -66,14 +81,14 @@ pub(super) fn attach_signal_action_state(sig_slots_ptr: u32) {
 }
 
 #[cfg(any(test, feature = "harness"))]
-pub(super) fn capture_signal_action_state_into(image: &mut ProcessSignalStateImage) {
+pub(crate) fn capture_signal_action_state_into(image: &mut SignalActionStateImage) {
     for (idx, slot) in sig_slots().iter().enumerate() {
         image.sig_slots[idx] = *slot as u32;
     }
 }
 
 #[cfg(any(test, feature = "harness"))]
-pub(super) fn restore_signal_action_state_from(image: &ProcessSignalStateImage) {
+pub(crate) fn restore_signal_action_state_from(image: &SignalActionStateImage) {
     for (idx, slot) in sig_slots().iter_mut().enumerate() {
         *slot = image.sig_slots[idx] as *mut [SigAction; MAX_SIGNALS];
     }

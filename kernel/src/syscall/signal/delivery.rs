@@ -2,8 +2,9 @@ use super::{
     actions::sigactions_for,
     defaults,
     frame::push_signal_frame,
-    pending::{peek_thread_pending_signals, process_pending, take_thread_pending_signals},
-    pid_from_vm,
+    pending::{
+        peek_thread_pending_signals, pid_from_vm, process_pending, take_thread_pending_signals,
+    },
 };
 use crate::abi::*;
 use crate::types::{MAX_SIGNALS, SIG_DFL, SIG_IGN, SigAction, ThreadState};

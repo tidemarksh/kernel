@@ -470,7 +470,8 @@ pub extern "C" fn kernel_attach_runtime_state(
     crate::syscall::socket::attach_socket_state(socket_table_ptr, socket_used);
     crate::syscall::pipe::attach_pipe_state(pipe_base, pipe_used);
     crate::net::ring_buffer::attach_net_buffer_state(net_buf_base, net_buf_used);
-    crate::syscall::signal::attach_process_signal_state(sig_slots_ptr, process_pending_ptr);
+    crate::syscall::signal::attach_signal_action_state(sig_slots_ptr);
+    crate::syscall::signal::attach_process_pending_state(process_pending_ptr);
     crate::syscall::process::attach_process_runtime_state_ptr(process_runtime_state_ptr);
     crate::syscall::time::attach_time_state_ptr(time_state_ptr);
 }

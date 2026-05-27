@@ -1,22 +1,26 @@
 #[derive(Clone, Copy)]
 pub(crate) struct ProcessSignalSnapshot {
-    state: crate::syscall::signal::ProcessSignalStateImage,
+    action_state: crate::syscall::signal::SignalActionStateImage,
+    pending_state: crate::syscall::signal::ProcessPendingStateImage,
 }
 
 impl ProcessSignalSnapshot {
     pub(crate) fn empty() -> Self {
         Self {
-            state: crate::syscall::signal::ProcessSignalStateImage::empty(),
+            action_state: crate::syscall::signal::SignalActionStateImage::empty(),
+            pending_state: crate::syscall::signal::ProcessPendingStateImage::empty(),
         }
     }
 }
 
 pub(crate) fn snapshot_process_context_into(snapshot: &mut ProcessSignalSnapshot) {
-    crate::syscall::signal::capture_process_signal_state_into(&mut snapshot.state);
+    crate::syscall::signal::capture_signal_action_state_into(&mut snapshot.action_state);
+    crate::syscall::signal::capture_process_pending_state_into(&mut snapshot.pending_state);
 }
 
 pub(crate) fn restore_process_context(snapshot: &ProcessSignalSnapshot) {
-    crate::syscall::signal::restore_process_signal_state_from(&snapshot.state);
+    crate::syscall::signal::restore_signal_action_state_from(&snapshot.action_state);
+    crate::syscall::signal::restore_process_pending_state_from(&snapshot.pending_state);
 }
 
 pub fn clear_debug_trace() {
