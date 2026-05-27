@@ -1505,6 +1505,8 @@ pub extern "C" fn process_release_host_stdio(vm_ptr: u32) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn process_inject_http(vm_ptr: u32, port: u32, req_ptr: u32, req_len: u32) -> i32 {
+    // Legacy runtime ABI name. Kernel socket semantics stay generic here; the
+    // wrapper delegates to the external-connection helper for compatibility.
     let _ = vm_ptr;
     let request = unsafe { core::slice::from_raw_parts(req_ptr as *const u8, req_len as usize) };
     crate::syscall::socket::inject_external_connection_by_port(port as u16, request)
@@ -1517,6 +1519,7 @@ pub extern "C" fn process_read_http_response(
     dst_ptr: u32,
     dst_len: u32,
 ) -> i32 {
+    // Legacy runtime ABI name. The connection slot is generic socket state.
     let _ = vm_ptr;
     let dst = unsafe { core::slice::from_raw_parts_mut(dst_ptr as *mut u8, dst_len as usize) };
     crate::syscall::socket::read_external_connection_data(conn_id, dst)
@@ -1524,6 +1527,7 @@ pub extern "C" fn process_read_http_response(
 
 #[unsafe(no_mangle)]
 pub extern "C" fn process_close_http_connection(vm_ptr: u32, conn_id: i32) {
+    // Legacy runtime ABI name. The connection slot is generic socket state.
     let _ = vm_ptr;
     crate::syscall::socket::close_connection_slot(conn_id);
 }
