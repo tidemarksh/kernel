@@ -50,6 +50,16 @@ pub extern "C" fn kernel_ofd_table_bytes() -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn kernel_ofd_state_ptr() -> u32 {
+    crate::fs::fd_table::ofd_state_ptr()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_ofd_state_bytes() -> u32 {
+    crate::fs::fd_table::ofd_state_bytes()
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn kernel_memfs_ptr() -> u32 {
     crate::fs::memfs::memfs_ptr()
 }
@@ -132,6 +142,16 @@ pub extern "C" fn kernel_socket_table_bytes() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_socket_used() -> u32 {
     crate::syscall::socket::socket_used()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_socket_state_ptr() -> u32 {
+    crate::syscall::socket::socket_state_ptr()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_socket_state_bytes() -> u32 {
+    crate::syscall::socket::socket_state_bytes()
 }
 
 #[unsafe(no_mangle)]
@@ -447,11 +467,11 @@ pub extern "C" fn kernel_reset_memfs() {
 pub extern "C" fn kernel_attach_runtime_state(
     heap_base: u32,
     heap_ptr: u32,
-    ofd_table_ptr: u32,
+    ofd_state_ptr: u32,
     memfs_ptr: u32,
     mem_state_ptr: u32,
     epoll_table_ptr: u32,
-    socket_table_ptr: u32,
+    socket_state_ptr: u32,
     socket_used: u32,
     pipe_base: u32,
     pipe_used: u64,
@@ -463,11 +483,11 @@ pub extern "C" fn kernel_attach_runtime_state(
     time_state_ptr: u32,
 ) {
     crate::alloc::attach_heap_state(heap_base, heap_ptr);
-    crate::fs::fd_table::attach_ofd_table_ptr(ofd_table_ptr);
+    crate::fs::fd_table::attach_ofd_state_ptr(ofd_state_ptr);
     crate::fs::memfs::attach_memfs_ptr(memfs_ptr);
     crate::syscall::memory::attach_mem_state_ptr(mem_state_ptr);
     crate::syscall::epoll::attach_epoll_table_ptr(epoll_table_ptr);
-    crate::syscall::socket::attach_socket_state(socket_table_ptr, socket_used);
+    crate::syscall::socket::attach_socket_state(socket_state_ptr, socket_used);
     crate::syscall::pipe::attach_pipe_state(pipe_base, pipe_used);
     crate::net::ring_buffer::attach_net_buffer_state(net_buf_base, net_buf_used);
     crate::syscall::signal::attach_signal_action_state(sig_slots_ptr);
@@ -513,6 +533,16 @@ pub extern "C" fn kernel_ofd_reserved_ptr() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_ofd_reserved_bytes() -> u32 {
     crate::fs::fd_table::ofd_reserved_bytes()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_ofd_offset_floor_ptr() -> u32 {
+    crate::fs::fd_table::ofd_offset_floor_ptr()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_ofd_offset_floor_bytes() -> u32 {
+    crate::fs::fd_table::ofd_offset_floor_bytes()
 }
 
 #[unsafe(no_mangle)]

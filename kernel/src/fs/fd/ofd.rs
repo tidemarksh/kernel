@@ -36,7 +36,15 @@ pub fn ofd_table_bytes() -> u32 {
     core::mem::size_of::<[OpenFileDesc; MAX_FDS]>() as u32
 }
 
-pub fn attach_ofd_table_ptr(ptr: u32) {
+pub fn ofd_state_ptr() -> u32 {
+    unsafe { core::ptr::read(core::ptr::addr_of!(OFD_STATE_PTR)) as u32 }
+}
+
+pub fn ofd_state_bytes() -> u32 {
+    core::mem::size_of::<OfdState>() as u32
+}
+
+pub fn attach_ofd_state_ptr(ptr: u32) {
     unsafe {
         core::ptr::write(core::ptr::addr_of_mut!(OFD_STATE_PTR), ptr as *mut OfdState);
     }
@@ -74,6 +82,14 @@ pub fn ofd_reserved_ptr() -> u32 {
 
 pub fn ofd_reserved_bytes() -> u32 {
     core::mem::size_of::<[u64; OFD_RESERVED_WORDS]>() as u32
+}
+
+pub fn ofd_offset_floor_ptr() -> u32 {
+    core::ptr::addr_of_mut!(state().offset_floor) as u32
+}
+
+pub fn ofd_offset_floor_bytes() -> u32 {
+    core::mem::size_of::<[u64; MAX_FDS]>() as u32
 }
 
 pub fn reserve_ofd_id(ofd_id: u32) {

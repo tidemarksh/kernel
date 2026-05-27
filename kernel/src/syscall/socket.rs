@@ -51,6 +51,6 @@ pub use state::{
     debug_socket_read_last_before, debug_socket_read_last_fd, debug_socket_read_last_result,
     debug_socket_recv_available, debug_socket_recv_buf_idx, debug_socket_state, debug_socket_type,
     drain_external_outbound_for_fd, force_shutdown_for_fd, init, inject_external_inbound_for_fd,
-    is_slot_used, mark_external_peer_for_fd, socket_close, socket_table_bytes, socket_table_ptr,
-    socket_used, thread_connect_fd,
+    is_slot_used, mark_external_peer_for_fd, socket_close, socket_state_bytes, socket_state_ptr,
+    socket_table_bytes, socket_table_ptr, socket_used, thread_connect_fd,
 };

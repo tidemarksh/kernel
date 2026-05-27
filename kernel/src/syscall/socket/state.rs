@@ -161,11 +161,19 @@ pub fn socket_table_bytes() -> u32 {
     core::mem::size_of::<[SocketSlot; MAX_SOCKETS]>() as u32
 }
 
-pub fn attach_socket_state(table_ptr: u32, used: u32) {
+pub fn socket_state_ptr() -> u32 {
+    unsafe { core::ptr::read(core::ptr::addr_of!(SOCKET_STATE_PTR)) as u32 }
+}
+
+pub fn socket_state_bytes() -> u32 {
+    core::mem::size_of::<SocketState>() as u32
+}
+
+pub fn attach_socket_state(state_ptr: u32, used: u32) {
     unsafe {
         core::ptr::write(
             core::ptr::addr_of_mut!(SOCKET_STATE_PTR),
-            table_ptr as *mut SocketState,
+            state_ptr as *mut SocketState,
         );
     }
     state().used = used;
