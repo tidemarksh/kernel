@@ -1,8 +1,7 @@
 use super::{
     SHUT_RD_MASK, SHUT_WR_MASK, SOCK_STATE_BOUND, SOCK_STATE_CONNECTED, SOCK_STATE_IDLE,
-    SOCK_STATE_SHUTDOWN, SOCKADDR_STORAGE_LEN, SOCKET_READ_BYTES, SOCKET_READ_COUNT,
-    SOCKET_READ_LAST_AFTER, SOCKET_READ_LAST_BEFORE, SOCKET_READ_LAST_FD, SOCKET_READ_LAST_RESULT,
-    ensure_external_peer_for_connected_socket, get_socket_idx, is_slot_used,
+    SOCK_STATE_SHUTDOWN, SOCKADDR_STORAGE_LEN, ensure_external_peer_for_connected_socket,
+    get_socket_idx, is_slot_used, record_socket_read_debug, socket_has_successful_read,
     socket_recv_timeout_ms_for_fd, socket_recv_timeout_ms_for_slot, socket_send_timeout_ms_for_fd,
     socket_send_timeout_ms_for_slot, socket_table,
 };
@@ -27,22 +26,6 @@ pub(super) fn socket_recv_available(idx: usize) -> usize {
         return 0;
     }
     crate::net::ring_buffer::available(slot.recv_buf_idx as u32)
-}
-
-fn record_socket_read_debug(idx: usize, fd: u64, before: usize, result: i64, after: usize) {
-    if idx >= MAX_SOCKETS {
-        return;
-    }
-    unsafe {
-        SOCKET_READ_LAST_FD[idx] = fd as u32;
-        SOCKET_READ_LAST_RESULT[idx] = result;
-        SOCKET_READ_LAST_BEFORE[idx] = before.min(u32::MAX as usize) as u32;
-        SOCKET_READ_LAST_AFTER[idx] = after.min(u32::MAX as usize) as u32;
-        if result > 0 {
-            SOCKET_READ_COUNT[idx] = SOCKET_READ_COUNT[idx].saturating_add(1);
-            SOCKET_READ_BYTES[idx] = SOCKET_READ_BYTES[idx].saturating_add(result as u64);
-        }
-    }
 }
 
 pub(super) fn socket_send_space(idx: usize) -> usize {
@@ -389,8 +372,7 @@ pub fn socket_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, len: u64)
         if socket_table()[idx].sock_type == 0
             && socket_table()[idx].external_peer == 0
             && socket_table()[idx].recv_buf_idx >= 0
-            && unsafe { SOCKET_READ_COUNT[idx] } > 0
-            && unsafe { SOCKET_READ_BYTES[idx] } > 0
+            && socket_has_successful_read(idx)
         {
             record_socket_read_debug(idx, fd, before, 0, socket_recv_available(idx));
             return 0;

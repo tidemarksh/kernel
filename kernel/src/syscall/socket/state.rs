@@ -67,33 +67,43 @@ pub(super) struct SocketSlot {
     pub(super) accept_queue: [i32; ACCEPT_QUEUE_SIZE],
 }
 
-/// Pointer to socket table in kernel Worker linear memory.
-pub(super) static mut SOCKET_TABLE_PTR: *mut [SocketSlot; MAX_SOCKETS] = core::ptr::null_mut();
+#[repr(C)]
+struct SocketReadDebugState {
+    count: [u32; MAX_SOCKETS],
+    bytes: [u64; MAX_SOCKETS],
+    last_fd: [u32; MAX_SOCKETS],
+    last_result: [i64; MAX_SOCKETS],
+    last_before: [u32; MAX_SOCKETS],
+    last_after: [u32; MAX_SOCKETS],
+}
 
-/// Socket slot allocation bitmap (1 = in use).
-pub(super) static mut SOCKET_USED: u32 = 0;
-pub(super) static mut NEXT_SOCKET_COOKIE: u64 = 1;
-pub(super) static mut SOCKET_READ_COUNT: [u32; MAX_SOCKETS] = [0; MAX_SOCKETS];
-pub(super) static mut SOCKET_READ_BYTES: [u64; MAX_SOCKETS] = [0; MAX_SOCKETS];
-pub(super) static mut SOCKET_READ_LAST_FD: [u32; MAX_SOCKETS] = [0; MAX_SOCKETS];
-pub(super) static mut SOCKET_READ_LAST_RESULT: [i64; MAX_SOCKETS] = [0; MAX_SOCKETS];
-pub(super) static mut SOCKET_READ_LAST_BEFORE: [u32; MAX_SOCKETS] = [0; MAX_SOCKETS];
-pub(super) static mut SOCKET_READ_LAST_AFTER: [u32; MAX_SOCKETS] = [0; MAX_SOCKETS];
+#[repr(C)]
+struct SocketState {
+    table: [SocketSlot; MAX_SOCKETS],
+    used: u32,
+    next_cookie: u64,
+    read_debug: SocketReadDebugState,
+}
 
-pub(super) fn socket_table() -> &'static mut [SocketSlot; MAX_SOCKETS] {
+/// Pointer to socket state in kernel Worker linear memory.
+static mut SOCKET_STATE_PTR: *mut SocketState = core::ptr::null_mut();
+
+fn state() -> &'static mut SocketState {
     unsafe {
-        let p = core::ptr::read(core::ptr::addr_of!(SOCKET_TABLE_PTR));
+        let p = core::ptr::read(core::ptr::addr_of!(SOCKET_STATE_PTR));
         &mut *p
     }
 }
 
+pub(super) fn socket_table() -> &'static mut [SocketSlot; MAX_SOCKETS] {
+    &mut state().table
+}
+
 pub(super) fn alloc_socket_cookie() -> u64 {
-    unsafe {
-        let cookie = core::ptr::read(core::ptr::addr_of!(NEXT_SOCKET_COOKIE));
-        let next = cookie.saturating_add(1).max(1);
-        core::ptr::write(core::ptr::addr_of_mut!(NEXT_SOCKET_COOKIE), next);
-        cookie
-    }
+    let socket_state = state();
+    let cookie = socket_state.next_cookie;
+    socket_state.next_cookie = cookie.saturating_add(1).max(1);
+    cookie
 }
 
 pub(super) fn empty_socket_slot() -> SocketSlot {
@@ -140,11 +150,11 @@ pub(super) fn empty_socket_slot() -> SocketSlot {
 }
 
 pub fn socket_table_ptr() -> u32 {
-    unsafe { core::ptr::read(core::ptr::addr_of!(SOCKET_TABLE_PTR)) as u32 }
+    core::ptr::addr_of_mut!(state().table) as u32
 }
 
 pub fn socket_used() -> u32 {
-    unsafe { core::ptr::read(core::ptr::addr_of!(SOCKET_USED)) }
+    state().used
 }
 
 pub fn socket_table_bytes() -> u32 {
@@ -154,66 +164,46 @@ pub fn socket_table_bytes() -> u32 {
 pub fn attach_socket_state(table_ptr: u32, used: u32) {
     unsafe {
         core::ptr::write(
-            core::ptr::addr_of_mut!(SOCKET_TABLE_PTR),
-            table_ptr as *mut [SocketSlot; MAX_SOCKETS],
+            core::ptr::addr_of_mut!(SOCKET_STATE_PTR),
+            table_ptr as *mut SocketState,
         );
-        core::ptr::write(core::ptr::addr_of_mut!(SOCKET_USED), used);
     }
+    state().used = used;
 }
 
-/// Initialize socket subsystem. Allocates socket table via alloc.rs.
+/// Initialize socket subsystem. Allocates socket state via alloc.rs.
 pub fn init() {
     unsafe {
         core::ptr::write(
-            core::ptr::addr_of_mut!(SOCKET_TABLE_PTR),
+            core::ptr::addr_of_mut!(SOCKET_STATE_PTR),
             core::ptr::null_mut(),
         );
-        core::ptr::write(core::ptr::addr_of_mut!(SOCKET_USED), 0);
-        core::ptr::write(core::ptr::addr_of_mut!(SOCKET_READ_COUNT), [0; MAX_SOCKETS]);
-        core::ptr::write(core::ptr::addr_of_mut!(SOCKET_READ_BYTES), [0; MAX_SOCKETS]);
-        core::ptr::write(
-            core::ptr::addr_of_mut!(SOCKET_READ_LAST_FD),
-            [0; MAX_SOCKETS],
-        );
-        core::ptr::write(
-            core::ptr::addr_of_mut!(SOCKET_READ_LAST_RESULT),
-            [0; MAX_SOCKETS],
-        );
-        core::ptr::write(
-            core::ptr::addr_of_mut!(SOCKET_READ_LAST_BEFORE),
-            [0; MAX_SOCKETS],
-        );
-        core::ptr::write(
-            core::ptr::addr_of_mut!(SOCKET_READ_LAST_AFTER),
-            [0; MAX_SOCKETS],
-        );
 
-        let size = core::mem::size_of::<[SocketSlot; MAX_SOCKETS]>() as u32;
-        let align = core::mem::align_of::<SocketSlot>() as u32;
+        let size = core::mem::size_of::<SocketState>() as u32;
+        let align = core::mem::align_of::<SocketState>() as u32;
         let ptr = alloc::alloc_zeroed(size, align);
         if ptr == 0 {
             core::arch::wasm32::unreachable();
         }
         core::ptr::write(
-            core::ptr::addr_of_mut!(SOCKET_TABLE_PTR),
-            ptr as *mut [SocketSlot; MAX_SOCKETS],
+            core::ptr::addr_of_mut!(SOCKET_STATE_PTR),
+            ptr as *mut SocketState,
         );
     }
+    state().next_cookie = 1;
 }
 
 pub(super) fn alloc_socket_slot() -> Option<u32> {
     reap_shutdown_socket_slots(u32::MAX);
-    unsafe {
-        let used = core::ptr::read(core::ptr::addr_of!(SOCKET_USED));
-        for i in 0..MAX_SOCKETS {
-            if used & (1u32 << i) == 0 {
-                core::ptr::write(core::ptr::addr_of_mut!(SOCKET_USED), used | (1u32 << i));
-                socket_table()[i] = empty_socket_slot();
-                return Some(i as u32);
-            }
+    let used = state().used;
+    for i in 0..MAX_SOCKETS {
+        if used & (1u32 << i) == 0 {
+            state().used = used | (1u32 << i);
+            socket_table()[i] = empty_socket_slot();
+            return Some(i as u32);
         }
-        None
     }
+    None
 }
 
 pub(super) fn reap_shutdown_socket_slots(excluded_idx: u32) {
@@ -269,32 +259,24 @@ pub(super) fn mark_socket_slot_used(idx: u32) {
     if idx >= MAX_SOCKETS as u32 {
         return;
     }
-    unsafe {
-        let used = core::ptr::read(core::ptr::addr_of!(SOCKET_USED));
-        core::ptr::write(core::ptr::addr_of_mut!(SOCKET_USED), used | (1u32 << idx));
-    }
+    state().used |= 1u32 << idx;
 }
 
 pub(super) fn alloc_socket_slot_excluding(excluded_idx: u32) -> Option<u32> {
     reap_shutdown_socket_slots(excluded_idx);
-    unsafe {
-        let used = core::ptr::read(core::ptr::addr_of!(SOCKET_USED)) | (1u32 << excluded_idx);
-        for i in 0..MAX_SOCKETS {
-            if used & (1u32 << i) == 0 {
-                core::ptr::write(core::ptr::addr_of_mut!(SOCKET_USED), used | (1u32 << i));
-                socket_table()[i] = empty_socket_slot();
-                return Some(i as u32);
-            }
+    let used = state().used | (1u32 << excluded_idx);
+    for i in 0..MAX_SOCKETS {
+        if used & (1u32 << i) == 0 {
+            state().used = used | (1u32 << i);
+            socket_table()[i] = empty_socket_slot();
+            return Some(i as u32);
         }
-        None
     }
+    None
 }
 
 pub(super) fn free_socket_slot(idx: u32) {
-    unsafe {
-        let used = core::ptr::read(core::ptr::addr_of!(SOCKET_USED));
-        core::ptr::write(core::ptr::addr_of_mut!(SOCKET_USED), used & !(1u32 << idx));
-    }
+    state().used &= !(1u32 << idx);
 }
 
 /// Check if a socket slot is allocated.
@@ -302,10 +284,7 @@ pub fn is_slot_used(idx: u32) -> bool {
     if idx >= MAX_SOCKETS as u32 {
         return false;
     }
-    unsafe {
-        let used = core::ptr::read(core::ptr::addr_of!(SOCKET_USED));
-        used & (1u32 << idx) != 0
-    }
+    state().used & (1u32 << idx) != 0
 }
 
 pub(super) fn mark_referenced_recv_buffers_used() {
@@ -741,42 +720,71 @@ pub fn debug_socket_read_count(idx: u32) -> u32 {
     if (idx as usize) >= MAX_SOCKETS {
         return 0;
     }
-    unsafe { SOCKET_READ_COUNT[idx as usize] }
+    state().read_debug.count[idx as usize]
 }
 
 pub fn debug_socket_read_bytes(idx: u32) -> u64 {
     if (idx as usize) >= MAX_SOCKETS {
         return 0;
     }
-    unsafe { SOCKET_READ_BYTES[idx as usize] }
+    state().read_debug.bytes[idx as usize]
 }
 
 pub fn debug_socket_read_last_fd(idx: u32) -> u32 {
     if (idx as usize) >= MAX_SOCKETS {
         return 0;
     }
-    unsafe { SOCKET_READ_LAST_FD[idx as usize] }
+    state().read_debug.last_fd[idx as usize]
 }
 
 pub fn debug_socket_read_last_result(idx: u32) -> i64 {
     if (idx as usize) >= MAX_SOCKETS {
         return 0;
     }
-    unsafe { SOCKET_READ_LAST_RESULT[idx as usize] }
+    state().read_debug.last_result[idx as usize]
 }
 
 pub fn debug_socket_read_last_before(idx: u32) -> u32 {
     if (idx as usize) >= MAX_SOCKETS {
         return 0;
     }
-    unsafe { SOCKET_READ_LAST_BEFORE[idx as usize] }
+    state().read_debug.last_before[idx as usize]
 }
 
 pub fn debug_socket_read_last_after(idx: u32) -> u32 {
     if (idx as usize) >= MAX_SOCKETS {
         return 0;
     }
-    unsafe { SOCKET_READ_LAST_AFTER[idx as usize] }
+    state().read_debug.last_after[idx as usize]
+}
+
+pub(super) fn record_socket_read_debug(
+    idx: usize,
+    fd: u64,
+    before: usize,
+    result: i64,
+    after: usize,
+) {
+    if idx >= MAX_SOCKETS {
+        return;
+    }
+    let debug = &mut state().read_debug;
+    debug.last_fd[idx] = fd as u32;
+    debug.last_result[idx] = result;
+    debug.last_before[idx] = before.min(u32::MAX as usize) as u32;
+    debug.last_after[idx] = after.min(u32::MAX as usize) as u32;
+    if result > 0 {
+        debug.count[idx] = debug.count[idx].saturating_add(1);
+        debug.bytes[idx] = debug.bytes[idx].saturating_add(result as u64);
+    }
+}
+
+pub(super) fn socket_has_successful_read(idx: usize) -> bool {
+    if idx >= MAX_SOCKETS {
+        return false;
+    }
+    let debug = &state().read_debug;
+    debug.count[idx] > 0 && debug.bytes[idx] > 0
 }
 
 pub fn inject_external_inbound_for_fd(base: u32, vm: &ThreadState, fd: u64, src: &[u8]) -> i32 {
@@ -970,13 +978,7 @@ mod tests {
             .expect("socket OFD should exist")
             .ino as usize;
 
-        unsafe {
-            let used = core::ptr::read(core::ptr::addr_of!(SOCKET_USED));
-            core::ptr::write(
-                core::ptr::addr_of_mut!(SOCKET_USED),
-                used & !(1u32 << socket_idx),
-            );
-        }
+        state().used &= !(1u32 << socket_idx);
 
         assert!(ensure_external_peer(socket_idx).is_ok());
         let peer_idx = socket_table()[socket_idx].peer_idx;

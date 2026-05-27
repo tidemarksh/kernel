@@ -37,12 +37,11 @@ use state::{
     ACCEPT_QUEUE_SIZE, DEFAULT_SOCKET_BUFFER, INVALID_BUF_IDX, INVALID_PEER_IDX, IPPROTO_TCP,
     IPPROTO_UDP, NETLINK_ROUTE, SHUT_RD_MASK, SHUT_WR_MASK, SOCK_STATE_BOUND, SOCK_STATE_CONNECTED,
     SOCK_STATE_CONNECTING, SOCK_STATE_IDLE, SOCK_STATE_LISTENING, SOCK_STATE_SHUTDOWN,
-    SOCKADDR_STORAGE_LEN, SOCKET_READ_BYTES, SOCKET_READ_COUNT, SOCKET_READ_LAST_AFTER,
-    SOCKET_READ_LAST_BEFORE, SOCKET_READ_LAST_FD, SOCKET_READ_LAST_RESULT, SocketSlot,
-    alloc_socket_cookie, alloc_socket_recv_buffer, alloc_socket_slot, ensure_external_peer,
-    ensure_external_peer_for_connected_socket, ensure_socket_recv_buffer,
-    free_recv_buffer_if_unreferenced, free_socket_slot, get_socket_idx, shutdown_slot,
-    socket_table, thread_connect_target_fd,
+    SOCKADDR_STORAGE_LEN, SocketSlot, alloc_socket_cookie, alloc_socket_recv_buffer,
+    alloc_socket_slot, ensure_external_peer, ensure_external_peer_for_connected_socket,
+    ensure_socket_recv_buffer, free_recv_buffer_if_unreferenced, free_socket_slot, get_socket_idx,
+    record_socket_read_debug, shutdown_slot, socket_has_successful_read, socket_table,
+    thread_connect_target_fd,
 };
 pub use state::{
     attach_socket_state, close_connection_slot, close_external_peer_for_fd,
