@@ -135,14 +135,14 @@ testcases/kernel/syscalls/eventfd/eventfd03.c direct eventfd2 coverage passes, b
 testcases/kernel/syscalls/eventfd/eventfd04.c requires select(2) write-readiness over eventfd plus needs_kconfigs CONFIG_EVENTFD; keep unsupported until poll/select and kernel .config exposure are in scope
 testcases/kernel/syscalls/eventfd/eventfd05.c source-level eventfd wrapper semantics map to implemented eventfd2 behavior, but the LTP row is blocked before execution by needs_kconfigs CONFIG_EVENTFD because the guest profile does not expose a parseable kernel .config
 testcases/kernel/syscalls/eventfd/eventfd06.c depends on AIO io_setup/io_submit/io_getevents prerequisites outside the implemented syscall denominator, so it is not standalone eventfd coverage for the current inventory
-testcases/kernel/syscalls/execl/execl01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/execl/execl01_child.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/execle/execle01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/execle/execle01_child.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/execlp/execlp01.c dedicated execlp(3) LTP ownership is not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/execlp/execlp01_child.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/execv/execv01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/execv/execv01_child.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/execl/execl01.c execl(3) wrapper coverage lowers to execve(2) but requires child_needs_reinit helper execution and runtime-backed nested process replacement outside the kernel-only LTP harness
+testcases/kernel/syscalls/execl/execl01_child.c helper binary for execl01 coverage; built and staged for wrapper exec tests but not executed as a standalone LTP case
+testcases/kernel/syscalls/execle/execle01.c execle(3) wrapper coverage lowers to execve(2) but requires child_needs_reinit helper execution, environment propagation, and runtime-backed nested process replacement outside the kernel-only LTP harness
+testcases/kernel/syscalls/execle/execle01_child.c helper binary for execle01 coverage; built and staged for wrapper exec tests but not executed as a standalone LTP case
+testcases/kernel/syscalls/execlp/execlp01.c execlp(3) wrapper coverage lowers to execve(2) through PATH lookup but requires child_needs_reinit helper execution and runtime-backed nested process replacement outside the kernel-only LTP harness
+testcases/kernel/syscalls/execlp/execlp01_child.c helper binary for execlp01 coverage; built and staged for wrapper exec tests but not executed as a standalone LTP case
+testcases/kernel/syscalls/execv/execv01.c execv(3) wrapper coverage lowers to execve(2) but requires child_needs_reinit helper execution and runtime-backed nested process replacement outside the kernel-only LTP harness
+testcases/kernel/syscalls/execv/execv01_child.c helper binary for execv01 coverage; built and staged for wrapper exec tests but not executed as a standalone LTP case
 testcases/kernel/syscalls/execve/execve01.c execve LTP coverage depends on child_needs_reinit and nested exec/wait orchestration that belongs to the runtime-backed acceptance harness, so the kernel-only harness keeps Rust semantics tests instead
 testcases/kernel/syscalls/execve/execve02.c execve LTP coverage depends on child_needs_reinit and nested exec/wait orchestration that belongs to the runtime-backed acceptance harness, so the kernel-only harness keeps Rust semantics tests instead
 testcases/kernel/syscalls/execve/execve03.c execve LTP coverage depends on child_needs_reinit and nested exec/wait orchestration that belongs to the runtime-backed acceptance harness, so the kernel-only harness keeps Rust semantics tests instead
@@ -157,8 +157,8 @@ testcases/kernel/syscalls/execveat/execveat02.c requires child_needs_reinit nest
 testcases/kernel/syscalls/execveat/execveat03.c requires overlayfs setup, unlinked O_PATH executable execution, and child_needs_reinit nested exec orchestration outside the kernel-only LTP harness
 testcases/kernel/syscalls/execveat/execveat_child.c helper binary for execveat01/03; excluded as non-standalone LTP coverage row
 testcases/kernel/syscalls/execveat/execveat_errno.c helper binary for execveat02; excluded as non-standalone LTP coverage row
-testcases/kernel/syscalls/execvp/execvp01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/execvp/execvp01_child.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/execvp/execvp01.c execvp(3) wrapper coverage lowers to execve(2) through PATH lookup but requires child_needs_reinit helper execution and runtime-backed nested process replacement outside the kernel-only LTP harness
+testcases/kernel/syscalls/execvp/execvp01_child.c helper binary for execvp01 coverage; built and staged for wrapper exec tests but not executed as a standalone LTP case
 testcases/kernel/syscalls/faccessat2/faccessat201.c faccessat2(2) is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/faccessat2/faccessat202.c faccessat2(2) is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/fadvise/posix_fadvise01.c not yet enabled in current syscall-conformance profile
@@ -306,15 +306,15 @@ testcases/kernel/syscalls/getcwd/getcwd04.c requires a multi-CPU rename race har
 testcases/kernel/syscalls/getcwd/getcwd03.c requires symlink(2) setup, which returns ENOSYS in the current production syscall surface
 testcases/kernel/syscalls/getdents/getdents01.c mixes old getdents(2), getdents64(2), and libc variants, and also requires symlink(2) plus all-filesystems mount-device setup outside the current getdents64 directory profile
 testcases/kernel/syscalls/getdents/getdents02.c mixes old getdents(2), getdents64(2), and libc variants and requires all-filesystems mount-device setup before the getdents64 errno matrix can be validated
-testcases/kernel/syscalls/getdomainname/getdomainname01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/getdomainname/getdomainname01.c getdomainname(2) wrapper maps to uname(2) domainname data, but current conform coverage only verifies uname sysname/release/machine fields; domainname wrapper semantics are not audited
 testcases/kernel/syscalls/getegid/getegid01.c requires /proc/self/status Gid reporting, which the current LTP runner procfs does not provide
 testcases/kernel/syscalls/geteuid/geteuid02.c requires /proc/self/status Uid reporting, which the current LTP runner procfs does not provide
 testcases/kernel/syscalls/getgroups/getgroups01.c requires setgroups(2) supplementary group persistence and getgroups(2) list reporting; current implementation validates inputs but does not persist supplementary groups
 testcases/kernel/syscalls/getgroups/getgroups03.c requires setgroups(2) supplementary group persistence and /etc/group-derived list reporting; current implementation validates inputs but does not persist supplementary groups
 testcases/kernel/syscalls/gethostbyname_r/gethostbyname_r01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/gethostid/gethostid01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/gethostname/gethostname01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/gethostname/gethostname02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/gethostname/gethostname01.c gethostname(2) wrapper maps to uname(2) nodename data, but current conform coverage only verifies direct uname rows and does not audit hostname wrapper buffer semantics
+testcases/kernel/syscalls/gethostname/gethostname02.c gethostname(2) wrapper maps to uname(2) nodename data but requires ENAMETOOLONG behavior for undersized buffers outside the current uname conform profile
 testcases/kernel/syscalls/getitimer/getitimer01.c targeted validation passed for preserved setitimer state in the supported interval timer model, but including this row with clock_nanosleep04 made the expanded full LTP gate OOM later during existing writev01 snapshot allocation
 testcases/kernel/syscalls/getitimer/getitimer02.c requires EFAULT for invalid itimerval pointers; current getitimer only checks NULL before writing the output buffer
 testcases/kernel/syscalls/getpagesize/getpagesize01.c not yet enabled in current syscall-conformance profile
@@ -877,9 +877,9 @@ testcases/kernel/syscalls/rt_sigqueueinfo/rt_sigqueueinfo02.c rt_sigqueueinfo(2)
 testcases/kernel/syscalls/rt_sigsuspend/rt_sigsuspend01.c rt_sigsuspend(2) is not production-dispatched and is excluded from the implemented-surface inventory
 testcases/kernel/syscalls/rt_sigtimedwait/rt_sigtimedwait01.c rt_sigtimedwait(2) is not production-dispatched and is excluded from the implemented-surface inventory
 testcases/kernel/syscalls/rt_tgsigqueueinfo/rt_tgsigqueueinfo01.c rt_tgsigqueueinfo(2) is not production-dispatched and is excluded from the implemented-surface inventory
-testcases/kernel/syscalls/sbrk/sbrk01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/sbrk/sbrk02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/sbrk/sbrk03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/sbrk/sbrk01.c sbrk(3) wrapper maps to brk(2), but wrapper increment/decrement behavior is not audited against the current brk profile
+testcases/kernel/syscalls/sbrk/sbrk02.c sbrk(3) wrapper maps to brk(2) but requires ENOMEM behavior while exhausting the data break outside the current brk profile
+testcases/kernel/syscalls/sbrk/sbrk03.c sbrk(3)/brk(2) overflow regression is s390 32-bit specific and excluded from the supported RISC-V implemented-surface inventory
 testcases/kernel/syscalls/sched_get_priority_max/sched_get_priority_max01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/sched_get_priority_max/sched_get_priority_max02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/sched_get_priority_min/sched_get_priority_min01.c not yet enabled in current syscall-conformance profile
@@ -1112,7 +1112,7 @@ testcases/kernel/syscalls/timerfd/timerfd_settime02.c requires TFD_TIMER_CANCEL_
 testcases/kernel/syscalls/times/times01.c times currently returns ENOSYS
 testcases/kernel/syscalls/times/times03.c times currently returns ENOSYS
 testcases/kernel/syscalls/truncate/truncate03.c requires permission-denial, symlink-loop, and RLIMIT_FSIZE/EFBIG behavior outside the current truncate profile
-testcases/kernel/syscalls/ulimit/ulimit01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/ulimit/ulimit01.c ulimit(3) wrapper maps to resource-limit syscalls but requires UL_GETFSIZE/UL_SETFSIZE file-size limit semantics outside the current preserved-limit getrlimit/setrlimit profile
 testcases/kernel/syscalls/umount/umount01.c requires successful mount setup and umount behavior outside the current no-mount-table umount2 profile
 testcases/kernel/syscalls/umount/umount02.c requires successful mount setup plus busy/unmount errno behavior outside the current no-mount-table umount2 profile
 testcases/kernel/syscalls/umount/umount03.c requires successful mount setup before unprivileged umount EPERM probing outside the current no-mount-table umount2 profile
