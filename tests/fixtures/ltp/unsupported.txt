@@ -197,9 +197,9 @@ testcases/kernel/syscalls/fanotify/fanotify23.c not yet enabled in current sysca
 testcases/kernel/syscalls/fanotify/fanotify24.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fanotify/fanotify25.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fanotify/fanotify_child.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fchdir/fchdir01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fchdir/fchdir02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fchdir/fchdir03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/fchdir/fchdir01.c fchdir(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/fchdir/fchdir02.c fchdir(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/fchdir/fchdir03.c fchdir(2) is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/fchmod/fchmod05.c requires non-root setgid stripping on directories when the caller lacks the directory group, outside the current fchmod metadata profile
 testcases/kernel/syscalls/fchmod/fchmod06.c requires EPERM and read-only filesystem error handling outside the current fchmod metadata profile
 testcases/kernel/syscalls/fchmodat/fchmodat02.c requires permission-denial, read-only filesystem, symlink-loop, and invalid-flag error matrices outside the current fchmodat metadata profile
@@ -1046,8 +1046,8 @@ testcases/kernel/syscalls/statmount/statmount06.c statmount(2) is not production
 testcases/kernel/syscalls/statmount/statmount07.c statmount(2) is not production-dispatched and is excluded from the implemented-surface inventory
 testcases/kernel/syscalls/statmount/statmount08.c statmount(2) is not production-dispatched and is excluded from the implemented-surface inventory
 testcases/kernel/syscalls/statmount/statmount09.c statmount(2) is not production-dispatched and is excluded from the implemented-surface inventory
-testcases/kernel/syscalls/statvfs/statvfs01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/statvfs/statvfs02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/statvfs/statvfs01.c statvfs wrapper maps to statfs-style coverage but requires mount-device/all-filesystem setup and name-length create semantics outside the current statfs profile
+testcases/kernel/syscalls/statvfs/statvfs02.c statvfs wrapper maps to statfs-style coverage but requires symlink setup plus bad-path/error-matrix handling outside the current statfs profile
 testcases/kernel/syscalls/statx/statx01.c statx(2) is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/statx/statx02.c statx(2) is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/statx/statx03.c statx(2) is not dispatched in production and is excluded from the implemented-surface denominator
