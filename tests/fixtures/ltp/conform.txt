@@ -77,6 +77,10 @@ testcases/kernel/syscalls/mkdirat/mkdirat01.c verified mkdirat(2) relative/absol
 testcases/kernel/syscalls/openat/openat01.c verified openat(2) relative/absolute dirfd handling
 testcases/kernel/syscalls/pipe/pipe01.c verified libc pipe wrapper creates a pipe2-backed unnamed pipe with working read/write data flow
 testcases/kernel/syscalls/pipe/pipe03.c verified libc pipe wrapper returns EBADF for writes to the read end and reads from the write end
+testcases/kernel/syscalls/pipe/pipe05.c verified libc pipe wrapper returns EFAULT for an inaccessible fd output array
+testcases/kernel/syscalls/pipe/pipe08.c verified write to a pipe with no readers returns EPIPE and raises SIGPIPE
+testcases/kernel/syscalls/pipe/pipe10.c verified a forked child can read data written to an inherited unnamed pipe
+testcases/kernel/syscalls/pipe/pipe14.c verified pipe EOF is reported only after buffered data is consumed and the write end is closed
 testcases/kernel/syscalls/pread/pread01.c verified pread(2) reads at offsets without changing file position
 testcases/kernel/syscalls/pread/pread02.c verified pread(2) ESPIPE, EINVAL negative offset, and EISDIR error paths
 testcases/kernel/syscalls/pwrite/pwrite01.c verified pwrite(2) writes at offsets without changing file position

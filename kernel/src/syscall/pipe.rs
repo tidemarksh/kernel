@@ -208,6 +208,10 @@ pub fn alloc_pipe_slot() -> Option<u32> {
 
 /// pipe2: create a pipe with read/write FDs. Supports O_CLOEXEC and O_NONBLOCK flags.
 pub fn sys_pipe2(vm: &mut ThreadState, base: u32, pipefd_addr: u64, flags: u64) -> i64 {
+    if pipefd_addr == 0 || !crate::syscall::memory::guest_range_accessible(base, pipefd_addr, 8) {
+        return EFAULT;
+    }
+
     let pipe_idx = match alloc_pipe_slot() {
         Some(i) => i,
         None => return ENOMEM,

@@ -97,7 +97,7 @@ testcases/kernel/syscalls/clone3/clone301.c clone3 thread-subset handoff is impl
 testcases/kernel/syscalls/clone3/clone302.c clone3 thread-subset handoff is implemented, but the broader clone3 LTP matrix is not yet enabled in the current syscall-conformance profile
 testcases/kernel/syscalls/clone3/clone303.c clone3 thread-subset handoff is implemented, but the broader clone3 LTP matrix is not yet enabled in the current syscall-conformance profile
 testcases/kernel/syscalls/clone3/clone304.c clone3 thread-subset handoff is implemented, but the broader clone3 LTP matrix is not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/close_range/close_range01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/close_range/close_range01.c requires filesystem mount-matrix setup plus Linux fd-table sharing and CLOSE_RANGE_UNSHARE split semantics; Tidemark currently has no per-thread shared fd-table model to split
 testcases/kernel/syscalls/cma/process_vm01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/cma/process_vm_readv02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/cma/process_vm_readv03.c not yet enabled in current syscall-conformance profile
@@ -122,7 +122,7 @@ testcases/kernel/syscalls/delete_module/delete_module02.c not yet enabled in cur
 testcases/kernel/syscalls/delete_module/delete_module03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/delete_module/dummy_del_mod.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/delete_module/dummy_del_mod_dep.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/dup/dup05.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/dup/dup05.c requires named FIFO setup via mknod/mkfifo; Tidemark currently validates dup behavior only for regular files and unnamed pipes
 testcases/kernel/syscalls/epoll/epoll-ltp.c epoll dispatch exists and kernel contract tests cover core ready/blocking/eventfd/OFD semantics, but the aggregated LTP epoll harness is not yet enabled in the current syscall-conformance profile
 testcases/kernel/syscalls/epoll_create/epoll_create01.c the legacy epoll_create syscall is not implemented; the current surface only exposes epoll_create1
 testcases/kernel/syscalls/epoll_create/epoll_create02.c the legacy epoll_create syscall is not implemented; the current surface only exposes epoll_create1
@@ -144,8 +144,8 @@ testcases/kernel/syscalls/eventfd/eventfd01.c local kernel contract tests pass f
 testcases/kernel/syscalls/eventfd/eventfd02.c local kernel contract tests pass for the write-side errno surface, but the upstream LTP binary still exits 2 without diagnostics, so the remaining blocker is LTP-specific harness/integration behavior
 testcases/kernel/syscalls/eventfd/eventfd03.c direct eventfd2 coverage passes, but this case depends on the libc eventfd() wrapper plus select(2), neither of which is yet enabled in the current syscall-conformance profile
 testcases/kernel/syscalls/eventfd/eventfd04.c eventfd/eventfd2 dispatch exists and kernel contract tests cover roundtrip/nonblock behavior, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/eventfd/eventfd05.c eventfd/eventfd2 dispatch exists and kernel contract tests cover roundtrip/nonblock behavior, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/eventfd/eventfd06.c eventfd/eventfd2 dispatch exists and kernel contract tests cover roundtrip/nonblock behavior, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/eventfd/eventfd05.c source-level eventfd wrapper semantics map to implemented eventfd2 behavior, but the LTP row is blocked before execution by needs_kconfigs CONFIG_EVENTFD because the guest profile does not expose a parseable kernel .config
+testcases/kernel/syscalls/eventfd/eventfd06.c depends on AIO io_setup/io_submit/io_getevents prerequisites outside the implemented syscall denominator, so it is not standalone eventfd coverage for the current inventory
 testcases/kernel/syscalls/execl/execl01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/execl/execl01_child.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/execle/execle01.c not yet enabled in current syscall-conformance profile
@@ -566,8 +566,8 @@ testcases/kernel/syscalls/llseek/llseek01.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/llseek/llseek02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/llseek/llseek03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/lremovexattr/lremovexattr01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/lseek/lseek02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/lseek/lseek11.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/lseek/lseek02.c pipe ESPIPE behavior is covered elsewhere, but this row also requires named FIFO setup that is not supported in the current LTP profile
+testcases/kernel/syscalls/lseek/lseek11.c requires SEEK_DATA and SEEK_HOLE semantics, which are not implemented by the current lseek surface
 testcases/kernel/syscalls/lsm/lsm_get_self_attr01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/lsm/lsm_get_self_attr02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/lsm/lsm_get_self_attr03.c not yet enabled in current syscall-conformance profile
@@ -788,21 +788,17 @@ testcases/kernel/syscalls/pidfd_send_signal/pidfd_send_signal02.c not yet enable
 testcases/kernel/syscalls/pidfd_send_signal/pidfd_send_signal03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/pipe/pipe02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/pipe/pipe04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/pipe/pipe05.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/pipe/pipe06.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/pipe/pipe07.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/pipe/pipe08.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/pipe/pipe09.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/pipe/pipe10.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/pipe/pipe11.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/pipe/pipe12.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/pipe/pipe12.c requires F_GETPIPE_SZ plus pipe FIONREAD readiness/accounting details that are not implemented
 testcases/kernel/syscalls/pipe/pipe13.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/pipe/pipe14.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/pipe/pipe15.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/pipe2/pipe2_01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/pipe/pipe15.c requires /proc/sys/fs/pipe-user-pages-soft and F_GETPIPE_SZ pipe-size policy support that is not implemented
+testcases/kernel/syscalls/pipe2/pipe2_01.c includes O_DIRECT pipe packet-mode semantics; current pipe2 support covers O_CLOEXEC/O_NONBLOCK but not packet-mode pipes
 testcases/kernel/syscalls/pipe2/pipe2_02.c LTP resource_files helper `pipe2_02_child` is built but not available at the guest resource path, so the harness fails during helper copy before exercising pipe2 CLOEXEC semantics
 testcases/kernel/syscalls/pipe2/pipe2_02_child.c helper binary for pipe2_02; excluded as non-standalone LTP coverage row until pipe2_02 resource_files staging is supported
-testcases/kernel/syscalls/pipe2/pipe2_04.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/pipe2/pipe2_04.c requires F_SETPIPE_SZ/F_GETPIPE_SZ pipe-size controls, which are not implemented
 testcases/kernel/syscalls/pivot_root/pivot_root01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/pkeys/pkey01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/poll/poll01.c not yet enabled in current syscall-conformance profile
@@ -867,7 +863,7 @@ testcases/kernel/syscalls/readlink/readlink03.c not yet enabled in current sysca
 testcases/kernel/syscalls/readlinkat/readlinkat01.c readlinkat LTP setup depends on symlink(2), which is outside the current Phase4 syscall surface
 testcases/kernel/syscalls/readlinkat/readlinkat02.c readlinkat LTP setup depends on symlink(2), which is outside the current Phase4 syscall surface
 testcases/kernel/syscalls/readv/readv01.c current LTP process-tree runner stops with unsupported deferred STATUS_OK while executing this no-fork readv harness; keep unsupported until the runner can complete this status shape
-testcases/kernel/syscalls/readv/readv02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/readv/readv02.c requires readv iovec-count, iovec-array, inaccessible iovec, and total-length overflow validation that is not implemented yet
 testcases/kernel/syscalls/realpath/realpath01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/reboot/reboot01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/reboot/reboot02.c not yet enabled in current syscall-conformance profile
