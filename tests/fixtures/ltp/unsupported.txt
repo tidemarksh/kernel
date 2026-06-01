@@ -18,11 +18,11 @@ testcases/kernel/syscalls/add_key/add_key05.c not yet enabled in current syscall
 testcases/kernel/syscalls/adjtimex/adjtimex01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/adjtimex/adjtimex02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/adjtimex/adjtimex03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/alarm/alarm02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/alarm/alarm03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/alarm/alarm05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/alarm/alarm06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/alarm/alarm07.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/alarm/alarm02.c alarm(2) wrapper requires setitimer-backed per-process alarm state and remaining-time accounting beyond the current preserved-only interval timer model
+testcases/kernel/syscalls/alarm/alarm03.c alarm(2) wrapper requires fork inheritance/cancellation behavior for scheduled alarms beyond the current preserved-only interval timer model
+testcases/kernel/syscalls/alarm/alarm05.c alarm(2) wrapper requires SIGALRM delivery after elapsed time and remaining-time accounting beyond the current preserved-only interval timer model
+testcases/kernel/syscalls/alarm/alarm06.c alarm(2) wrapper requires scheduled SIGALRM cancellation and elapsed-time delivery suppression beyond the current preserved-only interval timer model
+testcases/kernel/syscalls/alarm/alarm07.c alarm(2) wrapper requires parent-only SIGALRM delivery across fork beyond the current preserved-only interval timer model
 testcases/kernel/syscalls/arch_prctl/arch_prctl01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/bind/bind01.c bind(2) row requires EBADF/ENOTDIR/EADDRNOTAVAIL and pathname AF_UNIX filesystem error behavior not implemented by the current in-memory socket address binding
 testcases/kernel/syscalls/bind/bind02.c requires privileged-port EACCES enforcement after seteuid nobody; current bind(2) does not implement low-port capability checks
@@ -65,11 +65,11 @@ testcases/kernel/syscalls/chroot/chroot03.c mostly exercises chroot error paths,
 testcases/kernel/syscalls/chroot/chroot04.c expects unprivileged EACCES permission behavior for chroot, but Tidemark intentionally returns ENOSYS after path validation without a root-directory model
 testcases/kernel/syscalls/clock_adjtime/clock_adjtime01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/clock_adjtime/clock_adjtime02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/clock_getres/clock_getres01.c clock_getres exists but virtual-clock variants are not yet audited against LTP
-testcases/kernel/syscalls/clock_nanosleep/clock_nanosleep01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/clock_nanosleep/clock_nanosleep02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/clock_nanosleep/clock_nanosleep03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/clock_nanosleep/clock_nanosleep04.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/clock_getres/clock_getres01.c targeted validation produced TCONF for unsupported CLOCK_REALTIME_ALARM and CLOCK_BOOTTIME_ALARM variants; the current LTP harness treats that skipped-shape output as a failed conform row
+testcases/kernel/syscalls/clock_nanosleep/clock_nanosleep01.c requires EINTR/remain-time signal interruption behavior, bad remain-pointer EFAULT after interruption, and ENOTSUP/EINVAL clock-id distinctions beyond the current sleep-status path
+testcases/kernel/syscalls/clock_nanosleep/clock_nanosleep02.c targeted validation passes the first timer samples but exceeds the process-tree child-service iteration budget during repeated relative sleeps
+testcases/kernel/syscalls/clock_nanosleep/clock_nanosleep03.c requires CLONE_NEWTIME, /proc/self/timens_offsets writes, root privileges, and forked time-namespace sleep offset semantics outside the current virtual-clock model
+testcases/kernel/syscalls/clock_nanosleep/clock_nanosleep04.c targeted validation passed for absolute sleep on realtime and monotonic clocks, but including this row with getitimer01 made the expanded full LTP gate OOM later during existing writev01 snapshot allocation
 testcases/kernel/syscalls/clock_settime/clock_settime01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/clock_settime/clock_settime02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/clock_settime/clock_settime03.c not yet enabled in current syscall-conformance profile
@@ -314,8 +314,8 @@ testcases/kernel/syscalls/gethostbyname_r/gethostbyname_r01.c not yet enabled in
 testcases/kernel/syscalls/gethostid/gethostid01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/gethostname/gethostname01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/gethostname/gethostname02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getitimer/getitimer01.c getitimer/setitimer currently preserve state only and do not schedule delivery
-testcases/kernel/syscalls/getitimer/getitimer02.c getitimer/setitimer currently preserve state only and do not schedule delivery
+testcases/kernel/syscalls/getitimer/getitimer01.c targeted validation passed for preserved setitimer state in the supported interval timer model, but including this row with clock_nanosleep04 made the expanded full LTP gate OOM later during existing writev01 snapshot allocation
+testcases/kernel/syscalls/getitimer/getitimer02.c requires EFAULT for invalid itimerval pointers; current getitimer only checks NULL before writing the output buffer
 testcases/kernel/syscalls/getpagesize/getpagesize01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getpeername/getpeername01.c requires getpeername(2) EBADF/EFAULT/EINVAL addrlen matrix; current implementation does not pre-validate addr/addrlen and fd lookup returns ENOTSOCK for invalid fds
 testcases/kernel/syscalls/getpriority/getpriority01.c not yet enabled in current syscall-conformance profile
@@ -336,8 +336,8 @@ testcases/kernel/syscalls/getsockname/getsockname01.c requires getsockname(2) EB
 testcases/kernel/syscalls/getsockopt/getsockopt01.c getsockopt implements a narrow socket option subset only
 testcases/kernel/syscalls/getsockopt/getsockopt02.c getsockopt implements a narrow socket option subset only
 testcases/kernel/syscalls/gettid/gettid01.c requires /proc/self/status Pid/Tgid reporting; current LTP runner procfs provides pid stat/task entries but not /proc/self/status
-testcases/kernel/syscalls/gettimeofday/gettimeofday01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/gettimeofday/gettimeofday02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/gettimeofday/gettimeofday01.c uses non-dispatched raw gettimeofday(2); this row is excluded from the production clock_gettime inventory until a supported wrapper lowering is established
+testcases/kernel/syscalls/gettimeofday/gettimeofday02.c uses non-dispatched raw gettimeofday(2), alarm(2), and long-running monotonic wall-clock observation outside the production clock_gettime inventory
 testcases/kernel/syscalls/getuid/getuid03.c requires /proc/self/status Uid reporting, which the current LTP runner procfs does not provide
 testcases/kernel/syscalls/getxattr/getxattr01.c requires setxattr-backed value persistence and ERANGE behavior outside the current no-persistence getxattr profile
 testcases/kernel/syscalls/getxattr/getxattr02.c requires xattr-capable all-filesystem mount-device setup and special-file/socket xattr behavior outside the current getxattr profile
@@ -694,9 +694,9 @@ testcases/kernel/syscalls/munmap/munmap04.c requires max_map_count sysctl setup 
 testcases/kernel/syscalls/name_to_handle_at/name_to_handle_at01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/name_to_handle_at/name_to_handle_at02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/name_to_handle_at/name_to_handle_at03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/nanosleep/nanosleep01.c timer harness now reaches the testcase body, but glibc nanosleep() lowers to clock_nanosleep(115) and SYS_clock_nanosleep is not implemented yet
-testcases/kernel/syscalls/nanosleep/nanosleep02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/nanosleep/nanosleep04.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/nanosleep/nanosleep01.c targeted validation passes the first timer samples but exceeds the process-tree child-service iteration budget during repeated sleeps through the nanosleep wrapper
+testcases/kernel/syscalls/nanosleep/nanosleep02.c requires signal interruption with EINTR and accurate remaining-time reporting; current nanosleep/clock_nanosleep path does not update rem on interruption
+testcases/kernel/syscalls/nanosleep/nanosleep04.c requires EINVAL for negative tv_sec and invalid tv_nsec through the nanosleep wrapper; current sleep path does not reject the full invalid-timespec matrix
 testcases/kernel/syscalls/newuname/newuname01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/nftw/lib.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/nftw/lib64.c not yet enabled in current syscall-conformance profile
@@ -948,8 +948,8 @@ testcases/kernel/syscalls/setfsuid/setfsuid04.c not yet enabled in current sysca
 testcases/kernel/syscalls/setgroups/setgroups02.c requires setgroups(2) supplementary group persistence observable through getgroups(2); current implementation validates inputs but does not persist supplementary groups
 testcases/kernel/syscalls/setgroups/setgroups03.c requires NGROUPS limit enforcement and supplementary group semantics beyond the current input-validation-only setgroups(2) implementation
 testcases/kernel/syscalls/setgroups/setgroups04.c requires setgroups(2) to reject a group list at sbrk(0) with EFAULT; current guest range validation treats that address as accessible in this runner
-testcases/kernel/syscalls/setitimer/setitimer01.c getitimer/setitimer currently preserve state only and do not schedule delivery
-testcases/kernel/syscalls/setitimer/setitimer02.c getitimer/setitimer currently preserve state only and do not schedule delivery
+testcases/kernel/syscalls/setitimer/setitimer01.c requires interval timer signal delivery and child termination by SIGALRM/SIGVTALRM/SIGPROF; current setitimer preserves state only and does not schedule delivery
+testcases/kernel/syscalls/setitimer/setitimer02.c requires EFAULT for invalid old_value before writing the old timer state; current setitimer does not prevalidate the old_value output range
 testcases/kernel/syscalls/setns/setns01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setns/setns02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setpgrp/setpgrp01.c not yet enabled in current syscall-conformance profile
@@ -1094,7 +1094,7 @@ testcases/kernel/syscalls/tee/tee01.c not yet enabled in current syscall-conform
 testcases/kernel/syscalls/tee/tee02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/tgkill/tgkill01.c tgkill dispatch exists, but the specific-thread caught-handler delivery path exercised by this LTP case still hangs when targeting parallel guest pthreads
 testcases/kernel/syscalls/tgkill/tgkill02.c RLIMIT_SIGPENDING defaults and updates are covered, but this kernel tracks pending signals as bitsets rather than queued real-time signals, so the EAGAIN saturation path exercised by this LTP case is not implemented
-testcases/kernel/syscalls/time/time01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/time/time01.c uses the time(2) libc wrapper/non-dispatched raw time syscall and is excluded until a supported lowering to production clock_gettime is established
 testcases/kernel/syscalls/timer_create/timer_create01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/timer_create/timer_create02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/timer_create/timer_create03.c not yet enabled in current syscall-conformance profile
