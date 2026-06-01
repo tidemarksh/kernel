@@ -116,3 +116,28 @@ fn openat_with_o_directory_rejects_regular_files() {
     let ret = t.sys_openat(b"/plain", O_RDONLY | O_DIRECTORY);
     assert_eq!(ret, ENOTDIR);
 }
+
+#[test]
+fn openat_o_trunc_external_file_keeps_data_external() {
+    let mut t = TestVm::new();
+    let fd = t.sys_openat(b"/external-open-trunc.txt", O_CREAT | O_RDWR);
+    assert!(fd >= 3);
+    assert_eq!(t.sys_write_data(fd, b"payload"), 7);
+    t.sys_close(fd);
+
+    let ino = memfs::resolve_path(b"/external-open-trunc.txt");
+    assert!(ino > 0);
+    assert_eq!(memfs::set_file_external(ino, 7), 0);
+    assert!(memfs::file_data_ptr(ino).is_none());
+
+    let truncated = t.sys_openat(b"/external-open-trunc.txt", O_WRONLY | O_TRUNC);
+    assert!(truncated >= 3);
+
+    let stat_addr = t.scratch + 0x3000;
+    assert_eq!(t.sys_fstat(truncated, stat_addr), 0);
+    let size = unsafe { tidemark_kernel::guest_mem::read_u64(t.base, stat_addr + 48) };
+    assert_eq!(size, 0);
+    assert!(memfs::file_data_ptr(ino).is_none());
+    assert_eq!(memfs::debug_file_data_layout(ino) >> 32, 0);
+    t.sys_close(truncated);
+}

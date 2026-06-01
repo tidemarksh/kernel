@@ -199,3 +199,23 @@ fn set_file_external_clears_inline_storage_and_keeps_size() {
     assert_eq!(st.mode & memfs::S_IFMT, memfs::S_IFREG);
     assert!(memfs::file_data_ptr(ino).is_none());
 }
+
+#[test]
+fn truncate_zero_external_file_keeps_data_external() {
+    let _t = TestVm::new();
+    let ino = memfs::create_file(1, b"external-truncate.bin", 0o644);
+    assert!(ino > 0);
+    assert_eq!(memfs::write_file(ino, 0, b"payload"), 7);
+    assert!(memfs::file_data_ptr(ino).is_some());
+
+    assert_eq!(memfs::set_file_external(ino, 7), 0);
+    assert!(memfs::file_data_ptr(ino).is_none());
+
+    assert_eq!(memfs::truncate(ino, 0), 0);
+
+    let st = memfs::stat(ino).unwrap();
+    assert_eq!(st.size, 0);
+    assert_eq!(st.mode & memfs::S_IFMT, memfs::S_IFREG);
+    assert!(memfs::file_data_ptr(ino).is_none());
+    assert_eq!(memfs::debug_file_data_layout(ino) >> 32, 0);
+}

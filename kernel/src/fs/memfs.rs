@@ -1091,6 +1091,12 @@ pub fn truncate(ino: u32, size: u64) -> i64 {
     if inodes()[idx].mode & S_IFMT != S_IFREG {
         return EINVAL;
     }
+    if size == 0 && inodes()[idx].data_cap == 0 {
+        let inode = &mut inodes()[idx];
+        inode.size = 0;
+        inode.data_offset = 0;
+        return 0;
+    }
     let materialized = materialize_external_file_data(ino);
     if materialized < 0 {
         return materialized;
