@@ -23,8 +23,8 @@ pub(crate) use thread::*;
 mod tests {
     use super::*;
     use crate::harness::trace::{
-        clear_cpu_trace, clear_memory_trace, record_memory_syscall, record_thread_step_entry_trace,
-        record_thread_step_phase, record_thread_step_trace, THREAD_STEP_TRACE_CAP,
+        THREAD_STEP_TRACE_CAP, clear_cpu_trace, clear_memory_trace, record_memory_syscall,
+        record_thread_step_entry_trace, record_thread_step_phase, record_thread_step_trace,
     };
 
     fn make_thread_state(

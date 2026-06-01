@@ -47,8 +47,14 @@ fn contract_clone_vfork_applies_raw_clone_child_args_without_polluting_parent() 
     assert_eq!(t.vm.x[4], child_tls);
     assert_eq!(t.vm.tls_base, child_tls);
     assert_eq!(t.vm.clear_child_tid, child_tidptr);
-    assert_eq!(unsafe { guest_mem::read_u32(t.base, parent_tidptr) }, child_pid as u32);
-    assert_eq!(unsafe { guest_mem::read_u32(t.base, child_tidptr) }, child_pid as u32);
+    assert_eq!(
+        unsafe { guest_mem::read_u32(t.base, parent_tidptr) },
+        child_pid as u32
+    );
+    assert_eq!(
+        unsafe { guest_mem::read_u32(t.base, child_tidptr) },
+        child_pid as u32
+    );
 
     process_impl::vfork_parent_resume(&mut t.vm, child_pid);
     assert_eq!(t.vm.x[2], 0x41000);

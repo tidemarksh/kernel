@@ -226,7 +226,15 @@ pub fn sys_clone_vfork(
     tls: u64,
     child_tidptr: u64,
 ) -> i32 {
-    sys_vfork_inner(vm, base, flags, child_stack, parent_tidptr, tls, child_tidptr)
+    sys_vfork_inner(
+        vm,
+        base,
+        flags,
+        child_stack,
+        parent_tidptr,
+        tls,
+        child_tidptr,
+    )
 }
 
 fn vfork_parent_resume_inner(vm: &mut ThreadState, child_pid: i32, cleanup_child_fds: bool) {
