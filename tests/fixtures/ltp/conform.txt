@@ -11,6 +11,8 @@ testcases/kernel/syscalls/close/close02.c verified close(2) EBADF on invalid fd
 testcases/kernel/syscalls/clone/clone08.c verified CLONE_PARENT, CLONE_CHILD_SETTID, CLONE_PARENT_SETTID, and CLONE_THREAD clear_child_tid/futex orchestration within the supported clone subset
 testcases/kernel/syscalls/chdir/chdir02.c verified chdir(2) accepts root paths with repeated slashes shorter than PATH_MAX
 testcases/kernel/syscalls/chdir/chdir04.c verified chdir(2) ENAMETOOLONG, ENOENT, and EFAULT error handling
+testcases/kernel/syscalls/creat/creat01.c verified creat(2) libc wrapper truncates/creates files and returns a write-only fd through production openat(2)
+testcases/kernel/syscalls/creat/creat03.c verified creat(2) libc wrapper creates files without unexpected sticky mode bits through production openat(2)
 testcases/kernel/syscalls/epoll_create1/epoll_create1_01.c verified epoll_create1 CLOEXEC behavior
 testcases/kernel/syscalls/epoll_create1/epoll_create1_02.c verified epoll_create1 EINVAL on invalid flags
 testcases/kernel/syscalls/epoll_wait/epoll_wait07.c verified EPOLLONESHOT readiness suppression with epoll_create1-backed LTP coverage
@@ -99,6 +101,9 @@ testcases/kernel/syscalls/lseek/lseek07.c verified lseek(2) SEEK_SET positions s
 testcases/kernel/syscalls/llseek/llseek02.c verified lseek wrapper EINVAL for invalid whence and EBADF for closed fd
 testcases/kernel/syscalls/llseek/llseek03.c verified lseek wrapper SEEK_SET/SEEK_CUR/SEEK_END offsets and EOF reads
 testcases/kernel/syscalls/mkdirat/mkdirat01.c verified mkdirat(2) relative/absolute dirfd handling
+testcases/kernel/syscalls/open/open01.c verified open(2) libc wrapper preserves sticky file mode creation and opens directories through production openat(2)
+testcases/kernel/syscalls/open/open03.c verified open(2) libc wrapper creates read/write files through production openat(2)
+testcases/kernel/syscalls/open/open09.c verified open(2) libc wrapper enforces read-only/write-only fd access modes through production openat(2)
 testcases/kernel/syscalls/openat/openat01.c verified openat(2) relative/absolute dirfd handling
 testcases/kernel/syscalls/pipe/pipe01.c verified libc pipe wrapper creates a pipe2-backed unnamed pipe with working read/write data flow
 testcases/kernel/syscalls/pipe/pipe03.c verified libc pipe wrapper returns EBADF for writes to the read end and reads from the write end

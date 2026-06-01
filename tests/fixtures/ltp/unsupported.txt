@@ -99,15 +99,13 @@ testcases/kernel/syscalls/connect/connect02.c not yet enabled in current syscall
 testcases/kernel/syscalls/copy_file_range/copy_file_range01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/copy_file_range/copy_file_range02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/copy_file_range/copy_file_range03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/creat/creat01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/creat/creat03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/creat/creat04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/creat/creat05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/creat/creat06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/creat/creat07.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/creat/creat07_child.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/creat/creat08.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/creat/creat09.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/creat/creat04.c requires unprivileged directory/file EACCES behavior outside the current openat creation profile
+testcases/kernel/syscalls/creat/creat05.c requires per-process fd-limit EMFILE accounting outside the current openat creation profile
+testcases/kernel/syscalls/creat/creat06.c mixes directory, overlong path, missing path, ENOTDIR, bad-address, permission, symlink-loop, and read-only filesystem error cases outside the current openat creation profile
+testcases/kernel/syscalls/creat/creat07.c requires exec/checkpoint ETXTBSY behavior outside the current openat creation profile
+testcases/kernel/syscalls/creat/creat07_child.c helper binary for creat07; excluded as non-standalone LTP coverage row until creat07 exec/checkpoint behavior is supported
+testcases/kernel/syscalls/creat/creat08.c requires setgid directory group inheritance and setgid bit semantics outside the current openat creation profile
+testcases/kernel/syscalls/creat/creat09.c requires all-filesystems mount-device setup and setgid stripping semantics outside the current openat creation profile
 testcases/kernel/syscalls/delete_module/delete_module01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/delete_module/delete_module02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/delete_module/delete_module03.c not yet enabled in current syscall-conformance profile
@@ -717,21 +715,18 @@ testcases/kernel/syscalls/nice/nice02.c not yet enabled in current syscall-confo
 testcases/kernel/syscalls/nice/nice03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/nice/nice04.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/nice/nice05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/open/open01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/open/open02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/open/open03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/open/open04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/open/open06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/open/open07.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/open/open08.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/open/open09.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/open/open10.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/open/open11.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/open/open12.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/open/open12_child.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/open/open13.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/open/open14.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/open/open15.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/open/open02.c requires O_NOATIME EPERM behavior outside the current openat profile
+testcases/kernel/syscalls/open/open04.c requires per-process fd-limit EMFILE accounting outside the current openat profile
+testcases/kernel/syscalls/open/open06.c requires FIFO setup through mkfifo/mknod outside the current openat profile
+testcases/kernel/syscalls/open/open07.c requires symlink(2) setup and O_NOFOLLOW symlink traversal cases outside the current openat profile
+testcases/kernel/syscalls/open/open08.c mixes EEXIST, EISDIR, ENOTDIR, ENAMETOOLONG, EACCES, and EFAULT cases outside the current openat profile
+testcases/kernel/syscalls/open/open10.c requires setgid directory group inheritance and setgid bit semantics outside the current openat creation profile
+testcases/kernel/syscalls/open/open11.c requires hard links, symlinks, device special files, and mount setup outside the current openat profile
+testcases/kernel/syscalls/open/open12.c requires O_NOATIME, O_CLOEXEC helper exec, and large-file behavior outside the current openat profile
+testcases/kernel/syscalls/open/open12_child.c helper binary for open12; excluded as non-standalone LTP coverage row until open12 helper execution is supported
+testcases/kernel/syscalls/open/open13.c requires O_PATH semantics across read, write, fchmod, fchown, ioctl, mmap, and xattr operations outside the current openat profile
+testcases/kernel/syscalls/open/open14.c requires O_TMPFILE and linkat publication behavior outside the current openat profile
+testcases/kernel/syscalls/open/open15.c requires symlink(2) setup outside the current openat profile
 testcases/kernel/syscalls/open_by_handle_at/open_by_handle_at01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/open_by_handle_at/open_by_handle_at02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/open_tree/open_tree01.c not yet enabled in current syscall-conformance profile
@@ -740,9 +735,9 @@ testcases/kernel/syscalls/openat/openat02.c requires symlink(2), execlp helper e
 testcases/kernel/syscalls/openat/openat02_child.c helper binary for openat02; excluded as non-standalone LTP coverage row until openat02 helper execution is supported
 testcases/kernel/syscalls/openat/openat03.c requires O_TMPFILE plus /proc/self/fd linkat publication semantics, which are not implemented
 testcases/kernel/syscalls/openat/openat04.c requires O_TMPFILE on mounted filesystems, noacl mount setup, setgid strip semantics, and user/group transitions beyond the current openat profile
-testcases/kernel/syscalls/openat2/openat201.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/openat2/openat202.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/openat2/openat203.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/openat2/openat201.c openat2(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/openat2/openat202.c openat2(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/openat2/openat203.c openat2(2) is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/pathconf/pathconf01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/pathconf/pathconf02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/pause/pause01.c not yet enabled in current syscall-conformance profile

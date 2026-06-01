@@ -292,6 +292,9 @@ fn read_regular_file_to_guest(
         Some(o) => o,
         None => return EBADF,
     };
+    if ofd.status_flags & fd_table::OPEN_ACCESS_MODE_MASK == O_WRONLY {
+        return EBADF;
+    }
     if let Some(st) = memfs::stat(ofd.ino) {
         if st.mode & memfs::S_IFMT == memfs::S_IFDIR {
             return EISDIR;
