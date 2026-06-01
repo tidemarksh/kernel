@@ -3,7 +3,7 @@ testcases/kernel/syscalls/abort/abort01.c not yet enabled in current syscall-con
 testcases/kernel/syscalls/accept/accept01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/accept/accept02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/accept/accept03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/accept4/accept4_01.c accept4 is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/accept4/accept4_01.c direct accept4 semantics are implemented and covered by Rust contract; upstream LTP also requires AF_INET loopback connect scheduling in the kernel-only runner and a legacy socketcall(SYS_ACCEPT4) variant absent from the RISC-V syscall ABI
 testcases/kernel/syscalls/access/access01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/access/access02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/access/access03.c not yet enabled in current syscall-conformance profile

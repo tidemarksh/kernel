@@ -78,6 +78,66 @@ fn unix_stream_bind_listen_connect_accept_roundtrip() {
 }
 
 #[test]
+fn accept4_sets_requested_fd_and_status_flags() {
+    let cases = [
+        (0_u64, false, false),
+        (SOCK_CLOEXEC as u64, true, false),
+        (SOCK_NONBLOCK as u64, false, true),
+        ((SOCK_CLOEXEC | SOCK_NONBLOCK) as u64, true, true),
+    ];
+
+    for (case_idx, (flags, expect_cloexec, expect_nonblock)) in cases.into_iter().enumerate() {
+        let mut t = TestVm::new();
+        let listener_fd =
+            socket::sys_socket(&mut t.vm, t.base, AF_UNIX as u64, SOCK_STREAM as u64, 0);
+        assert!(listener_fd >= 0);
+        let client_fd =
+            socket::sys_socket(&mut t.vm, t.base, AF_UNIX as u64, SOCK_STREAM as u64, 0);
+        assert!(client_fd >= 0);
+
+        let path = format!("/tmp/tidemark-accept4-{case_idx}\0");
+        let addr = t.scratch + 0x240;
+        let mut sockaddr = [0u8; 2 + 108];
+        sockaddr[0..2].copy_from_slice(&(AF_UNIX as u16).to_le_bytes());
+        sockaddr[2..2 + path.len()].copy_from_slice(path.as_bytes());
+        t.write_mem(addr, &sockaddr[..2 + path.len()]);
+
+        assert_eq!(
+            socket::sys_bind(
+                &mut t.vm,
+                t.base,
+                listener_fd as u64,
+                addr,
+                (2 + path.len()) as u64,
+            ),
+            0
+        );
+        assert_eq!(
+            socket::sys_listen(&mut t.vm, t.base, listener_fd as u64, 8),
+            0
+        );
+        assert_eq!(
+            socket::sys_connect(
+                &mut t.vm,
+                t.base,
+                client_fd as u64,
+                addr,
+                (2 + path.len()) as u64,
+            ),
+            0
+        );
+
+        let accepted_fd = socket::sys_accept4(&mut t.vm, t.base, listener_fd as u64, 0, 0, flags);
+        assert!(accepted_fd >= 0);
+
+        let fd_flags = fd_table::sys_fcntl(&mut t.vm, t.base, accepted_fd as u64, F_GETFD, 0);
+        assert_eq!(fd_flags != 0, expect_cloexec);
+        let status_flags = fd_table::sys_fcntl(&mut t.vm, t.base, accepted_fd as u64, F_GETFL, 0);
+        assert_eq!(status_flags & O_NONBLOCK as i64 != 0, expect_nonblock);
+    }
+}
+
+#[test]
 fn unix_dgram_connect_routes_to_bound_peer() {
     let mut t = TestVm::new();
     let server_fd = socket::sys_socket(&mut t.vm, t.base, AF_UNIX as u64, SOCK_DGRAM as u64, 0);

@@ -17,6 +17,8 @@ pub enum Primitive {
     PrivateFutexFanout,
     SharedProcessFutexFanout,
     CloneFallback,
+    SocketLoopbackConnect,
+    LegacySocketcallAbi,
 }
 
 impl Primitive {
@@ -30,6 +32,8 @@ impl Primitive {
             Self::PrivateFutexFanout => "private_futex_fanout",
             Self::SharedProcessFutexFanout => "shared_process_futex_fanout",
             Self::CloneFallback => "clone_fallback",
+            Self::SocketLoopbackConnect => "socket_loopback_connect",
+            Self::LegacySocketcallAbi => "legacy_socketcall_abi",
         }
     }
 
@@ -415,6 +419,12 @@ fn extract_blocked_primitives(reason: &str) -> BTreeSet<Primitive> {
     }
     if lower.contains("clone3") || lower.contains("clone fallback") {
         set.insert(Primitive::CloneFallback);
+    }
+    if lower.contains("af_inet loopback") || lower.contains("loopback connect") {
+        set.insert(Primitive::SocketLoopbackConnect);
+    }
+    if lower.contains("socketcall") {
+        set.insert(Primitive::LegacySocketcallAbi);
     }
 
     set

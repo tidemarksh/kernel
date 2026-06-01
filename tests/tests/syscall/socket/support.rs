@@ -29,3 +29,4 @@ pub(super) const IPPROTO_TCP: u64 = 6;
 pub(super) const IPPROTO_UDP: u64 = 17;
 pub(super) const TCP_NODELAY: u64 = 1;
 pub(super) const F_GETFD: u64 = 1;
+pub(super) const F_GETFL: u64 = 3;
