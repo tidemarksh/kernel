@@ -359,13 +359,10 @@ testcases/kernel/syscalls/getcwd/getcwd04.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/getdents/getdents01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getdents/getdents02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getdomainname/getdomainname01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getegid/getegid01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getegid/getegid02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/geteuid/geteuid02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getgid/getgid01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getgid/getgid03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getgroups/getgroups01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getgroups/getgroups03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/getegid/getegid01.c requires /proc/self/status Gid reporting, which the current LTP runner procfs does not provide
+testcases/kernel/syscalls/geteuid/geteuid02.c requires /proc/self/status Uid reporting, which the current LTP runner procfs does not provide
+testcases/kernel/syscalls/getgroups/getgroups01.c requires setgroups(2) supplementary group persistence and getgroups(2) list reporting; current implementation validates inputs but does not persist supplementary groups
+testcases/kernel/syscalls/getgroups/getgroups03.c requires setgroups(2) supplementary group persistence and /etc/group-derived list reporting; current implementation validates inputs but does not persist supplementary groups
 testcases/kernel/syscalls/gethostbyname_r/gethostbyname_r01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/gethostid/gethostid01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/gethostname/gethostname01.c not yet enabled in current syscall-conformance profile
@@ -375,17 +372,10 @@ testcases/kernel/syscalls/getitimer/getitimer02.c getitimer/setitimer currently 
 testcases/kernel/syscalls/getpagesize/getpagesize01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getpeername/getpeername01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getpgrp/getpgrp01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getpid/getpid01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getpid/getpid02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getppid/getppid02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getpriority/getpriority01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getpriority/getpriority02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getresgid/getresgid01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getresgid/getresgid02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getresgid/getresgid03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getresuid/getresuid01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getresuid/getresuid02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getresuid/getresuid03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/getresgid/getresgid03.c requires saved-setgid state to remain distinct from the effective gid after setresgid(-1, gid, -1); current implementation reports saved gid as effective gid
+testcases/kernel/syscalls/getresuid/getresuid03.c requires saved-setuid state to remain distinct from the effective uid after setresuid(-1, uid, -1); current implementation reports saved uid as effective uid
 testcases/kernel/syscalls/getrlimit/getrlimit01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getrlimit/getrlimit02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getrlimit/getrlimit03.c not yet enabled in current syscall-conformance profile
@@ -399,11 +389,10 @@ testcases/kernel/syscalls/getsid/getsid02.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/getsockname/getsockname01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getsockopt/getsockopt01.c getsockopt implements a narrow socket option subset only
 testcases/kernel/syscalls/getsockopt/getsockopt02.c getsockopt implements a narrow socket option subset only
-testcases/kernel/syscalls/gettid/gettid01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/gettid/gettid02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/gettid/gettid01.c requires /proc/self/status Pid/Tgid reporting; current LTP runner procfs provides pid stat/task entries but not /proc/self/status
 testcases/kernel/syscalls/gettimeofday/gettimeofday01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/gettimeofday/gettimeofday02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getuid/getuid03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/getuid/getuid03.c requires /proc/self/status Uid reporting, which the current LTP runner procfs does not provide
 testcases/kernel/syscalls/getxattr/getxattr01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getxattr/getxattr02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getxattr/getxattr03.c not yet enabled in current syscall-conformance profile
@@ -1032,13 +1021,9 @@ testcases/kernel/syscalls/setfsuid/setfsuid01.c not yet enabled in current sysca
 testcases/kernel/syscalls/setfsuid/setfsuid02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setfsuid/setfsuid03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setfsuid/setfsuid04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setgid/setgid01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setgid/setgid02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setgid/setgid03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setgroups/setgroups01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setgroups/setgroups02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setgroups/setgroups03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setgroups/setgroups04.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/setgroups/setgroups02.c requires setgroups(2) supplementary group persistence observable through getgroups(2); current implementation validates inputs but does not persist supplementary groups
+testcases/kernel/syscalls/setgroups/setgroups03.c requires NGROUPS limit enforcement and supplementary group semantics beyond the current input-validation-only setgroups(2) implementation
+testcases/kernel/syscalls/setgroups/setgroups04.c requires setgroups(2) to reject a group list at sbrk(0) with EFAULT; current guest range validation treats that address as accessible in this runner
 testcases/kernel/syscalls/setitimer/setitimer01.c getitimer/setitimer currently preserve state only and do not schedule delivery
 testcases/kernel/syscalls/setitimer/setitimer02.c getitimer/setitimer currently preserve state only and do not schedule delivery
 testcases/kernel/syscalls/setns/setns01.c not yet enabled in current syscall-conformance profile
@@ -1047,26 +1032,20 @@ testcases/kernel/syscalls/setpgrp/setpgrp01.c not yet enabled in current syscall
 testcases/kernel/syscalls/setpgrp/setpgrp02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setpriority/setpriority01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setpriority/setpriority02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setregid/setregid01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setregid/setregid02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setregid/setregid03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setregid/setregid04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setresgid/setresgid01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setresgid/setresgid02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setresgid/setresgid03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setresgid/setresgid04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setresuid/setresuid01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setresuid/setresuid02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setresuid/setresuid03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setresuid/setresuid04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setresuid/setresuid05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setreuid/setreuid01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setreuid/setreuid02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setreuid/setreuid03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setreuid/setreuid04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setreuid/setreuid05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setreuid/setreuid06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setreuid/setreuid07.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/setregid/setregid03.c requires saved-setgid participation in non-root setregid permission checks; current implementation tracks only real/effective gid
+testcases/kernel/syscalls/setresgid/setresgid01.c requires full saved-setgid updates and reporting; current setresgid delegates to setregid and does not track saved gid
+testcases/kernel/syscalls/setresgid/setresgid02.c requires full saved-setgid updates and reporting; current setresgid delegates to setregid and does not track saved gid
+testcases/kernel/syscalls/setresgid/setresgid03.c requires saved-setgid participation in non-root permission checks; current implementation tracks only real/effective gid
+testcases/kernel/syscalls/setresgid/setresgid04.c requires filesystem file-creation ownership to follow the effective gid; current filesystem metadata still records gid 0 for this LTP path
+testcases/kernel/syscalls/setresuid/setresuid01.c requires full saved-setuid updates and reporting; current setresuid delegates to setreuid and does not track saved uid
+testcases/kernel/syscalls/setresuid/setresuid02.c requires full saved-setuid updates and reporting; current setresuid delegates to setreuid and does not track saved uid
+testcases/kernel/syscalls/setresuid/setresuid03.c requires saved-setuid participation in non-root permission checks; current implementation tracks only real/effective uid
+testcases/kernel/syscalls/setresuid/setresuid04.c requires filesystem access checks to reject non-owner write opens after effective uid change; current filesystem permission path allows this LTP open
+testcases/kernel/syscalls/setresuid/setresuid05.c requires filesystem file-creation ownership to follow the effective uid; current filesystem metadata still records uid 0 for this LTP path
+testcases/kernel/syscalls/setreuid/setreuid02.c requires full saved-setuid transition semantics; current implementation tracks only real/effective uid
+testcases/kernel/syscalls/setreuid/setreuid03.c requires saved-setuid participation in non-root permission checks; current implementation tracks only real/effective uid
+testcases/kernel/syscalls/setreuid/setreuid05.c requires saved-setuid transition semantics across a forked child; current implementation tracks only real/effective uid
+testcases/kernel/syscalls/setreuid/setreuid07.c requires filesystem access checks to reject non-owner write opens after effective uid change; current filesystem permission path allows this LTP open
 testcases/kernel/syscalls/setrlimit/setrlimit01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setrlimit/setrlimit02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setrlimit/setrlimit03.c not yet enabled in current syscall-conformance profile
@@ -1085,9 +1064,6 @@ testcases/kernel/syscalls/setsockopt/setsockopt09.c setsockopt implements a narr
 testcases/kernel/syscalls/setsockopt/setsockopt10.c setsockopt implements a narrow socket option subset only
 testcases/kernel/syscalls/settimeofday/settimeofday01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/settimeofday/settimeofday02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setuid/setuid01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setuid/setuid03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setuid/setuid04.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setxattr/setxattr01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setxattr/setxattr02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setxattr/setxattr03.c not yet enabled in current syscall-conformance profile
@@ -1190,7 +1166,7 @@ testcases/kernel/syscalls/sysfs/sysfs02.c not yet enabled in current syscall-con
 testcases/kernel/syscalls/sysfs/sysfs03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/sysfs/sysfs04.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/sysfs/sysfs05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/sysinfo/sysinfo03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/sysinfo/sysinfo03.c requires root, CLONE_NEWTIME, /proc/self/timens_offsets writes, and /proc/uptime time-namespace behavior outside the current syscall-conformance runner scope
 testcases/kernel/syscalls/syslog/syslog11.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/syslog/syslog12.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/tee/tee01.c not yet enabled in current syscall-conformance profile
@@ -1222,7 +1198,7 @@ testcases/kernel/syscalls/umount/umount02.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/umount/umount03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/umount2/umount2_01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/umount2/umount2_02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/uname/uname04.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/uname/uname04.c requires personality(2) PER_LINUX|UNAME26 behavior, but personality is not implemented in the production syscall dispatch
 testcases/kernel/syscalls/unlink/unlink05.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/unlink/unlink07.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/unlink/unlink08.c not yet enabled in current syscall-conformance profile
@@ -1278,7 +1254,7 @@ testcases/kernel/syscalls/waitpid/waitpid12.c not yet enabled in current syscall
 testcases/kernel/syscalls/waitpid/waitpid13.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/write/write04.c write04 targets nonblocking FIFO behavior, but its setup depends on mknod(2)/named FIFO filesystem support outside the current syscall-conformance scope; pipe write semantics remain covered by Rust tests and write05
 testcases/kernel/syscalls/writev/writev03.c writev03 requires root, mount_device/all-filesystems, and multi-CPU fuzzy synchronization harness support outside the current wasm LTP environment
-testcases/kernel/syscalls/getppid/getppid01.c parent/child semantics belong to Phase 5 process support, not current Phase 4 conformance scope
 testcases/kernel/syscalls/statfs/statfs01.c LTP variant requires mount-device/all-filesystems harness support not present in current wasm test environment
 testcases/kernel/syscalls/epoll_wait/epoll_wait06.c local EPOLLET pipe edge-trigger contract now passes in kernel tests, but the upstream LTP binary still exits 2 without diagnostics, so the remaining blocker is LTP-specific harness/integration behavior
 testcases/kernel/syscalls/epoll_wait/epoll_wait05.c local `shutdown(SHUT_RD)` / `EPOLLRDHUP` gate now passes on injected connected sockets, but the upstream LTP binary still exits 2 on the real bind/listen/connect socket path, so the remaining blocker is socket network integration behavior rather than bare epoll event decoding
+testcases/kernel/syscalls/setuid/setuid04.c requires filesystem access checks to reject non-owner write opens after setuid; current filesystem permission path allows this LTP open

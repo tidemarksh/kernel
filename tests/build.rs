@@ -356,13 +356,13 @@ fn merge_ltp_targets(
 }
 
 fn scan_ltp_helpers(source_path: &Path) -> Result<Vec<String>, String> {
-    let text =
-        fs::read_to_string(source_path).map_err(|e| format!("{}: {}", source_path.display(), e))?;
+    let bytes = fs::read(source_path).map_err(|e| format!("{}: {}", source_path.display(), e))?;
+    let text = String::from_utf8_lossy(&bytes);
     let defines = scan_string_defines(&text);
     let mut helpers = Vec::new();
-    scan_tst_get_path_helpers(text.as_str(), &mut helpers);
-    scan_execlp_helpers(text.as_str(), &defines, &mut helpers);
-    scan_resource_file_helpers(text.as_str(), &defines, &mut helpers);
+    scan_tst_get_path_helpers(&text, &mut helpers);
+    scan_execlp_helpers(&text, &defines, &mut helpers);
+    scan_resource_file_helpers(&text, &defines, &mut helpers);
     Ok(helpers)
 }
 

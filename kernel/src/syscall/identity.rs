@@ -80,7 +80,7 @@ fn getrandom_seed(vm: &ThreadState, buf: u64, len: u64) -> u64 {
 }
 
 fn parse_cred_arg(raw: i64) -> Result<Option<u32>, i64> {
-    if raw == -1 {
+    if raw == -1 || raw == u32::MAX as i64 {
         return Ok(None);
     }
     if raw < 0 || raw > u32::MAX as i64 {

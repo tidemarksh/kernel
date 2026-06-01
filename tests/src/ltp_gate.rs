@@ -303,7 +303,9 @@ fn load_source_bundle(source_path: &Path) -> Result<String, String> {
 }
 
 fn read_text(path: &Path) -> Result<String, String> {
-    fs::read_to_string(path).map_err(|err| format!("failed to read {}: {}", path.display(), err))
+    let bytes =
+        fs::read(path).map_err(|err| format!("failed to read {}: {}", path.display(), err))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 fn included_local_headers(source: &str) -> Vec<String> {

@@ -30,6 +30,18 @@ testcases/kernel/syscalls/getpgid/getpgid01.c verified getpgid(2) basic parent/c
 testcases/kernel/syscalls/getpgid/getpgid02.c verified getpgid(2) returns ESRCH for nonexistent pids
 testcases/kernel/syscalls/geteuid/geteuid01.c verified basic geteuid(2) success path
 testcases/kernel/syscalls/getcpu/getcpu02.c verified getcpu(2) EFAULT handling for cpu_id/node_id pointers outside the process address space
+testcases/kernel/syscalls/getegid/getegid02.c verifies getegid(2) matches passwd-derived effective gid for the current effective uid
+testcases/kernel/syscalls/getgid/getgid01.c verifies setgid(2) to nobody updates getgid(2)
+testcases/kernel/syscalls/getgid/getgid03.c verifies getgid(2) matches passwd-derived gid for the current uid
+testcases/kernel/syscalls/getpid/getpid01.c verified getpid(2) returns an in-range process id for forked children
+testcases/kernel/syscalls/getpid/getpid02.c verified fork return values and child getppid(2) parent identity
+testcases/kernel/syscalls/getppid/getppid01.c verified getppid(2) returns an in-range parent process id
+testcases/kernel/syscalls/getppid/getppid02.c verified child getppid(2) matches the parent getpid(2)
+testcases/kernel/syscalls/getresgid/getresgid01.c verifies getresgid(2) reports current real/effective/saved gid values
+testcases/kernel/syscalls/getresgid/getresgid02.c verifies setregid(2)-updated effective/saved gid values through getresgid(2)
+testcases/kernel/syscalls/getresuid/getresuid01.c verifies getresuid(2) reports current real/effective/saved uid values
+testcases/kernel/syscalls/getresuid/getresuid02.c verifies setreuid(2)-updated effective/saved uid values through getresuid(2)
+testcases/kernel/syscalls/gettid/gettid02.c verified pthread clone threads receive distinct tids from the process pid and from each other
 testcases/kernel/syscalls/getuid/getuid01.c verified basic getuid(2) success path
 testcases/kernel/syscalls/lseek/lseek01.c verified lseek(2) basic offset movement and reads
 testcases/kernel/syscalls/mkdirat/mkdirat01.c verified mkdirat(2) relative/absolute dirfd handling
@@ -43,6 +55,18 @@ testcases/kernel/syscalls/sched_yield/sched_yield01.c verified sched_yield retur
 testcases/kernel/syscalls/setpgid/setpgid01.c verified setpgid(2) basic caller/child process-group updates
 testcases/kernel/syscalls/setpgid/setpgid02.c verified setpgid(2) EINVAL, ESRCH, and EPERM error cases
 testcases/kernel/syscalls/setpgid/setpgid03.c verified setpgid(2) rejects moving an execve()'d child while preserving the session-leader EPERM cases
+testcases/kernel/syscalls/setgid/setgid01.c verifies setgid(2) succeeds for the current gid
+testcases/kernel/syscalls/setgid/setgid02.c verifies non-root setgid(2) to root gid fails with EPERM
+testcases/kernel/syscalls/setgid/setgid03.c verifies root setgid(2) to nobody updates getgid(2)
+testcases/kernel/syscalls/setgroups/setgroups01.c verifies root setgroups(2) accepts a valid one-entry group list
+testcases/kernel/syscalls/setregid/setregid01.c verifies current real/effective gid setregid(2) combinations
+testcases/kernel/syscalls/setregid/setregid02.c verifies non-root setregid(2) EPERM cases preserve real/effective gid
+testcases/kernel/syscalls/setregid/setregid04.c verifies root setregid(2) real/effective gid combinations
+testcases/kernel/syscalls/setuid/setuid01.c verifies setuid(2) succeeds for the current uid
+testcases/kernel/syscalls/setuid/setuid03.c verifies non-root setuid(2) to root uid fails with EPERM
+testcases/kernel/syscalls/setreuid/setreuid01.c verifies current real/effective uid setreuid(2) combinations
+testcases/kernel/syscalls/setreuid/setreuid04.c verifies root setreuid(2) to nobody updates getuid(2) and geteuid(2) in a child
+testcases/kernel/syscalls/setreuid/setreuid06.c verifies non-root setreuid(2) EPERM cases for unrelated uids
 testcases/kernel/syscalls/set_robust_list/set_robust_list01.c verified set_robust_list(2) accepts sizeof(robust_list_head) and rejects invalid len
 testcases/kernel/syscalls/set_tid_address/set_tid_address01.c verified set_tid_address(2) returns the thread-group leader tid for the main thread
 testcases/kernel/syscalls/setsid/setsid01.c verified setsid(2) rejects callers that are already process-group leaders after nested setpgid choreography
