@@ -298,7 +298,7 @@ testcases/kernel/syscalls/futex/futex_waitv01.c futex_waitv syscall dispatch is 
 testcases/kernel/syscalls/futex/futex_waitv02.c futex_waitv syscall dispatch is not yet implemented
 testcases/kernel/syscalls/futex/futex_waitv03.c futex_waitv syscall dispatch is not yet implemented
 testcases/kernel/syscalls/futex/futex_wake04.c hugepage-backed futex key separation is not yet modeled in the current focused suite
-testcases/kernel/syscalls/futimesat/futimesat01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/futimesat/futimesat01.c futimesat(2) is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/get_mempolicy/get_mempolicy01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/get_mempolicy/get_mempolicy02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/get_robust_list/get_robust_list01.c get_robust_list is implemented for self lookup and basic errno cases, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
@@ -1150,15 +1150,15 @@ testcases/kernel/syscalls/userfaultfd/userfaultfd05.c not yet enabled in current
 testcases/kernel/syscalls/userfaultfd/userfaultfd06.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/ustat/ustat01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/ustat/ustat02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/utime/utime01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/utime/utime02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/utime/utime03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/utime/utime04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/utime/utime05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/utime/utime06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/utime/utime07.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/utimensat/utimensat01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/utimes/utimes01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/utime/utime01.c requires persistent atime/mtime updates visible through stat(2) plus mount-device setup outside the current fs-time profile
+testcases/kernel/syscalls/utime/utime02.c requires persistent atime/mtime updates visible through stat(2) plus mount-device and ownership setup outside the current fs-time profile
+testcases/kernel/syscalls/utime/utime03.c requires persistent atime/mtime updates visible through stat(2) plus mount-device and permission setup outside the current fs-time profile
+testcases/kernel/syscalls/utime/utime04.c requires persistent atime/mtime updates visible through stat(2) plus mount-device setup outside the current fs-time profile
+testcases/kernel/syscalls/utime/utime05.c requires persistent atime/mtime updates visible through stat(2) plus mount-device and ownership setup outside the current fs-time profile
+testcases/kernel/syscalls/utime/utime06.c requires permission-denial and read-only filesystem utime error behavior outside the current fs-time profile
+testcases/kernel/syscalls/utime/utime07.c requires symlink setup and symlink-loop utime behavior outside the current fs-time profile
+testcases/kernel/syscalls/utimensat/utimensat01.c requires persistent timestamp updates, ioctl inode attributes, and immutable/append-only permission behavior outside the current fs-time profile
+testcases/kernel/syscalls/utimes/utimes01.c requires persistent timestamp updates plus permission-denial and read-only filesystem behavior outside the current fs-time profile
 testcases/kernel/syscalls/vhangup/vhangup01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/vhangup/vhangup02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/vmsplice/vmsplice01.c not yet enabled in current syscall-conformance profile
