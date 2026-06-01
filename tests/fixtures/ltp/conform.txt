@@ -1,4 +1,5 @@
 # PASS-required tests with Linux-conformant semantics.
+testcases/kernel/syscalls/access/access03.c verified access(2) libc wrapper reports EFAULT for inaccessible path pointers through production faccessat(2)
 testcases/kernel/syscalls/chmod/chmod01.c verified chmod libc wrapper lowers to fchmodat-compatible mode updates for files and directories
 testcases/kernel/syscalls/chmod/chmod03.c verified chmod libc wrapper updates sticky mode bits for files and directories in the supported ownership model
 testcases/kernel/syscalls/chmod/chmod07.c verified chmod libc wrapper updates sticky mode bits after root-owned setup

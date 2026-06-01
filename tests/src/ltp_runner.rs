@@ -1454,7 +1454,8 @@ mod tests {
 
 fn spawn_drive_mode_for_ltp(binary: &str) -> Result<SpawnDriveMode, String> {
     match binary {
-        "clone08"
+        "access03"
+        | "clone08"
         | "chdir02"
         | "chdir04"
         | "chmod01"

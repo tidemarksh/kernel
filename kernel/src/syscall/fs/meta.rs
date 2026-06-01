@@ -202,6 +202,10 @@ pub fn sys_faccessat(
     path_addr: u64,
     _mode: u64,
 ) -> i64 {
+    if path_addr == 0 || !crate::syscall::memory::guest_range_accessible(base, path_addr, 1) {
+        return EFAULT;
+    }
+
     let mut path_buf = [0u8; 512];
     let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf) };
     let raw_path = &path_buf[..len];

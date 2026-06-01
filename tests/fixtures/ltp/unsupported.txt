@@ -4,10 +4,9 @@ testcases/kernel/syscalls/accept/accept01.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/accept/accept02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/accept/accept03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/accept4/accept4_01.c direct accept4 semantics are implemented and covered by Rust contract; upstream LTP also requires AF_INET loopback connect scheduling in the kernel-only runner and a legacy socketcall(SYS_ACCEPT4) variant absent from the RISC-V syscall ABI
-testcases/kernel/syscalls/access/access01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/access/access02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/access/access03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/access/access04.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/access/access01.c requires root/nobody read/write/execute permission checks across files and directories outside the current faccessat existence/error profile
+testcases/kernel/syscalls/access/access02.c requires symlink(2) setup and executable helper execution outside the current faccessat existence/error profile
+testcases/kernel/syscalls/access/access04.c requires invalid-mode, missing path, overlong path, ENOTDIR, symlink-loop, and read-only filesystem access error cases outside the current faccessat profile
 testcases/kernel/syscalls/acct/acct01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/acct/acct02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/acct/acct02_helper.c not yet enabled in current syscall-conformance profile
@@ -162,8 +161,8 @@ testcases/kernel/syscalls/execveat/execveat_child.c not yet enabled in current s
 testcases/kernel/syscalls/execveat/execveat_errno.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/execvp/execvp01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/execvp/execvp01_child.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/faccessat2/faccessat201.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/faccessat2/faccessat202.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/faccessat2/faccessat201.c faccessat2(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/faccessat2/faccessat202.c faccessat2(2) is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/fadvise/posix_fadvise01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fadvise/posix_fadvise02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fadvise/posix_fadvise03.c not yet enabled in current syscall-conformance profile

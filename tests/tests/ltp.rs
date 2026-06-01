@@ -73,6 +73,7 @@ macro_rules! ltp_case {
 }
 
 ltp_case!(ltp_clone08);
+ltp_case!(ltp_access03);
 ltp_case!(ltp_chdir02);
 ltp_case!(ltp_chdir04);
 ltp_case!(ltp_chmod01);
