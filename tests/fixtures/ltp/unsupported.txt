@@ -112,23 +112,23 @@ testcases/kernel/syscalls/delete_module/delete_module03.c not yet enabled in cur
 testcases/kernel/syscalls/delete_module/dummy_del_mod.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/delete_module/dummy_del_mod_dep.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/dup/dup05.c requires named FIFO setup via mknod/mkfifo; Tidemark currently validates dup behavior only for regular files and unnamed pipes
-testcases/kernel/syscalls/epoll/epoll-ltp.c epoll dispatch exists and kernel contract tests cover core ready/blocking/eventfd/OFD semantics, but the aggregated LTP epoll harness is not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/epoll/epoll-ltp.c aggregated legacy epoll harness mixes broad epoll_create/ctl/wait behavior and runner assumptions beyond the current row-level epoll conform subset
 testcases/kernel/syscalls/epoll_create/epoll_create01.c the legacy epoll_create syscall is not implemented; the current surface only exposes epoll_create1
 testcases/kernel/syscalls/epoll_create/epoll_create02.c the legacy epoll_create syscall is not implemented; the current surface only exposes epoll_create1
-testcases/kernel/syscalls/epoll_ctl/epoll_ctl02.c epoll_ctl dispatch exists and kernel contract tests cover core add/del/reject semantics, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/epoll_ctl/epoll_ctl03.c epoll_ctl dispatch exists and kernel contract tests cover core add/del/reject semantics, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/epoll_ctl/epoll_ctl04.c epoll_ctl dispatch exists and kernel contract tests cover core add/del/reject semantics, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/epoll_ctl/epoll_ctl05.c epoll_ctl dispatch exists and kernel contract tests cover core add/del/reject semantics, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/epoll_pwait/epoll_pwait01.c epoll_pwait dispatch exists and kernel contract tests cover ready-event delivery, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/epoll_pwait/epoll_pwait02.c epoll_pwait dispatch exists and kernel contract tests cover ready-event delivery, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/epoll_pwait/epoll_pwait03.c epoll_pwait dispatch exists and kernel contract tests cover ready-event delivery, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/epoll_pwait/epoll_pwait04.c epoll_pwait dispatch exists and kernel contract tests cover ready-event delivery, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/epoll_pwait/epoll_pwait05.c epoll_pwait dispatch exists and kernel contract tests cover ready-event delivery, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/epoll_pwait/epoll_pwait06.c epoll_pwait dispatch exists and kernel contract tests cover ready-event delivery, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/epoll_wait/epoll_wait01.c epoll_wait01 depends on poll(2) in its harness, which is outside the current Phase4 syscall surface
-testcases/kernel/syscalls/epoll_wait/epoll_wait02.c epoll_wait dispatch exists and kernel contract tests cover ready, blocking, timeout, eventfd, and OFD-alias semantics, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/epoll_wait/epoll_wait03.c epoll_wait dispatch exists and kernel contract tests cover ready, blocking, timeout, eventfd, and OFD-alias semantics, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/epoll_wait/epoll_wait04.c epoll_wait dispatch exists and kernel contract tests cover ready, blocking, timeout, eventfd, and OFD-alias semantics, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/epoll_ctl/epoll_ctl02.c requires full epoll_ctl error matrix including EPERM on unsupported fd types, NULL event EFAULT, and duplicate/not-registered edge cases beyond the current conform subset
+testcases/kernel/syscalls/epoll_ctl/epoll_ctl03.c requires successful EPOLL_CTL_MOD across all event-bit combinations including EPOLLPRI/EPOLLERR/EPOLLHUP/EPOLLET/EPOLLRDHUP beyond the current add/mod/del conform row
+testcases/kernel/syscalls/epoll_ctl/epoll_ctl04.c requires nested epoll depth-limit EINVAL/ELOOP semantics outside the current epoll instance model
+testcases/kernel/syscalls/epoll_ctl/epoll_ctl05.c requires nested epoll circular-loop ELOOP detection outside the current epoll instance model
+testcases/kernel/syscalls/epoll_pwait/epoll_pwait01.c requires signal-mask atomicity, signal interruption with EINTR, forked signal sender coordination, and socketpair readiness beyond the current epoll_pwait conform subset
+testcases/kernel/syscalls/epoll_pwait/epoll_pwait02.c requires socketpair-backed epoll_pwait ready-event delivery through the wrapper variants beyond the current pipe/eventfd conform subset
+testcases/kernel/syscalls/epoll_pwait/epoll_pwait03.c requires repeated epoll_pwait timeout measurement loops that exceed the current process-tree runner budget
+testcases/kernel/syscalls/epoll_pwait/epoll_pwait04.c requires EFAULT for invalid sigmask pointers in epoll_pwait wrapper variants beyond the current ready-event conform subset
+testcases/kernel/syscalls/epoll_pwait/epoll_pwait05.c targets epoll_pwait2 invalid-timespec behavior; epoll_pwait2 is not production-dispatched
+testcases/kernel/syscalls/epoll_pwait/epoll_pwait06.c requires broad fd-type iteration, alarm watchdogs, and timeout-regression coverage beyond the current epoll_pwait conform subset
+testcases/kernel/syscalls/epoll_wait/epoll_wait01.c requires poll(2)-driven pipe-fill setup plus multi-event EPOLLIN/EPOLLOUT validation beyond the current epoll_wait conform subset
+testcases/kernel/syscalls/epoll_wait/epoll_wait02.c requires repeated epoll_wait timeout measurement loops that exceed the current process-tree runner budget
+testcases/kernel/syscalls/epoll_wait/epoll_wait03.c requires full epoll_wait EBADF/EINVAL/EFAULT matrix including read-only mmaped event buffers beyond the current conform subset
+testcases/kernel/syscalls/epoll_wait/epoll_wait04.c requires sub-millisecond immediate-timeout measurement beyond the current virtual-time epoll_wait conform subset
 testcases/kernel/syscalls/eventfd/eventfd01.c local kernel contract tests pass for the read-side errno surface, but the upstream LTP binary still exits 2 without diagnostics, so the remaining blocker is LTP-specific harness/integration behavior
 testcases/kernel/syscalls/eventfd/eventfd02.c local kernel contract tests pass for the write-side errno surface, but the upstream LTP binary still exits 2 without diagnostics, so the remaining blocker is LTP-specific harness/integration behavior
 testcases/kernel/syscalls/eventfd/eventfd03.c direct eventfd2 coverage passes, but this case depends on the libc eventfd() wrapper plus select(2), neither of which is yet enabled in the current syscall-conformance profile
@@ -768,11 +768,11 @@ testcases/kernel/syscalls/pipe2/pipe2_02_child.c helper binary for pipe2_02; exc
 testcases/kernel/syscalls/pipe2/pipe2_04.c requires F_SETPIPE_SZ/F_GETPIPE_SZ pipe-size controls, which are not implemented
 testcases/kernel/syscalls/pivot_root/pivot_root01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/pkeys/pkey01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/poll/poll01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/poll/poll02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/poll/poll03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/poll/poll04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/ppoll/ppoll01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/poll/poll01.c poll(2) wrapper coverage requires pipe POLLIN/POLLOUT readiness through ppoll lowering; this wrapper surface is not yet admitted to conform because full-gate budget is already saturated
+testcases/kernel/syscalls/poll/poll02.c poll(2) wrapper timeout coverage uses repeated timer samples that exceed the current process-tree runner budget
+testcases/kernel/syscalls/poll/poll03.c poll(2) wrapper requires POLLHUP reporting on closed pipe write ends through ppoll lowering outside the current conform subset
+testcases/kernel/syscalls/poll/poll04.c poll(2) wrapper requires POLLNVAL reporting for invalid fds through ppoll lowering outside the current conform subset
+testcases/kernel/syscalls/ppoll/ppoll01.c requires broad ppoll signal-mask, EINTR race, invalid nfds, invalid fds EFAULT, closed-fd POLLNVAL, and timeout behavior beyond the current conform subset
 testcases/kernel/syscalls/prctl/prctl01.c prctl currently returns ENOSYS
 testcases/kernel/syscalls/prctl/prctl02.c prctl currently returns ENOSYS
 testcases/kernel/syscalls/prctl/prctl03.c prctl currently returns ENOSYS
@@ -791,9 +791,9 @@ testcases/kernel/syscalls/preadv2/preadv202.c not yet enabled in current syscall
 testcases/kernel/syscalls/preadv2/preadv203.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/process_madvise/process_madvise01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/profil/profil01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/pselect/pselect01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/pselect/pselect02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/pselect/pselect03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/pselect/pselect01.c pselect wrapper timeout coverage uses repeated timer samples that exceed the current process-tree runner budget
+testcases/kernel/syscalls/pselect/pselect02.c requires pselect EBADF/EINVAL invalid-timespec error matrix through pselect6 lowering beyond the current conform subset
+testcases/kernel/syscalls/pselect/pselect03.c requires pselect wrapper success semantics on regular files through pselect6 lowering outside the current conform subset
 testcases/kernel/syscalls/ptrace/ptrace01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/ptrace/ptrace02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/ptrace/ptrace03.c not yet enabled in current syscall-conformance profile
@@ -904,10 +904,10 @@ testcases/kernel/syscalls/sched_setscheduler/sched_setscheduler02.c not yet enab
 testcases/kernel/syscalls/sched_setscheduler/sched_setscheduler03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/sched_setscheduler/sched_setscheduler04.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/seccomp/seccomp01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/select/select01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/select/select02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/select/select03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/select/select04.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/select/select01.c select wrapper coverage requires regular file, system pipe, and named FIFO readiness through pselect6 lowering; named FIFO setup is outside the current profile
+testcases/kernel/syscalls/select/select02.c select wrapper timeout coverage uses repeated timer samples that exceed the current process-tree runner budget
+testcases/kernel/syscalls/select/select03.c requires select EBADF/EFAULT/EINVAL error matrix and forked signal observation through pselect6 lowering beyond the current conform subset
+testcases/kernel/syscalls/select/select04.c requires select fd-set clearing behavior for empty and full nonblocking pipes beyond the current pselect6 conform subset
 testcases/kernel/syscalls/send/send01.c requires send(2) EBADF/EFAULT/EMSGSIZE/EPIPE and MSG_OOB behavior with a forked AF_INET server; current sendto-backed path ignores OOB and does not implement the full errno matrix
 testcases/kernel/syscalls/send/send02.c MSG_MORE coverage requires TCP/UDP buffering semantics for send/sendto/sendmsg; current socket write path sends immediately and does not implement MSG_MORE
 testcases/kernel/syscalls/sendfile/sendfile02.c not yet enabled in current syscall-conformance profile
