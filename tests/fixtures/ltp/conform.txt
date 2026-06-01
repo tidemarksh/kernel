@@ -50,6 +50,10 @@ testcases/kernel/syscalls/sigaltstack/sigaltstack02.c verified sigaltstack(2) re
 testcases/kernel/syscalls/tgkill/tgkill03.c verified invalid/defunct tgkill errno surface and pthread-backed checkpoint fanout once deferred clone-thread ownership and process-tree external futex wake accounting matched Linux-shaped behavior
 testcases/kernel/syscalls/sysinfo/sysinfo01.c verified sysinfo(2) success path
 testcases/kernel/syscalls/sysinfo/sysinfo02.c verified sysinfo(2) EFAULT on invalid address
+testcases/kernel/syscalls/timerfd/timerfd02.c verified timerfd_create(2) TFD_CLOEXEC and TFD_NONBLOCK fd/status flag propagation
+testcases/kernel/syscalls/timerfd/timerfd_create01.c verified timerfd_create(2) EINVAL for invalid clockid and invalid flags
+testcases/kernel/syscalls/timerfd/timerfd_gettime01.c verified timerfd_gettime(2) EBADF, EFAULT, and EINVAL error handling
+testcases/kernel/syscalls/timerfd/timerfd_settime01.c verified timerfd_settime(2) EBADF, EFAULT, EINVAL fd-type, and invalid flag error handling
 testcases/kernel/syscalls/truncate/truncate02.c verified truncate(2) shrink/extend semantics without changing file offset
 testcases/kernel/syscalls/uname/uname01.c verified uname(2) reports Linux sysname
 testcases/kernel/syscalls/uname/uname02.c verified uname(2) EFAULT on invalid address

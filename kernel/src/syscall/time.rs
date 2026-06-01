@@ -587,15 +587,14 @@ pub fn sys_timerfd_settime(
 
 /// timerfd_gettime: report the current timer spec.
 pub fn sys_timerfd_gettime(vm: &ThreadState, base: u32, fd: u64, curr_value: u64) -> i64 {
-    if curr_value == 0 || !crate::syscall::memory::guest_range_accessible(base, curr_value, 32) {
-        return abi::EFAULT;
-    }
-
     let Some(ofd) = crate::fs::fd_table::get_ofd(base, vm, fd) else {
         return abi::EBADF;
     };
     if ofd.fd_type != abi::FD_TYPE_TIMERFD {
         return abi::EINVAL;
+    }
+    if curr_value == 0 || !crate::syscall::memory::guest_range_accessible(base, curr_value, 32) {
+        return abi::EFAULT;
     }
     let Some(slot) = timerfd_slot(ofd.ino) else {
         return abi::EINVAL;

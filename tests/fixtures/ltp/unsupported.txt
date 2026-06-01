@@ -1208,13 +1208,9 @@ testcases/kernel/syscalls/timer_gettime/timer_gettime01.c not yet enabled in cur
 testcases/kernel/syscalls/timer_settime/timer_settime01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/timer_settime/timer_settime02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/timer_settime/timer_settime03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/timerfd/timerfd01.c timerfd create/settime/gettime/read subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/timerfd/timerfd02.c timerfd create/settime/gettime/read subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/timerfd/timerfd04.c timerfd create/settime/gettime/read subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/timerfd/timerfd_create01.c timerfd create/settime/gettime/read subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/timerfd/timerfd_gettime01.c timerfd create/settime/gettime/read subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/timerfd/timerfd_settime01.c timerfd create/settime/gettime/read subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/timerfd/timerfd_settime02.c timerfd create/settime/gettime/read subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/timerfd/timerfd01.c timerfd syscall semantics are implemented, but upstream LTP blocks in poll(-1)/read waiting for timerfd expiry; kernel-only ltp_runner does not yet advance virtual time to timerfd deadlines while blocked in poll/read
+testcases/kernel/syscalls/timerfd/timerfd04.c requires root, CLONE_NEWTIME time namespace, /proc/self/timens_offsets writes, and forked child timing semantics outside the current syscall-conformance runner scope
+testcases/kernel/syscalls/timerfd/timerfd_settime02.c requires TFD_TIMER_CANCEL_ON_SET success semantics plus pthread-backed fuzzy race/taint checking; current timerfd_settime intentionally rejects CANCEL_ON_SET with EINVAL
 testcases/kernel/syscalls/times/times01.c times currently returns ENOSYS
 testcases/kernel/syscalls/times/times03.c times currently returns ENOSYS
 testcases/kernel/syscalls/tkill/tkill01.c not yet enabled in current syscall-conformance profile

@@ -19,6 +19,9 @@ pub enum Primitive {
     CloneFallback,
     SocketLoopbackConnect,
     LegacySocketcallAbi,
+    TimerfdBlockedDeadline,
+    TimeNamespace,
+    CancelOnSet,
 }
 
 impl Primitive {
@@ -34,6 +37,9 @@ impl Primitive {
             Self::CloneFallback => "clone_fallback",
             Self::SocketLoopbackConnect => "socket_loopback_connect",
             Self::LegacySocketcallAbi => "legacy_socketcall_abi",
+            Self::TimerfdBlockedDeadline => "timerfd_blocked_deadline",
+            Self::TimeNamespace => "time_namespace",
+            Self::CancelOnSet => "cancel_on_set",
         }
     }
 
@@ -425,6 +431,21 @@ fn extract_blocked_primitives(reason: &str) -> BTreeSet<Primitive> {
     }
     if lower.contains("socketcall") {
         set.insert(Primitive::LegacySocketcallAbi);
+    }
+    if lower.contains("timerfd deadline")
+        || lower.contains("timerfd deadlines")
+        || lower.contains("blocked in poll/read")
+    {
+        set.insert(Primitive::TimerfdBlockedDeadline);
+    }
+    if lower.contains("clone_newtime")
+        || lower.contains("time namespace")
+        || lower.contains("timens_offsets")
+    {
+        set.insert(Primitive::TimeNamespace);
+    }
+    if lower.contains("cancel_on_set") {
+        set.insert(Primitive::CancelOnSet);
     }
 
     set
