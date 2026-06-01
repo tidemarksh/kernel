@@ -39,8 +39,8 @@ testcases/kernel/syscalls/bpf/bpf_prog04.c not yet enabled in current syscall-co
 testcases/kernel/syscalls/bpf/bpf_prog05.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/bpf/bpf_prog06.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/bpf/bpf_prog07.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/brk/brk01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/brk/brk02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/brk/brk01.c targeted validation reaches the brk growth loop but faults when LTP writes at the returned new break boundary address; current brk maps bytes below the break only
+testcases/kernel/syscalls/brk/brk02.c targeted validation passed for brk shrink after mprotecting newly grown heap pages, but including the remaining memory candidate subset made the expanded full LTP gate fail existing write01 and OOM during existing write06
 testcases/kernel/syscalls/cacheflush/cacheflush01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/cachestat/cachestat01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/cachestat/cachestat02.c not yet enabled in current syscall-conformance profile
@@ -548,17 +548,17 @@ testcases/kernel/syscalls/lsm/lsm_set_self_attr01.c not yet enabled in current s
 testcases/kernel/syscalls/lstat/lstat01.c requires symlink(2) setup and lstat symlink metadata, which are outside the current production-dispatched metadata profile
 testcases/kernel/syscalls/lstat/lstat02.c requires symlink-loop and permission edge setup for lstat, which is outside the current metadata profile
 testcases/kernel/syscalls/lstat/lstat03.c requires mount/device setup plus symlink metadata differences across many stat fields, which is outside the current metadata profile
-testcases/kernel/syscalls/madvise/madvise01.c madvise currently returns ENOSYS
-testcases/kernel/syscalls/madvise/madvise02.c madvise currently returns ENOSYS
-testcases/kernel/syscalls/madvise/madvise03.c madvise currently returns ENOSYS
-testcases/kernel/syscalls/madvise/madvise05.c madvise currently returns ENOSYS
-testcases/kernel/syscalls/madvise/madvise06.c madvise currently returns ENOSYS
-testcases/kernel/syscalls/madvise/madvise07.c madvise currently returns ENOSYS
-testcases/kernel/syscalls/madvise/madvise08.c madvise currently returns ENOSYS
-testcases/kernel/syscalls/madvise/madvise09.c madvise currently returns ENOSYS
-testcases/kernel/syscalls/madvise/madvise10.c madvise currently returns ENOSYS
-testcases/kernel/syscalls/madvise/madvise11.c madvise currently returns ENOSYS
-testcases/kernel/syscalls/madvise/madvise12.c madvise currently returns ENOSYS
+testcases/kernel/syscalls/madvise/madvise01.c requires broad madvise advice coverage including REMOVE, HWPOISON, KSM, hugepage, dump, wipe/keep-on-fork, cold/pageout plus tmpfs mount setup beyond the current supported-advice subset
+testcases/kernel/syscalls/madvise/madvise02.c requires the full madvise errno matrix including mlock/KSM/WIPEONFORK/EBADF cases beyond the current supported-advice subset
+testcases/kernel/syscalls/madvise/madvise03.c targeted validation passed for MADV_DONTNEED zero-fill on a private anonymous mapping, but including the remaining memory candidate subset made the expanded full LTP gate fail existing write01 and OOM during existing write06
+testcases/kernel/syscalls/madvise/madvise05.c targeted validation passed for MADV_WILLNEED on a 32MiB PROT_NONE private anonymous mapping, but including this row made the expanded full LTP gate OOM later during existing waitpid04 snapshot allocation
+testcases/kernel/syscalls/madvise/madvise06.c requires cgroup memory/swap pressure, meminfo accounting, page-fault counters, and WILLNEED swap-cache behavior outside the current advisory no-op WILLNEED implementation
+testcases/kernel/syscalls/madvise/madvise07.c requires MADV_HWPOISON and SIGBUS memory-failure behavior outside the current supported-advice subset
+testcases/kernel/syscalls/madvise/madvise08.c requires MADV_DONTDUMP/MADV_DODUMP core-dump filtering and core_pattern/coredump_filter behavior outside the current supported-advice subset
+testcases/kernel/syscalls/madvise/madvise09.c requires MADV_FREE lazy reclaim under cgroup memory pressure; current MADV_FREE discards private anonymous pages immediately
+testcases/kernel/syscalls/madvise/madvise10.c requires MADV_WIPEONFORK/MADV_KEEPONFORK fork inheritance semantics outside the current DONTFORK/DOFORK advisory no-op subset
+testcases/kernel/syscalls/madvise/madvise11.c requires MADV_SOFT_OFFLINE, memory-failure kernel support, debugfs, /dev/kmsg, and threaded checkpoint stress outside the current supported-advice subset
+testcases/kernel/syscalls/madvise/madvise12.c requires MADV_GUARD_INSTALL/MADV_GUARD_REMOVE guard-page semantics outside the current supported-advice subset
 testcases/kernel/syscalls/mallinfo/mallinfo01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/mallinfo/mallinfo02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/mallinfo2/mallinfo2_01.c not yet enabled in current syscall-conformance profile
@@ -612,27 +612,27 @@ testcases/kernel/syscalls/mlock2/mlock203.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/mlockall/mlockall01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/mlockall/mlockall02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/mlockall/mlockall03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mmap/mmap01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mmap/mmap02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mmap/mmap03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mmap/mmap04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mmap/mmap05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mmap/mmap06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mmap/mmap08.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mmap/mmap09.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mmap/mmap10.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mmap/mmap11.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mmap/mmap12.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mmap/mmap13.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mmap/mmap14.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mmap/mmap15.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mmap/mmap16.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mmap/mmap17.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mmap/mmap18.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mmap/mmap19.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mmap/mmap20.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mmap/mmap21.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mmap/mmap22.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/mmap/mmap01.c targeted validation reaches the MAP_SHARED msync path but LTP reads 16 bytes where it expects 12 after beyond-EOF writes; current file-backed mmap/writeback shape does not match this row
+testcases/kernel/syscalls/mmap/mmap02.c targeted validation passed for read-only file-backed mmap content preservation, but including the memory candidate batch made the expanded full LTP gate OOM later during existing waitpid snapshot allocation
+testcases/kernel/syscalls/mmap/mmap03.c requires executable file mappings and child control-flow/SIGSEGV behavior from mapped file bytes beyond the current mmap conform subset
+testcases/kernel/syscalls/mmap/mmap04.c requires /proc/self/maps permission-string reporting for every anonymous protection/shared-private combination; current procfs does not expose VMA permission maps
+testcases/kernel/syscalls/mmap/mmap05.c targeted validation passed for PROT_NONE file-backed mmap SIGSEGV behavior, but including the memory candidate batch made the expanded full LTP gate OOM later during existing waitpid snapshot allocation
+testcases/kernel/syscalls/mmap/mmap06.c requires EACCES for file-backed mappings whose fd lacks read permission and EINVAL for missing MAP_PRIVATE/MAP_SHARED; current mmap does not enforce that full permission/flag matrix
+testcases/kernel/syscalls/mmap/mmap08.c targeted validation expected EBADF for mmap on a closed descriptor but current path reports EINVAL in this fixture setup
+testcases/kernel/syscalls/mmap/mmap09.c targeted validation passed for ftruncate on a currently mmaped shared file, but including the memory candidate batch made the expanded full LTP gate OOM later during existing waitpid snapshot allocation
+testcases/kernel/syscalls/mmap/mmap10.c requires KSM or /dev/zero mmap behavior plus root/forked munmap stress outside the current VMA conform subset
+testcases/kernel/syscalls/mmap/mmap11.c requires detached pthread max-mapcount stress and glibc thread-stack munmap behavior outside the current process-tree runner budget
+testcases/kernel/syscalls/mmap/mmap12.c requires MAP_POPULATE page-residency verification through /proc/self/pagemap, which current procfs does not provide
+testcases/kernel/syscalls/mmap/mmap13.c requires SIGBUS on access beyond EOF in a file-backed mapping; current file-backed mmap zero-fills beyond EOF
+testcases/kernel/syscalls/mmap/mmap14.c requires MAP_LOCKED accounting in /proc/self/status VmLck, which current procfs/VMA accounting does not provide
+testcases/kernel/syscalls/mmap/mmap15.c targeted validation passed for MAP_FIXED invalid high address rejection, but including the memory candidate batch made the expanded full LTP gate OOM later during existing waitpid snapshot allocation
+testcases/kernel/syscalls/mmap/mmap16.c ext4 data-corruption regression requires mount-device setup, ENOSPC choreography, checkpoints, and filesystem block allocation outside the current MemFS mmap model
+testcases/kernel/syscalls/mmap/mmap17.c targeted validation passed for MAP_FIXED_NOREPLACE overlap rejection, but including the memory candidate batch made the expanded full LTP gate OOM later during existing waitpid snapshot allocation
+testcases/kernel/syscalls/mmap/mmap18.c requires MAP_GROWSDOWN automatic stack growth, guard-page SIGSEGV, pthread custom stacks, and fork observation outside the current mmap model
+testcases/kernel/syscalls/mmap/mmap19.c targeted validation passed for repeated private file-backed mmap content preservation, but including the memory candidate batch made the expanded full LTP gate OOM later during existing waitpid snapshot allocation
+testcases/kernel/syscalls/mmap/mmap20.c requires MAP_SHARED_VALIDATE to reject unknown flags with EOPNOTSUPP; current mmap does not implement the MAP_SHARED_VALIDATE flag contract
+testcases/kernel/syscalls/mmap/mmap21.c requires large MAP_SHARED dirty writeback through a forked child and full-file reread; current file-backed mmap writeback already mismatches smaller MAP_SHARED edge coverage
+testcases/kernel/syscalls/mmap/mmap22.c requires MAP_DROPPABLE reclaim behavior under memory-cgroup pressure outside the current mmap flag set
 testcases/kernel/syscalls/modify_ldt/modify_ldt01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/modify_ldt/modify_ldt02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/mount/mount01.c requires successful all-filesystem mount/umount behavior outside the current no-mount-table mount profile
@@ -661,11 +661,11 @@ testcases/kernel/syscalls/move_pages/move_pages10.c not yet enabled in current s
 testcases/kernel/syscalls/move_pages/move_pages11.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/move_pages/move_pages12.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/move_pages/move_pages_support.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mprotect/mprotect01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mprotect/mprotect02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mprotect/mprotect03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mprotect/mprotect04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mprotect/mprotect05.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/mprotect/mprotect01.c requires mprotect(2) EACCES when upgrading a read-only file mapping to PROT_WRITE; current mprotect does not enforce file access permissions
+testcases/kernel/syscalls/mprotect/mprotect02.c requires child SIGSEGV on writing a PROT_READ mapping and successful write after PROT_WRITE, a write-permission signal path not covered by the current PROT_NONE/exec subset
+testcases/kernel/syscalls/mprotect/mprotect03.c requires child SIGSEGV on writing a MAP_SHARED mapping after downgrading to PROT_READ, a write-permission signal path not covered by the current PROT_NONE/exec subset
+testcases/kernel/syscalls/mprotect/mprotect04.c requires PROT_EXEC execution of copied code, cache flush behavior, and PROT_NONE signal observation across child processes beyond the current mprotect conform subset
+testcases/kernel/syscalls/mprotect/mprotect05.c targeted validation passed for mprotect VMA split/merge across read/write/exec protections, but including the remaining memory candidate subset made the expanded full LTP gate fail existing write01 and OOM during existing write06
 testcases/kernel/syscalls/mq_notify/mq_notify01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/mq_notify/mq_notify02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/mq_notify/mq_notify03.c not yet enabled in current syscall-conformance profile
@@ -673,24 +673,24 @@ testcases/kernel/syscalls/mq_open/mq_open01.c not yet enabled in current syscall
 testcases/kernel/syscalls/mq_timedreceive/mq_timedreceive01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/mq_timedsend/mq_timedsend01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/mq_unlink/mq_unlink01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mremap/mremap01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mremap/mremap02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mremap/mremap03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mremap/mremap04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mremap/mremap05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mremap/mremap06.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/mremap/mremap01.c targeted validation hit unsupported deferred runner status while expanding a file-backed mapping with mremap/MS_SYNC
+testcases/kernel/syscalls/mremap/mremap02.c targeted validation passed for EINVAL on unaligned or unmapped old addresses, but including the remaining memory candidate subset made the expanded full LTP gate fail existing write01 and OOM during existing write06
+testcases/kernel/syscalls/mremap/mremap03.c expects EFAULT for an unmapped old address, while current mremap reports EINVAL for missing source VMA
+testcases/kernel/syscalls/mremap/mremap04.c requires SysV shared-memory setup and ENOMEM when growing without MREMAP_MAYMOVE; SysV shm is outside the current production surface
+testcases/kernel/syscalls/mremap/mremap05.c requires MREMAP_FIXED/MREMAP_MAYMOVE target-address validation and move semantics; current mremap ignores the new_addr contract
+testcases/kernel/syscalls/mremap/mremap06.c requires fallocate-backed file mappings plus MREMAP_FIXED vm_pgoff merge behavior outside the current file-backed mmap/mremap subset
 testcases/kernel/syscalls/mseal/mseal01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/mseal/mseal02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/msync/msync01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/msync/msync02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/msync/msync03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/msync/msync04.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/msync/msync01.c targeted validation passed for MS_ASYNC MAP_SHARED writeback to the mapped file, but including the remaining memory candidate subset made the expanded full LTP gate fail existing write01 and OOM during existing write06
+testcases/kernel/syscalls/msync/msync02.c targeted validation shows MS_INVALIDATE does not refresh an existing MAP_SHARED mapping after direct file writes
+testcases/kernel/syscalls/msync/msync03.c requires msync(2) EBUSY/EINVAL/ENOMEM error matrix for locked, misaligned, invalid-flag, and unmapped ranges; current msync is a narrow successful flush path
+testcases/kernel/syscalls/msync/msync04.c requires dirty-page verification through /proc/self/pagemap and /proc/kpageflags plus O_DIRECT reread behavior outside the current procfs/page-cache model
 testcases/kernel/syscalls/munlock/munlock01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/munlock/munlock02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/munlockall/munlockall01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/munmap/munmap01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/munmap/munmap03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/munmap/munmap04.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/munmap/munmap01.c targeted validation expects the child SIGSEGV after unmapped access to be observed by the LTP process, but the current process-tree runner treats the child SIGSEGV as a harness failure first
+testcases/kernel/syscalls/munmap/munmap03.c requires EINVAL for zero length, out-of-range address, and unaligned address cases; current munmap only rejects unaligned addresses
+testcases/kernel/syscalls/munmap/munmap04.c requires max_map_count sysctl setup and ENOMEM on partial unmap after exhausting VMA split capacity, outside the current fixed VMA table model
 testcases/kernel/syscalls/name_to_handle_at/name_to_handle_at01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/name_to_handle_at/name_to_handle_at02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/name_to_handle_at/name_to_handle_at03.c not yet enabled in current syscall-conformance profile
