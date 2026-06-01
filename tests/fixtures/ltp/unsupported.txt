@@ -1,8 +1,8 @@
 # Tests not enabled in the current syscall-conformance profile.
 testcases/kernel/syscalls/abort/abort01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/accept/accept01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/accept/accept02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/accept/accept03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/accept/accept01.c requires accept(2) EBADF/EINVAL/EOPNOTSUPP error-matrix coverage and queued AF_INET listener behavior beyond the current accept4-backed socket subset
+testcases/kernel/syscalls/accept/accept02.c CVE multicast membership clone test requires SOL_IP MCAST_JOIN_GROUP/MCAST_LEAVE_GROUP and checkpointed threaded AF_INET accept behavior outside the current socket option subset
+testcases/kernel/syscalls/accept/accept03.c requires differentiating EBADF for O_PATH/open_tree fds from ENOTSOCK for other non-socket fds; current socket fd lookup collapses these cases
 testcases/kernel/syscalls/accept4/accept4_01.c direct accept4 semantics are implemented and covered by Rust contract; upstream LTP also requires AF_INET loopback connect scheduling in the kernel-only runner and a legacy socketcall(SYS_ACCEPT4) variant absent from the RISC-V syscall ABI
 testcases/kernel/syscalls/access/access01.c requires root/nobody read/write/execute permission checks across files and directories outside the current faccessat existence/error profile
 testcases/kernel/syscalls/access/access02.c requires symlink(2) setup and executable helper execution outside the current faccessat existence/error profile
@@ -24,12 +24,12 @@ testcases/kernel/syscalls/alarm/alarm05.c not yet enabled in current syscall-con
 testcases/kernel/syscalls/alarm/alarm06.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/alarm/alarm07.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/arch_prctl/arch_prctl01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/bind/bind01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/bind/bind02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/bind/bind03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/bind/bind04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/bind/bind05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/bind/bind06.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/bind/bind01.c bind(2) row requires EBADF/ENOTDIR/EADDRNOTAVAIL and pathname AF_UNIX filesystem error behavior not implemented by the current in-memory socket address binding
+testcases/kernel/syscalls/bind/bind02.c requires privileged-port EACCES enforcement after seteuid nobody; current bind(2) does not implement low-port capability checks
+testcases/kernel/syscalls/bind/bind03.c requires AF_UNIX pathname node side effects and post-5.14 unlink expectations beyond the current address-table-only AF_UNIX bind model
+testcases/kernel/syscalls/bind/bind04.c requires stream communication across AF_UNIX SOCK_SEQPACKET, IPv4/IPv6 loopback, SCTP, pthread peer, listen/accept/read/write paths beyond the current narrow socket protocol matrix
+testcases/kernel/syscalls/bind/bind05.c requires datagram communication across AF_UNIX pathname/abstract, IPv4/IPv6 UDP and UDP-Lite, pthread peer, recvfrom/sendto paths beyond the current narrow socket protocol matrix
+testcases/kernel/syscalls/bind/bind06.c AF_PACKET bind race/CVE test requires packet sockets, ioctl netdev state changes, network namespaces, taint checks, and long fuzzy-sync runtime outside the implemented socket surface
 testcases/kernel/syscalls/bpf/bpf_common.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/bpf/bpf_map01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/bpf/bpf_prog01.c not yet enabled in current syscall-conformance profile
@@ -94,8 +94,8 @@ testcases/kernel/syscalls/cma/process_vm_readv02.c not yet enabled in current sy
 testcases/kernel/syscalls/cma/process_vm_readv03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/cma/process_vm_writev02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/confstr/confstr01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/connect/connect01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/connect/connect02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/connect/connect01.c requires connect(2) EBADF/EFAULT/EAFNOSUPPORT/ECONNREFUSED matrix plus forked AF_INET server behavior beyond the current async connect subset
+testcases/kernel/syscalls/connect/connect02.c IPV6_ADDRFORM CVE loop requires SOL_IPV6/IPV6_ADDRFORM, AF_UNSPEC reset connect, repeated AF_INET/AF_INET6 accept/listen cycles, and taint checks outside the current socket option subset
 testcases/kernel/syscalls/copy_file_range/copy_file_range01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/copy_file_range/copy_file_range02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/copy_file_range/copy_file_range03.c not yet enabled in current syscall-conformance profile
@@ -317,7 +317,7 @@ testcases/kernel/syscalls/gethostname/gethostname02.c not yet enabled in current
 testcases/kernel/syscalls/getitimer/getitimer01.c getitimer/setitimer currently preserve state only and do not schedule delivery
 testcases/kernel/syscalls/getitimer/getitimer02.c getitimer/setitimer currently preserve state only and do not schedule delivery
 testcases/kernel/syscalls/getpagesize/getpagesize01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getpeername/getpeername01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/getpeername/getpeername01.c requires getpeername(2) EBADF/EFAULT/EINVAL addrlen matrix; current implementation does not pre-validate addr/addrlen and fd lookup returns ENOTSOCK for invalid fds
 testcases/kernel/syscalls/getpriority/getpriority01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getpriority/getpriority02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getresgid/getresgid03.c requires saved-setgid state to remain distinct from the effective gid after setresgid(-1, gid, -1); current implementation reports saved gid as effective gid
@@ -332,7 +332,7 @@ testcases/kernel/syscalls/getrusage/getrusage03_child.c not yet enabled in curre
 testcases/kernel/syscalls/getrusage/getrusage04.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getsid/getsid01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getsid/getsid02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getsockname/getsockname01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/getsockname/getsockname01.c requires getsockname(2) EBADF/EFAULT/EINVAL addrlen matrix; current implementation writes directly to caller buffers and fd lookup returns ENOTSOCK for invalid fds
 testcases/kernel/syscalls/getsockopt/getsockopt01.c getsockopt implements a narrow socket option subset only
 testcases/kernel/syscalls/getsockopt/getsockopt02.c getsockopt implements a narrow socket option subset only
 testcases/kernel/syscalls/gettid/gettid01.c requires /proc/self/status Pid/Tgid reporting; current LTP runner procfs provides pid stat/task entries but not /proc/self/status
@@ -523,7 +523,7 @@ testcases/kernel/syscalls/link/link05.c link(2) lowers to linkat-family hard-lin
 testcases/kernel/syscalls/link/link08.c link(2) lowers to linkat-family hard-link creation that is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/linkat/linkat01.c linkat(2) is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/linkat/linkat02.c linkat(2) is not dispatched in production and is excluded from the implemented-surface denominator
-testcases/kernel/syscalls/listen/listen01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/listen/listen01.c requires listen(2) EBADF versus ENOTSOCK differentiation and UDP EOPNOTSUPP on AF_INET datagram sockets; current listen path returns ENOTSOCK for invalid fds and EINVAL for unbound datagram sockets
 testcases/kernel/syscalls/listmount/listmount01.c listmount(2) is not production-dispatched and is excluded from the implemented-surface inventory
 testcases/kernel/syscalls/listmount/listmount02.c listmount(2) is not production-dispatched and is excluded from the implemented-surface inventory
 testcases/kernel/syscalls/listmount/listmount03.c listmount(2) is not production-dispatched and is excluded from the implemented-surface inventory
@@ -833,12 +833,12 @@ testcases/kernel/syscalls/readv/readv01.c current LTP process-tree runner stops 
 testcases/kernel/syscalls/realpath/realpath01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/reboot/reboot01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/reboot/reboot02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/recv/recv01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/recvfrom/recvfrom01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/recv/recv01.c requires recv(2) EBADF/EFAULT/MSG_OOB/MSG_ERRQUEUE errno behavior with a forked AF_INET server; current recvfrom-backed path ignores flag-specific OOB/error-queue semantics
+testcases/kernel/syscalls/recvfrom/recvfrom01.c requires recvfrom(2) EBADF/EFAULT/EINVAL addrlen and MSG_OOB/MSG_ERRQUEUE errno behavior with a forked AF_INET server; current recvfrom path lacks those flag and addrlen checks
 testcases/kernel/syscalls/recvmmsg/recvmmsg01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/recvmsg/recvmsg01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/recvmsg/recvmsg02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/recvmsg/recvmsg03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/recvmsg/recvmsg01.c requires recvmsg(2) control-message, invalid msghdr/iovec, MSG_OOB/MSG_ERRQUEUE, and forked AF_INET/AF_UNIX server behavior beyond the minimal scatter receive implementation
+testcases/kernel/syscalls/recvmsg/recvmsg02.c MSG_PEEK truncation regression requires AF_INET6 datagram semantics and non-consuming peek behavior not implemented by current recvmsg
+testcases/kernel/syscalls/recvmsg/recvmsg03.c RDS CVE test requires AF_RDS SOCK_SEQPACKET sockets, checkpoints, and sendmsg/recvmsg routing outside the implemented socket domains
 testcases/kernel/syscalls/remap_file_pages/remap_file_pages01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/remap_file_pages/remap_file_pages02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/removexattr/removexattr01.c requires setxattr-backed successful removal outside the current no-persistence removexattr profile
@@ -908,8 +908,8 @@ testcases/kernel/syscalls/select/select01.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/select/select02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/select/select03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/select/select04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/send/send01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/send/send02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/send/send01.c requires send(2) EBADF/EFAULT/EMSGSIZE/EPIPE and MSG_OOB behavior with a forked AF_INET server; current sendto-backed path ignores OOB and does not implement the full errno matrix
+testcases/kernel/syscalls/send/send02.c MSG_MORE coverage requires TCP/UDP buffering semantics for send/sendto/sendmsg; current socket write path sends immediately and does not implement MSG_MORE
 testcases/kernel/syscalls/sendfile/sendfile02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/sendfile/sendfile03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/sendfile/sendfile04.c not yet enabled in current syscall-conformance profile
@@ -920,12 +920,12 @@ testcases/kernel/syscalls/sendfile/sendfile08.c not yet enabled in current sysca
 testcases/kernel/syscalls/sendfile/sendfile09.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/sendmmsg/sendmmsg01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/sendmmsg/sendmmsg02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/sendmsg/sendmsg01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/sendmsg/sendmsg02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/sendmsg/sendmsg03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/sendto/sendto01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/sendto/sendto02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/sendto/sendto03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/sendmsg/sendmsg01.c requires sendmsg(2) invalid name/iovec/control, EMSGSIZE/EPIPE, MSG_OOB, and AF_UNIX ancillary/right-passing behavior beyond the minimal data-path implementation
+testcases/kernel/syscalls/sendmsg/sendmsg02.c stress row forks CPU-scaled AF_UNIX socketpair children and System V semaphore synchronization, outside the current LTP socket runner budget
+testcases/kernel/syscalls/sendmsg/sendmsg03.c raw ICMP/IP_HDRINCL race requires AF_INET SOCK_RAW, SOL_IP IP_HDRINCL, network namespace setup, and taint checks outside the implemented socket protocol matrix
+testcases/kernel/syscalls/sendto/sendto01.c requires sendto(2) EBADF/EFAULT/EINVAL/EMSGSIZE/EPIPE and MSG_OOB errno behavior with a forked AF_INET server; current sendto path ignores OOB and lacks the full validation matrix
+testcases/kernel/syscalls/sendto/sendto02.c SCTP invalid-pointer regression requires AF_INET SOCK_STREAM IPPROTO_SCTP sockets outside the implemented socket protocol matrix
+testcases/kernel/syscalls/sendto/sendto03.c packet-socket CVE test requires AF_PACKET raw sockets, PACKET_* setsockopt/ring behavior, network namespace setup, and taint checks outside the implemented socket protocol matrix
 testcases/kernel/syscalls/set_mempolicy/set_mempolicy01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/set_mempolicy/set_mempolicy02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/set_mempolicy/set_mempolicy03.c not yet enabled in current syscall-conformance profile
@@ -992,8 +992,8 @@ testcases/kernel/syscalls/setxattr/setxattr01.c requires full xattr flag/name/va
 testcases/kernel/syscalls/setxattr/setxattr02.c requires successful path xattr creation/replacement across file types outside the current EOPNOTSUPP setxattr profile
 testcases/kernel/syscalls/setxattr/setxattr03.c requires security/trusted namespace xattr permission and persistence behavior outside the current EOPNOTSUPP setxattr profile
 testcases/kernel/syscalls/sgetmask/sgetmask01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/shutdown/shutdown01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/shutdown/shutdown02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/shutdown/shutdown01.c requires AF_UNIX stream server/client shutdown read/write half-close semantics across fork/checkpointed communication beyond the currently audited shutdown subset
+testcases/kernel/syscalls/shutdown/shutdown02.c requires shutdown(2) EBADF versus ENOTSOCK differentiation and ENOTCONN on unconnected sockets; current fd lookup returns ENOTSOCK for invalid fds before that matrix
 testcases/kernel/syscalls/sigaction/sigaction01.c libc sigaction wrapper row requires SA_RESETHAND/SA_SIGINFO mask introspection and pthread_kill handler delivery beyond the current rt_sigaction conform subset
 testcases/kernel/syscalls/sigaction/sigaction02.c libc sigaction wrapper row mixes EINVAL catchability checks with invalid act/oact EFAULT cases that current rt_sigaction does not pre-validate
 testcases/kernel/syscalls/sigaltstack/sigaltstack01.c passes targeted validation, but the expanded signal batch made the full LTP gate run out of memory before existing writev coverage completed
@@ -1014,13 +1014,13 @@ testcases/kernel/syscalls/sigsuspend/sigsuspend02.c sigsuspend wrapper requires 
 testcases/kernel/syscalls/sigtimedwait/sigtimedwait01.c sigtimedwait wrapper lowers to rt_sigtimedwait behavior, which is not production-dispatched
 testcases/kernel/syscalls/sigwait/sigwait01.c sigwait wrapper depends on sigtimedwait/sigwaitinfo wait-for-signal behavior outside the production-dispatched signal surface
 testcases/kernel/syscalls/sigwaitinfo/sigwaitinfo01.c sigwaitinfo wrapper lowers to rt_sigtimedwait-style wait-for-signal behavior, which is not production-dispatched
-testcases/kernel/syscalls/socket/socket01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/socket/socket02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/socket/socket01.c requires the full socket(2) domain/type/protocol errno matrix including raw/IPPROTO_TCP/IPPROTO_UDP/IPPROTO_ICMP rejection cases; current socket creation accepts a narrower protocol model
+testcases/kernel/syscalls/socket/socket02.c passes targeted validation for SOCK_CLOEXEC/SOCK_NONBLOCK fd flag propagation, but adding it made the full LTP gate run out of memory during existing writev01 snapshot allocation
 testcases/kernel/syscalls/socketcall/socketcall01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/socketcall/socketcall02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/socketcall/socketcall03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/socketpair/socketpair01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/socketpair/socketpair02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/socketpair/socketpair01.c requires socketpair(2) domain/protocol/bad-pointer errno matrix including PF_INET EOPNOTSUPP/EPROTONOSUPPORT cases beyond the current AF_UNIX-only implementation
+testcases/kernel/syscalls/socketpair/socketpair02.c passes targeted validation for SOCK_CLOEXEC/SOCK_NONBLOCK fd flag propagation on both returned descriptors, but adding it made the full LTP gate run out of memory during existing writev01 snapshot allocation
 testcases/kernel/syscalls/sockioctl/sockioctl01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/splice/splice01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/splice/splice02.c not yet enabled in current syscall-conformance profile
