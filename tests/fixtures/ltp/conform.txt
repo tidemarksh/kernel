@@ -5,6 +5,22 @@ testcases/kernel/syscalls/clone/clone08.c verified CLONE_PARENT, CLONE_CHILD_SET
 testcases/kernel/syscalls/epoll_create1/epoll_create1_01.c verified epoll_create1 CLOEXEC behavior
 testcases/kernel/syscalls/epoll_create1/epoll_create1_02.c verified epoll_create1 EINVAL on invalid flags
 testcases/kernel/syscalls/epoll_wait/epoll_wait07.c verified EPOLLONESHOT readiness suppression with epoll_create1-backed LTP coverage
+testcases/kernel/syscalls/close_range/close_range02.c verified close_range(2) range closing, invalid range/flags, large no-op range, CLOEXEC marking, and UNSHARE child isolation within the implemented fd-table model
+testcases/kernel/syscalls/dup/dup01.c verified dup(2) creates an fd referring to the same file object
+testcases/kernel/syscalls/dup/dup02.c verified dup(2) EBADF for invalid oldfd values
+testcases/kernel/syscalls/dup/dup03.c verified dup(2) returns EMFILE when the fd table is exhausted
+testcases/kernel/syscalls/dup/dup04.c verified dup(2) works for both ends of an unnamed pipe
+testcases/kernel/syscalls/dup/dup06.c verified dup(2) duplicates exactly the available fd-table slots up to the open-file limit
+testcases/kernel/syscalls/dup/dup07.c verified dup(2) preserves the underlying file access mode
+testcases/kernel/syscalls/dup2/dup201.c verified libc dup2 lowering returns EBADF for invalid oldfd/newfd values
+testcases/kernel/syscalls/dup2/dup202.c verified libc dup2 lowering preserves file mode across replacement fds
+testcases/kernel/syscalls/dup2/dup203.c verified libc dup2 lowering replaces open/closed fds, clears FD_CLOEXEC, and reads from the duplicated file
+testcases/kernel/syscalls/dup2/dup204.c verified libc dup2 lowering preserves pipe inode identity
+testcases/kernel/syscalls/dup2/dup205.c verified libc dup2 lowering stops at the open-file limit with a Linux-accepted errno
+testcases/kernel/syscalls/dup2/dup206.c verified libc dup2 lowering with oldfd == newfd returns the unchanged fd
+testcases/kernel/syscalls/dup2/dup207.c verified libc dup2 lowering shares the open-file-description offset
+testcases/kernel/syscalls/dup3/dup3_01.c verified dup3(2) O_CLOEXEC flag propagation
+testcases/kernel/syscalls/dup3/dup3_02.c verified dup3(2) EINVAL for oldfd == newfd and invalid flags
 testcases/kernel/syscalls/exit/exit01.c verified exit(2) reports the expected wait status to the parent
 testcases/kernel/syscalls/exit/exit02.c verified exit(2) closes inherited file descriptors so child writes are visible without an explicit close
 testcases/kernel/syscalls/exit_group/exit_group01.c verified exit_group(2) terminates the entire thread group with the requested status
@@ -43,11 +59,21 @@ testcases/kernel/syscalls/getresuid/getresuid01.c verifies getresuid(2) reports 
 testcases/kernel/syscalls/getresuid/getresuid02.c verifies setreuid(2)-updated effective/saved uid values through getresuid(2)
 testcases/kernel/syscalls/gettid/gettid02.c verified pthread clone threads receive distinct tids from the process pid and from each other
 testcases/kernel/syscalls/getuid/getuid01.c verified basic getuid(2) success path
+testcases/kernel/syscalls/flock/flock01.c verified flock(2) LOCK_SH, LOCK_UN, and LOCK_EX success paths on regular files
+testcases/kernel/syscalls/flock/flock02.c verified flock(2) EBADF, EINVAL, and nonblocking conflict error paths
+testcases/kernel/syscalls/flock/flock06.c verified flock(2) conflicts and unlock handoff across distinct file descriptions
 testcases/kernel/syscalls/lseek/lseek01.c verified lseek(2) basic offset movement and reads
+testcases/kernel/syscalls/lseek/lseek07.c verified lseek(2) SEEK_SET positions subsequent writes at the requested offset
 testcases/kernel/syscalls/mkdirat/mkdirat01.c verified mkdirat(2) relative/absolute dirfd handling
 testcases/kernel/syscalls/openat/openat01.c verified openat(2) relative/absolute dirfd handling
+testcases/kernel/syscalls/pipe/pipe01.c verified libc pipe wrapper creates a pipe2-backed unnamed pipe with working read/write data flow
+testcases/kernel/syscalls/pipe/pipe03.c verified libc pipe wrapper returns EBADF for writes to the read end and reads from the write end
 testcases/kernel/syscalls/pread/pread01.c verified pread(2) reads at offsets without changing file position
+testcases/kernel/syscalls/pread/pread02.c verified pread(2) ESPIPE, EINVAL negative offset, and EISDIR error paths
 testcases/kernel/syscalls/pwrite/pwrite01.c verified pwrite(2) writes at offsets without changing file position
+testcases/kernel/syscalls/pwrite/pwrite02.c verified pwrite(2) ESPIPE, EINVAL negative offset, EBADF, and EFAULT error paths
+testcases/kernel/syscalls/pwrite/pwrite03.c verified pwrite(fd, NULL, 0, 0) returns zero
+testcases/kernel/syscalls/pwrite/pwrite04.c verified Linux O_APPEND pwrite(2) appends at EOF without changing the file offset
 testcases/kernel/syscalls/read/read01.c verified basic read(2) success path
 testcases/kernel/syscalls/read/read04.c verified read(2) returns correct byte count and data
 testcases/kernel/syscalls/sched_getaffinity/sched_getaffinity01.c verified single-CPU affinity mask and error handling

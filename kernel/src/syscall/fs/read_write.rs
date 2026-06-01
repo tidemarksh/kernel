@@ -219,6 +219,9 @@ pub fn sys_pread64(
     count: u64,
     offset: u64,
 ) -> i64 {
+    if (offset as i64) < 0 {
+        return EINVAL;
+    }
     let ofd = match fd_table::get_ofd(base, vm, fd) {
         Some(o) => o,
         None => return EBADF,
@@ -226,6 +229,12 @@ pub fn sys_pread64(
 
     if ofd.fd_type == FD_TYPE_DEVNULL {
         return 0;
+    }
+    if ofd.fd_type != FD_TYPE_FILE {
+        return ESPIPE;
+    }
+    if ofd.status_flags & fd_table::OPEN_ACCESS_MODE_MASK == O_WRONLY {
+        return EBADF;
     }
 
     read_regular_file_to_guest(vm, base, fd, buf, count, Some(offset))
@@ -250,6 +259,9 @@ fn read_regular_file_to_guest(
     }
     if count == 0 {
         return 0;
+    }
+    if guest_buf == 0 {
+        return EFAULT;
     }
 
     let start_offset = offset.unwrap_or(ofd.offset as u64);
@@ -298,16 +310,30 @@ pub fn sys_pwrite64(
     count: u64,
     offset: u64,
 ) -> i64 {
+    if (offset as i64) < 0 {
+        return EINVAL;
+    }
     let ofd = match fd_table::get_ofd(base, vm, fd) {
         Some(o) => o,
         None => return EBADF,
     };
 
+    if !file_open_for_write(&ofd) {
+        return EBADF;
+    }
     if ofd.fd_type == FD_TYPE_DEVNULL {
         return count as i64;
     }
+    if ofd.fd_type != FD_TYPE_FILE {
+        return ESPIPE;
+    }
 
-    let n = write_regular_file_from_guest(base, buf, count, ofd.ino, offset);
+    let start_offset = if ofd.status_flags & O_APPEND != 0 {
+        memfs::stat(ofd.ino).map(|stat| stat.size).unwrap_or(0)
+    } else {
+        offset
+    };
+    let n = write_regular_file_from_guest(base, buf, count, ofd.ino, start_offset);
     if n > 0 {
         mark_process_memfs_sync_effect(vm);
     }
@@ -323,6 +349,9 @@ fn write_regular_file_from_guest(
 ) -> i64 {
     if len == 0 {
         return 0;
+    }
+    if guest_addr == 0 {
+        return EFAULT;
     }
     if len <= u32::MAX as u64
         && crate::syscall::memory::guest_range_accessible(base, guest_addr, len)

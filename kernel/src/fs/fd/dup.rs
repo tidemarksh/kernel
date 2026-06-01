@@ -32,6 +32,9 @@ pub fn sys_dup(vm: &mut ThreadState, base: u32, oldfd: u64) -> i64 {
 /// dup3(oldfd, newfd, flags) -> newfd
 pub fn sys_dup3(vm: &mut ThreadState, base: u32, oldfd: u64, newfd: u64, flags: u64) -> i64 {
     unsafe {
+        if flags & !(O_CLOEXEC as u64) != 0 {
+            return EINVAL;
+        }
         if oldfd == newfd {
             return EINVAL;
         }
