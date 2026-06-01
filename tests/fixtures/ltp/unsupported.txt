@@ -301,8 +301,7 @@ testcases/kernel/syscalls/fsopen/fsopen01.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/fsopen/fsopen02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fspick/fspick01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fspick/fspick02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fstat/fstat02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fstat/fstat03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/fstat/fstat02.c requires hard-link setup and exact st_nlink behavior, which is outside the current fstat metadata profile
 testcases/kernel/syscalls/fstatfs/fstatfs01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fstatfs/fstatfs02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fsync/fsync01.c not yet enabled in current syscall-conformance profile
@@ -567,9 +566,9 @@ testcases/kernel/syscalls/lsm/lsm_get_self_attr03.c not yet enabled in current s
 testcases/kernel/syscalls/lsm/lsm_list_modules01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/lsm/lsm_list_modules02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/lsm/lsm_set_self_attr01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/lstat/lstat01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/lstat/lstat02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/lstat/lstat03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/lstat/lstat01.c requires symlink(2) setup and lstat symlink metadata, which are outside the current production-dispatched metadata profile
+testcases/kernel/syscalls/lstat/lstat02.c requires symlink-loop and permission edge setup for lstat, which is outside the current metadata profile
+testcases/kernel/syscalls/lstat/lstat03.c requires mount/device setup plus symlink metadata differences across many stat fields, which is outside the current metadata profile
 testcases/kernel/syscalls/madvise/madvise01.c madvise currently returns ENOSYS
 testcases/kernel/syscalls/madvise/madvise02.c madvise currently returns ENOSYS
 testcases/kernel/syscalls/madvise/madvise03.c madvise currently returns ENOSYS
@@ -1062,10 +1061,9 @@ testcases/kernel/syscalls/splice/splice07.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/splice/splice08.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/splice/splice09.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/ssetmask/ssetmask01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/stat/stat01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/stat/stat02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/stat/stat03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/stat/stat04.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/stat/stat01.c requires file ownership to reflect the post-setuid creator uid; current MemFS ownership remains root-owned in this LTP setup
+testcases/kernel/syscalls/stat/stat03.c requires symlink-loop setup and directory permission edge behavior outside the current stat metadata profile
+testcases/kernel/syscalls/stat/stat04.c requires mount/device setup, symlink setup, hard links, ownership changes, and timestamp metadata comparisons outside the current stat metadata profile
 testcases/kernel/syscalls/statfs/statfs02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/statfs/statfs03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/statmount/statmount01.c not yet enabled in current syscall-conformance profile
@@ -1079,18 +1077,18 @@ testcases/kernel/syscalls/statmount/statmount08.c not yet enabled in current sys
 testcases/kernel/syscalls/statmount/statmount09.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/statvfs/statvfs01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/statvfs/statvfs02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/statx/statx01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/statx/statx02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/statx/statx03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/statx/statx04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/statx/statx05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/statx/statx06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/statx/statx07.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/statx/statx08.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/statx/statx09.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/statx/statx10.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/statx/statx11.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/statx/statx12.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/statx/statx01.c statx(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/statx/statx02.c statx(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/statx/statx03.c statx(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/statx/statx04.c statx(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/statx/statx05.c statx(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/statx/statx06.c statx(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/statx/statx07.c statx(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/statx/statx08.c statx(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/statx/statx09.c statx(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/statx/statx10.c statx(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/statx/statx11.c statx(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/statx/statx12.c statx(2) is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/stime/stime01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/stime/stime02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/string/string01.c not yet enabled in current syscall-conformance profile

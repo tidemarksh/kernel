@@ -41,6 +41,9 @@ pub fn sys_fstat(vm: &mut ThreadState, base: u32, fd: u64, stat_buf: u64) -> i64
         Some(o) => o,
         None => return EBADF,
     };
+    if stat_buf == 0 || !crate::syscall::memory::guest_range_accessible(base, stat_buf, 128) {
+        return EFAULT;
+    }
     if ofd.fd_type == FD_TYPE_DEVNULL {
         write_devnull_stat(base, stat_buf, vm.uid, vm.gid);
         return 0;

@@ -41,6 +41,7 @@ testcases/kernel/syscalls/fcntl/fcntl09.c verified fcntl(2) F_SETLK accepts read
 testcases/kernel/syscalls/fcntl/fcntl10.c verified fcntl(2) F_SETLKW accepts read, write, and unlock requests on a regular file
 testcases/kernel/syscalls/fcntl/fcntl29.c verified fcntl(2) F_DUPFD_CLOEXEC creates a duplicated fd with FD_CLOEXEC set
 testcases/kernel/syscalls/fstatat/fstatat01.c verified newfstatat basic path/dirfd errno handling
+testcases/kernel/syscalls/fstat/fstat03.c verified fstat(2) EBADF and EFAULT error handling
 testcases/kernel/syscalls/ftruncate/ftruncate01.c verified ftruncate(2) shrink and extend semantics
 testcases/kernel/syscalls/futex/futex_wake01.c verified futex(FUTEX_WAKE) returns 0 when no waiters are present
 testcases/kernel/syscalls/futex/futex_cmp_requeue01.c verified shared-process FUTEX_CMP_REQUEUE integration through ltp_runner subtree batching and full LTP pass
@@ -119,6 +120,7 @@ testcases/kernel/syscalls/set_robust_list/set_robust_list01.c verified set_robus
 testcases/kernel/syscalls/set_tid_address/set_tid_address01.c verified set_tid_address(2) returns the thread-group leader tid for the main thread
 testcases/kernel/syscalls/setsid/setsid01.c verified setsid(2) rejects callers that are already process-group leaders after nested setpgid choreography
 testcases/kernel/syscalls/sigaltstack/sigaltstack02.c verified sigaltstack(2) reports EINVAL for invalid flags and ENOMEM for undersized alternate stacks
+testcases/kernel/syscalls/stat/stat02.c verified stat(2) reports file size after repeated writes through libc wrapper lowering
 testcases/kernel/syscalls/tgkill/tgkill03.c verified invalid/defunct tgkill errno surface and pthread-backed checkpoint fanout once deferred clone-thread ownership and process-tree external futex wake accounting matched Linux-shaped behavior
 testcases/kernel/syscalls/sysinfo/sysinfo01.c verified sysinfo(2) success path
 testcases/kernel/syscalls/sysinfo/sysinfo02.c verified sysinfo(2) EFAULT on invalid address
