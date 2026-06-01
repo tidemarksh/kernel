@@ -522,10 +522,10 @@ testcases/kernel/syscalls/lchown/lchown01.c requires symlink(2) setup and symlin
 testcases/kernel/syscalls/lchown/lchown02.c requires symlink(2) setup plus permission-denial, read-only filesystem, and symlink-loop error matrices outside the current fchownat metadata profile
 testcases/kernel/syscalls/lgetxattr/lgetxattr01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/lgetxattr/lgetxattr02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/link/link02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/link/link04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/link/link05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/link/link08.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/link/link02.c link(2) lowers to linkat-family hard-link creation that is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/link/link04.c link(2) lowers to linkat-family hard-link creation that is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/link/link05.c link(2) lowers to linkat-family hard-link creation that is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/link/link08.c link(2) lowers to linkat-family hard-link creation that is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/linkat/linkat01.c linkat(2) is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/linkat/linkat02.c linkat(2) is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/listen/listen01.c not yet enabled in current syscall-conformance profile
@@ -833,8 +833,8 @@ testcases/kernel/syscalls/readahead/readahead01.c not yet enabled in current sys
 testcases/kernel/syscalls/readahead/readahead02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/readdir/readdir01.c requires LTP all-filesystems mount-device setup before libc readdir(3) can validate production getdents64 enumeration
 testcases/kernel/syscalls/readdir/readdir21.c targets old readdir(2), which is not dispatched in production and is excluded from the implemented-surface denominator
-testcases/kernel/syscalls/readlink/readlink01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/readlink/readlink03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/readlink/readlink01.c readlink libc wrapper targets production readlinkat behavior, but the LTP setup depends on symlink(2), which is not production-dispatched
+testcases/kernel/syscalls/readlink/readlink03.c readlink libc wrapper targets production readlinkat behavior, but the LTP setup depends on symlink(2) plus permission and symlink-loop cases outside the current readlinkat profile
 testcases/kernel/syscalls/readlinkat/readlinkat01.c readlinkat LTP setup depends on symlink(2), which is outside the current Phase4 syscall surface
 testcases/kernel/syscalls/readlinkat/readlinkat02.c readlinkat LTP setup depends on symlink(2), which is outside the current Phase4 syscall surface
 testcases/kernel/syscalls/readv/readv01.c current LTP process-tree runner stops with unsupported deferred STATUS_OK while executing this no-fork readv harness; keep unsupported until the runner can complete this status shape
@@ -1081,9 +1081,9 @@ testcases/kernel/syscalls/swapon/swapon01.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/swapon/swapon02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/swapon/swapon03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/switch/endian_switch01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/symlink/symlink02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/symlink/symlink03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/symlink/symlink04.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/symlink/symlink02.c symlink(2) lowers to symlinkat-family symlink creation that is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/symlink/symlink03.c symlink(2) lowers to symlinkat-family symlink creation that is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/symlink/symlink04.c symlink(2) lowers to symlinkat-family symlink creation that is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/symlinkat/symlinkat01.c symlinkat(2) is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/sync/sync01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/sync_file_range/sync_file_range01.c not yet enabled in current syscall-conformance profile
