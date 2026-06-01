@@ -292,6 +292,9 @@ pub fn send_signal_to_pid(vm: &mut ThreadState, base: u32, pid: i32, sig: i32) -
     if sig < 0 || sig as usize >= MAX_SIGNALS {
         return EINVAL;
     }
+    if pid == i32::MIN {
+        return ESRCH;
+    }
     let current_pid = pid_from_vm(vm, base);
     if pid > 0 {
         if !signal_process_if_present(pid, sig) {

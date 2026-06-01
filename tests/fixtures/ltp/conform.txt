@@ -93,6 +93,7 @@ testcases/kernel/syscalls/getcwd/getcwd01.c verified getcwd(2) EFAULT and ERANGE
 testcases/kernel/syscalls/getcwd/getcwd02.c verified getcwd(2) returns the current directory through fixed and libc-allocated buffers
 testcases/kernel/syscalls/gettid/gettid02.c verified pthread clone threads receive distinct tids from the process pid and from each other
 testcases/kernel/syscalls/getuid/getuid01.c verified basic getuid(2) success path
+testcases/kernel/syscalls/kill/kill03.c verified kill(2) EINVAL for invalid signal and ESRCH for nonexistent/INT_MIN pid
 testcases/kernel/syscalls/flock/flock01.c verified flock(2) LOCK_SH, LOCK_UN, and LOCK_EX success paths on regular files
 testcases/kernel/syscalls/flock/flock02.c verified flock(2) EBADF, EINVAL, and nonblocking conflict error paths
 testcases/kernel/syscalls/flock/flock03.c verified fork-inherited file-description flock unlock behavior
@@ -144,9 +145,14 @@ testcases/kernel/syscalls/setreuid/setreuid06.c verifies non-root setreuid(2) EP
 testcases/kernel/syscalls/set_robust_list/set_robust_list01.c verified set_robust_list(2) accepts sizeof(robust_list_head) and rejects invalid len
 testcases/kernel/syscalls/set_tid_address/set_tid_address01.c verified set_tid_address(2) returns the thread-group leader tid for the main thread
 testcases/kernel/syscalls/setsid/setsid01.c verified setsid(2) rejects callers that are already process-group leaders after nested setpgid choreography
+testcases/kernel/syscalls/rt_sigaction/rt_sigaction03.c verified rt_sigaction(2) rejects invalid sigsetsize with EINVAL across realtime signals
 testcases/kernel/syscalls/sigaltstack/sigaltstack02.c verified sigaltstack(2) reports EINVAL for invalid flags and ENOMEM for undersized alternate stacks
+testcases/kernel/syscalls/signalfd4/signalfd4_01.c verified signalfd4(2) SFD_CLOEXEC flag handling through F_GETFD
+testcases/kernel/syscalls/signalfd4/signalfd4_02.c verified signalfd4(2) SFD_NONBLOCK flag handling through F_GETFL
 testcases/kernel/syscalls/stat/stat02.c verified stat(2) reports file size after repeated writes through libc wrapper lowering
 testcases/kernel/syscalls/tgkill/tgkill03.c verified invalid/defunct tgkill errno surface and pthread-backed checkpoint fanout once deferred clone-thread ownership and process-tree external futex wake accounting matched Linux-shaped behavior
+testcases/kernel/syscalls/tkill/tkill01.c verified tkill(2) can signal the current thread and run the installed handler
+testcases/kernel/syscalls/tkill/tkill02.c verified tkill(2) reports EINVAL for invalid tid and ESRCH for nonexistent tid
 testcases/kernel/syscalls/sysinfo/sysinfo01.c verified sysinfo(2) success path
 testcases/kernel/syscalls/sysinfo/sysinfo02.c verified sysinfo(2) EFAULT on invalid address
 testcases/kernel/syscalls/timerfd/timerfd02.c verified timerfd_create(2) TFD_CLOEXEC and TFD_NONBLOCK fd/status flag propagation

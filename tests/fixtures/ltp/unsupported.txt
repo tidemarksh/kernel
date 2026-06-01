@@ -494,15 +494,14 @@ testcases/kernel/syscalls/keyctl/keyctl06.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/keyctl/keyctl07.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/keyctl/keyctl08.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/keyctl/keyctl09.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/kill/kill02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/kill/kill03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/kill/kill05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/kill/kill06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/kill/kill08.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/kill/kill10.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/kill/kill11.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/kill/kill12.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/kill/kill13.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/kill/kill02.c requires process-group signal delivery across nested forked children, nonblocking pipe status channels, and pause/signal-handler scheduling beyond the current audited kill conform subset
+testcases/kernel/syscalls/kill/kill05.c requires SysV shared memory setup (`shmget`, `shmat`, `shmctl`) plus cross-uid EPERM checks; SysV IPC syscalls are not production-dispatched
+testcases/kernel/syscalls/kill/kill06.c requires negative-pgid process-group SIGKILL fanout across five paused fork children; current kill conform surface covers direct error handling only
+testcases/kernel/syscalls/kill/kill08.c requires kill(0, SIGKILL) process-group fanout across five paused fork children; current kill conform surface covers direct error handling only
+testcases/kernel/syscalls/kill/kill10.c requires high-fanout signal flooding across manager/child process groups and repeated handler synchronization outside the current signal runner profile
+testcases/kernel/syscalls/kill/kill11.c requires core-dump wait-status accounting plus RLIMIT_CORE setup across many terminating signals; current signal conform surface does not claim core-dump status bits
+testcases/kernel/syscalls/kill/kill12.c requires legacy sigset/SIGCHLD choreography, ignored-signal wait status checks, and repeated fork/wait handler synchronization outside the current kill conform subset
+testcases/kernel/syscalls/kill/kill13.c requires CONFIG_UBSAN_SIGNED_OVERFLOW taint/kconfig instrumentation; current wasm LTP gate does not provide kernel kconfig/taint checking
 testcases/kernel/syscalls/landlock/landlock01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/landlock/landlock02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/landlock/landlock03.c not yet enabled in current syscall-conformance profile
@@ -868,16 +867,15 @@ testcases/kernel/syscalls/request_key/request_key05.c not yet enabled in current
 testcases/kernel/syscalls/request_key/request_key06.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/rmdir/rmdir02.c mixes non-empty, overlong path, missing path, non-directory, bad pointer, symlink-loop, read-only filesystem, mount-point, and current-directory cases outside the current unlinkat AT_REMOVEDIR profile
 testcases/kernel/syscalls/rmdir/rmdir03.c requires sticky-bit and no-search-permission denial semantics after switching to nobody, outside the current unlinkat AT_REMOVEDIR profile
-testcases/kernel/syscalls/rt_sigaction/rt_sigaction01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rt_sigaction/rt_sigaction02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rt_sigaction/rt_sigaction03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rt_sigprocmask/rt_sigprocmask01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rt_sigprocmask/rt_sigprocmask02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rt_sigqueueinfo/rt_sigqueueinfo01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rt_sigqueueinfo/rt_sigqueueinfo02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rt_sigsuspend/rt_sigsuspend01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rt_sigtimedwait/rt_sigtimedwait01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rt_tgsigqueueinfo/rt_tgsigqueueinfo01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/rt_sigaction/rt_sigaction01.c requires broad realtime signal handler delivery across SA_RESETHAND, SA_SIGINFO, and SA_NOMASK cases for every realtime signal; current rt_sigaction conform surface covers invalid sigsetsize only
+testcases/kernel/syscalls/rt_sigaction/rt_sigaction02.c requires EFAULT for invalid act pointers; current rt_sigaction reads guest action memory without pre-validating the full action range
+testcases/kernel/syscalls/rt_sigprocmask/rt_sigprocmask01.c passes targeted validation, but the expanded signal batch made the full LTP gate run out of memory before existing writev coverage completed
+testcases/kernel/syscalls/rt_sigprocmask/rt_sigprocmask02.c requires EFAULT for invalid oldset pointers; current rt_sigprocmask writes oldset without pre-validating the destination range
+testcases/kernel/syscalls/rt_sigqueueinfo/rt_sigqueueinfo01.c rt_sigqueueinfo(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/rt_sigqueueinfo/rt_sigqueueinfo02.c rt_sigqueueinfo(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/rt_sigsuspend/rt_sigsuspend01.c rt_sigsuspend(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/rt_sigtimedwait/rt_sigtimedwait01.c rt_sigtimedwait(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/rt_tgsigqueueinfo/rt_tgsigqueueinfo01.c rt_tgsigqueueinfo(2) is not production-dispatched and is excluded from the implemented-surface inventory
 testcases/kernel/syscalls/sbrk/sbrk01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/sbrk/sbrk02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/sbrk/sbrk03.c not yet enabled in current syscall-conformance profile
@@ -996,28 +994,26 @@ testcases/kernel/syscalls/setxattr/setxattr03.c requires security/trusted namesp
 testcases/kernel/syscalls/sgetmask/sgetmask01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/shutdown/shutdown01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/shutdown/shutdown02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/sigaction/sigaction01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/sigaction/sigaction02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/sigaltstack/sigaltstack01.c sigaltstack dispatch exists and kernel contract tests cover roundtrip/disable semantics, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/sighold/sighold02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/signal/signal01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/signal/signal02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/signal/signal03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/signal/signal04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/signal/signal05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/signal/signal06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/signalfd/signalfd01.c signalfd4 create/update/read and epoll-readiness subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/signalfd/signalfd02.c signalfd4 create/update/read and epoll-readiness subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/signalfd4/signalfd4_01.c signalfd4 create/update/read and epoll-readiness subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/signalfd4/signalfd4_02.c signalfd4 create/update/read and epoll-readiness subset is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/sigpending/sigpending02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/sigprocmask/sigprocmask01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/sigrelse/sigrelse01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/sigsuspend/sigsuspend01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/sigsuspend/sigsuspend02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/sigtimedwait/sigtimedwait01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/sigwait/sigwait01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/sigwaitinfo/sigwaitinfo01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/sigaction/sigaction01.c libc sigaction wrapper row requires SA_RESETHAND/SA_SIGINFO mask introspection and pthread_kill handler delivery beyond the current rt_sigaction conform subset
+testcases/kernel/syscalls/sigaction/sigaction02.c libc sigaction wrapper row mixes EINVAL catchability checks with invalid act/oact EFAULT cases that current rt_sigaction does not pre-validate
+testcases/kernel/syscalls/sigaltstack/sigaltstack01.c passes targeted validation, but the expanded signal batch made the full LTP gate run out of memory before existing writev coverage completed
+testcases/kernel/syscalls/signalfd/signalfd01.c passes targeted validation, but the expanded signal batch made the full LTP gate run out of memory before existing writev coverage completed
+testcases/kernel/syscalls/signalfd/signalfd02.c passes targeted validation, but the expanded signal batch made the full LTP gate run out of memory before existing writev coverage completed
+testcases/kernel/syscalls/sighold/sighold02.c XSI sighold wrapper row requires holding and delivering nearly every catchable signal across fork/checkpoint synchronization outside the current rt_sigprocmask conform subset
+testcases/kernel/syscalls/signal/signal01.c libc signal wrapper row requires SIGKILL catch/ignore/default rejection plus forked default SIGKILL termination checks beyond the current kill/signal conform subset
+testcases/kernel/syscalls/signal/signal02.c libc signal wrapper row covers old signal(2) invalid signal handling; current conform evidence is recorded on rt_sigaction/tkill/kill rows only
+testcases/kernel/syscalls/signal/signal03.c libc signal wrapper row requires ignoring a broad per-signal matrix and proving no handler delivery for each signal outside the current signal conform subset
+testcases/kernel/syscalls/signal/signal04.c libc signal wrapper row requires default-disposition reset return-value checks across a broad signal matrix outside the current rt_sigaction conform subset
+testcases/kernel/syscalls/signal/signal05.c libc signal wrapper row requires caught-handler delivery across a broad signal matrix outside the current signal conform subset
+testcases/kernel/syscalls/signal/signal06.c x86_64-specific FPU signal-frame regression test uses architecture-specific assembly, mprotect toggling, and pthread signal stress; excluded from the RISC-V implemented-surface inventory
+testcases/kernel/syscalls/sigpending/sigpending02.c mixes libc sigpending, old non-dispatched sigpending syscall, and rt_sigpending variants; the old sigpending syscall is not production-dispatched
+testcases/kernel/syscalls/sigprocmask/sigprocmask01.c passes targeted validation, but the expanded signal batch made the full LTP gate run out of memory before existing writev coverage completed
+testcases/kernel/syscalls/sigrelse/sigrelse01.c XSI sigrelse wrapper row requires releasing and delivering nearly every held signal across forked pipe/checkpoint synchronization outside the current rt_sigprocmask conform subset
+testcases/kernel/syscalls/sigsuspend/sigsuspend01.c sigsuspend wrapper requires rt_sigsuspend-style temporary mask replacement and EINTR wake behavior, but rt_sigsuspend is not production-dispatched
+testcases/kernel/syscalls/sigsuspend/sigsuspend02.c sigsuspend wrapper requires EFAULT for an invalid suspend mask, but rt_sigsuspend is not production-dispatched
+testcases/kernel/syscalls/sigtimedwait/sigtimedwait01.c sigtimedwait wrapper lowers to rt_sigtimedwait behavior, which is not production-dispatched
+testcases/kernel/syscalls/sigwait/sigwait01.c sigwait wrapper depends on sigtimedwait/sigwaitinfo wait-for-signal behavior outside the production-dispatched signal surface
+testcases/kernel/syscalls/sigwaitinfo/sigwaitinfo01.c sigwaitinfo wrapper lowers to rt_sigtimedwait-style wait-for-signal behavior, which is not production-dispatched
 testcases/kernel/syscalls/socket/socket01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/socket/socket02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/socketcall/socketcall01.c not yet enabled in current syscall-conformance profile
@@ -1114,8 +1110,6 @@ testcases/kernel/syscalls/timerfd/timerfd04.c requires root, CLONE_NEWTIME time 
 testcases/kernel/syscalls/timerfd/timerfd_settime02.c requires TFD_TIMER_CANCEL_ON_SET success semantics plus pthread-backed fuzzy race/taint checking; current timerfd_settime intentionally rejects CANCEL_ON_SET with EINVAL
 testcases/kernel/syscalls/times/times01.c times currently returns ENOSYS
 testcases/kernel/syscalls/times/times03.c times currently returns ENOSYS
-testcases/kernel/syscalls/tkill/tkill01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/tkill/tkill02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/truncate/truncate03.c requires permission-denial, symlink-loop, and RLIMIT_FSIZE/EFBIG behavior outside the current truncate profile
 testcases/kernel/syscalls/ulimit/ulimit01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/umount/umount01.c requires successful mount setup and umount behavior outside the current no-mount-table umount2 profile
