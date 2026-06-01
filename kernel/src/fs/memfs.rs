@@ -1154,12 +1154,13 @@ pub fn read_file(ino: u32, offset: u64, buf: &mut [u8]) -> i64 {
     if offset >= inode.size {
         return 0;
     }
+    let avail = (inode.size - offset) as usize;
     if inode.data_cap == 0 {
+        let n = buf.len().min(avail);
         return unsafe {
-            tidemark_page_cache_read(ino, offset, buf.as_mut_ptr() as u32, buf.len() as u32)
+            tidemark_page_cache_read(ino, offset, buf.as_mut_ptr() as u32, n as u32)
         };
     }
-    let avail = (inode.size - offset) as usize;
     let n = buf.len().min(avail);
     let base = inode.data_offset as usize + offset as usize;
     unsafe {

@@ -185,12 +185,16 @@ fn file_and_symlink_do_not_change_parent_nlink() {
 }
 
 #[test]
-fn set_file_external_clears_inline_storage_and_keeps_size() {
+fn set_file_external_keeps_external_marker_and_size() {
     let _t = TestVm::new();
     let ino = memfs::create_file(1, b"external.bin", 0o644);
     assert!(ino > 0);
     assert_eq!(memfs::write_file(ino, 0, b"payload"), 7);
-    assert!(memfs::file_data_ptr(ino).is_some());
+    assert!(memfs::file_data_ptr(ino).is_none());
+
+    let mut before = [0; 7];
+    assert_eq!(memfs::read_file(ino, 0, &mut before), 7);
+    assert_eq!(&before, b"payload");
 
     assert_eq!(memfs::set_file_external(ino, 3), 0);
 
@@ -198,6 +202,10 @@ fn set_file_external_clears_inline_storage_and_keeps_size() {
     assert_eq!(st.size, 3);
     assert_eq!(st.mode & memfs::S_IFMT, memfs::S_IFREG);
     assert!(memfs::file_data_ptr(ino).is_none());
+
+    let mut after = [0; 7];
+    assert_eq!(memfs::read_file(ino, 0, &mut after), 3);
+    assert_eq!(&after[..3], b"pay");
 }
 
 #[test]
@@ -206,7 +214,7 @@ fn truncate_zero_external_file_keeps_data_external() {
     let ino = memfs::create_file(1, b"external-truncate.bin", 0o644);
     assert!(ino > 0);
     assert_eq!(memfs::write_file(ino, 0, b"payload"), 7);
-    assert!(memfs::file_data_ptr(ino).is_some());
+    assert!(memfs::file_data_ptr(ino).is_none());
 
     assert_eq!(memfs::set_file_external(ino, 7), 0);
     assert!(memfs::file_data_ptr(ino).is_none());
