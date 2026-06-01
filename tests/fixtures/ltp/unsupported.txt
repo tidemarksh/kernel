@@ -66,10 +66,10 @@ testcases/kernel/syscalls/chown/chown02.c not yet enabled in current syscall-con
 testcases/kernel/syscalls/chown/chown03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/chown/chown04.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/chown/chown05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/chroot/chroot01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/chroot/chroot02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/chroot/chroot03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/chroot/chroot04.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/chroot/chroot01.c Tidemark validates the path but intentionally returns ENOSYS because it has no per-process root-directory model; this row expects unprivileged EPERM
+testcases/kernel/syscalls/chroot/chroot02.c requires successful chroot path resolution under a new process root, which is intentionally unavailable because Tidemark has no per-process root-directory model
+testcases/kernel/syscalls/chroot/chroot03.c mostly exercises chroot error paths, but the symlink-loop setup requires symlink(2) and the success surface remains intentionally unavailable without a root-directory model
+testcases/kernel/syscalls/chroot/chroot04.c expects unprivileged EACCES permission behavior for chroot, but Tidemark intentionally returns ENOSYS after path validation without a root-directory model
 testcases/kernel/syscalls/clock_adjtime/clock_adjtime01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/clock_adjtime/clock_adjtime02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/clock_getres/clock_getres01.c clock_getres exists but virtual-clock variants are not yet audited against LTP
