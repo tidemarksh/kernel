@@ -41,7 +41,7 @@ testcases/kernel/syscalls/bpf/bpf_prog06.c not yet enabled in current syscall-co
 testcases/kernel/syscalls/bpf/bpf_prog07.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/brk/brk01.c targeted validation reaches the brk growth loop but faults when LTP writes at the returned new break boundary address; current brk maps bytes below the break only
 testcases/kernel/syscalls/brk/brk02.c targeted validation passed for brk shrink after mprotecting newly grown heap pages, but including the remaining memory candidate subset made the expanded full LTP gate fail existing write01 and OOM during existing write06
-testcases/kernel/syscalls/cacheflush/cacheflush01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/cacheflush/cacheflush01.c cacheflush(2) is not production-dispatched on the supported RISC-V ABI; the implemented surface is riscv_flush_icache(2), which has no same-name LTP family here
 testcases/kernel/syscalls/cachestat/cachestat01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/cachestat/cachestat02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/cachestat/cachestat03.c not yet enabled in current syscall-conformance profile
@@ -322,9 +322,9 @@ testcases/kernel/syscalls/getpriority/getpriority01.c not yet enabled in current
 testcases/kernel/syscalls/getpriority/getpriority02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getresgid/getresgid03.c requires saved-setgid state to remain distinct from the effective gid after setresgid(-1, gid, -1); current implementation reports saved gid as effective gid
 testcases/kernel/syscalls/getresuid/getresuid03.c requires saved-setuid state to remain distinct from the effective uid after setresuid(-1, uid, -1); current implementation reports saved uid as effective uid
-testcases/kernel/syscalls/getrlimit/getrlimit01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getrlimit/getrlimit02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getrlimit/getrlimit03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/getrlimit/getrlimit01.c requires getrlimit success across the full Linux resource matrix; current prlimit64-backed model preserves a narrower synthetic limit table
+testcases/kernel/syscalls/getrlimit/getrlimit02.c requires EFAULT for invalid rlimit output pointers; current prlimit64 writes old limits without prevalidating the destination range
+testcases/kernel/syscalls/getrlimit/getrlimit03.c compares legacy getrlimit/ugetrlimit and prlimit64 results across all resources; legacy/ugetrlimit compatibility and full RLIM_INFINITY capping are outside the current RISC-V resource-limit profile
 testcases/kernel/syscalls/getrusage/getrusage01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getrusage/getrusage02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getrusage/getrusage03.c not yet enabled in current syscall-conformance profile
@@ -970,12 +970,12 @@ testcases/kernel/syscalls/setreuid/setreuid02.c requires full saved-setuid trans
 testcases/kernel/syscalls/setreuid/setreuid03.c requires saved-setuid participation in non-root permission checks; current implementation tracks only real/effective uid
 testcases/kernel/syscalls/setreuid/setreuid05.c requires saved-setuid transition semantics across a forked child; current implementation tracks only real/effective uid
 testcases/kernel/syscalls/setreuid/setreuid07.c requires filesystem access checks to reject non-owner write opens after effective uid change; current filesystem permission path allows this LTP open
-testcases/kernel/syscalls/setrlimit/setrlimit01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setrlimit/setrlimit02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setrlimit/setrlimit03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setrlimit/setrlimit04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setrlimit/setrlimit05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setrlimit/setrlimit06.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/setrlimit/setrlimit01.c requires RLIMIT_NOFILE/getdtablesize enforcement, RLIMIT_FSIZE write truncation/SIGXFSZ behavior, RLIMIT_NPROC fork limiting, and RLIMIT_CORE crash behavior beyond the current preserved-limit model
+testcases/kernel/syscalls/setrlimit/setrlimit02.c requires unprivileged EPERM when raising RLIMIT_NOFILE hard limits after setuid nobody; current resource-limit model does not enforce privilege-based hard-limit raises
+testcases/kernel/syscalls/setrlimit/setrlimit03.c requires /proc/sys/fs/nr_open integration and EPERM when exceeding kernel-wide fd limits, plus EINVAL cur>max handling; current model only validates cur<=max
+testcases/kernel/syscalls/setrlimit/setrlimit04.c requires reduced RLIMIT_STACK to still permit exec of /bin/true with stack guard-gap semantics, outside the current exec/stack-limit model
+testcases/kernel/syscalls/setrlimit/setrlimit05.c requires EFAULT for invalid rlimit input pointers; current prlimit64 reads new limits without prevalidating the source range
+testcases/kernel/syscalls/setrlimit/setrlimit06.c requires RLIMIT_CPU soft/hard enforcement with SIGXCPU then SIGKILL; current resource-limit model preserves values but does not schedule CPU-limit signals
 testcases/kernel/syscalls/setsockopt/setsockopt01.c setsockopt implements a narrow socket option subset only
 testcases/kernel/syscalls/setsockopt/setsockopt02.c setsockopt implements a narrow socket option subset only
 testcases/kernel/syscalls/setsockopt/setsockopt03.c setsockopt implements a narrow socket option subset only
