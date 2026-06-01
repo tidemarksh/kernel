@@ -1022,7 +1022,7 @@ testcases/kernel/syscalls/socketcall/socketcall02.c not yet enabled in current s
 testcases/kernel/syscalls/socketcall/socketcall03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/socketpair/socketpair01.c requires socketpair(2) domain/protocol/bad-pointer errno matrix including PF_INET EOPNOTSUPP/EPROTONOSUPPORT cases beyond the current AF_UNIX-only implementation
 testcases/kernel/syscalls/socketpair/socketpair02.c passes targeted validation for SOCK_CLOEXEC/SOCK_NONBLOCK fd flag propagation on both returned descriptors, but adding it made the full LTP gate run out of memory during existing writev01 snapshot allocation
-testcases/kernel/syscalls/sockioctl/sockioctl01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/sockioctl/sockioctl01.c socket ioctl matrix requires SIOCATMARK, SIOCGIFCONF, SIOCGIFFLAGS, and SIOCSIFFLAGS handling outside the current PTY/FIONBIO/FIONREAD ioctl profile
 testcases/kernel/syscalls/splice/splice01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/splice/splice02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/splice/splice03.c not yet enabled in current syscall-conformance profile
