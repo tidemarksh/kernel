@@ -29,6 +29,15 @@ testcases/kernel/syscalls/eventfd2/eventfd2_02.c verified eventfd2(2) O_NONBLOCK
 testcases/kernel/syscalls/eventfd2/eventfd2_03.c verified EFD_SEMAPHORE process-tree wake/resume semantics with local guest fixtures and full LTP pass
 testcases/kernel/syscalls/faccessat/faccessat01.c verified faccessat(2) relative/absolute/AT_FDCWD existence checks
 testcases/kernel/syscalls/faccessat/faccessat02.c verified faccessat(2) ENOTDIR and EBADF error paths
+testcases/kernel/syscalls/fcntl/fcntl01.c verified fcntl(2) F_DUPFD, F_SETFL, F_GETFL, F_SETFD, and F_GETFD basics
+testcases/kernel/syscalls/fcntl/fcntl02.c verified fcntl(2) F_DUPFD honors requested minimum fd values
+testcases/kernel/syscalls/fcntl/fcntl03.c verified fcntl(2) F_GETFD succeeds on an open file
+testcases/kernel/syscalls/fcntl/fcntl04.c verified fcntl(2) F_GETFL reports the open access mode
+testcases/kernel/syscalls/fcntl/fcntl05.c verified fcntl(2) F_GETLK reports F_UNLCK for the supported no-conflict lock query
+testcases/kernel/syscalls/fcntl/fcntl08.c verified fcntl(2) F_SETFL accepts O_NDELAY/O_APPEND/O_NONBLOCK
+testcases/kernel/syscalls/fcntl/fcntl09.c verified fcntl(2) F_SETLK accepts read, write, and unlock requests on a regular file
+testcases/kernel/syscalls/fcntl/fcntl10.c verified fcntl(2) F_SETLKW accepts read, write, and unlock requests on a regular file
+testcases/kernel/syscalls/fcntl/fcntl29.c verified fcntl(2) F_DUPFD_CLOEXEC creates a duplicated fd with FD_CLOEXEC set
 testcases/kernel/syscalls/fstatat/fstatat01.c verified newfstatat basic path/dirfd errno handling
 testcases/kernel/syscalls/ftruncate/ftruncate01.c verified ftruncate(2) shrink and extend semantics
 testcases/kernel/syscalls/futex/futex_wake01.c verified futex(FUTEX_WAKE) returns 0 when no waiters are present

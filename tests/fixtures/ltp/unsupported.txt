@@ -229,44 +229,35 @@ testcases/kernel/syscalls/fchown/fchown05.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/fchownat/fchownat01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fchownat/fchownat02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fchownat/fchownat03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fcntl/fcntl01.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl02.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl03.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl04.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl05.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl07.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl08.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl09.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl10.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl11.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl12.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl13.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl14.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl15.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl16.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl17.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl18.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl19.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl20.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl21.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl22.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl23.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl24.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl25.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl26.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl27.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl29.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl30.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl31.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl32.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl33.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl34.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl35.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl36.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl37.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl38.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl39.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
-testcases/kernel/syscalls/fcntl/fcntl40.c fcntl currently implements only F_DUPFD/F_DUPFD_CLOEXEC/F_GETFL/F_SETFL
+testcases/kernel/syscalls/fcntl/fcntl07.c requires named FIFO setup and exec-based CLOEXEC self-check beyond the currently staged fcntl LTP helper/resource coverage
+testcases/kernel/syscalls/fcntl/fcntl11.c requires region-accurate cross-process POSIX lock conflict reporting; current fcntl lock implementation only validates basic lock types and reports no-conflict F_GETLK
+testcases/kernel/syscalls/fcntl/fcntl12.c getdtablesize()-based fd exhaustion in the forked LTP child does not currently exhaust Tidemark's fd table, so F_DUPFD succeeds instead of returning EMFILE
+testcases/kernel/syscalls/fcntl/fcntl13.c requires EFAULT for arbitrary inaccessible flock pointers and EINVAL for invalid flock.l_whence; current fcntl lock validation is not that complete
+testcases/kernel/syscalls/fcntl/fcntl14.c requires randomized region-accurate parent/child POSIX lock conflict behavior across 5000 cases
+testcases/kernel/syscalls/fcntl/fcntl15.c requires Linux POSIX-lock close semantics that remove all locks held by a process across dup/open/fork variants
+testcases/kernel/syscalls/fcntl/fcntl16.c requires blocking F_SETLKW wakeup behavior for detailed byte-range lock boundary changes
+testcases/kernel/syscalls/fcntl/fcntl17.c requires deadlock detection for blocking POSIX byte-range locks
+testcases/kernel/syscalls/fcntl/fcntl18.c requires root credential transition plus full inaccessible flock pointer handling for F_GETLK
+testcases/kernel/syscalls/fcntl/fcntl19.c requires region-accurate F_GETLK reporting while unlocking sections around a write lock
+testcases/kernel/syscalls/fcntl/fcntl20.c requires region-accurate F_GETLK reporting while unlocking sections around a read lock
+testcases/kernel/syscalls/fcntl/fcntl21.c requires region-accurate F_GETLK reporting while changing sections around a read lock
+testcases/kernel/syscalls/fcntl/fcntl22.c requires cross-process POSIX lock conflict to return EAGAIN
+testcases/kernel/syscalls/fcntl/fcntl23.c requires file lease commands F_SETLEASE/F_GETLEASE, which are not implemented
+testcases/kernel/syscalls/fcntl/fcntl24.c requires file lease commands F_SETLEASE/F_GETLEASE, which are not implemented
+testcases/kernel/syscalls/fcntl/fcntl25.c requires file lease commands F_SETLEASE/F_GETLEASE, which are not implemented
+testcases/kernel/syscalls/fcntl/fcntl26.c requires file lease commands F_SETLEASE/F_GETLEASE, which are not implemented
+testcases/kernel/syscalls/fcntl/fcntl27.c requires file lease command F_SETLEASE, which is not implemented
+testcases/kernel/syscalls/fcntl/fcntl30.c requires pipe capacity commands F_GETPIPE_SZ/F_SETPIPE_SZ, which are not implemented
+testcases/kernel/syscalls/fcntl/fcntl31.c requires F_GETOWN/F_SETOWN/F_GETOWN_EX/F_SETOWN_EX/F_GETSIG/F_SETSIG and SIGIO ownership behavior, which are not implemented
+testcases/kernel/syscalls/fcntl/fcntl32.c requires file lease command F_SETLEASE, which is not implemented
+testcases/kernel/syscalls/fcntl/fcntl33.c requires file lease behavior, SIGIO lease-break notification, and /proc/sys/fs/lease-break-time control
+testcases/kernel/syscalls/fcntl/fcntl34.c requires OFD byte-range locks to serialize threaded file writes; current OFD lock commands are only basic validation stubs
+testcases/kernel/syscalls/fcntl/fcntl35.c requires /proc/sys/fs/pipe-max-size and pipe capacity semantics
+testcases/kernel/syscalls/fcntl/fcntl36.c requires full OFD and POSIX byte-range lock interaction under threaded races
+testcases/kernel/syscalls/fcntl/fcntl37.c requires pipe capacity commands F_GETPIPE_SZ/F_SETPIPE_SZ and their Linux error surface
+testcases/kernel/syscalls/fcntl/fcntl38.c requires dnotify F_NOTIFY/F_SETSIG behavior, which is not implemented
+testcases/kernel/syscalls/fcntl/fcntl39.c requires dnotify F_NOTIFY/F_SETSIG behavior, which is not implemented
+testcases/kernel/syscalls/fcntl/fcntl40.c requires F_CREATED_QUERY, which is not implemented
 testcases/kernel/syscalls/fdatasync/fdatasync01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fdatasync/fdatasync02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fdatasync/fdatasync03.c not yet enabled in current syscall-conformance profile
