@@ -166,6 +166,10 @@ pub const S_IFREG: u32 = 0o100000;
 pub const S_IFLNK: u32 = 0o120000;
 pub const S_IFCHR: u32 = 0o020000;
 
+const S_ISUID: u32 = 0o4000;
+const S_ISGID: u32 = 0o2000;
+const S_IXGRP: u32 = 0o0010;
+
 const MAX_INODES: usize = 65536;
 const MAX_NAME_LEN: usize = 255;
 const MAX_SYMLINK_FOLLOWS: u32 = 40;
@@ -1306,11 +1310,19 @@ pub fn set_owner(ino: u32, uid: Option<u32>, gid: Option<u32>) -> i64 {
     if idx >= ins.len() || ino == 0 {
         return ENOENT;
     }
+    let owner_update_requested = uid.is_some() || gid.is_some();
+
     if let Some(uid) = uid {
         inodes()[idx].uid = uid;
     }
     if let Some(gid) = gid {
         inodes()[idx].gid = gid;
+    }
+    if owner_update_requested && inodes()[idx].mode & S_IFMT == S_IFREG {
+        inodes()[idx].mode &= !S_ISUID;
+        if inodes()[idx].mode & S_IXGRP != 0 {
+            inodes()[idx].mode &= !S_ISGID;
+        }
     }
     0
 }

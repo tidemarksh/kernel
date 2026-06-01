@@ -54,18 +54,12 @@ testcases/kernel/syscalls/capset/capset02.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/capset/capset03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/capset/capset04.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/chdir/chdir01.c requires root, all-filesystem mount matrix, symlink-loop setup, and unprivileged directory permission checks beyond the current cwd profile
-testcases/kernel/syscalls/chmod/chmod01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/chmod/chmod03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/chmod/chmod05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/chmod/chmod06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/chmod/chmod07.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/chmod/chmod08.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/chmod/chmod09.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/chown/chown01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/chown/chown02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/chown/chown03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/chown/chown04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/chown/chown05.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/chmod/chmod05.c requires non-root setgid stripping on directories when the caller lacks the directory group, outside the current chmod metadata profile
+testcases/kernel/syscalls/chmod/chmod06.c requires permission-denial, read-only filesystem, and symlink-loop error matrices outside the current chmod metadata profile
+testcases/kernel/syscalls/chmod/chmod08.c requires symlink(2) setup; production currently returns ENOSYS for symlink creation
+testcases/kernel/syscalls/chmod/chmod09.c requires /proc/self/fd O_PATH symlink publication and symlink chmod ENOTSUP behavior outside the current chmod metadata profile
+testcases/kernel/syscalls/chown/chown03.c requires file ownership to reflect the post-seteuid creator uid before group-only chown; current MemFS creation remains root-owned in this setup
+testcases/kernel/syscalls/chown/chown04.c requires permission-denial, read-only filesystem, and symlink-loop error matrices outside the current chown metadata profile
 testcases/kernel/syscalls/chroot/chroot01.c Tidemark validates the path but intentionally returns ENOSYS because it has no per-process root-directory model; this row expects unprivileged EPERM
 testcases/kernel/syscalls/chroot/chroot02.c requires successful chroot path resolution under a new process root, which is intentionally unavailable because Tidemark has no per-process root-directory model
 testcases/kernel/syscalls/chroot/chroot03.c mostly exercises chroot error paths, but the symlink-loop setup requires symlink(2) and the success surface remains intentionally unavailable without a root-directory model
@@ -209,24 +203,15 @@ testcases/kernel/syscalls/fanotify/fanotify_child.c not yet enabled in current s
 testcases/kernel/syscalls/fchdir/fchdir01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fchdir/fchdir02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fchdir/fchdir03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fchmod/fchmod01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fchmod/fchmod02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fchmod/fchmod03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fchmod/fchmod04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fchmod/fchmod05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fchmod/fchmod06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fchmodat/fchmodat01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fchmodat/fchmodat02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fchmodat2/fchmodat2_01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fchmodat2/fchmodat2_02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fchown/fchown01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fchown/fchown02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fchown/fchown03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fchown/fchown04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fchown/fchown05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fchownat/fchownat01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fchownat/fchownat02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fchownat/fchownat03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/fchmod/fchmod05.c requires non-root setgid stripping on directories when the caller lacks the directory group, outside the current fchmod metadata profile
+testcases/kernel/syscalls/fchmod/fchmod06.c requires EPERM and read-only filesystem error handling outside the current fchmod metadata profile
+testcases/kernel/syscalls/fchmodat/fchmodat02.c requires permission-denial, read-only filesystem, symlink-loop, and invalid-flag error matrices outside the current fchmodat metadata profile
+testcases/kernel/syscalls/fchmodat2/fchmodat2_01.c fchmodat2(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/fchmodat2/fchmodat2_02.c fchmodat2(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/fchown/fchown03.c requires file ownership to reflect the post-seteuid creator uid before group-only fchown; current MemFS creation remains root-owned in this setup
+testcases/kernel/syscalls/fchown/fchown04.c requires EPERM and read-only filesystem error handling outside the current fchown metadata profile
+testcases/kernel/syscalls/fchownat/fchownat02.c requires symlink(2) setup and AT_SYMLINK_NOFOLLOW ownership on the symlink inode, outside the current fchownat metadata profile
+testcases/kernel/syscalls/fchownat/fchownat03.c requires permission-denial, read-only filesystem, symlink-loop, and AT_SYMLINK_NOFOLLOW error matrices outside the current fchownat metadata profile
 testcases/kernel/syscalls/fcntl/fcntl07.c requires named FIFO setup and exec-based CLOEXEC self-check beyond the currently staged fcntl LTP helper/resource coverage
 testcases/kernel/syscalls/fcntl/fcntl11.c requires region-accurate cross-process POSIX lock conflict reporting; current fcntl lock implementation only validates basic lock types and reports no-conflict F_GETLK
 testcases/kernel/syscalls/fcntl/fcntl12.c getdtablesize()-based fd exhaustion in the forked LTP child does not currently exhaust Tidemark's fd table, so F_DUPFD succeeds instead of returning EMFILE
@@ -534,8 +519,8 @@ testcases/kernel/syscalls/landlock/landlock08.c not yet enabled in current sysca
 testcases/kernel/syscalls/landlock/landlock09.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/landlock/landlock10.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/landlock/landlock_exec.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/lchown/lchown01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/lchown/lchown02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/lchown/lchown01.c requires symlink(2) setup and symlink inode ownership updates, outside the current fchownat metadata profile
+testcases/kernel/syscalls/lchown/lchown02.c requires symlink(2) setup plus permission-denial, read-only filesystem, and symlink-loop error matrices outside the current fchownat metadata profile
 testcases/kernel/syscalls/lgetxattr/lgetxattr01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/lgetxattr/lgetxattr02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/link/link02.c not yet enabled in current syscall-conformance profile

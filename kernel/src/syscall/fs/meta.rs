@@ -301,22 +301,22 @@ pub fn sys_fchmod(vm: &mut ThreadState, base: u32, fd: u64, mode: u64) -> i64 {
     }
 }
 
+fn parse_chown_id(raw: u64) -> Option<u32> {
+    if raw == u64::MAX || raw == u32::MAX as u64 {
+        None
+    } else {
+        Some(raw as u32)
+    }
+}
+
 pub fn sys_fchown(vm: &mut ThreadState, base: u32, fd: u64, owner: u64, group: u64) -> i64 {
     let ofd = match fd_table::get_ofd(base, vm, fd) {
         Some(ofd) => ofd,
         None => return EBADF,
     };
 
-    let uid = if owner as i64 == -1 {
-        None
-    } else {
-        Some(owner as u32)
-    };
-    let gid = if group as i64 == -1 {
-        None
-    } else {
-        Some(group as u32)
-    };
+    let uid = parse_chown_id(owner);
+    let gid = parse_chown_id(group);
 
     match ofd.fd_type {
         FD_TYPE_FILE | FD_TYPE_DIR => memfs::set_owner(ofd.ino, uid, gid),
@@ -342,16 +342,8 @@ pub fn sys_fchownat(
         Err(errno) => return errno,
     };
 
-    let uid = if owner as i64 == -1 {
-        None
-    } else {
-        Some(owner as u32)
-    };
-    let gid = if group as i64 == -1 {
-        None
-    } else {
-        Some(group as u32)
-    };
+    let uid = parse_chown_id(owner);
+    let gid = parse_chown_id(group);
 
     memfs::set_owner(ino, uid, gid)
 }
