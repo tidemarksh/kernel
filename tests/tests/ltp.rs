@@ -189,6 +189,7 @@ ltp_case!(ltp_pwrite04);
 ltp_case!(ltp_read01);
 ltp_case!(ltp_read04);
 ltp_case!(ltp_readv02);
+ltp_case!(ltp_rmdir01);
 ltp_case!(ltp_sched_getaffinity01);
 ltp_case!(ltp_sched_yield01);
 ltp_case!(ltp_set_robust_list01);

@@ -115,6 +115,7 @@ testcases/kernel/syscalls/pwrite/pwrite04.c verified Linux O_APPEND pwrite(2) ap
 testcases/kernel/syscalls/read/read01.c verified basic read(2) success path
 testcases/kernel/syscalls/read/read04.c verified read(2) returns correct byte count and data
 testcases/kernel/syscalls/readv/readv02.c verified readv(2) EINVAL, EFAULT, EISDIR, and EBADF error handling
+testcases/kernel/syscalls/rmdir/rmdir01.c verified libc rmdir(3) removes an empty directory through production unlinkat(2) AT_REMOVEDIR
 testcases/kernel/syscalls/sched_getaffinity/sched_getaffinity01.c verified single-CPU affinity mask and error handling
 testcases/kernel/syscalls/sched_yield/sched_yield01.c verified sched_yield returns success
 testcases/kernel/syscalls/setpgid/setpgid01.c verified setpgid(2) basic caller/child process-group updates

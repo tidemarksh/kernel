@@ -1571,6 +1571,7 @@ fn spawn_drive_mode_for_ltp(binary: &str) -> Result<SpawnDriveMode, String> {
         | "read01"
         | "read04"
         | "readv02"
+        | "rmdir01"
         | "sched_getaffinity01"
         | "sched_yield01"
         | "set_robust_list01"

@@ -306,8 +306,8 @@ testcases/kernel/syscalls/getcontext/getcontext01.c not yet enabled in current s
 testcases/kernel/syscalls/getcpu/getcpu01.c getcpu01 depends on sched_setaffinity(2) and /sys NUMA/cpu topology enumeration; keep it unsupported until that affinity/topology surface is promoted
 testcases/kernel/syscalls/getcwd/getcwd04.c requires a multi-CPU rename race harness and child kill/wait cleanup beyond the current cwd profile
 testcases/kernel/syscalls/getcwd/getcwd03.c requires symlink(2) setup, which returns ENOSYS in the current production syscall surface
-testcases/kernel/syscalls/getdents/getdents01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getdents/getdents02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/getdents/getdents01.c mixes old getdents(2), getdents64(2), and libc variants, and also requires symlink(2) plus all-filesystems mount-device setup outside the current getdents64 directory profile
+testcases/kernel/syscalls/getdents/getdents02.c mixes old getdents(2), getdents64(2), and libc variants and requires all-filesystems mount-device setup before the getdents64 errno matrix can be validated
 testcases/kernel/syscalls/getdomainname/getdomainname01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getegid/getegid01.c requires /proc/self/status Gid reporting, which the current LTP runner procfs does not provide
 testcases/kernel/syscalls/geteuid/geteuid02.c requires /proc/self/status Uid reporting, which the current LTP runner procfs does not provide
@@ -831,8 +831,8 @@ testcases/kernel/syscalls/read/read02.c includes O_DIRECT alignment cases and LT
 testcases/kernel/syscalls/read/read03.c requires named FIFO setup via mknod/mkfifo, which is not supported in the current LTP profile
 testcases/kernel/syscalls/readahead/readahead01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/readahead/readahead02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/readdir/readdir01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/readdir/readdir21.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/readdir/readdir01.c requires LTP all-filesystems mount-device setup before libc readdir(3) can validate production getdents64 enumeration
+testcases/kernel/syscalls/readdir/readdir21.c targets old readdir(2), which is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/readlink/readlink01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/readlink/readlink03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/readlinkat/readlinkat01.c readlinkat LTP setup depends on symlink(2), which is outside the current Phase4 syscall surface
@@ -874,9 +874,8 @@ testcases/kernel/syscalls/request_key/request_key03.c not yet enabled in current
 testcases/kernel/syscalls/request_key/request_key04.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/request_key/request_key05.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/request_key/request_key06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rmdir/rmdir01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rmdir/rmdir02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rmdir/rmdir03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/rmdir/rmdir02.c mixes non-empty, overlong path, missing path, non-directory, bad pointer, symlink-loop, read-only filesystem, mount-point, and current-directory cases outside the current unlinkat AT_REMOVEDIR profile
+testcases/kernel/syscalls/rmdir/rmdir03.c requires sticky-bit and no-search-permission denial semantics after switching to nobody, outside the current unlinkat AT_REMOVEDIR profile
 testcases/kernel/syscalls/rt_sigaction/rt_sigaction01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/rt_sigaction/rt_sigaction02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/rt_sigaction/rt_sigaction03.c not yet enabled in current syscall-conformance profile
