@@ -147,6 +147,7 @@ testcases/kernel/syscalls/truncate/truncate02.c verified truncate(2) shrink/exte
 testcases/kernel/syscalls/umask/umask01.c verified umask(2) returns the previous mask and filters creat(2) file mode bits for masks 0000..0777
 testcases/kernel/syscalls/uname/uname01.c verified uname(2) reports Linux sysname
 testcases/kernel/syscalls/uname/uname02.c verified uname(2) EFAULT on invalid address
+testcases/kernel/syscalls/unlink/unlink07.c verified unlink libc wrapper reports ENOENT, EFAULT, ENOTDIR, and ENAMETOOLONG path errors
 testcases/kernel/syscalls/unlinkat/unlinkat01.c verified unlinkat file/remove-dir errno handling
 testcases/kernel/syscalls/vfork/vfork01.c verified vfork(2) preserves parent credentials, cwd, and umask while parent waits for child _exit
 testcases/kernel/syscalls/vfork/vfork02.c verified vfork(2) children do not inherit the parent's pending signals

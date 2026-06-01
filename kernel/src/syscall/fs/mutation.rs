@@ -69,47 +69,16 @@ pub fn sys_unlinkat(
         return EINVAL;
     }
 
-    let mut path_buf = [0u8; 513];
-    let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf[1..]) };
-    let path = trim_trailing_slashes(&path_buf[1..1 + len]);
-    if path.is_empty() {
-        return ENOENT;
-    }
-
-    if path[0] == b'/' {
-        let (parent_ino, name) = split_parent_name(path);
-        if parent_ino == 0 || name.is_empty() {
-            return ENOENT;
-        }
-        if flags & AT_REMOVEDIR != 0 {
-            memfs::rmdir(parent_ino, name)
-        } else {
-            memfs::unlink(parent_ino, name)
-        }
+    let (parent_ino, name_buf, name_len) = match resolve_parent_and_name(vm, base, dirfd, path_addr)
+    {
+        Ok(parts) => parts,
+        Err(errno) => return errno,
+    };
+    let name = &name_buf[..name_len];
+    if flags & AT_REMOVEDIR != 0 {
+        memfs::rmdir(parent_ino, name)
     } else {
-        let (parent_rel, name) = split_relative_parent_name(path);
-        if name.is_empty() {
-            return ENOENT;
-        }
-
-        let base_ino = match dirfd_base_ino(vm, dirfd, base) {
-            Ok(ino) => ino,
-            Err(errno) => return errno,
-        };
-
-        let parent_ino = if parent_rel.is_empty() {
-            base_ino
-        } else {
-            memfs::resolve_path_from(base_ino, parent_rel)
-        };
-        if parent_ino == 0 {
-            return ENOENT;
-        }
-        if flags & AT_REMOVEDIR != 0 {
-            memfs::rmdir(parent_ino, name)
-        } else {
-            memfs::unlink(parent_ino, name)
-        }
+        memfs::unlink(parent_ino, name)
     }
 }
 

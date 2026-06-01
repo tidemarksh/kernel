@@ -247,8 +247,15 @@ pub(super) fn resolve_parent_and_name(
     dirfd: u64,
     path_addr: u64,
 ) -> Result<(u32, [u8; 513], usize), i64> {
+    if path_addr == 0 || !crate::syscall::memory::guest_range_accessible(base, path_addr, 1) {
+        return Err(EFAULT);
+    }
+
     let mut path_buf = [0u8; 513];
     let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf[1..]) };
+    if len >= path_buf.len() - 2 {
+        return Err(ENAMETOOLONG);
+    }
     let path = trim_trailing_slashes(&path_buf[1..1 + len]);
     if path.is_empty() {
         return Err(ENOENT);
@@ -272,6 +279,9 @@ pub(super) fn resolve_parent_and_name(
         if name.is_empty() {
             return Err(ENOENT);
         }
+        if name.len() > NAME_MAX {
+            return Err(ENAMETOOLONG);
+        }
         let parent_ino =
             resolve_path_with_symlink_policy(1, parent_path, true, MAX_PATH_SYMLINK_FOLLOWS)?;
         let parent_ino = ensure_directory_inode(parent_ino)?;
@@ -283,6 +293,9 @@ pub(super) fn resolve_parent_and_name(
     let (parent_rel, name) = split_relative_parent_name(path);
     if name.is_empty() {
         return Err(ENOENT);
+    }
+    if name.len() > NAME_MAX {
+        return Err(ENAMETOOLONG);
     }
     let parent_ino = if parent_rel.is_empty() {
         base_ino

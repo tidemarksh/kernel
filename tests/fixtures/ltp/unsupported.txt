@@ -527,8 +527,8 @@ testcases/kernel/syscalls/link/link02.c not yet enabled in current syscall-confo
 testcases/kernel/syscalls/link/link04.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/link/link05.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/link/link08.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/linkat/linkat01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/linkat/linkat02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/linkat/linkat01.c linkat(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/linkat/linkat02.c linkat(2) is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/listen/listen01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/listmount/listmount01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/listmount/listmount02.c not yet enabled in current syscall-conformance profile
@@ -590,23 +590,23 @@ testcases/kernel/syscalls/mincore/mincore01.c not yet enabled in current syscall
 testcases/kernel/syscalls/mincore/mincore02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/mincore/mincore03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/mincore/mincore04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mkdir/mkdir02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mkdir/mkdir03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mkdir/mkdir04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mkdir/mkdir05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mkdir/mkdir09.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mkdirat/mkdirat02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mknod/mknod01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mknod/mknod02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mknod/mknod03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mknod/mknod04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mknod/mknod05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mknod/mknod06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mknod/mknod07.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mknod/mknod08.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mknod/mknod09.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mknodat/mknodat01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mknodat/mknodat02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/mkdir/mkdir02.c requires setgid-directory group and S_ISGID inheritance outside the current mkdirat mutation profile
+testcases/kernel/syscalls/mkdir/mkdir03.c requires symlink, FIFO, /dev/null, read-only filesystem, and symlink-loop setup outside the current mkdirat mutation profile
+testcases/kernel/syscalls/mkdir/mkdir04.c requires unprivileged directory permission-denial checks outside the current mkdirat mutation profile
+testcases/kernel/syscalls/mkdir/mkdir05.c requires directory ownership to reflect the post-setuid creator uid/gid; current MemFS creation remains root-owned in this setup
+testcases/kernel/syscalls/mkdir/mkdir09.c requires threaded all-filesystem mount-device mkdir/rmdir stress behavior outside the current mkdirat mutation profile
+testcases/kernel/syscalls/mkdirat/mkdirat02.c requires read-only filesystem and symlink-loop setup outside the current mkdirat mutation profile
+testcases/kernel/syscalls/mknod/mknod01.c mknod(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/mknod/mknod02.c mknod(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/mknod/mknod03.c mknod(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/mknod/mknod04.c mknod(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/mknod/mknod05.c mknod(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/mknod/mknod06.c mknod(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/mknod/mknod07.c mknod(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/mknod/mknod08.c mknod(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/mknod/mknod09.c mknod(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/mknodat/mknodat01.c mknodat(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/mknodat/mknodat02.c mknodat(2) is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/mlock/mlock01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/mlock/mlock02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/mlock/mlock03.c not yet enabled in current syscall-conformance profile
@@ -852,23 +852,23 @@ testcases/kernel/syscalls/remap_file_pages/remap_file_pages01.c not yet enabled 
 testcases/kernel/syscalls/remap_file_pages/remap_file_pages02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/removexattr/removexattr01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/removexattr/removexattr02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rename/rename01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rename/rename03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rename/rename04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rename/rename05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rename/rename06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rename/rename07.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rename/rename08.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rename/rename09.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rename/rename10.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rename/rename11.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rename/rename12.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rename/rename13.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rename/rename14.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/rename/rename15.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/renameat/renameat01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/renameat2/renameat201.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/renameat2/renameat202.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/rename/rename01.c requires LTP mount-device acquisition before basic rename validation; the current test profile reports no free devices
+testcases/kernel/syscalls/rename/rename03.c requires LTP mount-device acquisition before existing-target rename validation; the current test profile reports no free devices
+testcases/kernel/syscalls/rename/rename04.c requires LTP mount-device acquisition before non-empty-directory rename validation; the current test profile reports no free devices
+testcases/kernel/syscalls/rename/rename05.c requires LTP mount-device acquisition before file-to-directory rename validation; the current test profile reports no free devices
+testcases/kernel/syscalls/rename/rename06.c requires LTP mount-device acquisition before self-subdirectory rename validation; the current test profile reports no free devices
+testcases/kernel/syscalls/rename/rename07.c requires LTP mount-device acquisition before directory-to-file rename validation; the current test profile reports no free devices
+testcases/kernel/syscalls/rename/rename08.c requires LTP mount-device acquisition before EFAULT rename validation; the current test profile reports no free devices
+testcases/kernel/syscalls/rename/rename09.c requires unprivileged directory permission-denial checks outside the current renameat mutation profile
+testcases/kernel/syscalls/rename/rename10.c requires LTP mount-device acquisition before ENAMETOOLONG rename validation; the current test profile reports no free devices
+testcases/kernel/syscalls/rename/rename11.c requires symlink-loop, read-only filesystem, and EMLINK mount-device setup outside the current renameat mutation profile
+testcases/kernel/syscalls/rename/rename12.c requires sticky-bit permission-denial checks outside the current renameat mutation profile
+testcases/kernel/syscalls/rename/rename13.c requires hard-link setup and same-inode link behavior outside the current renameat mutation profile
+testcases/kernel/syscalls/rename/rename14.c requires multi-process create/unlink/rename race stress behavior outside the current renameat mutation profile
+testcases/kernel/syscalls/rename/rename15.c requires symlink setup and lstat symlink inode semantics outside the current renameat mutation profile
+testcases/kernel/syscalls/renameat/renameat01.c mixes basic renameat success with symlink-loop, read-only filesystem, and EMLINK cases outside the current renameat mutation profile
+testcases/kernel/syscalls/renameat2/renameat201.c requires RENAME_NOREPLACE, RENAME_EXCHANGE, and RENAME_WHITEOUT flag semantics; production renameat2 currently supports only zero flags
+testcases/kernel/syscalls/renameat2/renameat202.c requires RENAME_EXCHANGE content-swap semantics; production renameat2 currently supports only zero flags
 testcases/kernel/syscalls/request_key/request_key01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/request_key/request_key02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/request_key/request_key03.c not yet enabled in current syscall-conformance profile
@@ -1086,7 +1086,7 @@ testcases/kernel/syscalls/switch/endian_switch01.c not yet enabled in current sy
 testcases/kernel/syscalls/symlink/symlink02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/symlink/symlink03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/symlink/symlink04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/symlinkat/symlinkat01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/symlinkat/symlinkat01.c symlinkat(2) is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/sync/sync01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/sync_file_range/sync_file_range01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/sync_file_range/sync_file_range02.c not yet enabled in current syscall-conformance profile
@@ -1134,11 +1134,10 @@ testcases/kernel/syscalls/umount/umount03.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/umount2/umount2_01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/umount2/umount2_02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/uname/uname04.c requires personality(2) PER_LINUX|UNAME26 behavior, but personality is not implemented in the production syscall dispatch
-testcases/kernel/syscalls/unlink/unlink05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/unlink/unlink07.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/unlink/unlink08.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/unlink/unlink09.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/unlink/unlink10.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/unlink/unlink05.c requires FIFO setup through mkfifo/mknod, outside the current unlinkat mutation profile
+testcases/kernel/syscalls/unlink/unlink08.c requires unprivileged directory permission-denial checks outside the current unlinkat mutation profile
+testcases/kernel/syscalls/unlink/unlink09.c requires ioctl inode immutable/append-only flags outside the current unlinkat mutation profile
+testcases/kernel/syscalls/unlink/unlink10.c requires read-only filesystem unlink EROFS behavior outside the current unlinkat mutation profile
 testcases/kernel/syscalls/unshare/unshare01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/unshare/unshare02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/unshare/unshare03.c not yet enabled in current syscall-conformance profile

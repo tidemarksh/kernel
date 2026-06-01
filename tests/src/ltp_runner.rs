@@ -1603,6 +1603,7 @@ fn spawn_drive_mode_for_ltp(binary: &str) -> Result<SpawnDriveMode, String> {
         | "umask01"
         | "uname01"
         | "uname02"
+        | "unlink07"
         | "unlinkat01"
         | "wait401"
         | "wait402"

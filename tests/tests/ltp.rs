@@ -221,6 +221,7 @@ ltp_case!(ltp_truncate02);
 ltp_case!(ltp_umask01);
 ltp_case!(ltp_uname01);
 ltp_case!(ltp_uname02);
+ltp_case!(ltp_unlink07);
 ltp_case!(ltp_unlinkat01);
 ltp_case!(ltp_vfork01);
 ltp_case!(ltp_vfork02);
