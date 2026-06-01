@@ -58,6 +58,7 @@ testcases/kernel/syscalls/fchownat/fchownat01.c verified fchownat(2) updates own
 testcases/kernel/syscalls/fstatat/fstatat01.c verified newfstatat basic path/dirfd errno handling
 testcases/kernel/syscalls/fstat/fstat03.c verified fstat(2) EBADF and EFAULT error handling
 testcases/kernel/syscalls/ftruncate/ftruncate01.c verified ftruncate(2) shrink and extend semantics
+testcases/kernel/syscalls/ftruncate/ftruncate03.c verified ftruncate(2) EINVAL for socket/read-only/negative-length cases and EBADF for invalid fd
 testcases/kernel/syscalls/futex/futex_wake01.c verified futex(FUTEX_WAKE) returns 0 when no waiters are present
 testcases/kernel/syscalls/futex/futex_cmp_requeue01.c verified shared-process FUTEX_CMP_REQUEUE integration through ltp_runner subtree batching and full LTP pass
 testcases/kernel/syscalls/futex/futex_cmp_requeue02.c verified futex(FUTEX_CMP_REQUEUE) returns Linux-shaped EINVAL/EAGAIN for invalid wake counts, requeue counts, and compare mismatches

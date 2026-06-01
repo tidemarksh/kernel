@@ -293,8 +293,7 @@ testcases/kernel/syscalls/fsync/fsync01.c not yet enabled in current syscall-con
 testcases/kernel/syscalls/fsync/fsync02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fsync/fsync03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fsync/fsync04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/ftruncate/ftruncate03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/ftruncate/ftruncate04.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/ftruncate/ftruncate04.c requires mandatory locking and mount-device remount behavior outside the current ftruncate profile
 testcases/kernel/syscalls/futex/futex_waitv01.c futex_waitv syscall dispatch is not yet implemented
 testcases/kernel/syscalls/futex/futex_waitv02.c futex_waitv syscall dispatch is not yet implemented
 testcases/kernel/syscalls/futex/futex_waitv03.c futex_waitv syscall dispatch is not yet implemented
@@ -1126,7 +1125,7 @@ testcases/kernel/syscalls/times/times01.c times currently returns ENOSYS
 testcases/kernel/syscalls/times/times03.c times currently returns ENOSYS
 testcases/kernel/syscalls/tkill/tkill01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/tkill/tkill02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/truncate/truncate03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/truncate/truncate03.c requires permission-denial, symlink-loop, and RLIMIT_FSIZE/EFBIG behavior outside the current truncate profile
 testcases/kernel/syscalls/ulimit/ulimit01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/umount/umount01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/umount/umount02.c not yet enabled in current syscall-conformance profile

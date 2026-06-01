@@ -431,6 +431,9 @@ pub fn sys_ftruncate(vm: &mut ThreadState, base: u32, fd: u64, length: u64) -> i
         Some(o) => o,
         None => return EBADF,
     };
+    if (length as i64) < 0 || ofd.status_flags & fd_table::OPEN_ACCESS_MODE_MASK == O_RDONLY {
+        return EINVAL;
+    }
     memfs::truncate(ofd.ino, length)
 }
 
