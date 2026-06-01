@@ -63,7 +63,6 @@ testcases/kernel/syscalls/fstat/fstat03.c verified fstat(2) EBADF and EFAULT err
 testcases/kernel/syscalls/ftruncate/ftruncate01.c verified ftruncate(2) shrink and extend semantics
 testcases/kernel/syscalls/ftruncate/ftruncate03.c verified ftruncate(2) EINVAL for socket/read-only/negative-length cases and EBADF for invalid fd
 testcases/kernel/syscalls/futex/futex_wake01.c verified futex(FUTEX_WAKE) returns 0 when no waiters are present
-testcases/kernel/syscalls/futex/futex_cmp_requeue01.c verified shared-process FUTEX_CMP_REQUEUE integration through ltp_runner subtree batching and full LTP pass
 testcases/kernel/syscalls/futex/futex_cmp_requeue02.c verified futex(FUTEX_CMP_REQUEUE) returns Linux-shaped EINVAL/EAGAIN for invalid wake counts, requeue counts, and compare mismatches
 testcases/kernel/syscalls/futex/futex_wait01.c verified futex(FUTEX_WAIT) returns ETIMEDOUT for timed waits and EWOULDBLOCK for value mismatches
 testcases/kernel/syscalls/futex/futex_wait02.c verified futex(FUTEX_WAIT) blocks on a shared futex and resumes when a forked child issues FUTEX_WAKE

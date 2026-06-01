@@ -1518,7 +1518,6 @@ fn spawn_drive_mode_for_ltp(binary: &str) -> Result<SpawnDriveMode, String> {
         | "fstat03"
         | "ftruncate01"
         | "ftruncate03"
-        | "futex_cmp_requeue01"
         | "futex_cmp_requeue02"
         | "futex_wait01"
         | "futex_wait02"

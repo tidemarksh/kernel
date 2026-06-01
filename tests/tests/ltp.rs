@@ -136,7 +136,6 @@ ltp_case!(ltp_fstatat01);
 ltp_case!(ltp_fstat03);
 ltp_case!(ltp_ftruncate01);
 ltp_case!(ltp_ftruncate03);
-ltp_case!(ltp_futex_cmp_requeue01);
 ltp_case!(ltp_futex_cmp_requeue02);
 ltp_case!(ltp_futex_wait01);
 ltp_case!(ltp_futex_wait02);

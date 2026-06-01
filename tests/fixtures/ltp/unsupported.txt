@@ -294,6 +294,7 @@ testcases/kernel/syscalls/ftruncate/ftruncate04.c requires mandatory locking and
 testcases/kernel/syscalls/futex/futex_waitv01.c futex_waitv syscall dispatch is not yet implemented
 testcases/kernel/syscalls/futex/futex_waitv02.c futex_waitv syscall dispatch is not yet implemented
 testcases/kernel/syscalls/futex/futex_waitv03.c futex_waitv syscall dispatch is not yet implemented
+testcases/kernel/syscalls/futex/futex_cmp_requeue01.c current validation fails with ltp_runner watchdog after TPASS sub-results in the large shared-process requeue matrix; keep unsupported until runner/process-tree completion is fixed
 testcases/kernel/syscalls/futex/futex_wake04.c hugepage-backed futex key separation is not yet modeled in the current focused suite
 testcases/kernel/syscalls/futimesat/futimesat01.c futimesat(2) is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/get_mempolicy/get_mempolicy01.c not yet enabled in current syscall-conformance profile
@@ -697,7 +698,7 @@ testcases/kernel/syscalls/name_to_handle_at/name_to_handle_at03.c not yet enable
 testcases/kernel/syscalls/nanosleep/nanosleep01.c targeted validation passes the first timer samples but exceeds the process-tree child-service iteration budget during repeated sleeps through the nanosleep wrapper
 testcases/kernel/syscalls/nanosleep/nanosleep02.c requires signal interruption with EINTR and accurate remaining-time reporting; current nanosleep/clock_nanosleep path does not update rem on interruption
 testcases/kernel/syscalls/nanosleep/nanosleep04.c requires EINVAL for negative tv_sec and invalid tv_nsec through the nanosleep wrapper; current sleep path does not reject the full invalid-timespec matrix
-testcases/kernel/syscalls/newuname/newuname01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/newuname/newuname01.c targeted and expanded full-gate execution passed, but adding this row made the full LTP gate OOM during existing writev coverage; keep unsupported until the conform gate budget is fixed
 testcases/kernel/syscalls/nftw/lib.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/nftw/lib64.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/nftw/nftw.c not yet enabled in current syscall-conformance profile
@@ -952,8 +953,8 @@ testcases/kernel/syscalls/setitimer/setitimer01.c requires interval timer signal
 testcases/kernel/syscalls/setitimer/setitimer02.c requires EFAULT for invalid old_value before writing the old timer state; current setitimer does not prevalidate the old_value output range
 testcases/kernel/syscalls/setns/setns01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setns/setns02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setpgrp/setpgrp01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setpgrp/setpgrp02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/setpgrp/setpgrp01.c targeted and expanded full-gate execution passed, but adding this row made the full LTP gate OOM during existing writev coverage; keep unsupported until the conform gate budget is fixed
+testcases/kernel/syscalls/setpgrp/setpgrp02.c targeted and expanded full-gate execution passed, but adding this row made the full LTP gate OOM during existing writev coverage; keep unsupported until the conform gate budget is fixed
 testcases/kernel/syscalls/setpriority/setpriority01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setpriority/setpriority02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/setregid/setregid03.c requires saved-setgid participation in non-root setregid permission checks; current implementation tracks only real/effective gid
