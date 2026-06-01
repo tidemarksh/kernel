@@ -69,7 +69,7 @@ fn umask_updates_process_mask_and_filters_create_modes() {
 }
 
 #[test]
-fn status_fs_round_trip_for_open_then_local_write_and_lseek() {
+fn status_fs_round_trip_for_open_then_write_and_lseek() {
     let mut t = TestVm::new();
     let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
 
@@ -91,6 +91,10 @@ fn status_fs_round_trip_for_open_then_local_write_and_lseek() {
     let buf_addr = t.scratch + 0x6100;
     t.write_mem(buf_addr, b"async fs");
     let ret = fs::dispatch_write(&mut t.vm, t.base, fd as u64, buf_addr, 8, SYS_WRITE);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_FS);
+    fs::process_pending_requests(vm_ptr, t.base);
+    let ret = fs::resume_from_fs(vm_ptr, t.base);
     assert_eq!(ret, 8);
     assert_eq!(t.vm.status, STATUS_OK);
 

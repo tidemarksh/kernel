@@ -403,7 +403,7 @@ mod tests {
     };
     use crate::abi::{
         AF_UNIX, EAGAIN, ENOENT, O_CREAT, O_RDONLY, O_WRONLY, SOCK_STREAM, STATUS_FS, STATUS_OK,
-        SYS_WRITE,
+        SYS_WRITE, SYS_WRITEV,
     };
     use crate::fs::ring_buffer;
     use crate::harness::TestVm;
@@ -622,7 +622,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_write_runs_regular_files_locally() {
+    fn dispatch_write_routes_regular_files_to_fs_ring() {
         let mut vm = TestVm::new();
         vm.memfs.create_file(b"write.txt", b"seed");
         let fd = vm.sys_openat(b"/write.txt", O_WRONLY);
@@ -632,10 +632,55 @@ mod tests {
         vm.write_mem(data_addr, b"hello");
         let written = dispatch_write(&mut vm.vm, vm.base, fd as u64, data_addr, 5, SYS_WRITE);
 
+        assert_eq!(written, 0);
+        assert_eq!(vm.vm.status, STATUS_FS);
+
+        let vm_ptr = &mut vm.vm as *mut _ as u32;
+        process_pending_requests(vm_ptr, vm.base);
+        let written = resume_from_fs(vm_ptr, vm.base);
+
         assert_eq!(written, 5);
         assert_eq!(vm.vm.status, STATUS_OK);
 
         let read_fd = vm.sys_openat(b"/write.txt", O_RDONLY);
+        assert!(read_fd >= 3);
+        let mut buf = [0u8; 5];
+        assert_eq!(vm.sys_read(read_fd, &mut buf), 5);
+        assert_eq!(&buf, b"hello");
+    }
+
+    #[test]
+    fn dispatch_writev_routes_regular_files_to_fs_ring() {
+        let mut vm = TestVm::new();
+        vm.memfs.create_file(b"writev.txt", b"seed");
+        let fd = vm.sys_openat(b"/writev.txt", O_WRONLY);
+        assert!(fd >= 3);
+
+        let part_a = vm.scratch + 0x900;
+        let part_b = vm.scratch + 0x940;
+        let iov_addr = vm.scratch + 0x980;
+        vm.write_mem(part_a, b"he");
+        vm.write_mem(part_b, b"llo");
+        unsafe {
+            crate::guest_mem::write_u64(vm.base, iov_addr, part_a);
+            crate::guest_mem::write_u64(vm.base, iov_addr + 8, 2);
+            crate::guest_mem::write_u64(vm.base, iov_addr + 16, part_b);
+            crate::guest_mem::write_u64(vm.base, iov_addr + 24, 3);
+        }
+
+        let written = dispatch_write(&mut vm.vm, vm.base, fd as u64, iov_addr, 2, SYS_WRITEV);
+
+        assert_eq!(written, 0);
+        assert_eq!(vm.vm.status, STATUS_FS);
+
+        let vm_ptr = &mut vm.vm as *mut _ as u32;
+        process_pending_requests(vm_ptr, vm.base);
+        let written = resume_from_fs(vm_ptr, vm.base);
+
+        assert_eq!(written, 5);
+        assert_eq!(vm.vm.status, STATUS_OK);
+
+        let read_fd = vm.sys_openat(b"/writev.txt", O_RDONLY);
         assert!(read_fd >= 3);
         let mut buf = [0u8; 5];
         assert_eq!(vm.sys_read(read_fd, &mut buf), 5);
@@ -727,7 +772,7 @@ pub fn dispatch_write(
     count: u64,
     nr: u64,
 ) -> i64 {
-    if nr == SYS_WRITEV || fd == 1 || fd == 2 {
+    if fd == 1 || fd == 2 {
         return sys_write(vm, base, fd, buf, count, nr);
     }
 
@@ -735,12 +780,30 @@ pub fn dispatch_write(
         Some(o) => o,
         None => return EBADF,
     };
+    if ofd.fd_type == FD_TYPE_FILE {
+        let flags = if nr == SYS_WRITEV {
+            ring_buffer::FS_REQ_FLAG_WRITEV
+        } else {
+            0
+        };
+        return submit_fs_request(
+            vm,
+            base,
+            ring_buffer::FS_OP_WRITE,
+            fd as i32,
+            0,
+            count,
+            buf,
+            0,
+            flags,
+            0,
+        );
+    }
     if ofd.fd_type == FD_TYPE_PIPE
         || ofd.fd_type == FD_TYPE_SOCKET
         || ofd.fd_type == FD_TYPE_EVENTFD
         || ofd.fd_type == FD_TYPE_PTY_MASTER
         || ofd.fd_type == FD_TYPE_PTY_SLAVE
-        || ofd.fd_type == FD_TYPE_FILE
     {
         return sys_write(vm, base, fd, buf, count, nr);
     }

@@ -54,6 +54,7 @@ pub const FS_OP_GETDENTS: u32 = 9;
 pub const FS_OP_TRUNCATE: u32 = 10;
 pub const FS_OP_LSEEK: u32 = 11;
 pub const FS_REQ_FLAG_PWRITE: u32 = 1 << 0;
+pub const FS_REQ_FLAG_WRITEV: u32 = 1 << 1;
 
 // Offsets within the ring buffer header
 pub const OFF_SUBMIT_HEAD: u32 = 0;
@@ -330,6 +331,8 @@ pub fn process_requests(ring_base: u32, vm_ptr: u32, base: u32) {
                 FS_OP_WRITE => {
                     if flags & FS_REQ_FLAG_PWRITE != 0 {
                         crate::syscall::fs::sys_pwrite64(vm, base, fd as u64, buf_ptr, len, offset)
+                    } else if flags & FS_REQ_FLAG_WRITEV != 0 {
+                        crate::syscall::fs::sys_write(vm, base, fd as u64, buf_ptr, len, SYS_WRITEV)
                     } else {
                         crate::syscall::fs::sys_write(vm, base, fd as u64, buf_ptr, len, SYS_WRITE)
                     }
