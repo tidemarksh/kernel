@@ -241,9 +241,9 @@ testcases/kernel/syscalls/fcntl/fcntl40.c requires F_CREATED_QUERY, which is not
 testcases/kernel/syscalls/fdatasync/fdatasync01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fdatasync/fdatasync02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fdatasync/fdatasync03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fgetxattr/fgetxattr01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fgetxattr/fgetxattr02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fgetxattr/fgetxattr03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/fgetxattr/fgetxattr01.c requires fsetxattr-backed attribute persistence and ERANGE behavior outside the current no-persistence fgetxattr profile
+testcases/kernel/syscalls/fgetxattr/fgetxattr02.c requires persisted xattrs across regular files, directories, symlinks, special files, and sockets outside the current no-persistence fgetxattr profile
+testcases/kernel/syscalls/fgetxattr/fgetxattr03.c requires fsetxattr-backed successful value retrieval outside the current no-persistence fgetxattr profile
 testcases/kernel/syscalls/file_attr/file_attr01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/file_attr/file_attr02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/file_attr/file_attr03.c not yet enabled in current syscall-conformance profile
@@ -252,9 +252,9 @@ testcases/kernel/syscalls/file_attr/file_attr05.c not yet enabled in current sys
 testcases/kernel/syscalls/finit_module/finit_module.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/finit_module/finit_module01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/finit_module/finit_module02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/flistxattr/flistxattr01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/flistxattr/flistxattr02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/flistxattr/flistxattr03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/flistxattr/flistxattr01.c requires fsetxattr-backed list contents outside the current empty-list flistxattr profile
+testcases/kernel/syscalls/flistxattr/flistxattr02.c requires persisted list contents and ERANGE behavior outside the current empty-list flistxattr profile
+testcases/kernel/syscalls/flistxattr/flistxattr03.c requires fd-specific persisted xattr list contents outside the current empty-list flistxattr profile
 testcases/kernel/syscalls/flock/flock04.c forked flock lock checks reach TPASS, but the current LTP process-tree runner reports the child status as TBROK 224; keep unsupported until child exit-status propagation for this harness shape is fixed
 testcases/kernel/syscalls/flock/flock07.c requires blocking flock(LOCK_EX) to be interrupted by SIGUSR1 and return EINTR, which is not implemented in the current flock wait model
 testcases/kernel/syscalls/fmtmsg/fmtmsg01.c not yet enabled in current syscall-conformance profile
@@ -270,22 +270,22 @@ testcases/kernel/syscalls/fork/fork13.c not yet enabled in current syscall-confo
 testcases/kernel/syscalls/fork/fork14.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fork/fork_procs.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fpathconf/fpathconf01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fremovexattr/fremovexattr01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fremovexattr/fremovexattr02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fsconfig/fsconfig01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fsconfig/fsconfig02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fsconfig/fsconfig03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fsetxattr/fsetxattr01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fsetxattr/fsetxattr02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fsmount/fsmount01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fsmount/fsmount02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fsopen/fsopen01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fsopen/fsopen02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fspick/fspick01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fspick/fspick02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/fremovexattr/fremovexattr01.c requires fsetxattr-backed successful removal outside the current no-persistence fremovexattr profile
+testcases/kernel/syscalls/fremovexattr/fremovexattr02.c mixes no-attribute and EBADF cases with bad-name-pointer validation and all-filesystem mount-device setup outside the current fremovexattr profile
+testcases/kernel/syscalls/fsconfig/fsconfig01.c fsconfig(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/fsconfig/fsconfig02.c fsconfig(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/fsconfig/fsconfig03.c fsconfig(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/fsetxattr/fsetxattr01.c requires full xattr flag/name/value validation plus successful persisted attributes outside the current EOPNOTSUPP fsetxattr profile
+testcases/kernel/syscalls/fsetxattr/fsetxattr02.c requires successful fd xattr creation/replacement across file types outside the current EOPNOTSUPP fsetxattr profile
+testcases/kernel/syscalls/fsmount/fsmount01.c fsmount(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/fsmount/fsmount02.c fsmount(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/fsopen/fsopen01.c fsopen(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/fsopen/fsopen02.c fsopen(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/fspick/fspick01.c fspick(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/fspick/fspick02.c fspick(2) is not production-dispatched and is excluded from the implemented-surface inventory
 testcases/kernel/syscalls/fstat/fstat02.c requires hard-link setup and exact st_nlink behavior, which is outside the current fstat metadata profile
-testcases/kernel/syscalls/fstatfs/fstatfs01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fstatfs/fstatfs02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/fstatfs/fstatfs01.c fstatfs(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/fstatfs/fstatfs02.c fstatfs(2) is not production-dispatched and is excluded from the implemented-surface inventory
 testcases/kernel/syscalls/fsync/fsync01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fsync/fsync02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fsync/fsync03.c not yet enabled in current syscall-conformance profile
@@ -340,11 +340,11 @@ testcases/kernel/syscalls/gettid/gettid01.c requires /proc/self/status Pid/Tgid 
 testcases/kernel/syscalls/gettimeofday/gettimeofday01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/gettimeofday/gettimeofday02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getuid/getuid03.c requires /proc/self/status Uid reporting, which the current LTP runner procfs does not provide
-testcases/kernel/syscalls/getxattr/getxattr01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getxattr/getxattr02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getxattr/getxattr03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getxattr/getxattr04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getxattr/getxattr05.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/getxattr/getxattr01.c requires setxattr-backed value persistence and ERANGE behavior outside the current no-persistence getxattr profile
+testcases/kernel/syscalls/getxattr/getxattr02.c requires xattr-capable all-filesystem mount-device setup and special-file/socket xattr behavior outside the current getxattr profile
+testcases/kernel/syscalls/getxattr/getxattr03.c requires setxattr-backed size query for an existing value outside the current no-persistence getxattr profile
+testcases/kernel/syscalls/getxattr/getxattr04.c requires trusted.* xattrs and large xattr values across mounted filesystems outside the current no-persistence getxattr profile
+testcases/kernel/syscalls/getxattr/getxattr05.c requires POSIX ACL xattrs plus user-namespace/procfs setup outside the current no-persistence getxattr profile
 testcases/kernel/syscalls/init_module/init_module.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/init_module/init_module01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/init_module/init_module02.c not yet enabled in current syscall-conformance profile
@@ -517,8 +517,8 @@ testcases/kernel/syscalls/landlock/landlock10.c not yet enabled in current sysca
 testcases/kernel/syscalls/landlock/landlock_exec.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/lchown/lchown01.c requires symlink(2) setup and symlink inode ownership updates, outside the current fchownat metadata profile
 testcases/kernel/syscalls/lchown/lchown02.c requires symlink(2) setup plus permission-denial, read-only filesystem, and symlink-loop error matrices outside the current fchownat metadata profile
-testcases/kernel/syscalls/lgetxattr/lgetxattr01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/lgetxattr/lgetxattr02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/lgetxattr/lgetxattr01.c requires symlink xattr value retrieval outside the current no-persistence lgetxattr profile
+testcases/kernel/syscalls/lgetxattr/lgetxattr02.c requires symlink creation and lsetxattr-backed symlink xattr persistence outside the current lgetxattr profile
 testcases/kernel/syscalls/link/link02.c link(2) lowers to linkat-family hard-link creation that is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/link/link04.c link(2) lowers to linkat-family hard-link creation that is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/link/link05.c link(2) lowers to linkat-family hard-link creation that is not dispatched in production and is excluded from the implemented-surface denominator
@@ -526,19 +526,19 @@ testcases/kernel/syscalls/link/link08.c link(2) lowers to linkat-family hard-lin
 testcases/kernel/syscalls/linkat/linkat01.c linkat(2) is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/linkat/linkat02.c linkat(2) is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/listen/listen01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/listmount/listmount01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/listmount/listmount02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/listmount/listmount03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/listmount/listmount04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/listxattr/listxattr01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/listxattr/listxattr02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/listxattr/listxattr03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/listxattr/listxattr04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/llistxattr/llistxattr01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/llistxattr/llistxattr02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/llistxattr/llistxattr03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/listmount/listmount01.c listmount(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/listmount/listmount02.c listmount(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/listmount/listmount03.c listmount(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/listmount/listmount04.c listmount(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/listxattr/listxattr01.c requires setxattr-backed list contents outside the current empty-list listxattr profile
+testcases/kernel/syscalls/listxattr/listxattr02.c requires persisted list contents and ERANGE behavior outside the current empty-list listxattr profile
+testcases/kernel/syscalls/listxattr/listxattr03.c requires per-file persisted list contents outside the current empty-list listxattr profile
+testcases/kernel/syscalls/listxattr/listxattr04.c requires large security xattr list contents and ERANGE sizing outside the current empty-list listxattr profile
+testcases/kernel/syscalls/llistxattr/llistxattr01.c requires symlink xattr list contents outside the current empty-list llistxattr profile
+testcases/kernel/syscalls/llistxattr/llistxattr02.c requires symlink xattr list contents and ERANGE behavior outside the current empty-list llistxattr profile
+testcases/kernel/syscalls/llistxattr/llistxattr03.c requires path-specific xattr list contents for symlink and non-symlink paths outside the current empty-list llistxattr profile
 testcases/kernel/syscalls/llseek/llseek01.c requires RLIMIT_FSIZE enforcement on write after lseek beyond the file-size limit, which is not implemented
-testcases/kernel/syscalls/lremovexattr/lremovexattr01.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/lremovexattr/lremovexattr01.c requires file and symlink xattr persistence plus successful symlink-only removal outside the current no-persistence lremovexattr profile
 testcases/kernel/syscalls/lseek/lseek02.c pipe ESPIPE behavior is covered elsewhere, but this row also requires named FIFO setup that is not supported in the current LTP profile
 testcases/kernel/syscalls/lseek/lseek11.c requires SEEK_DATA and SEEK_HOLE semantics, which are not implemented by the current lseek surface
 testcases/kernel/syscalls/lsm/lsm_get_self_attr01.c not yet enabled in current syscall-conformance profile
@@ -637,20 +637,20 @@ testcases/kernel/syscalls/mmap/mmap21.c not yet enabled in current syscall-confo
 testcases/kernel/syscalls/mmap/mmap22.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/modify_ldt/modify_ldt01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/modify_ldt/modify_ldt02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mount/mount01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mount/mount02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mount/mount03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mount/mount03_suid_child.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mount/mount04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mount/mount05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mount/mount06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mount/mount07.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mount/mount08.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mount_setattr/mount_setattr01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/mount_setattr/mount_setattr02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/move_mount/move_mount01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/move_mount/move_mount02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/move_mount/move_mount03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/mount/mount01.c requires successful all-filesystem mount/umount behavior outside the current no-mount-table mount profile
+testcases/kernel/syscalls/mount/mount02.c requires pre-mounted targets and detailed mount path/device errno behavior outside the current EPERM-only mount probe profile
+testcases/kernel/syscalls/mount/mount03.c requires successful remount/bind/move/nosuid/noexec/readonly mount-flag behavior outside the current no-mount-table mount profile
+testcases/kernel/syscalls/mount/mount03_suid_child.c helper belongs to mount03 and requires the same successful mount-flag behavior outside the current no-mount-table mount profile
+testcases/kernel/syscalls/mount/mount04.c requires LTP mount-device acquisition before the unprivileged EPERM mount probe can run; the current wasm test environment reports no free devices
+testcases/kernel/syscalls/mount/mount05.c requires successful bind mounts and cross-mount file visibility outside the current no-mount-table mount profile
+testcases/kernel/syscalls/mount/mount06.c requires successful bind/private/move mount operations outside the current no-mount-table mount profile
+testcases/kernel/syscalls/mount/mount07.c requires nosymfollow mount flag propagation and statfs flag reporting outside the current no-mount-table mount/statfs profile
+testcases/kernel/syscalls/mount/mount08.c requires procfs magic-link setup and bind-mount errno behavior outside the current mount profile
+testcases/kernel/syscalls/mount_setattr/mount_setattr01.c mount_setattr(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/mount_setattr/mount_setattr02.c mount_setattr(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/move_mount/move_mount01.c move_mount(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/move_mount/move_mount02.c move_mount(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/move_mount/move_mount03.c move_mount(2) is not production-dispatched and is excluded from the implemented-surface inventory
 testcases/kernel/syscalls/move_pages/move_pages01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/move_pages/move_pages02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/move_pages/move_pages03.c not yet enabled in current syscall-conformance profile
@@ -729,8 +729,8 @@ testcases/kernel/syscalls/open/open14.c requires O_TMPFILE and linkat publicatio
 testcases/kernel/syscalls/open/open15.c requires symlink(2) setup outside the current openat profile
 testcases/kernel/syscalls/open_by_handle_at/open_by_handle_at01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/open_by_handle_at/open_by_handle_at02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/open_tree/open_tree01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/open_tree/open_tree02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/open_tree/open_tree01.c open_tree(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/open_tree/open_tree02.c open_tree(2) is not production-dispatched and is excluded from the implemented-surface inventory
 testcases/kernel/syscalls/openat/openat02.c requires symlink(2), execlp helper execution for O_CLOEXEC, O_NOATIME, O_NOFOLLOW, and large-file/mount-path behavior beyond the current openat profile
 testcases/kernel/syscalls/openat/openat02_child.c helper binary for openat02; excluded as non-standalone LTP coverage row until openat02 helper execution is supported
 testcases/kernel/syscalls/openat/openat03.c requires O_TMPFILE plus /proc/self/fd linkat publication semantics, which are not implemented
@@ -843,8 +843,7 @@ testcases/kernel/syscalls/recvmsg/recvmsg02.c not yet enabled in current syscall
 testcases/kernel/syscalls/recvmsg/recvmsg03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/remap_file_pages/remap_file_pages01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/remap_file_pages/remap_file_pages02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/removexattr/removexattr01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/removexattr/removexattr02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/removexattr/removexattr01.c requires setxattr-backed successful removal outside the current no-persistence removexattr profile
 testcases/kernel/syscalls/rename/rename01.c requires LTP mount-device acquisition before basic rename validation; the current test profile reports no free devices
 testcases/kernel/syscalls/rename/rename03.c requires LTP mount-device acquisition before existing-target rename validation; the current test profile reports no free devices
 testcases/kernel/syscalls/rename/rename04.c requires LTP mount-device acquisition before non-empty-directory rename validation; the current test profile reports no free devices
@@ -992,9 +991,9 @@ testcases/kernel/syscalls/setsockopt/setsockopt09.c setsockopt implements a narr
 testcases/kernel/syscalls/setsockopt/setsockopt10.c setsockopt implements a narrow socket option subset only
 testcases/kernel/syscalls/settimeofday/settimeofday01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/settimeofday/settimeofday02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setxattr/setxattr01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setxattr/setxattr02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/setxattr/setxattr03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/setxattr/setxattr01.c requires full xattr flag/name/value validation plus successful persisted attributes outside the current EOPNOTSUPP setxattr profile
+testcases/kernel/syscalls/setxattr/setxattr02.c requires successful path xattr creation/replacement across file types outside the current EOPNOTSUPP setxattr profile
+testcases/kernel/syscalls/setxattr/setxattr03.c requires security/trusted namespace xattr permission and persistence behavior outside the current EOPNOTSUPP setxattr profile
 testcases/kernel/syscalls/sgetmask/sgetmask01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/shutdown/shutdown01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/shutdown/shutdown02.c not yet enabled in current syscall-conformance profile
@@ -1041,17 +1040,17 @@ testcases/kernel/syscalls/ssetmask/ssetmask01.c not yet enabled in current sysca
 testcases/kernel/syscalls/stat/stat01.c requires file ownership to reflect the post-setuid creator uid; current MemFS ownership remains root-owned in this LTP setup
 testcases/kernel/syscalls/stat/stat03.c requires symlink-loop setup and directory permission edge behavior outside the current stat metadata profile
 testcases/kernel/syscalls/stat/stat04.c requires mount/device setup, symlink setup, hard links, ownership changes, and timestamp metadata comparisons outside the current stat metadata profile
-testcases/kernel/syscalls/statfs/statfs02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/statfs/statfs03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/statmount/statmount01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/statmount/statmount02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/statmount/statmount03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/statmount/statmount04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/statmount/statmount05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/statmount/statmount06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/statmount/statmount07.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/statmount/statmount08.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/statmount/statmount09.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/statfs/statfs02.c mixes statfs path errno cases with symlink-loop setup and bad-buffer fault behavior outside the current statfs profile
+testcases/kernel/syscalls/statfs/statfs03.c requires directory search-permission denial after effective-uid switching outside the current statfs path-resolution profile
+testcases/kernel/syscalls/statmount/statmount01.c statmount(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/statmount/statmount02.c statmount(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/statmount/statmount03.c statmount(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/statmount/statmount04.c statmount(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/statmount/statmount05.c statmount(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/statmount/statmount06.c statmount(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/statmount/statmount07.c statmount(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/statmount/statmount08.c statmount(2) is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/statmount/statmount09.c statmount(2) is not production-dispatched and is excluded from the implemented-surface inventory
 testcases/kernel/syscalls/statvfs/statvfs01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/statvfs/statvfs02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/statx/statx01.c statx(2) is not dispatched in production and is excluded from the implemented-surface denominator
@@ -1120,11 +1119,11 @@ testcases/kernel/syscalls/tkill/tkill01.c not yet enabled in current syscall-con
 testcases/kernel/syscalls/tkill/tkill02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/truncate/truncate03.c requires permission-denial, symlink-loop, and RLIMIT_FSIZE/EFBIG behavior outside the current truncate profile
 testcases/kernel/syscalls/ulimit/ulimit01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/umount/umount01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/umount/umount02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/umount/umount03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/umount2/umount2_01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/umount2/umount2_02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/umount/umount01.c requires successful mount setup and umount behavior outside the current no-mount-table umount2 profile
+testcases/kernel/syscalls/umount/umount02.c requires successful mount setup plus busy/unmount errno behavior outside the current no-mount-table umount2 profile
+testcases/kernel/syscalls/umount/umount03.c requires successful mount setup before unprivileged umount EPERM probing outside the current no-mount-table umount2 profile
+testcases/kernel/syscalls/umount2/umount2_01.c requires successful mount setup and MNT_DETACH semantics outside the current no-mount-table umount2 profile
+testcases/kernel/syscalls/umount2/umount2_02.c requires successful mount setup plus MNT_EXPIRE and UMOUNT_NOFOLLOW semantics outside the current no-mount-table umount2 profile
 testcases/kernel/syscalls/uname/uname04.c requires personality(2) PER_LINUX|UNAME26 behavior, but personality is not implemented in the production syscall dispatch
 testcases/kernel/syscalls/unlink/unlink05.c requires FIFO setup through mkfifo/mknod, outside the current unlinkat mutation profile
 testcases/kernel/syscalls/unlink/unlink08.c requires unprivileged directory permission-denial checks outside the current unlinkat mutation profile
