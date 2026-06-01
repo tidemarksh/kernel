@@ -5,6 +5,8 @@ use crate::fs::{fd_table, memfs};
 use crate::guest_mem;
 use crate::types::ThreadState;
 
+const NAME_MAX: usize = 255;
+
 pub(super) fn dirfd_base_ino(vm: &ThreadState, dirfd: u64, base: u32) -> Result<u32, i64> {
     if dirfd as i32 == AT_FDCWD {
         return Ok(current_dir_ino(base, vm));
@@ -75,6 +77,9 @@ pub(super) fn resolve_path_with_symlink_policy(
             cursor += 1;
         }
         let component = &path[component_start..cursor];
+        if component.len() > NAME_MAX {
+            return Err(ENAMETOOLONG);
+        }
         if component.is_empty() || component == b"." {
             continue;
         }
@@ -136,6 +141,10 @@ pub(super) fn resolve_at(
     path_addr: u64,
     base: u32,
 ) -> Result<u32, i64> {
+    if path_addr == 0 || !crate::syscall::memory::guest_range_accessible(base, path_addr, 1) {
+        return Err(EFAULT);
+    }
+
     let mut path_buf = [0u8; 512];
     let len = unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf) };
     let path = trim_trailing_slashes(&path_buf[..len]);
@@ -160,6 +169,9 @@ pub fn sys_getcwd(vm: &ThreadState, base: u32, buf: u64, size: u64) -> i64 {
     }
     if len as u64 + 1 > size {
         return ERANGE;
+    }
+    if buf == 0 || !crate::syscall::memory::guest_range_accessible(base, buf, len as u64 + 1) {
+        return EFAULT;
     }
     unsafe {
         guest_mem::write_bytes(base, buf, &path[..len]);

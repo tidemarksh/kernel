@@ -2,6 +2,8 @@
 testcases/kernel/syscalls/close/close01.c verified close(2) for file/pipe/socket descriptors
 testcases/kernel/syscalls/close/close02.c verified close(2) EBADF on invalid fd
 testcases/kernel/syscalls/clone/clone08.c verified CLONE_PARENT, CLONE_CHILD_SETTID, CLONE_PARENT_SETTID, and CLONE_THREAD clear_child_tid/futex orchestration within the supported clone subset
+testcases/kernel/syscalls/chdir/chdir02.c verified chdir(2) accepts root paths with repeated slashes shorter than PATH_MAX
+testcases/kernel/syscalls/chdir/chdir04.c verified chdir(2) ENAMETOOLONG, ENOENT, and EFAULT error handling
 testcases/kernel/syscalls/epoll_create1/epoll_create1_01.c verified epoll_create1 CLOEXEC behavior
 testcases/kernel/syscalls/epoll_create1/epoll_create1_02.c verified epoll_create1 EINVAL on invalid flags
 testcases/kernel/syscalls/epoll_wait/epoll_wait07.c verified EPOLLONESHOT readiness suppression with epoll_create1-backed LTP coverage
@@ -66,6 +68,8 @@ testcases/kernel/syscalls/getresgid/getresgid01.c verifies getresgid(2) reports 
 testcases/kernel/syscalls/getresgid/getresgid02.c verifies setregid(2)-updated effective/saved gid values through getresgid(2)
 testcases/kernel/syscalls/getresuid/getresuid01.c verifies getresuid(2) reports current real/effective/saved uid values
 testcases/kernel/syscalls/getresuid/getresuid02.c verifies setreuid(2)-updated effective/saved uid values through getresuid(2)
+testcases/kernel/syscalls/getcwd/getcwd01.c verified getcwd(2) EFAULT and ERANGE error handling
+testcases/kernel/syscalls/getcwd/getcwd02.c verified getcwd(2) returns the current directory through fixed and libc-allocated buffers
 testcases/kernel/syscalls/gettid/gettid02.c verified pthread clone threads receive distinct tids from the process pid and from each other
 testcases/kernel/syscalls/getuid/getuid01.c verified basic getuid(2) success path
 testcases/kernel/syscalls/flock/flock01.c verified flock(2) LOCK_SH, LOCK_UN, and LOCK_EX success paths on regular files

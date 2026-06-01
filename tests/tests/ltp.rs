@@ -73,6 +73,8 @@ macro_rules! ltp_case {
 }
 
 ltp_case!(ltp_clone08);
+ltp_case!(ltp_chdir02);
+ltp_case!(ltp_chdir04);
 ltp_case!(ltp_close01);
 ltp_case!(ltp_close02);
 ltp_case!(ltp_close_range02);
@@ -140,6 +142,8 @@ ltp_case!(ltp_getresgid01);
 ltp_case!(ltp_getresgid02);
 ltp_case!(ltp_getresuid01);
 ltp_case!(ltp_getresuid02);
+ltp_case!(ltp_getcwd01);
+ltp_case!(ltp_getcwd02);
 ltp_case!(ltp_gettid02);
 ltp_case!(ltp_getuid01);
 ltp_case!(ltp_flock01);

@@ -53,9 +53,7 @@ testcases/kernel/syscalls/capset/capset01.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/capset/capset02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/capset/capset03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/capset/capset04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/chdir/chdir01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/chdir/chdir02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/chdir/chdir04.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/chdir/chdir01.c requires root, all-filesystem mount matrix, symlink-loop setup, and unprivileged directory permission checks beyond the current cwd profile
 testcases/kernel/syscalls/chmod/chmod01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/chmod/chmod03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/chmod/chmod05.c not yet enabled in current syscall-conformance profile
@@ -323,10 +321,8 @@ testcases/kernel/syscalls/get_mempolicy/get_mempolicy02.c not yet enabled in cur
 testcases/kernel/syscalls/get_robust_list/get_robust_list01.c get_robust_list is implemented for self lookup and basic errno cases, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
 testcases/kernel/syscalls/getcontext/getcontext01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getcpu/getcpu01.c getcpu01 depends on sched_setaffinity(2) and /sys NUMA/cpu topology enumeration; keep it unsupported until that affinity/topology surface is promoted
-testcases/kernel/syscalls/getcwd/getcwd01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getcwd/getcwd02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getcwd/getcwd03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getcwd/getcwd04.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/getcwd/getcwd04.c requires a multi-CPU rename race harness and child kill/wait cleanup beyond the current cwd profile
+testcases/kernel/syscalls/getcwd/getcwd03.c requires symlink(2) setup, which returns ENOSYS in the current production syscall surface
 testcases/kernel/syscalls/getdents/getdents01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getdents/getdents02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getdomainname/getdomainname01.c not yet enabled in current syscall-conformance profile

@@ -1455,6 +1455,8 @@ mod tests {
 fn spawn_drive_mode_for_ltp(binary: &str) -> Result<SpawnDriveMode, String> {
     match binary {
         "clone08"
+        | "chdir02"
+        | "chdir04"
         | "close01"
         | "close02"
         | "close_range02"
@@ -1522,6 +1524,8 @@ fn spawn_drive_mode_for_ltp(binary: &str) -> Result<SpawnDriveMode, String> {
         | "getresgid02"
         | "getresuid01"
         | "getresuid02"
+        | "getcwd01"
+        | "getcwd02"
         | "gettid02"
         | "getuid01"
         | "flock01"
