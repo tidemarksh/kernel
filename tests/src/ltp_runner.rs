@@ -1536,6 +1536,7 @@ fn spawn_drive_mode_for_ltp(binary: &str) -> Result<SpawnDriveMode, String> {
         | "pipe05"
         | "pipe08"
         | "pipe10"
+        | "pipe11"
         | "pipe14"
         | "pread01"
         | "pread02"

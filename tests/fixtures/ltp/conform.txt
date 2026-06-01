@@ -80,6 +80,7 @@ testcases/kernel/syscalls/pipe/pipe03.c verified libc pipe wrapper returns EBADF
 testcases/kernel/syscalls/pipe/pipe05.c verified libc pipe wrapper returns EFAULT for an inaccessible fd output array
 testcases/kernel/syscalls/pipe/pipe08.c verified write to a pipe with no readers returns EPIPE and raises SIGPIPE
 testcases/kernel/syscalls/pipe/pipe10.c verified a forked child can read data written to an inherited unnamed pipe
+testcases/kernel/syscalls/pipe/pipe11.c verified multiple forked children can consume parent-written pipe data slices
 testcases/kernel/syscalls/pipe/pipe14.c verified pipe EOF is reported only after buffered data is consumed and the write end is closed
 testcases/kernel/syscalls/pread/pread01.c verified pread(2) reads at offsets without changing file position
 testcases/kernel/syscalls/pread/pread02.c verified pread(2) ESPIPE, EINVAL negative offset, and EISDIR error paths

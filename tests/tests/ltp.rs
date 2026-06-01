@@ -154,6 +154,7 @@ ltp_case!(ltp_pipe03);
 ltp_case!(ltp_pipe05);
 ltp_case!(ltp_pipe08);
 ltp_case!(ltp_pipe10);
+ltp_case!(ltp_pipe11);
 ltp_case!(ltp_pipe14);
 ltp_case!(ltp_pread01);
 ltp_case!(ltp_pread02);

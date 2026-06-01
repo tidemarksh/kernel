@@ -786,14 +786,13 @@ testcases/kernel/syscalls/pidfd_open/pidfd_open04.c not yet enabled in current s
 testcases/kernel/syscalls/pidfd_send_signal/pidfd_send_signal01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/pidfd_send_signal/pidfd_send_signal02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/pidfd_send_signal/pidfd_send_signal03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/pipe/pipe02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/pipe/pipe04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/pipe/pipe06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/pipe/pipe07.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/pipe/pipe09.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/pipe/pipe11.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/pipe/pipe02.c child reaches the broken-pipe path, but the LTP wait-status check observes that the child was not killed by SIGPIPE
+testcases/kernel/syscalls/pipe/pipe04.c requires killing writers blocked on a full pipe and validating signal wait status, which is broader than the currently adopted pipe dataflow subset
+testcases/kernel/syscalls/pipe/pipe06.c depends on getdtablesize()-based fd-limit exhaustion matching Tidemark's fd-table limit, which is not currently true
+testcases/kernel/syscalls/pipe/pipe07.c depends on /proc/self/fd enumeration plus getdtablesize()-based expected fd-limit accounting, which is not currently aligned with Tidemark's fd-table limit
+testcases/kernel/syscalls/pipe/pipe09.c runner stops with unsupported deferred status 21 after the sequential forked writer flow, so the row is not usable as conform evidence yet
 testcases/kernel/syscalls/pipe/pipe12.c requires F_GETPIPE_SZ plus pipe FIONREAD readiness/accounting details that are not implemented
-testcases/kernel/syscalls/pipe/pipe13.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/pipe/pipe13.c requires /proc/<pid>/stat process-state observation for sleeping pipe readers before validating close wakeups
 testcases/kernel/syscalls/pipe/pipe15.c requires /proc/sys/fs/pipe-user-pages-soft and F_GETPIPE_SZ pipe-size policy support that is not implemented
 testcases/kernel/syscalls/pipe2/pipe2_01.c includes O_DIRECT pipe packet-mode semantics; current pipe2 support covers O_CLOEXEC/O_NONBLOCK but not packet-mode pipes
 testcases/kernel/syscalls/pipe2/pipe2_02.c LTP resource_files helper `pipe2_02_child` is built but not available at the guest resource path, so the harness fails during helper copy before exercising pipe2 CLOEXEC semantics
