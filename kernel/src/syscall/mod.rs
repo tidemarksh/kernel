@@ -574,7 +574,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             // CLONE_VM | CLONE_THREAD → new thread (thread.rs)
             // neither → process context (process.rs)
             if a0 & CLONE_VFORK != 0 {
-                let status = process::sys_vfork(vm, base);
+                let status = process::sys_clone_vfork(vm, base, a0, a1, a2, a3, a4);
                 return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, vm.x[10] as i64, status);
             } else if a0 & CLONE_VM != 0 && a0 & CLONE_THREAD != 0 {
                 let ret = thread::sys_clone(vm, base, a0, a1, a2, a3, a4);

@@ -14,6 +14,50 @@ fn contract_vfork_snapshots_and_suspends_parent() {
 }
 
 #[test]
+fn contract_clone_vfork_applies_raw_clone_child_args_without_polluting_parent() {
+    let mut t = TestVm::new();
+    t.vm.x[2] = 0x41000;
+    t.vm.x[4] = 0x12000;
+    t.vm.clear_child_tid = 0x7770;
+    let parent_tidptr = 0x3000;
+    let child_tidptr = 0x3008;
+    let child_stack = 0x88000;
+    let child_tls = 0x99000;
+    let flags = CLONE_VFORK
+        | CLONE_VM
+        | CLONE_SETTLS
+        | CLONE_PARENT_SETTID
+        | CLONE_CHILD_SETTID
+        | CLONE_CHILD_CLEARTID;
+
+    let status = process_impl::sys_clone_vfork(
+        &mut t.vm,
+        t.base,
+        flags,
+        child_stack,
+        parent_tidptr,
+        child_tls,
+        child_tidptr,
+    );
+    let child_pid = process_impl::vfork_child_pid();
+    assert_eq!(status, STATUS_VFORK_WAIT);
+    assert!(child_pid > 0);
+    assert_eq!(t.vm.x[10], 0);
+    assert_eq!(t.vm.x[2], child_stack);
+    assert_eq!(t.vm.x[4], child_tls);
+    assert_eq!(t.vm.tls_base, child_tls);
+    assert_eq!(t.vm.clear_child_tid, child_tidptr);
+    assert_eq!(unsafe { guest_mem::read_u32(t.base, parent_tidptr) }, child_pid as u32);
+    assert_eq!(unsafe { guest_mem::read_u32(t.base, child_tidptr) }, child_pid as u32);
+
+    process_impl::vfork_parent_resume(&mut t.vm, child_pid);
+    assert_eq!(t.vm.x[2], 0x41000);
+    assert_eq!(t.vm.x[4], 0x12000);
+    assert_eq!(t.vm.clear_child_tid, 0x7770);
+    assert_eq!(t.vm.status, STATUS_OK);
+}
+
+#[test]
 fn contract_vfork_parent_resume_restores_state() {
     let mut t = TestVm::new();
     t.vm.x[1] = 0xBEEF;

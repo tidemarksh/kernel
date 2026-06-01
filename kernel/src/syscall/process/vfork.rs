@@ -135,7 +135,15 @@ fn retire_vfork_child_process(base: u32, child_process_ptr: u32) {
     }
 }
 
-pub fn sys_vfork(vm: &mut ThreadState, base: u32) -> i32 {
+fn sys_vfork_inner(
+    vm: &mut ThreadState,
+    base: u32,
+    flags: u64,
+    child_stack: u64,
+    parent_tidptr: u64,
+    tls: u64,
+    child_tidptr: u64,
+) -> i32 {
     clear_spawn_handoff(vm);
     let parent_process_ptr = vm.process_ptr;
     let parent_tid = vm.tid;
@@ -160,6 +168,9 @@ pub fn sys_vfork(vm: &mut ThreadState, base: u32) -> i32 {
     } else {
         vm.process_ptr
     };
+    if flags & CLONE_PARENT_SETTID != 0 && parent_tidptr != 0 && child_pid > 0 {
+        unsafe { guest_mem::write_u32(base, parent_tidptr, child_pid as u32) };
+    }
     let mut proc_self_exe_target = [0u8; super::execve::PROC_SELF_EXE_SNAPSHOT_MAX];
     let proc_self_exe_len = super::execve::snapshot_proc_self_exe_target(&mut proc_self_exe_target);
     if proc_self_exe_len == 0 {
@@ -175,10 +186,47 @@ pub fn sys_vfork(vm: &mut ThreadState, base: u32) -> i32 {
     vm.sig_pending = 0;
     vm.tid = child_pid;
     vm.process_ptr = child_process_ptr;
+    vm.clone_flags = flags;
+    vm.clone_child_stack = child_stack;
+    vm.clone_tls = tls;
+    vm.clone_child_tidptr = child_tidptr;
+    vm.clone_child_tid = child_pid;
+    vm.clone_pending = 0;
+    if child_stack != 0 {
+        vm.x[2] = child_stack;
+    }
+    if flags & CLONE_SETTLS != 0 {
+        vm.x[4] = tls;
+        vm.tls_base = tls;
+    }
+    if flags & CLONE_CHILD_CLEARTID != 0 {
+        vm.clear_child_tid = child_tidptr;
+    } else {
+        vm.clear_child_tid = 0;
+    }
+    if flags & CLONE_CHILD_SETTID != 0 && child_tidptr != 0 && child_pid > 0 {
+        unsafe { guest_mem::write_u32(base, child_tidptr, child_pid as u32) };
+    }
     reattach_guest_thread_count(vm, base);
     vm.x[10] = 0;
     vm.status = STATUS_VFORK_WAIT;
     STATUS_VFORK_WAIT
+}
+
+pub fn sys_vfork(vm: &mut ThreadState, base: u32) -> i32 {
+    sys_vfork_inner(vm, base, 0, 0, 0, 0, 0)
+}
+
+pub fn sys_clone_vfork(
+    vm: &mut ThreadState,
+    base: u32,
+    flags: u64,
+    child_stack: u64,
+    parent_tidptr: u64,
+    tls: u64,
+    child_tidptr: u64,
+) -> i32 {
+    sys_vfork_inner(vm, base, flags, child_stack, parent_tidptr, tls, child_tidptr)
 }
 
 fn vfork_parent_resume_inner(vm: &mut ThreadState, child_pid: i32, cleanup_child_fds: bool) {
