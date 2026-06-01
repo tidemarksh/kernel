@@ -143,7 +143,7 @@ testcases/kernel/syscalls/epoll_wait/epoll_wait04.c epoll_wait dispatch exists a
 testcases/kernel/syscalls/eventfd/eventfd01.c local kernel contract tests pass for the read-side errno surface, but the upstream LTP binary still exits 2 without diagnostics, so the remaining blocker is LTP-specific harness/integration behavior
 testcases/kernel/syscalls/eventfd/eventfd02.c local kernel contract tests pass for the write-side errno surface, but the upstream LTP binary still exits 2 without diagnostics, so the remaining blocker is LTP-specific harness/integration behavior
 testcases/kernel/syscalls/eventfd/eventfd03.c direct eventfd2 coverage passes, but this case depends on the libc eventfd() wrapper plus select(2), neither of which is yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/eventfd/eventfd04.c eventfd/eventfd2 dispatch exists and kernel contract tests cover roundtrip/nonblock behavior, but the corresponding LTP cases are not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/eventfd/eventfd04.c requires select(2) write-readiness over eventfd plus needs_kconfigs CONFIG_EVENTFD; keep unsupported until poll/select and kernel .config exposure are in scope
 testcases/kernel/syscalls/eventfd/eventfd05.c source-level eventfd wrapper semantics map to implemented eventfd2 behavior, but the LTP row is blocked before execution by needs_kconfigs CONFIG_EVENTFD because the guest profile does not expose a parseable kernel .config
 testcases/kernel/syscalls/eventfd/eventfd06.c depends on AIO io_setup/io_submit/io_getevents prerequisites outside the implemented syscall denominator, so it is not standalone eventfd coverage for the current inventory
 testcases/kernel/syscalls/execl/execl01.c not yet enabled in current syscall-conformance profile
@@ -275,9 +275,8 @@ testcases/kernel/syscalls/finit_module/finit_module02.c not yet enabled in curre
 testcases/kernel/syscalls/flistxattr/flistxattr01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/flistxattr/flistxattr02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/flistxattr/flistxattr03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/flock/flock03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/flock/flock04.c forked flock lock checks reach TPASS, but the current LTP process-tree runner reports the child status as TBROK 224; keep unsupported until child exit-status propagation for this harness shape is fixed
-testcases/kernel/syscalls/flock/flock07.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/flock/flock07.c requires blocking flock(LOCK_EX) to be interrupted by SIGUSR1 and return EINTR, which is not implemented in the current flock wait model
 testcases/kernel/syscalls/fmtmsg/fmtmsg01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fork/fork01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fork/fork03.c not yet enabled in current syscall-conformance profile
@@ -562,9 +561,7 @@ testcases/kernel/syscalls/listxattr/listxattr04.c not yet enabled in current sys
 testcases/kernel/syscalls/llistxattr/llistxattr01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/llistxattr/llistxattr02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/llistxattr/llistxattr03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/llseek/llseek01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/llseek/llseek02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/llseek/llseek03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/llseek/llseek01.c requires RLIMIT_FSIZE enforcement on write after lseek beyond the file-size limit, which is not implemented
 testcases/kernel/syscalls/lremovexattr/lremovexattr01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/lseek/lseek02.c pipe ESPIPE behavior is covered elsewhere, but this row also requires named FIFO setup that is not supported in the current LTP profile
 testcases/kernel/syscalls/lseek/lseek11.c requires SEEK_DATA and SEEK_HOLE semantics, which are not implemented by the current lseek surface
@@ -815,9 +812,9 @@ testcases/kernel/syscalls/prctl/prctl07.c prctl currently returns ENOSYS
 testcases/kernel/syscalls/prctl/prctl08.c prctl currently returns ENOSYS
 testcases/kernel/syscalls/prctl/prctl09.c prctl currently returns ENOSYS
 testcases/kernel/syscalls/prctl/prctl10.c prctl currently returns ENOSYS
-testcases/kernel/syscalls/preadv/preadv01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/preadv/preadv02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/preadv/preadv03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/preadv/preadv01.c preadv(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/preadv/preadv02.c preadv(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/preadv/preadv03.c preadv(2) is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/preadv2/preadv201.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/preadv2/preadv202.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/preadv2/preadv203.c not yet enabled in current syscall-conformance profile
@@ -837,9 +834,9 @@ testcases/kernel/syscalls/ptrace/ptrace08.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/ptrace/ptrace09.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/ptrace/ptrace10.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/ptrace/ptrace11.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/pwritev/pwritev01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/pwritev/pwritev02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/pwritev/pwritev03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/pwritev/pwritev01.c pwritev(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/pwritev/pwritev02.c pwritev(2) is not dispatched in production and is excluded from the implemented-surface denominator
+testcases/kernel/syscalls/pwritev/pwritev03.c pwritev(2) is not dispatched in production and is excluded from the implemented-surface denominator
 testcases/kernel/syscalls/pwritev2/pwritev201.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/pwritev2/pwritev202.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/quotactl/quotactl01.c not yet enabled in current syscall-conformance profile
@@ -851,8 +848,8 @@ testcases/kernel/syscalls/quotactl/quotactl06.c not yet enabled in current sysca
 testcases/kernel/syscalls/quotactl/quotactl07.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/quotactl/quotactl08.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/quotactl/quotactl09.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/read/read02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/read/read03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/read/read02.c includes O_DIRECT alignment cases and LTP TCONF behavior outside the current read(2) regular-file error profile
+testcases/kernel/syscalls/read/read03.c requires named FIFO setup via mknod/mkfifo, which is not supported in the current LTP profile
 testcases/kernel/syscalls/readahead/readahead01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/readahead/readahead02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/readdir/readdir01.c not yet enabled in current syscall-conformance profile
@@ -862,7 +859,6 @@ testcases/kernel/syscalls/readlink/readlink03.c not yet enabled in current sysca
 testcases/kernel/syscalls/readlinkat/readlinkat01.c readlinkat LTP setup depends on symlink(2), which is outside the current Phase4 syscall surface
 testcases/kernel/syscalls/readlinkat/readlinkat02.c readlinkat LTP setup depends on symlink(2), which is outside the current Phase4 syscall surface
 testcases/kernel/syscalls/readv/readv01.c current LTP process-tree runner stops with unsupported deferred STATUS_OK while executing this no-fork readv harness; keep unsupported until the runner can complete this status shape
-testcases/kernel/syscalls/readv/readv02.c requires readv iovec-count, iovec-array, inaccessible iovec, and total-length overflow validation that is not implemented yet
 testcases/kernel/syscalls/realpath/realpath01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/reboot/reboot01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/reboot/reboot02.c not yet enabled in current syscall-conformance profile

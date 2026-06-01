@@ -175,6 +175,11 @@ pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) 
 
 /// readv: scatter read into multiple guest buffers.
 pub fn sys_readv(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u64) -> i64 {
+    let validation = validate_readv_iovecs(base, iov_addr, iovcnt);
+    if validation < 0 {
+        return validation;
+    }
+
     let mut total = 0i64;
 
     for i in 0..iovcnt {
@@ -208,6 +213,41 @@ pub fn sys_readv(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt
     }
 
     total
+}
+
+fn validate_readv_iovecs(base: u32, iov_addr: u64, iovcnt: u64) -> i64 {
+    if iovcnt == 0 {
+        return 0;
+    }
+    if iovcnt > LINUX_IOV_MAX {
+        return EINVAL;
+    }
+    let Some(iov_bytes) = iovcnt.checked_mul(IOVEC_SIZE) else {
+        return EINVAL;
+    };
+    if !crate::syscall::memory::guest_range_accessible(base, iov_addr, iov_bytes) {
+        return EFAULT;
+    }
+
+    let mut total = 0u64;
+    for i in 0..iovcnt {
+        let iov_base = unsafe { guest_mem::read_u64(base, iov_addr + i * IOVEC_SIZE) };
+        let iov_len = unsafe { guest_mem::read_u64(base, iov_addr + i * IOVEC_SIZE + 8) };
+        if iov_len > i64::MAX as u64 {
+            return EINVAL;
+        }
+        let Some(next_total) = total.checked_add(iov_len) else {
+            return EINVAL;
+        };
+        if next_total > i64::MAX as u64 {
+            return EINVAL;
+        }
+        total = next_total;
+        if iov_len > 0 && !crate::syscall::memory::guest_range_accessible(base, iov_base, iov_len) {
+            return EFAULT;
+        }
+    }
+    0
 }
 
 /// pread64: read at specified offset without changing OFD offset.

@@ -70,9 +70,12 @@ testcases/kernel/syscalls/gettid/gettid02.c verified pthread clone threads recei
 testcases/kernel/syscalls/getuid/getuid01.c verified basic getuid(2) success path
 testcases/kernel/syscalls/flock/flock01.c verified flock(2) LOCK_SH, LOCK_UN, and LOCK_EX success paths on regular files
 testcases/kernel/syscalls/flock/flock02.c verified flock(2) EBADF, EINVAL, and nonblocking conflict error paths
+testcases/kernel/syscalls/flock/flock03.c verified fork-inherited file-description flock unlock behavior
 testcases/kernel/syscalls/flock/flock06.c verified flock(2) conflicts and unlock handoff across distinct file descriptions
 testcases/kernel/syscalls/lseek/lseek01.c verified lseek(2) basic offset movement and reads
 testcases/kernel/syscalls/lseek/lseek07.c verified lseek(2) SEEK_SET positions subsequent writes at the requested offset
+testcases/kernel/syscalls/llseek/llseek02.c verified lseek wrapper EINVAL for invalid whence and EBADF for closed fd
+testcases/kernel/syscalls/llseek/llseek03.c verified lseek wrapper SEEK_SET/SEEK_CUR/SEEK_END offsets and EOF reads
 testcases/kernel/syscalls/mkdirat/mkdirat01.c verified mkdirat(2) relative/absolute dirfd handling
 testcases/kernel/syscalls/openat/openat01.c verified openat(2) relative/absolute dirfd handling
 testcases/kernel/syscalls/pipe/pipe01.c verified libc pipe wrapper creates a pipe2-backed unnamed pipe with working read/write data flow
@@ -90,6 +93,7 @@ testcases/kernel/syscalls/pwrite/pwrite03.c verified pwrite(fd, NULL, 0, 0) retu
 testcases/kernel/syscalls/pwrite/pwrite04.c verified Linux O_APPEND pwrite(2) appends at EOF without changing the file offset
 testcases/kernel/syscalls/read/read01.c verified basic read(2) success path
 testcases/kernel/syscalls/read/read04.c verified read(2) returns correct byte count and data
+testcases/kernel/syscalls/readv/readv02.c verified readv(2) EINVAL, EFAULT, EISDIR, and EBADF error handling
 testcases/kernel/syscalls/sched_getaffinity/sched_getaffinity01.c verified single-CPU affinity mask and error handling
 testcases/kernel/syscalls/sched_yield/sched_yield01.c verified sched_yield returns success
 testcases/kernel/syscalls/setpgid/setpgid01.c verified setpgid(2) basic caller/child process-group updates
