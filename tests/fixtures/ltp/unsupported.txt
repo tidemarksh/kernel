@@ -1217,7 +1217,6 @@ testcases/kernel/syscalls/tkill/tkill01.c not yet enabled in current syscall-con
 testcases/kernel/syscalls/tkill/tkill02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/truncate/truncate03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/ulimit/ulimit01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/umask/umask01.c umask is implemented, but the corresponding LTP is not yet enabled in the current syscall-conformance profile
 testcases/kernel/syscalls/umount/umount01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/umount/umount02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/umount/umount03.c not yet enabled in current syscall-conformance profile

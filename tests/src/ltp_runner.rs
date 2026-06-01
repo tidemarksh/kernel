@@ -1511,6 +1511,7 @@ fn spawn_drive_mode_for_ltp(binary: &str) -> Result<SpawnDriveMode, String> {
         | "timerfd_gettime01"
         | "timerfd_settime01"
         | "truncate02"
+        | "umask01"
         | "uname01"
         | "uname02"
         | "unlinkat01"

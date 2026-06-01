@@ -55,6 +55,7 @@ testcases/kernel/syscalls/timerfd/timerfd_create01.c verified timerfd_create(2) 
 testcases/kernel/syscalls/timerfd/timerfd_gettime01.c verified timerfd_gettime(2) EBADF, EFAULT, and EINVAL error handling
 testcases/kernel/syscalls/timerfd/timerfd_settime01.c verified timerfd_settime(2) EBADF, EFAULT, EINVAL fd-type, and invalid flag error handling
 testcases/kernel/syscalls/truncate/truncate02.c verified truncate(2) shrink/extend semantics without changing file offset
+testcases/kernel/syscalls/umask/umask01.c verified umask(2) returns the previous mask and filters creat(2) file mode bits for masks 0000..0777
 testcases/kernel/syscalls/uname/uname01.c verified uname(2) reports Linux sysname
 testcases/kernel/syscalls/uname/uname02.c verified uname(2) EFAULT on invalid address
 testcases/kernel/syscalls/unlinkat/unlinkat01.c verified unlinkat file/remove-dir errno handling

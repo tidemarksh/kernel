@@ -129,6 +129,7 @@ ltp_case!(ltp_timerfd_create01);
 ltp_case!(ltp_timerfd_gettime01);
 ltp_case!(ltp_timerfd_settime01);
 ltp_case!(ltp_truncate02);
+ltp_case!(ltp_umask01);
 ltp_case!(ltp_uname01);
 ltp_case!(ltp_uname02);
 ltp_case!(ltp_unlinkat01);
