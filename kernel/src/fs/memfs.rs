@@ -32,6 +32,8 @@
 
 use crate::abi::*;
 use crate::alloc;
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+use alloc_crate::vec::Vec;
 
 #[repr(C)]
 struct PageCacheMeta {
@@ -49,18 +51,113 @@ unsafe extern "C" {
 }
 
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-unsafe fn tidemark_page_cache_read(_ino: u32, _offset: u64, _dst_ptr: u32, _dst_len: u32) -> i64 {
-    0
+struct FallbackPageCacheEntry {
+    ino: u32,
+    mode: u32,
+    data: Vec<u8>,
 }
 
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-unsafe fn tidemark_page_cache_stat(_ino: u32, _out_ptr: u32) -> i32 {
-    0
+static mut FALLBACK_PAGE_CACHE: Option<Vec<FallbackPageCacheEntry>> = None;
+
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+fn fallback_page_cache_entries() -> &'static mut Vec<FallbackPageCacheEntry> {
+    unsafe {
+        let entries = core::ptr::addr_of_mut!(FALLBACK_PAGE_CACHE);
+        if (*entries).is_none() {
+            *entries = Some(Vec::new());
+        }
+        (*entries).as_mut().unwrap()
+    }
 }
 
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
-unsafe fn tidemark_page_cache_write(_ino: u32, _offset: u64, _src_ptr: u32, _src_len: u32) -> i64 {
-    ENOSYS
+fn reset_fallback_page_cache() {
+    unsafe {
+        let entries = core::ptr::addr_of_mut!(FALLBACK_PAGE_CACHE);
+        if let Some(entries) = (*entries).as_mut() {
+            entries.clear();
+        }
+    }
+}
+
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+fn fallback_page_cache_entry(ino: u32) -> Option<&'static mut FallbackPageCacheEntry> {
+    fallback_page_cache_entries()
+        .iter_mut()
+        .find(|entry| entry.ino == ino)
+}
+
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+unsafe fn tidemark_page_cache_read(ino: u32, offset: u64, dst_ptr: u32, dst_len: u32) -> i64 {
+    let Some(entry) = fallback_page_cache_entry(ino) else {
+        return 0;
+    };
+    let offset = offset as usize;
+    if offset >= entry.data.len() {
+        return 0;
+    }
+    let len = (dst_len as usize).min(entry.data.len() - offset);
+    unsafe {
+        core::ptr::copy_nonoverlapping(entry.data.as_ptr().add(offset), dst_ptr as *mut u8, len);
+    }
+    len as i64
+}
+
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+unsafe fn tidemark_page_cache_stat(ino: u32, out_ptr: u32) -> i32 {
+    let Some(entry) = fallback_page_cache_entry(ino) else {
+        return 0;
+    };
+    unsafe {
+        let meta = &mut *(out_ptr as *mut PageCacheMeta);
+        meta.mode = entry.mode;
+        meta._pad = 0;
+        meta.size = entry.data.len() as u64;
+    }
+    1
+}
+
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+unsafe fn tidemark_page_cache_write(ino: u32, offset: u64, src_ptr: u32, src_len: u32) -> i64 {
+    let Some(end) = (offset as usize).checked_add(src_len as usize) else {
+        return ENOSPC;
+    };
+    if end > u32::MAX as usize {
+        return ENOSPC;
+    }
+
+    let entries = fallback_page_cache_entries();
+    let index = match entries.iter().position(|entry| entry.ino == ino) {
+        Some(index) => index,
+        None => {
+            entries.push(FallbackPageCacheEntry {
+                ino,
+                mode: S_IFREG | 0o644,
+                data: Vec::new(),
+            });
+            entries.len() - 1
+        }
+    };
+    let entry = &mut entries[index];
+    if entry.data.len() < end {
+        if entry
+            .data
+            .try_reserve_exact(end - entry.data.len())
+            .is_err()
+        {
+            return ENOSPC;
+        }
+        entry.data.resize(end, 0);
+    }
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            src_ptr as *const u8,
+            entry.data.as_mut_ptr().add(offset as usize),
+            src_len as usize,
+        );
+    }
+    src_len as i64
 }
 
 pub const S_IFMT: u32 = 0o170000;
@@ -223,6 +320,9 @@ fn dir_entries() -> &'static mut [DirEntry] {
 
 /// Initialize MemFS. Allocates all data structures via alloc.rs.
 pub fn init() {
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    reset_fallback_page_cache();
+
     unsafe {
         core::ptr::write(core::ptr::addr_of_mut!(MEMFS_PTR), core::ptr::null_mut());
 

@@ -1519,7 +1519,16 @@ fn spawn_drive_mode_for_ltp(binary: &str) -> Result<SpawnDriveMode, String> {
         | "waitpid09"
         | "vfork01"
         | "vfork02"
-        | "write02" => Ok(if matches!(binary, "futex_cmp_requeue01") {
+        | "write01"
+        | "write03"
+        | "write05"
+        | "write06"
+        | "write02"
+        | "writev01"
+        | "writev02"
+        | "writev05"
+        | "writev06"
+        | "writev07" => Ok(if matches!(binary, "futex_cmp_requeue01") {
             SpawnDriveMode::WaiterBatch
         } else if matches!(binary, "futex_cmp_requeue02" | "setpgid03") {
             SpawnDriveMode::ParentFirst

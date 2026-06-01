@@ -1281,17 +1281,8 @@ testcases/kernel/syscalls/waitpid/waitpid10.c not yet enabled in current syscall
 testcases/kernel/syscalls/waitpid/waitpid11.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/waitpid/waitpid12.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/waitpid/waitpid13.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/write/write03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/write/write04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/write/write05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/write/write06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/write/write01.c write currently chunks regular-file copies through a fixed 4096-byte buffer, so large writes return short counts
-testcases/kernel/syscalls/writev/writev01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/writev/writev02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/writev/writev03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/writev/writev05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/writev/writev06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/writev/writev07.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/write/write04.c write04 targets nonblocking FIFO behavior, but its setup depends on mknod(2)/named FIFO filesystem support outside the current syscall-conformance scope; pipe write semantics remain covered by Rust tests and write05
+testcases/kernel/syscalls/writev/writev03.c writev03 requires root, mount_device/all-filesystems, and multi-CPU fuzzy synchronization harness support outside the current wasm LTP environment
 testcases/kernel/syscalls/getppid/getppid01.c parent/child semantics belong to Phase 5 process support, not current Phase 4 conformance scope
 testcases/kernel/syscalls/statfs/statfs01.c LTP variant requires mount-device/all-filesystems harness support not present in current wasm test environment
 testcases/kernel/syscalls/epoll_wait/epoll_wait06.c local EPOLLET pipe edge-trigger contract now passes in kernel tests, but the upstream LTP binary still exits 2 without diagnostics, so the remaining blocker is LTP-specific harness/integration behavior

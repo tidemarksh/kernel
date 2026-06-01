@@ -9,6 +9,8 @@ use crate::syscall::{pipe, signal, socket};
 use crate::types::{OpenFileDesc, ThreadState};
 
 const EVENTFD_COUNTER_MAX: u64 = u64::MAX - 1;
+const IOVEC_SIZE: u64 = 16;
+const LINUX_IOV_MAX: u64 = 1024;
 pub(crate) const PIPE_READ_EOF_SYNC_RETRY_MARKER: u64 = 0x7069_7065_454f_4652;
 const PIPE_EPIPE_SYNC_RETRY_MARKER: u64 = 0x7069_7065_4550_4950;
 
@@ -416,6 +418,50 @@ fn flush_shared_guest_write(vm: &mut ThreadState, base: u32, guest_addr: u64, le
     }
 }
 
+fn file_open_for_write(ofd: &OpenFileDesc) -> bool {
+    (ofd.status_flags & fd_table::OPEN_ACCESS_MODE_MASK) != O_RDONLY
+}
+
+fn regular_file_write_offset(ofd: &OpenFileDesc, ofd_id: u32) -> u64 {
+    if ofd.status_flags & O_APPEND != 0 {
+        return memfs::stat(ofd.ino).map(|stat| stat.size).unwrap_or(0);
+    }
+    fd_table::get_offset_by_id(ofd_id)
+        .max(fd_table::get_offset_floor_by_id(ofd_id))
+        .max(ofd.offset as u64)
+}
+
+fn validate_writev_iovecs(base: u32, iov_addr: u64, iovcnt: u64) -> i64 {
+    if iovcnt == 0 {
+        return 0;
+    }
+    if iovcnt > LINUX_IOV_MAX {
+        return EINVAL;
+    }
+    let Some(iov_bytes) = iovcnt.checked_mul(IOVEC_SIZE) else {
+        return EINVAL;
+    };
+    if !crate::syscall::memory::guest_range_accessible(base, iov_addr, iov_bytes) {
+        return EFAULT;
+    }
+
+    let mut total = 0u64;
+    for i in 0..iovcnt {
+        let iov_len = unsafe { guest_mem::read_u64(base, iov_addr + i * IOVEC_SIZE + 8) };
+        if iov_len > i64::MAX as u64 {
+            return EINVAL;
+        }
+        let Some(next_total) = total.checked_add(iov_len) else {
+            return EINVAL;
+        };
+        if next_total > i64::MAX as u64 {
+            return EINVAL;
+        }
+        total = next_total;
+    }
+    0
+}
+
 pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64, nr: u64) -> i64 {
     if nr == SYS_WRITEV {
         return sys_writev(vm, base, fd, buf, count);
@@ -444,6 +490,22 @@ pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64,
     let (pipe_read_open, pipe_write_open) = trace_pipe_open_state(&ofd);
 
     if ofd.fd_type == FD_TYPE_DEVNULL {
+        if !file_open_for_write(&ofd) {
+            return trace_write_attempt(
+                fd,
+                nr,
+                buf,
+                count,
+                EBADF,
+                ofd_id,
+                ofd.fd_type,
+                ofd.ino,
+                ofd.status_flags,
+                0,
+                0,
+                None,
+            );
+        }
         return trace_write_attempt(
             fd,
             nr,
@@ -847,6 +909,23 @@ pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64,
         );
     }
 
+    if ofd.fd_type == FD_TYPE_FILE && !file_open_for_write(&ofd) {
+        return trace_write_attempt(
+            fd,
+            nr,
+            buf,
+            count,
+            EBADF,
+            ofd_id,
+            ofd.fd_type,
+            ofd.ino,
+            ofd.status_flags,
+            0,
+            0,
+            None,
+        );
+    }
+
     let mut trace = [0u8; 64];
     let to_trace = (count as usize).min(trace.len());
     if to_trace > 0 {
@@ -854,9 +933,7 @@ pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64,
             guest_mem::read_bytes(base, buf, &mut trace[..to_trace]);
         }
     }
-    let current_offset = fd_table::get_offset_by_id(ofd_id)
-        .max(fd_table::get_offset_floor_by_id(ofd_id))
-        .max(ofd.offset as u64);
+    let current_offset = regular_file_write_offset(&ofd, ofd_id);
     let n = write_regular_file_from_guest(base, buf, count, ofd.ino, current_offset);
     if n > 0 {
         let next_offset = current_offset.saturating_add(n as u64);
@@ -902,8 +979,41 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
     };
     let ofd_id = fd_table::get_ofd_id(base, vm, fd).unwrap_or(0);
     let (pipe_read_open, pipe_write_open) = trace_pipe_open_state(&ofd);
+    let validation = validate_writev_iovecs(base, iov_addr, iovcnt);
+    if validation < 0 {
+        return trace_write_attempt(
+            fd,
+            SYS_WRITEV,
+            iov_addr,
+            iovcnt,
+            validation,
+            ofd_id,
+            ofd.fd_type,
+            ofd.ino,
+            ofd.status_flags,
+            pipe_read_open,
+            pipe_write_open,
+            None,
+        );
+    }
 
     if ofd.fd_type == FD_TYPE_DEVNULL {
+        if !file_open_for_write(&ofd) {
+            return trace_write_attempt(
+                fd,
+                SYS_WRITEV,
+                iov_addr,
+                iovcnt,
+                EBADF,
+                ofd_id,
+                ofd.fd_type,
+                ofd.ino,
+                ofd.status_flags,
+                0,
+                0,
+                None,
+            );
+        }
         let mut total = 0u64;
         for i in 0..iovcnt {
             total += unsafe { guest_mem::read_u64(base, iov_addr + i * 16 + 8) };
@@ -963,8 +1073,8 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
 
     let mut total = 0i64;
     for i in 0..iovcnt {
-        let iov_base = unsafe { guest_mem::read_u64(base, iov_addr + i * 16) };
-        let iov_len = unsafe { guest_mem::read_u64(base, iov_addr + i * 16 + 8) };
+        let iov_base = unsafe { guest_mem::read_u64(base, iov_addr + i * IOVEC_SIZE) };
+        let iov_len = unsafe { guest_mem::read_u64(base, iov_addr + i * IOVEC_SIZE + 8) };
         if iov_len == 0 {
             continue;
         }
@@ -1298,10 +1408,23 @@ fn sys_writev(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u
                 );
             }
         } else {
-            let current_offset = fd_table::get_offset(base, vm, fd)
-                .max(fd_table::get_offset_by_id(ofd_id))
-                .max(fd_table::get_offset_floor_by_id(ofd_id))
-                .max(ofd.offset as u64);
+            if ofd.fd_type == FD_TYPE_FILE && !file_open_for_write(&ofd) {
+                return trace_write_attempt(
+                    fd,
+                    SYS_WRITEV,
+                    iov_addr,
+                    iovcnt,
+                    EBADF,
+                    ofd_id,
+                    ofd.fd_type,
+                    ofd.ino,
+                    ofd.status_flags,
+                    0,
+                    0,
+                    None,
+                );
+            }
+            let current_offset = regular_file_write_offset(&ofd, ofd_id);
             let n = write_regular_file_from_guest(base, iov_base, iov_len, ofd.ino, current_offset);
             if n > 0 {
                 let next_offset = current_offset.saturating_add(n as u64);

@@ -402,8 +402,8 @@ mod tests {
         process_pending_requests, resume_from_fs,
     };
     use crate::abi::{
-        AF_UNIX, EAGAIN, ENOENT, O_CREAT, O_RDONLY, O_WRONLY, SOCK_STREAM, STATUS_FS, STATUS_OK,
-        SYS_WRITE, SYS_WRITEV,
+        AF_UNIX, EAGAIN, EINVAL, ENOENT, O_APPEND, O_CREAT, O_RDONLY, O_WRONLY, SOCK_STREAM,
+        STATUS_FS, STATUS_OK, SYS_WRITE, SYS_WRITEV,
     };
     use crate::fs::ring_buffer;
     use crate::harness::TestVm;
@@ -685,6 +685,67 @@ mod tests {
         let mut buf = [0u8; 5];
         assert_eq!(vm.sys_read(read_fd, &mut buf), 5);
         assert_eq!(&buf, b"hello");
+    }
+
+    #[test]
+    fn regular_file_write_honors_o_append_after_fs_round_trip() {
+        let mut vm = TestVm::new();
+        vm.memfs.create_file(b"append.txt", b"seed");
+        let fd = vm.sys_openat(b"/append.txt", O_WRONLY | O_APPEND);
+        assert!(fd >= 3);
+        assert_eq!(vm.sys_lseek(fd, 1, 0), 1);
+
+        let data_addr = vm.scratch + 0xa00;
+        vm.write_mem(data_addr, b"++");
+        let written = dispatch_write(&mut vm.vm, vm.base, fd as u64, data_addr, 2, SYS_WRITE);
+
+        assert_eq!(written, 0);
+        assert_eq!(vm.vm.status, STATUS_FS);
+
+        let vm_ptr = &mut vm.vm as *mut _ as u32;
+        process_pending_requests(vm_ptr, vm.base);
+        let written = resume_from_fs(vm_ptr, vm.base);
+
+        assert_eq!(written, 2);
+        assert_eq!(vm.sys_lseek(fd, 0, 1), 6);
+
+        let read_fd = vm.sys_openat(b"/append.txt", O_RDONLY);
+        assert!(read_fd >= 3);
+        let mut buf = [0u8; 6];
+        assert_eq!(vm.sys_read(read_fd, &mut buf), 6);
+        assert_eq!(&buf, b"seed++");
+    }
+
+    #[test]
+    fn regular_file_writev_rejects_invalid_iov_len_after_fs_round_trip() {
+        let mut vm = TestVm::new();
+        vm.memfs.create_file(b"bad-iov.txt", b"seed");
+        let fd = vm.sys_openat(b"/bad-iov.txt", O_WRONLY);
+        assert!(fd >= 3);
+
+        let data_addr = vm.scratch + 0xb00;
+        let iov_addr = vm.scratch + 0xb80;
+        vm.write_mem(data_addr, b"bad");
+        unsafe {
+            crate::guest_mem::write_u64(vm.base, iov_addr, data_addr);
+            crate::guest_mem::write_u64(vm.base, iov_addr + 8, u64::MAX);
+        }
+
+        let written = dispatch_write(&mut vm.vm, vm.base, fd as u64, iov_addr, 1, SYS_WRITEV);
+
+        assert_eq!(written, 0);
+        assert_eq!(vm.vm.status, STATUS_FS);
+
+        let vm_ptr = &mut vm.vm as *mut _ as u32;
+        process_pending_requests(vm_ptr, vm.base);
+        let written = resume_from_fs(vm_ptr, vm.base);
+
+        assert_eq!(written, EINVAL);
+        let read_fd = vm.sys_openat(b"/bad-iov.txt", O_RDONLY);
+        assert!(read_fd >= 3);
+        let mut buf = [0u8; 4];
+        assert_eq!(vm.sys_read(read_fd, &mut buf), 4);
+        assert_eq!(&buf, b"seed");
     }
 
     #[test]

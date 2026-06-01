@@ -63,5 +63,14 @@ testcases/kernel/syscalls/waitid/waitid06.c verified waitid(2) filters direct ch
 testcases/kernel/syscalls/waitid/waitid09.c verified waitid(2) returns ECHILD for non-child P_PID targets even when other children exist
 testcases/kernel/syscalls/waitpid/waitpid04.c verified waitpid(2) ECHILD, EINVAL, and ESRCH error handling for no-child and invalid-input cases
 testcases/kernel/syscalls/waitpid/waitpid09.c verified waitpid(2) WNOHANG semantics for running/exited children and ECHILD on no-children cases
+testcases/kernel/syscalls/write/write01.c verified regular-file write(2) reports the full byte count across BUFSIZ-sized writes
 testcases/kernel/syscalls/write/write02.c verified write(fd, NULL, 0) returns 0
+testcases/kernel/syscalls/write/write03.c verified failed write(2) from an inaccessible buffer does not corrupt existing file data
+testcases/kernel/syscalls/write/write05.c verified write(2) EBADF, EFAULT, and EPIPE/SIGPIPE errno behavior
+testcases/kernel/syscalls/write/write06.c verified O_APPEND write(2) appends at EOF and advances the file offset
+testcases/kernel/syscalls/writev/writev01.c verified writev(2) iov_len/iovcnt validation, zero-length vectors, and EPIPE behavior
+testcases/kernel/syscalls/writev/writev02.c verified writev(2) EFAULT on an inaccessible first iovec without corrupting sparse file data
+testcases/kernel/syscalls/writev/writev05.c verified writev(2) EFAULT on an inaccessible first iovec without extending existing file data
+testcases/kernel/syscalls/writev/writev06.c verified writev(2) writes readable iovecs spanning page boundaries
+testcases/kernel/syscalls/writev/writev07.c verified partially valid writev(2) updates file data and offset consistently with the return value
 testcases/kernel/syscalls/epoll_ctl/epoll_ctl01.c verified epoll_ctl(2) add/mod/del semantics on ready pipe fds
