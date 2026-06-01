@@ -543,6 +543,15 @@ impl SavedProcessCtx {
             if *exited {
                 continue;
             }
+            if let Some((_, recorded_exited, recorded_wait_status)) =
+                tidemark_kernel::harness::process::debug_child_entry(*pid)
+            {
+                if recorded_exited {
+                    *exited = true;
+                    *wait_status = recorded_wait_status;
+                    continue;
+                }
+            }
             let still_queued = child_proc_stats
                 .iter()
                 .any(|(child_pid, _, _, _)| *child_pid == *pid);
@@ -614,7 +623,9 @@ impl SavedProcessCtx {
         self.guest_memory
             .recapture_into_scratch_for_vm(base, &self.vm);
         self.mm_state = tidemark_kernel::harness::support::snapshot_process_context_boxed();
-        self.child_entries = current_child_entries.to_vec();
+        self.child_entries = capture_live_child_entries(self.pid);
+        current_child_entries.clear();
+        current_child_entries.extend(self.child_entries.iter().copied());
         let saved_shared_mappings =
             tidemark_kernel::harness::support::capture_live_shared_mapping_overlay(
                 base,
@@ -2131,6 +2142,9 @@ fn run_vm_inner(
     let mut skip_deferred_clone_service_once = false;
 
     loop {
+        if vm.status == STATUS_FAULT {
+            return Ok(VmRunOutcome::Exited(vm.exit_code, vm.pc));
+        }
         if service_deferred_clones
             && !skip_deferred_clone_service_once
             && !deferred_clone_threads.is_empty()

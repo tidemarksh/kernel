@@ -75,6 +75,7 @@ testcases/kernel/syscalls/futex/futex_wake02.c verified pthread-backed private F
 testcases/kernel/syscalls/futex/futex_wake03.c verified shared-process FUTEX_WAKE fanout after restoring non-aliased process-tree snapshots and leader-only futex bookkeeping
 testcases/kernel/syscalls/getpgid/getpgid01.c verified getpgid(2) basic parent/child and init-process lookup semantics
 testcases/kernel/syscalls/getpgid/getpgid02.c verified getpgid(2) returns ESRCH for nonexistent pids
+testcases/kernel/syscalls/getpgrp/getpgrp01.c verified getpgrp(2) libc wrapper matches getpgid(0)
 testcases/kernel/syscalls/geteuid/geteuid01.c verified basic geteuid(2) success path
 testcases/kernel/syscalls/getcpu/getcpu02.c verified getcpu(2) EFAULT handling for cpu_id/node_id pointers outside the process address space
 testcases/kernel/syscalls/getegid/getegid02.c verifies getegid(2) matches passwd-derived effective gid for the current effective uid
@@ -160,11 +161,20 @@ testcases/kernel/syscalls/unlink/unlink07.c verified unlink libc wrapper reports
 testcases/kernel/syscalls/unlinkat/unlinkat01.c verified unlinkat file/remove-dir errno handling
 testcases/kernel/syscalls/vfork/vfork01.c verified vfork(2) preserves parent credentials, cwd, and umask while parent waits for child _exit
 testcases/kernel/syscalls/vfork/vfork02.c verified vfork(2) children do not inherit the parent's pending signals
+testcases/kernel/syscalls/wait/wait01.c verified wait(2) returns ECHILD when the caller has no unwaited-for children
+testcases/kernel/syscalls/wait/wait02.c verified wait(2) reaps a terminated child and reports its pid and normal exit status
 testcases/kernel/syscalls/wait4/wait401.c verified wait4(2) reaps a child and reports normal exit status
 testcases/kernel/syscalls/wait4/wait402.c verified wait4(2) returns ECHILD for an invalid positive pid
 testcases/kernel/syscalls/wait4/wait403.c verified wait4(2) returns ESRCH for pid == INT_MIN
+testcases/kernel/syscalls/waitid/waitid01.c verified waitid(2) waits for any exited child and reports pid/status/SIGCHLD/CLD_EXITED
+testcases/kernel/syscalls/waitid/waitid02.c verified waitid(2) returns EINVAL when WEXITED is missing
+testcases/kernel/syscalls/waitid/waitid03.c verified waitid(2) returns ECHILD for WNOHANG|WEXITED when no children exist
+testcases/kernel/syscalls/waitid/waitid04.c verified waitid(2) with WNOHANG|WEXITED clears siginfo when a matching child is still running
+testcases/kernel/syscalls/waitid/waitid05.c verified waitid(2) P_PGID filtering returns ECHILD for a non-child group and reports exited children in the caller group
 testcases/kernel/syscalls/waitid/waitid06.c verified waitid(2) filters direct children by PID and reports minimal siginfo_t on normal exit
 testcases/kernel/syscalls/waitid/waitid09.c verified waitid(2) returns ECHILD for non-child P_PID targets even when other children exist
+testcases/kernel/syscalls/waitid/waitid11.c verified waitid(2) reports SIGKILL child termination with SIGCHLD/CLD_KILLED
+testcases/kernel/syscalls/waitpid/waitpid03.c verified waitpid(2) reaps a specific child and returns ECHILD when called again for the reaped child
 testcases/kernel/syscalls/waitpid/waitpid04.c verified waitpid(2) ECHILD, EINVAL, and ESRCH error handling for no-child and invalid-input cases
 testcases/kernel/syscalls/waitpid/waitpid09.c verified waitpid(2) WNOHANG semantics for running/exited children and ECHILD on no-children cases
 testcases/kernel/syscalls/write/write01.c verified regular-file write(2) reports the full byte count across BUFSIZ-sized writes

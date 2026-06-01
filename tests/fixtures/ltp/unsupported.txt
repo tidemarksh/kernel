@@ -84,10 +84,10 @@ testcases/kernel/syscalls/clone/clone07.c clone currently supports only the CLON
 testcases/kernel/syscalls/clone/clone09.c clone currently supports only the CLONE_VM | CLONE_THREAD thread-worker subset; the broader LTP clone matrix is not yet audited
 testcases/kernel/syscalls/clone/clone10.c clone currently supports only the CLONE_VM | CLONE_THREAD thread-worker subset; the broader LTP clone matrix is not yet audited
 testcases/kernel/syscalls/clone/clone11.c clone currently supports only the CLONE_VM | CLONE_THREAD thread-worker subset; the broader LTP clone matrix is not yet audited
-testcases/kernel/syscalls/clone3/clone301.c clone3 thread-subset handoff is implemented, but the broader clone3 LTP matrix is not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/clone3/clone302.c clone3 thread-subset handoff is implemented, but the broader clone3 LTP matrix is not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/clone3/clone303.c clone3 thread-subset handoff is implemented, but the broader clone3 LTP matrix is not yet enabled in the current syscall-conformance profile
-testcases/kernel/syscalls/clone3/clone304.c clone3 thread-subset handoff is implemented, but the broader clone3 LTP matrix is not yet enabled in the current syscall-conformance profile
+testcases/kernel/syscalls/clone3/clone301.c clone3 thread-subset handoff is implemented, but the broader clone3 argument/flag matrix remains outside the audited clone3 profile
+testcases/kernel/syscalls/clone3/clone302.c clone3 thread-subset handoff is implemented, but the broader clone3 argument/flag matrix remains outside the audited clone3 profile
+testcases/kernel/syscalls/clone3/clone303.c clone3 thread-subset handoff is implemented, but the broader clone3 argument/flag matrix remains outside the audited clone3 profile
+testcases/kernel/syscalls/clone3/clone304.c clone3 thread-subset handoff is implemented, but the broader clone3 argument/flag matrix remains outside the audited clone3 profile
 testcases/kernel/syscalls/close_range/close_range01.c requires filesystem mount-matrix setup plus Linux fd-table sharing and CLOSE_RANGE_UNSHARE split semantics; Tidemark currently has no per-thread shared fd-table model to split
 testcases/kernel/syscalls/cma/process_vm01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/cma/process_vm_readv02.c not yet enabled in current syscall-conformance profile
@@ -152,11 +152,11 @@ testcases/kernel/syscalls/execve/execve06.c execve LTP coverage depends on child
 testcases/kernel/syscalls/execve/execve01_child.c helper binary for execve01 coverage; built and staged for PATH-based execve tests but not executed as a standalone LTP case
 testcases/kernel/syscalls/execve/execve06_child.c helper binary for execve06 coverage; built and staged for PATH-based execve tests but not executed as a standalone LTP case
 testcases/kernel/syscalls/execve/execve_child.c helper binary for unpromoted execve coverage; not executed as a standalone LTP case
-testcases/kernel/syscalls/execveat/execveat01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/execveat/execveat02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/execveat/execveat03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/execveat/execveat_child.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/execveat/execveat_errno.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/execveat/execveat01.c requires child_needs_reinit nested exec orchestration, helper execution, O_PATH executable handoff, and runtime-backed process replacement outside the kernel-only LTP harness
+testcases/kernel/syscalls/execveat/execveat02.c requires child_needs_reinit nested exec orchestration plus symlink-loop setup and helper execution outside the kernel-only LTP harness
+testcases/kernel/syscalls/execveat/execveat03.c requires overlayfs setup, unlinked O_PATH executable execution, and child_needs_reinit nested exec orchestration outside the kernel-only LTP harness
+testcases/kernel/syscalls/execveat/execveat_child.c helper binary for execveat01/03; excluded as non-standalone LTP coverage row
+testcases/kernel/syscalls/execveat/execveat_errno.c helper binary for execveat02; excluded as non-standalone LTP coverage row
 testcases/kernel/syscalls/execvp/execvp01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/execvp/execvp01_child.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/faccessat2/faccessat201.c faccessat2(2) is not dispatched in production and is excluded from the implemented-surface denominator
@@ -258,17 +258,17 @@ testcases/kernel/syscalls/flistxattr/flistxattr03.c requires fd-specific persist
 testcases/kernel/syscalls/flock/flock04.c forked flock lock checks reach TPASS, but the current LTP process-tree runner reports the child status as TBROK 224; keep unsupported until child exit-status propagation for this harness shape is fixed
 testcases/kernel/syscalls/flock/flock07.c requires blocking flock(LOCK_EX) to be interrupted by SIGUSR1 and return EINTR, which is not implemented in the current flock wait model
 testcases/kernel/syscalls/fmtmsg/fmtmsg01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fork/fork01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fork/fork03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fork/fork04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fork/fork05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fork/fork07.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fork/fork08.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fork/fork09.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fork/fork10.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fork/fork13.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fork/fork14.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fork/fork_procs.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/fork/fork01.c passes targeted validation, but adding fork rows to the full LTP gate currently causes later vfork coverage to OOM in wasm snapshot allocation
+testcases/kernel/syscalls/fork/fork03.c passes targeted validation, but adding fork rows to the full LTP gate currently causes later vfork coverage to OOM in wasm snapshot allocation
+testcases/kernel/syscalls/fork/fork07.c passes targeted validation, but adding fork rows to the full LTP gate currently causes later vfork coverage to OOM in wasm snapshot allocation
+testcases/kernel/syscalls/fork/fork08.c passes targeted validation, but adding fork rows to the full LTP gate currently causes later vfork coverage to OOM in wasm snapshot allocation
+testcases/kernel/syscalls/fork/fork10.c passes targeted validation, but adding fork rows to the full LTP gate currently causes later vfork coverage to OOM in wasm snapshot allocation
+testcases/kernel/syscalls/fork/fork05.c requires modify_ldt(2), which is not production-dispatched and is excluded from the implemented-surface inventory
+testcases/kernel/syscalls/fork/fork04.c requires LTP checkpoint synchronization for parent/child environment isolation; current ltp_runner hangs in this checkpoint shape
+testcases/kernel/syscalls/fork/fork09.c requires libc stdio FILE stream state and descriptor reopening semantics beyond the current fork fd-table conform subset
+testcases/kernel/syscalls/fork/fork13.c requires root PID-reuse stress behavior across repeated fork/wait cycles outside the current process-id allocation profile
+testcases/kernel/syscalls/fork/fork14.c requires huge 64-bit VMA allocation/mmap overflow behavior outside the current memory/fork profile
+testcases/kernel/syscalls/fork/fork_procs.c requires high-fanout repeated fork/wait snapshots; current wasm ltp_runner OOMs while snapshotting forked children
 testcases/kernel/syscalls/fpathconf/fpathconf01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/fremovexattr/fremovexattr01.c requires fsetxattr-backed successful removal outside the current no-persistence fremovexattr profile
 testcases/kernel/syscalls/fremovexattr/fremovexattr02.c mixes no-attribute and EBADF cases with bad-name-pointer validation and all-filesystem mount-device setup outside the current fremovexattr profile
@@ -318,7 +318,6 @@ testcases/kernel/syscalls/getitimer/getitimer01.c getitimer/setitimer currently 
 testcases/kernel/syscalls/getitimer/getitimer02.c getitimer/setitimer currently preserve state only and do not schedule delivery
 testcases/kernel/syscalls/getpagesize/getpagesize01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getpeername/getpeername01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getpgrp/getpgrp01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getpriority/getpriority01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getpriority/getpriority02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getresgid/getresgid03.c requires saved-setgid state to remain distinct from the effective gid after setresgid(-1, gid, -1); current implementation reports saved gid as effective gid
@@ -1157,26 +1156,17 @@ testcases/kernel/syscalls/vmsplice/vmsplice01.c not yet enabled in current sysca
 testcases/kernel/syscalls/vmsplice/vmsplice02.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/vmsplice/vmsplice03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/vmsplice/vmsplice04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/wait/wait01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/wait/wait02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/waitid/waitid01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/waitid/waitid02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/waitid/waitid03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/waitid/waitid04.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/waitid/waitid05.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/waitid/waitid07.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/waitid/waitid08.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/waitid/waitid10.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/waitid/waitid11.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/waitpid/waitpid01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/waitpid/waitpid03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/waitpid/waitpid06.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/waitpid/waitpid07.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/waitpid/waitpid08.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/waitpid/waitpid10.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/waitpid/waitpid11.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/waitpid/waitpid12.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/waitpid/waitpid13.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/waitid/waitid07.c requires stopped-child waitid state (`WSTOPPED`, `CLD_STOPPED`, `SIGSTOP`) plus later checkpoint continuation; current waitid conform surface covers exited-child state only
+testcases/kernel/syscalls/waitid/waitid08.c requires stopped and continued child waitid state (`WSTOPPED`, `WCONTINUED`, `CLD_STOPPED`, `CLD_CONTINUED`, `SIGSTOP`/`SIGCONT`); current waitid conform surface covers exited-child state only
+testcases/kernel/syscalls/waitid/waitid10.c requires signal/core-dump accounting for SIGFPE plus setup dependencies on RLIMIT_CORE, `/proc/sys/kernel/core_pattern`, and `prctl(2)`/core-dump policy; current waitid conform surface does not claim `CLD_DUMPED` or core-pattern behavior
+testcases/kernel/syscalls/waitpid/waitpid01.c setup requires getrlimit(RLIMIT_CORE) inside a saved LTP child; current resource syscall returns ESRCH in that context before the waitpid signal matrix runs
+testcases/kernel/syscalls/waitpid/waitpid06.c passes targeted validation, but the full LTP gate currently causes later writev rows to run out of memory after checkpointed waitpid child-fanout snapshot allocation
+testcases/kernel/syscalls/waitpid/waitpid07.c WNOHANG child-fanout release ordering does not complete in the current saved-runner scheduling; strict local run leaves children under an intermediate parent and does not reach final LTP evidence
+testcases/kernel/syscalls/waitpid/waitpid08.c requires stopped-child waitpid state (`WUNTRACED`, `WIFSTOPPED`, `WSTOPSIG(SIGSTOP)`) and SIGCONT continuation; current waitpid conform surface covers exited/signaled child state only
+testcases/kernel/syscalls/waitpid/waitpid10.c passes targeted validation, but the full LTP gate currently OOMs during nested-fork waitpid process-tree snapshot allocation
+testcases/kernel/syscalls/waitpid/waitpid11.c passes targeted validation, but the full LTP gate currently destabilizes the following write rows and OOMs after pgid waitpid process-tree snapshot allocation
+testcases/kernel/syscalls/waitpid/waitpid12.c WNOHANG pgid child-fanout release ordering does not complete in the current saved-runner scheduling; strict local run leaves children under an intermediate parent and does not reach final LTP evidence
+testcases/kernel/syscalls/waitpid/waitpid13.c requires stopped-child waitpid state (`WUNTRACED`, `WIFSTOPPED`, `WSTOPSIG(SIGSTOP)`) across pgid filtering and SIGCONT continuation; current waitpid conform surface covers exited/signaled child state only
 testcases/kernel/syscalls/write/write04.c write04 targets nonblocking FIFO behavior, but its setup depends on mknod(2)/named FIFO filesystem support outside the current syscall-conformance scope; pipe write semantics remain covered by Rust tests and write05
 testcases/kernel/syscalls/writev/writev03.c writev03 requires root, mount_device/all-filesystems, and multi-CPU fuzzy synchronization harness support outside the current wasm LTP environment
 testcases/kernel/syscalls/statfs/statfs01.c LTP variant requires mount-device/all-filesystems harness support not present in current wasm test environment

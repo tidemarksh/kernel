@@ -479,8 +479,8 @@ pub fn wait_set_pipe_slots_mask(vm: &ThreadState, base: u32) -> u64 {
 ///
 /// Blocking ppoll waits are represented with STATUS_PIPE_WAIT and re-dispatch
 /// the syscall after any shared pipe/socket readiness wake. The signal mask is
-/// intentionally not applied yet; signal delivery is still handled at normal
-/// syscall boundaries by the existing signal machinery.
+/// intentionally not applied yet; signal delivery is still handled by the
+/// existing signal machinery before entering the blocked state.
 pub fn sys_ppoll(
     vm: &mut ThreadState,
     base: u32,
@@ -550,6 +550,17 @@ pub fn sys_ppoll(
         fd_table::clear_blocked_ofd_pin(vm);
         vm.status = STATUS_OK;
         return ready;
+    }
+
+    if crate::syscall::signal::pending_signal_interrupts_blocked_syscall(vm, base) {
+        vm.fault_addr = 0;
+        vm.fault_pc = 0;
+        fd_table::clear_blocked_ofd_pin(vm);
+        vm.epoll_timeout_ms = 0;
+        vm.x[10] = EINTR as u64;
+        vm.status = STATUS_OK;
+        crate::syscall::signal::check_pending(vm, base);
+        return EINTR;
     }
 
     vm.fault_addr = 0;

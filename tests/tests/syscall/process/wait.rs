@@ -53,6 +53,36 @@ fn semantics_waitid_wnowait_reports_without_reaping() {
 }
 
 #[test]
+fn semantics_waitid_reports_signal_killed_children() {
+    let mut t = TestVm::new();
+    let info_addr = t.scratch + 0x1000;
+
+    let child = process_impl::sys_fork(&mut t.vm, t.base, 0, 0, 0, 0, 0) as i32;
+    assert!(child > 0);
+    t.vm.status = STATUS_OK;
+    process_impl::record_child_exit(child, SIGKILL);
+
+    let ret = process_impl::sys_waitid(&mut t.vm, t.base, P_ALL, 0, info_addr, WEXITED, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(
+        unsafe { guest_mem::read_u32(t.base, info_addr + SIGINFO_OFF_SI_PID) },
+        child as u32
+    );
+    assert_eq!(
+        unsafe { guest_mem::read_u32(t.base, info_addr + SIGINFO_OFF_SI_STATUS) },
+        SIGKILL as u32
+    );
+    assert_eq!(
+        unsafe { guest_mem::read_u32(t.base, info_addr + SIGINFO_OFF_SI_SIGNO) },
+        SIGCHLD as u32
+    );
+    assert_eq!(
+        unsafe { guest_mem::read_u32(t.base, info_addr + SIGINFO_OFF_SI_CODE) },
+        CLD_KILLED
+    );
+}
+
+#[test]
 fn semantics_wait4_accepts_common_waitpid_flags_when_reaping_exited_child() {
     let mut t = TestVm::new();
     let wstatus_addr = t.scratch + 0x1200;

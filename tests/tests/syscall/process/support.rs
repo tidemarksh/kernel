@@ -27,8 +27,10 @@ pub(super) const WUNTRACED: u64 = 2;
 pub(super) const WCONTINUED: u64 = 8;
 pub(super) const WNOWAIT: u64 = 0x01000000;
 pub(super) const WEXITED: u64 = 4;
+pub(super) const P_ALL: u32 = 0;
 pub(super) const P_PID: u32 = 1;
 pub(super) const ECHILD: i64 = -10;
+pub(super) const CLD_KILLED: u32 = 2;
 pub(super) const SS_DISABLE: i32 = 2;
 
 pub(super) fn read_file_bytes(path: &[u8]) -> Vec<u8> {
@@ -51,4 +53,6 @@ pub(super) fn read_link_bytes(path: &[u8]) -> Vec<u8> {
 }
 
 pub(super) const SIGINFO_OFF_SI_PID: u64 = 16;
+pub(super) const SIGINFO_OFF_SI_CODE: u64 = 8;
+pub(super) const SIGINFO_OFF_SI_SIGNO: u64 = 0;
 pub(super) const SIGINFO_OFF_SI_STATUS: u64 = 24;
