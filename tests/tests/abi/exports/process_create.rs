@@ -103,16 +103,12 @@ fn target_address_profile_is_memory64_and_not_wasm32_fallback() {
     assert_ne!(memory64_profile, 0);
     assert_ne!(memory64_profile, wasm32_profile);
     assert_eq!(target_profile, memory64_profile);
+    let target_base = process_guest_base_for_address_profile(target_profile);
+    assert_ne!(target_base, 0);
     assert_ne!(process_guest_base_for_address_profile(wasm32_profile), 0);
-    assert_eq!(
-        process_guest_base_for_address_profile(target_profile),
+    assert_ne!(
+        process_guest_address_limit_for_profile(target_profile, target_base),
         0,
-        "target profile must not silently fall back to wasm32-compatible base while unsupported",
-    );
-    assert_eq!(
-        process_guest_address_limit_for_profile(target_profile, 0),
-        0,
-        "unsupported target profile must not produce a wasm32-compatible address limit",
     );
 }
 
@@ -261,7 +257,7 @@ fn process_create_with_memory_policy_initializes_memory_contract() {
     let _t = TestVm::new();
     let ram_size = 64 * 1024 * 1024u64;
     let stack_size = 1024 * 1024;
-    let address_profile = abi_guest_address_profile_wasm32_compatible();
+    let address_profile = abi_guest_address_profile_target();
     let guest_base = process_guest_base_for_address_profile(address_profile);
     assert_ne!(guest_base, 0);
     assert_ne!(

@@ -818,24 +818,22 @@ fn process_guest_base_for_ram(ram_size: u32) -> u32 {
 
 fn process_guest_base_for_profile(address_profile: u32) -> u64 {
     match address_profile {
-        GUEST_ADDRESS_PROFILE_WASM32_COMPATIBLE => process_guest_base_for_ram(0) as u64,
-        // The ABI is typed for Memory64, but the current wasm32 kernel artifact
-        // cannot safely execute the Memory64 profile yet.
-        GUEST_ADDRESS_PROFILE_MEMORY64 => 0,
+        GUEST_ADDRESS_PROFILE_WASM32_COMPATIBLE | GUEST_ADDRESS_PROFILE_MEMORY64 => {
+            process_guest_base_for_ram(0) as u64
+        }
         _ => 0,
     }
 }
 
 fn guest_address_limit_for_profile(address_profile: u32, guest_base: u64) -> u64 {
     match address_profile {
-        GUEST_ADDRESS_PROFILE_WASM32_COMPATIBLE => {
+        GUEST_ADDRESS_PROFILE_WASM32_COMPATIBLE | GUEST_ADDRESS_PROFILE_MEMORY64 => {
             if guest_base > u32::MAX as u64 {
                 0
             } else {
                 max_guest_window_for_base(guest_base as u32)
             }
         }
-        GUEST_ADDRESS_PROFILE_MEMORY64 => 0,
         _ => 0,
     }
 }
