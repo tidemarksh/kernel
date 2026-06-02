@@ -42,13 +42,12 @@ rustflags = [
 ]
 
 [alias]
-# The no_std kernel artifact for wasm32-unknown-unknown needs core/alloc from
-# build-std. Keep that scoped to explicit kernel build aliases so the test
-# package can use the wasm32-wasip1 toolchain directly under `cargo test`.
-build-kernel = "build -p tidemark-kernel -Z build-std=core,alloc --target wasm32-unknown-unknown"
-build-kernel-release = "build -p tidemark-kernel -Z build-std=core,alloc --target wasm32-unknown-unknown --release"
-build-kernel-memory64 = "build -p tidemark-kernel -Z build-std=core,alloc --target wasm64-unknown-unknown"
-build-kernel-memory64-release = "build -p tidemark-kernel -Z build-std=core,alloc --target wasm64-unknown-unknown --release"
+# The production kernel artifact uses the target process-memory profile.
+# wasm32-compatible builds are explicit migration fixtures only.
+build-kernel = "build -p tidemark-kernel -Z build-std=core,alloc --target wasm64-unknown-unknown"
+build-kernel-release = "build -p tidemark-kernel -Z build-std=core,alloc --target wasm64-unknown-unknown --release"
+build-kernel-wasm32-compat = "build -p tidemark-kernel -Z build-std=core,alloc --target wasm32-unknown-unknown"
+build-kernel-wasm32-compat-release = "build -p tidemark-kernel -Z build-std=core,alloc --target wasm32-unknown-unknown --release"
 test-kernel = "test"
 test-kernel-lib = "test -p tidemark-kernel --lib"
 test-kernel-riscv = "test -p tidemark-kernel-tests --test riscv_tests"
