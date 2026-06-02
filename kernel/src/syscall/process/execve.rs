@@ -674,9 +674,11 @@ fn current_guest_memory_limit(base: u32) -> u64 {
 
 fn execve_guest_limit(base: u32, brk_start: u64, stack_size: u64, ram_limit: u64) -> u64 {
     const EXECVE_STACK_HEADROOM: u64 = 64 * 1024 * 1024;
-    if ram_limit != 0 {
-        return ram_limit.min(max_execve_ram_limit(base));
-    }
+    let max_limit = if ram_limit != 0 {
+        ram_limit.min(max_execve_ram_limit(base))
+    } else {
+        max_execve_ram_limit(base)
+    };
     let current_limit = current_guest_memory_limit(base);
     let usable_stack = ((stack_size.max(64 * 1024) + 4095) & !4095).saturating_add(4096);
     let required_limit = brk_start
@@ -685,7 +687,7 @@ fn execve_guest_limit(base: u32, brk_start: u64, stack_size: u64, ram_limit: u64
     let rounded_limit = (required_limit + 0xF_FFFF) & !0xF_FFFF;
     current_limit
         .max(rounded_limit)
-        .min(max_execve_ram_limit(base))
+        .min(max_limit)
 }
 
 #[cfg(test)]
@@ -702,6 +704,19 @@ mod tests {
         );
 
         assert_eq!(limit, 16 * 1024 * 1024);
+    }
+
+    #[test]
+    fn execve_guest_limit_treats_large_ram_limit_as_cap_not_allocation_target() {
+        let limit = execve_guest_limit(
+            0,
+            0x83000,
+            crate::syscall::memory::DEFAULT_STACK_SIZE,
+            896 * 1024 * 1024,
+        );
+
+        assert!(limit < 896 * 1024 * 1024);
+        assert!(limit >= 72 * 1024 * 1024);
     }
 }
 
