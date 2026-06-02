@@ -649,6 +649,50 @@ fn file_backed_mmap_zero_fills_tail_after_eof_with_offset() {
 }
 
 #[test]
+fn file_backed_private_mmap_materializes_from_page_cache_into_process_backing() {
+    let mut t = TestVm::new();
+    t.vm.guest_memory_policy_limit = 0x1000_0000;
+    let data: Vec<u8> = (0..0x3000).map(|idx| ((idx * 37) % 251) as u8).collect();
+    let ino = memfs::create_file(1, b"mapped-backing.bin", 0o644);
+    assert!(ino > 0);
+    assert_eq!(memfs::write_file(ino, 0, &data), data.len() as i64);
+
+    let fd = t.sys_openat(b"/mapped-backing.bin", O_RDONLY);
+    assert!(fd >= 3);
+
+    let before_pages = core::arch::wasm32::memory_size(0);
+    let len = 0x4000u64;
+    let policy_before = t.vm.guest_memory_policy_limit;
+    let fixed = (policy_before - 0x40_0000) & !(PAGE_SIZE - 1);
+    assert!(fixed + len < policy_before);
+    let required_pages = ((t.base as u64 + fixed + len) + 65535) / 65536;
+    let mapped = t.sys_mmap(
+        fixed,
+        len,
+        PROT_READ,
+        MAP_PRIVATE | MAP_FIXED_NOREPLACE,
+        fd,
+        0,
+    );
+    assert_eq!(mapped as u64, fixed);
+    let after_pages = core::arch::wasm32::memory_size(0);
+    assert!(after_pages as u64 >= required_pages);
+    if before_pages as u64 >= required_pages {
+        assert_eq!(after_pages, before_pages);
+    } else {
+        assert!(after_pages > before_pages);
+    }
+    assert_eq!(
+        t.vm.guest_memory_policy_limit, policy_before,
+        "file-backed mmap materialization must not rewrite guest policy",
+    );
+
+    let mapped_bytes = t.guest_mem(mapped as u64, len as usize);
+    assert_eq!(&mapped_bytes[..data.len()], data.as_slice());
+    assert!(mapped_bytes[data.len()..].iter().all(|byte| *byte == 0));
+}
+
+#[test]
 fn prot_none_reservation_does_not_grow_linear_memory() {
     let mut t = TestVm::new();
     let before = core::arch::wasm32::memory_size(0);
