@@ -13,6 +13,10 @@ impl Drop for ActiveThreadStepGuard {
     }
 }
 
+pub(crate) fn active_thread_step_vm_ptr() -> u32 {
+    ACTIVE_THREAD_STEP_VM_PTR.load(Ordering::Acquire)
+}
+
 unsafe fn thread_block_cache(vm: &mut ThreadState, base: u32) -> Option<BlockCache> {
     if vm.process_ptr == 0 {
         return None;
@@ -88,7 +92,7 @@ pub extern "C" fn thread_step(vm_ptr: u32, budget: i32) -> i32 {
     )
 )))]
 pub extern "C" fn debug_thread_step_vm_ptr() -> u32 {
-    ACTIVE_THREAD_STEP_VM_PTR.load(Ordering::Acquire)
+    active_thread_step_vm_ptr()
 }
 
 #[unsafe(no_mangle)]

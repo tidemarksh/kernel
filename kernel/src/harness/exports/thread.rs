@@ -1038,7 +1038,7 @@ pub extern "C" fn debug_thread_step_tid() -> i32 {
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_vm_ptr() -> u32 {
-    crate::harness::debug::last_thread_step_trace().vm_ptr
+    crate::exports::thread::active_thread_step_vm_ptr()
 }
 
 #[cfg(any(test, feature = "harness"))]
