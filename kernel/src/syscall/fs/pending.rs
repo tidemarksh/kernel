@@ -402,13 +402,14 @@ mod tests {
         process_pending_requests, resume_from_fs,
     };
     use crate::abi::{
-        AF_UNIX, EAGAIN, EINVAL, ENOENT, O_APPEND, O_CREAT, O_RDONLY, O_WRONLY, SOCK_STREAM,
-        STATUS_FS, STATUS_OK, SYS_WRITE, SYS_WRITEV,
+        AF_UNIX, CLONE_THREAD, CLONE_VM, EAGAIN, EINVAL, ENOENT, O_APPEND, O_CREAT, O_RDONLY,
+        O_WRONLY, SOCK_STREAM, STATUS_FS, STATUS_OK, SYS_WRITE, SYS_WRITEV,
     };
     use crate::fs::ring_buffer;
     use crate::harness::TestVm;
     use crate::syscall::fd_table;
     use crate::syscall::socket::sys_socketpair;
+    use crate::types::ThreadState;
 
     #[test]
     fn dispatch_openat_runs_read_only_existing_files_locally() {
@@ -474,6 +475,53 @@ mod tests {
         assert!(fd >= 3);
         assert_eq!(vm.vm.status, STATUS_OK);
         assert_eq!(fd_table::sys_fcntl(&mut vm.vm, vm.base, fd as u64, 2, 1), 0,);
+    }
+
+    #[test]
+    fn process_pending_requests_openat_installs_fd_for_cloned_thread_process_table() {
+        let mut vm = TestVm::new();
+        let parent_vm_ptr = &mut vm.vm as *mut _ as u32;
+        let clone_result = crate::syscall::thread::sys_clone(
+            &mut vm.vm,
+            vm.base,
+            CLONE_VM | CLONE_THREAD,
+            vm.scratch + 0x7000,
+            0,
+            0,
+            0,
+        );
+        assert!(clone_result > 0);
+
+        let child_vm_ptr = crate::syscall::thread::spawn_from_clone(parent_vm_ptr, vm.base);
+        assert_ne!(child_vm_ptr, 0);
+        let child = unsafe { &mut *(child_vm_ptr as *mut ThreadState) };
+        assert_eq!(child.process_ptr, vm.vm.process_ptr);
+
+        let path_addr = vm.write_path(0x500, b"/child-created.txt");
+        let result = dispatch_openat(
+            child,
+            vm.base,
+            (-100i64) as u64,
+            path_addr,
+            (O_RDONLY | O_CREAT) as u64,
+            0o644,
+        );
+        assert_eq!(result, 0);
+        assert_eq!(child.status, STATUS_FS);
+
+        process_pending_requests(child_vm_ptr, vm.base);
+        let fd = resume_from_fs(child_vm_ptr, vm.base);
+
+        assert!(fd >= 3);
+        assert_eq!(child.status, STATUS_OK);
+        assert_eq!(
+            fd_table::sys_fcntl(child, vm.base, fd as u64, 2, 1),
+            0,
+        );
+        assert_ne!(
+            fd_table::load_process_fd_entry(vm.base, vm.vm.process_ptr, fd as usize).ofd_id,
+            0,
+        );
     }
 
     #[test]
