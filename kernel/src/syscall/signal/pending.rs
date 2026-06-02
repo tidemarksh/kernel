@@ -380,11 +380,22 @@ pub fn send_signal_to_tid(vm: &mut ThreadState, base: u32, tid: i32, sig: i32) -
 pub fn queue_sigill(vm: &mut ThreadState, pc: u64) {
     vm.fault_pc = pc;
     vm.fault_addr = pc;
+    vm.fault_kind = FAULT_KIND_ILLEGAL_INSTRUCTION;
+    vm.fault_signal = SIGILL;
+    vm.fault_code = ILL_ILLOPC;
     send_signal_with_code(vm, SIGILL, ILL_ILLOPC);
 }
 
 pub fn queue_sigsegv(vm: &mut ThreadState, pc: u64, addr: u64, accerr: bool) {
     vm.fault_pc = pc;
     vm.fault_addr = addr;
-    send_signal_with_code(vm, SIGSEGV, if accerr { SEGV_ACCERR } else { SEGV_MAPERR });
+    let code = if accerr { SEGV_ACCERR } else { SEGV_MAPERR };
+    vm.fault_kind = if accerr {
+        FAULT_KIND_GUEST_ACCERR
+    } else {
+        FAULT_KIND_GUEST_MAPERR
+    };
+    vm.fault_signal = SIGSEGV;
+    vm.fault_code = code;
+    send_signal_with_code(vm, SIGSEGV, code);
 }

@@ -51,18 +51,6 @@ pub extern "C" fn thread_sig_info_code(vm_ptr: u32) -> i32 {
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
-pub extern "C" fn thread_fault_pc(vm_ptr: u32) -> u64 {
-    unsafe { (*(vm_ptr as *const crate::types::ThreadState)).fault_pc }
-}
-
-#[cfg(any(test, feature = "harness"))]
-#[unsafe(no_mangle)]
-pub extern "C" fn thread_fault_addr(vm_ptr: u32) -> u64 {
-    unsafe { (*(vm_ptr as *const crate::types::ThreadState)).fault_addr }
-}
-
-#[cfg(any(test, feature = "harness"))]
-#[unsafe(no_mangle)]
 pub extern "C" fn thread_ra(vm_ptr: u32) -> u64 {
     unsafe { (*(vm_ptr as *const crate::types::ThreadState)).x[1] }
 }

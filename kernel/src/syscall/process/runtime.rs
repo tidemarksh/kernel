@@ -56,6 +56,10 @@ pub(super) struct VforkSnapshot {
     pub(super) insn_budget: i32,
     pub(super) fault_pc: u64,
     pub(super) fault_addr: u64,
+    pub(super) fault_kind: u32,
+    pub(super) fault_signal: i32,
+    pub(super) fault_code: i32,
+    pub(super) _pad_fault: u32,
     pub(super) guest_base: u32,
     pub(super) guest_address_profile: u32,
     pub(super) guest_address_limit: u64,
@@ -168,6 +172,10 @@ macro_rules! for_each_vfork_snapshot_field {
         $callback!($target, $source, insn_budget);
         $callback!($target, $source, fault_pc);
         $callback!($target, $source, fault_addr);
+        $callback!($target, $source, fault_kind);
+        $callback!($target, $source, fault_signal);
+        $callback!($target, $source, fault_code);
+        $callback!($target, $source, _pad_fault);
         $callback!($target, $source, guest_base);
         $callback!($target, $source, guest_address_profile);
         $callback!($target, $source, guest_address_limit);
@@ -275,6 +283,10 @@ pub(super) fn empty_vfork_snapshot() -> VforkSnapshot {
         insn_budget: 0,
         fault_pc: 0,
         fault_addr: 0,
+        fault_kind: 0,
+        fault_signal: 0,
+        fault_code: 0,
+        _pad_fault: 0,
         guest_base: 0,
         guest_address_profile: 0,
         guest_address_limit: 0,

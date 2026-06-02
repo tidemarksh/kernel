@@ -79,6 +79,10 @@ pub struct ThreadState {
     // --- Fault info ---
     pub fault_pc: u64,
     pub fault_addr: u64,
+    pub fault_kind: u32,
+    pub fault_signal: i32,
+    pub fault_code: i32,
+    pub _pad_fault: u32,
 
     // --- Guest/process pointers ---
     /// Base offset of the guest address space inside the shared WASM memory.

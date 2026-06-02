@@ -23,6 +23,15 @@ pub const STATUS_WAIT4: i32 = 31;
 pub const STATUS_FLOCK_WAIT: i32 = 32;
 
 // =============================================================================
+// Fault classification
+// =============================================================================
+pub const FAULT_KIND_NONE: u32 = 0;
+pub const FAULT_KIND_GUEST_MAPERR: u32 = 1;
+pub const FAULT_KIND_GUEST_ACCERR: u32 = 2;
+pub const FAULT_KIND_ILLEGAL_INSTRUCTION: u32 = 3;
+pub const FAULT_KIND_GUEST_BUS: u32 = 4;
+
+// =============================================================================
 // Process spawn handoff kinds
 // =============================================================================
 pub const SPAWN_KIND_NONE: u32 = 0;
@@ -414,6 +423,11 @@ export_const!(abi_status_execve_spawn, STATUS_EXECVE_SPAWN);
 export_const!(abi_status_clone_spawn, STATUS_CLONE_SPAWN);
 export_const!(abi_status_sleep, STATUS_SLEEP);
 export_const!(abi_status_jit_ready, STATUS_JIT_READY);
+export_const!(abi_fault_kind_none, FAULT_KIND_NONE as i32);
+export_const!(abi_fault_kind_guest_maperr, FAULT_KIND_GUEST_MAPERR as i32);
+export_const!(abi_fault_kind_guest_accerr, FAULT_KIND_GUEST_ACCERR as i32);
+export_const!(abi_fault_kind_illegal_instruction, FAULT_KIND_ILLEGAL_INSTRUCTION as i32);
+export_const!(abi_fault_kind_guest_bus, FAULT_KIND_GUEST_BUS as i32);
 export_const!(abi_spawn_kind_none, SPAWN_KIND_NONE as i32);
 export_const!(abi_spawn_kind_execve, SPAWN_KIND_EXECVE as i32);
 export_const!(abi_spawn_kind_fork, SPAWN_KIND_FORK as i32);

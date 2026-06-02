@@ -524,6 +524,9 @@ fn instruction_fetch_from_brk_heap_requires_prot_exec() {
     assert_eq!(t.vm.term_signal, SIGSEGV);
     assert_eq!(t.vm.fault_pc, heap_pc);
     assert_eq!(t.vm.fault_addr, heap_pc);
+    assert_eq!(t.vm.fault_kind, FAULT_KIND_GUEST_ACCERR);
+    assert_eq!(t.vm.fault_signal, SIGSEGV);
+    assert_eq!(t.vm.fault_code, 2);
 }
 
 #[test]
