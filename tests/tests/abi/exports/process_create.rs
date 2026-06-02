@@ -94,6 +94,27 @@ fn spawn_handoff_exports_round_trip() {
 }
 
 #[test]
+fn memory64_address_profile_is_distinct_and_not_wasm32_fallback() {
+    let _t = TestVm::new();
+    let wasm32_profile = abi_guest_address_profile_wasm32_compatible();
+    let memory64_profile = abi_guest_address_profile_memory64();
+
+    assert_ne!(memory64_profile, 0);
+    assert_ne!(memory64_profile, wasm32_profile);
+    assert_ne!(process_guest_base_for_address_profile(wasm32_profile), 0);
+    assert_eq!(
+        process_guest_base_for_address_profile(memory64_profile),
+        0,
+        "Memory64 profile must not silently fall back to wasm32-compatible base while unsupported",
+    );
+    assert_eq!(
+        process_guest_address_limit_for_profile(memory64_profile, 0),
+        0,
+        "unsupported Memory64 profile must not produce a wasm32-compatible address limit",
+    );
+}
+
+#[test]
 fn resume_vfork_parent_export_restores_parent_view() {
     let mut t = TestVm::new();
     t.vm.x[1] = 0x1234;
