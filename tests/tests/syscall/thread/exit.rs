@@ -47,7 +47,7 @@ fn contract_exit_group_terminates_sibling_thread_state_and_blocks_future_steps()
     let child = unsafe { &mut *(child_ptr as *mut ThreadState) };
     child.tid = 2;
     child.guest_base = t.base;
-    child.guest_ram_limit = t.vm.guest_ram_limit;
+    child.guest_memory_policy_limit = t.vm.guest_memory_policy_limit;
     child.process_ptr = t.vm.process_ptr;
     child.pc = t.vm.pc;
     child.x[2] = t.vm.x[2];

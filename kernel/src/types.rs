@@ -83,8 +83,6 @@ pub struct ThreadState {
     // --- Guest/process pointers ---
     /// Base offset of the guest address space inside the shared WASM memory.
     pub guest_base: u32,
-    /// Maximum guest-visible RAM window available to this process image.
-    pub guest_ram_limit: u32,
     /// Guest addressability profile selected by the runtime ABI.
     pub guest_address_profile: u32,
     /// Maximum representable guest address range for this profile.
@@ -111,8 +109,6 @@ pub struct ThreadState {
     pub clone_pending: i32,
     /// Pending process-spawn handoff kind. Zero = inactive.
     pub spawn_kind: u32,
-    /// Guest RAM size requested for an execve handoff child image.
-    pub spawn_ram_size: u32,
     /// Address profile requested for the execve/fork handoff child image.
     pub spawn_address_profile: u32,
     /// Optional guest memory policy requested for the spawn child image.

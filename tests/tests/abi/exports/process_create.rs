@@ -267,10 +267,10 @@ fn process_create_with_memory_policy_initializes_memory_contract() {
     let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
     assert_eq!(vm.guest_address_profile, address_profile);
     assert_eq!(vm.guest_memory_policy_limit, ram_size);
-    assert_eq!(vm.guest_ram_limit, ram_size as u32);
     assert_eq!(vm.process_max_memory_pages, 2048);
     assert_eq!(thread_guest_address_profile(vm_ptr), address_profile);
     assert_eq!(thread_guest_memory_policy_limit(vm_ptr), ram_size);
+    assert_eq!(thread_guest_ram_limit(vm_ptr), ram_size as u32);
     assert_eq!(thread_process_max_memory_pages(vm_ptr), 2048);
 }
 
@@ -294,7 +294,7 @@ fn process_create_keeps_initial_stack_compact_for_large_ram_limit() {
     assert_ne!(vm_ptr, 0);
 
     let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
-    assert_eq!(vm.guest_ram_limit, ram_size);
+    assert_eq!(vm.guest_memory_policy_limit, ram_size as u64);
     assert!(
         vm.x[2] < (ram_size as u64 / 2),
         "initial stack should not force materializing the full RAM window: sp=0x{:x}",

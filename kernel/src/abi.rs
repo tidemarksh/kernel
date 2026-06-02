@@ -1032,13 +1032,10 @@ pub extern "C" fn process_create_with_memory_policy(
         } else {
             guest_address_limit
         };
-        let guest_ram_limit_compat = match checked_wasm32_guest_limit(guest_ram_size) {
-            Some(limit) => limit,
-            None => {
-                set_process_create_last_error(4);
-                return 0;
-            }
-        };
+        if checked_wasm32_guest_limit(guest_ram_size).is_none() {
+            set_process_create_last_error(4);
+            return 0;
+        }
         let mut main_inspected = match crate::elf::inspect_elf(elf_ptr, elf_len, guest_ram_size) {
             Ok(r) => r,
             Err(_) => {
@@ -1320,7 +1317,6 @@ pub extern "C" fn process_create_with_memory_policy(
         ts.tid = 1;
         ts.tls_base = elf_result.tls_base;
         ts.guest_base = base;
-        ts.guest_ram_limit = guest_ram_limit_compat;
         ts.guest_address_profile = address_profile;
         ts.guest_address_limit = guest_address_limit;
         ts.guest_memory_policy_limit = guest_memory_policy_limit;

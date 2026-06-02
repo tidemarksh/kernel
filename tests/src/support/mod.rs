@@ -2533,7 +2533,7 @@ fn prepare_process_spawn_after_flush(
     parent_vm.clone_child_tid = 0;
     parent_vm.clone_pending = 0;
     parent_vm.spawn_kind = 0;
-    parent_vm.spawn_ram_size = 0;
+    parent_vm.spawn_guest_memory_policy_limit = 0;
     parent_vm.spawn_child_pid = 0;
     parent_vm.spawn_path = 0;
     parent_vm.spawn_argv = 0;
@@ -2603,7 +2603,7 @@ fn prepare_process_spawn_after_flush_with_parent_memory_scratch(
     parent_vm.clone_child_tid = 0;
     parent_vm.clone_pending = 0;
     parent_vm.spawn_kind = 0;
-    parent_vm.spawn_ram_size = 0;
+    parent_vm.spawn_guest_memory_policy_limit = 0;
     parent_vm.spawn_child_pid = 0;
     parent_vm.spawn_path = 0;
     parent_vm.spawn_argv = 0;
@@ -3424,7 +3424,7 @@ pub(crate) fn prepare_elf_vm(elf_bytes: &[u8], use_cache: bool) -> Result<Prepar
         vm.status = STATUS_OK;
         vm.tid = INITIAL_PID;
         vm.guest_base = base;
-        vm.guest_ram_limit = GUEST_RAM_SIZE;
+        vm.guest_memory_policy_limit = GUEST_RAM_SIZE as u64;
 
         let ps_size = core::mem::size_of::<ProcessState>() as u64;
         let ps_align = core::mem::align_of::<ProcessState>() as u64;

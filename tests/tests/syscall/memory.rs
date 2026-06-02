@@ -233,7 +233,7 @@ fn madvise_dontfork_and_dofork_are_accepted_as_advisory_noops() {
 fn fixed_high_commit_within_sparse_prot_none_reservation_can_skip_linear_materialization() {
     let mut t = TestVm::new();
     let fake_base = 0x23e0_0000u32;
-    t.vm.guest_ram_limit = 0xd820_0000u32;
+    t.vm.guest_memory_policy_limit = 0xd820_0000u64;
 
     let reserve_addr = 0xf820_0000u64;
     let reserve_len = 0x07e0_0000u64;
@@ -274,7 +274,7 @@ fn fixed_high_commit_within_sparse_prot_none_reservation_can_skip_linear_materia
 #[test]
 fn map_fixed_noreplace_above_guest_limit_fails_instead_of_falling_back() {
     let mut t = TestVm::new();
-    t.vm.guest_ram_limit = 0x7fff_ffff;
+    t.vm.guest_memory_policy_limit = 0x7fff_ffff;
 
     let ret = t.sys_mmap(
         0x1_0000_0000,
@@ -295,7 +295,7 @@ fn map_fixed_noreplace_above_guest_limit_fails_instead_of_falling_back() {
 #[test]
 fn map_fixed_noreplace_above_2gb_succeeds_when_guest_window_allows_it() {
     let mut t = TestVm::new();
-    t.vm.guest_ram_limit = tidemark_kernel::abi::max_guest_window_for_base(t.base) as u32;
+    t.vm.guest_memory_policy_limit = tidemark_kernel::abi::max_guest_window_for_base(t.base);
     let addr = 0x8900_0000u64;
     let len = 0x1000u64;
 
@@ -321,7 +321,7 @@ fn map_fixed_noreplace_above_2gb_succeeds_when_guest_window_allows_it() {
 #[test]
 fn map_fixed_noreplace_prot_none_noreserve_can_reserve_up_to_u32_ceiling() {
     let mut t = TestVm::new();
-    t.vm.guest_ram_limit = 0xd820_0000;
+    t.vm.guest_memory_policy_limit = 0xd820_0000;
     let addr = 0xf820_0000u64;
     let len = 0x07e0_0000u64;
     let before_pages = core::arch::wasm32::memory_size(0);
@@ -668,7 +668,7 @@ fn prot_none_reservation_does_not_grow_linear_memory() {
 fn guest_ram_limit_caps_high_prot_none_reservations() {
     let mut t = TestVm::new();
     let guest_limit = 0x6000_0000u64;
-    t.vm.guest_ram_limit = guest_limit as u32;
+    t.vm.guest_memory_policy_limit = guest_limit;
     let len = 128 * 1024 * 1024;
 
     let addr = t.sys_mmap(0, len, PROT_NONE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
@@ -686,7 +686,7 @@ fn guest_ram_limit_caps_high_prot_none_reservations() {
 #[test]
 fn prot_none_reservations_stay_within_linux_shaped_topdown_window() {
     let mut t = TestVm::new();
-    t.vm.guest_ram_limit = 0xd820_0000u32;
+    t.vm.guest_memory_policy_limit = 0xd820_0000u64;
     let len = 128 * 1024 * 1024;
 
     let addr = t.sys_mmap(0, len, PROT_NONE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
@@ -705,7 +705,7 @@ fn guest_ram_limit_caps_brk_growth() {
     let mut t = TestVm::new();
     let cur = t.sys_brk(0) as u64;
     let guest_limit = cur + 2 * PAGE_SIZE;
-    t.vm.guest_ram_limit = guest_limit as u32;
+    t.vm.guest_memory_policy_limit = guest_limit;
 
     assert_eq!(t.sys_brk(cur + PAGE_SIZE), (cur + PAGE_SIZE) as i64);
     assert_eq!(t.sys_brk(guest_limit + PAGE_SIZE), (cur + PAGE_SIZE) as i64);
@@ -714,7 +714,7 @@ fn guest_ram_limit_caps_brk_growth() {
 #[test]
 fn prot_none_reservation_keeps_rw_mmaps_low() {
     let mut t = TestVm::new();
-    t.vm.guest_ram_limit = 0x6000_0000;
+    t.vm.guest_memory_policy_limit = 0x6000_0000;
 
     let reserve = t.sys_mmap(
         0,
@@ -743,7 +743,7 @@ fn mprotect_materializes_high_prot_none_reservation_without_clobbering_current_t
     let mut t = TestVm::new();
     let addr = 0x5c00_0000u64;
     let len = 0x21_000u64;
-    t.vm.guest_ram_limit = 0x6000_0000;
+    t.vm.guest_memory_policy_limit = 0x6000_0000;
     t.vm.pc = 0x1234_5678;
     t.vm.x[2] = 0x2345_6780;
     t.vm.x[27] = 0x3456_7890;
@@ -789,7 +789,7 @@ fn thread_step_mprotect_materialization_preserves_parent_context_in_multithreade
 
     let reserve_addr = 0x5c00_0000u64;
     let reserve_len = 0x21_000u64;
-    t.vm.guest_ram_limit = 0x6000_0000;
+    t.vm.guest_memory_policy_limit = 0x6000_0000;
     let reserved = t.sys_mmap(
         reserve_addr,
         reserve_len,
@@ -918,7 +918,7 @@ fn multithreaded_flush_icache_reexec_preserves_parent_context() {
 #[test]
 fn guest_generated_high_code_cache_flush_icache_executes_in_multithreaded_process() {
     let mut t = TestVm::new();
-    t.vm.guest_ram_limit = 0x7fff_ffff;
+    t.vm.guest_memory_policy_limit = 0x7fff_ffff;
 
     let reserve_base = 0x7053_0000u64;
     let reserve_len = 0x90_000u64;

@@ -10,7 +10,6 @@ pub(crate) fn set_spawn_handoff(
     envp_addr: u64,
 ) {
     vm.spawn_kind = kind;
-    vm.spawn_ram_size = 0;
     vm.spawn_address_profile = vm.guest_address_profile;
     vm.spawn_guest_memory_policy_limit = vm.guest_memory_policy_limit;
     vm.spawn_process_max_memory_pages = vm.process_max_memory_pages;
@@ -22,7 +21,6 @@ pub(crate) fn set_spawn_handoff(
 
 pub(crate) fn clear_spawn_handoff(vm: &mut ThreadState) {
     vm.spawn_kind = SPAWN_KIND_NONE;
-    vm.spawn_ram_size = 0;
     vm.spawn_address_profile = 0;
     vm.spawn_guest_memory_policy_limit = 0;
     vm.spawn_process_max_memory_pages = 0;

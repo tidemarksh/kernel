@@ -986,7 +986,14 @@ pub extern "C" fn thread_spawn_kind(vm_ptr: u32) -> u32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn thread_guest_ram_limit(vm_ptr: u32) -> u32 {
-    unsafe { (*(vm_ptr as *const ThreadState)).guest_ram_limit }
+    unsafe {
+        let limit = (*(vm_ptr as *const ThreadState)).guest_memory_policy_limit;
+        if limit <= u32::MAX as u64 {
+            limit as u32
+        } else {
+            0
+        }
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -1014,11 +1021,6 @@ pub extern "C" fn thread_set_guest_memory_policy_limit(vm_ptr: u32, limit: u64) 
     unsafe {
         let vm = &mut *(vm_ptr as *mut ThreadState);
         vm.guest_memory_policy_limit = limit;
-        vm.guest_ram_limit = if limit <= u32::MAX as u64 {
-            limit as u32
-        } else {
-            0
-        };
     }
 }
 
@@ -1069,7 +1071,14 @@ pub extern "C" fn thread_spawn_envp(vm_ptr: u32) -> u64 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn thread_spawn_ram_size(vm_ptr: u32) -> u32 {
-    unsafe { (*(vm_ptr as *const ThreadState)).spawn_ram_size }
+    unsafe {
+        let limit = (*(vm_ptr as *const ThreadState)).spawn_guest_memory_policy_limit;
+        if limit <= u32::MAX as u64 {
+            limit as u32
+        } else {
+            0
+        }
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -1123,11 +1132,6 @@ pub extern "C" fn thread_set_execve_memory_handoff(
         let vm = &mut *(vm_ptr as *mut ThreadState);
         vm.process_ptr = process_ptr;
         vm.spawn_kind = SPAWN_KIND_EXECVE;
-        vm.spawn_ram_size = if guest_memory_policy_limit <= u32::MAX as u64 {
-            guest_memory_policy_limit as u32
-        } else {
-            0
-        };
         vm.spawn_address_profile = address_profile;
         vm.spawn_guest_memory_policy_limit = guest_memory_policy_limit;
         vm.spawn_process_max_memory_pages = process_max_memory_pages;
@@ -1142,7 +1146,6 @@ pub extern "C" fn thread_clear_spawn_handoff(vm_ptr: u32) {
     unsafe {
         let vm = &mut *(vm_ptr as *mut ThreadState);
         vm.spawn_kind = SPAWN_KIND_NONE;
-        vm.spawn_ram_size = 0;
         vm.spawn_address_profile = 0;
         vm.spawn_guest_memory_policy_limit = 0;
         vm.spawn_process_max_memory_pages = 0;
@@ -1182,9 +1185,7 @@ pub extern "C" fn thread_complete_execve_handoff(vm_ptr: u32) -> i64 {
         let spawn_address_profile = vm.spawn_address_profile;
         let spawn_guest_memory_policy_limit = vm.spawn_guest_memory_policy_limit;
         let spawn_process_max_memory_pages = vm.spawn_process_max_memory_pages;
-        let exec_ram_size = if vm.spawn_ram_size != 0 {
-            vm.spawn_ram_size as u64
-        } else if spawn_guest_memory_policy_limit != 0 {
+        let exec_ram_size = if spawn_guest_memory_policy_limit != 0 {
             spawn_guest_memory_policy_limit
         } else {
             crate::syscall::process::max_execve_ram_limit(vm.guest_base)
@@ -1200,11 +1201,6 @@ pub extern "C" fn thread_complete_execve_handoff(vm_ptr: u32) -> i64 {
             }
             if spawn_guest_memory_policy_limit != 0 {
                 vm.guest_memory_policy_limit = spawn_guest_memory_policy_limit;
-                vm.guest_ram_limit = if spawn_guest_memory_policy_limit <= u32::MAX as u64 {
-                    spawn_guest_memory_policy_limit as u32
-                } else {
-                    0
-                };
             }
             if spawn_process_max_memory_pages != 0 {
                 vm.process_max_memory_pages = spawn_process_max_memory_pages;
