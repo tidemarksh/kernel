@@ -226,6 +226,11 @@ unsafe fn read_thread_record(record: *const ThreadRecord) -> ThreadRecord {
 }
 
 pub(crate) fn record_thread_record_write(record: *mut ThreadRecord, value: ThreadRecord) {
+    const THREAD_RECORD_WRITE_TRACE_ENABLED: bool = false;
+    if !THREAD_RECORD_WRITE_TRACE_ENABLED {
+        let _ = (record, value);
+        return;
+    }
     unsafe {
         let cursor = THREAD_RECORD_WRITE_TRACE_CURSOR as usize % THREAD_RECORD_WRITE_TRACE_CAP;
         THREAD_RECORD_WRITE_TRACE[cursor] = ThreadRecordWriteTrace {

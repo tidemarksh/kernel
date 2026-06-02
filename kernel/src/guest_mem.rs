@@ -147,6 +147,7 @@ static mut DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE: [DebugProcMapsShapedWriteTraceEnt
     [DEBUG_EMPTY_PROC_MAPS_SHAPED_WRITE; DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE_CAP];
 static mut DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE_LEN: u32 = 0;
 static mut DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE_CURSOR: u32 = 0;
+const DEBUG_PROC_MAPS_SHAPED_WRITE_ENABLED: bool = false;
 
 #[inline(always)]
 fn sample_u64(bytes: &[u8]) -> (u64, u32) {
@@ -188,6 +189,10 @@ pub fn debug_configure_guest_write_watch(slot: u32, start: u64, end: u64) {
 }
 
 pub fn debug_set_guest_write_context(vm_ptr: u32, pc: u64, raw: u32, step: u64) {
+    if !debug_guest_write_overlap_enabled() {
+        let _ = (vm_ptr, pc, raw, step);
+        return;
+    }
     unsafe {
         DEBUG_GUEST_WRITE_CONTEXT = DebugGuestWriteContext {
             vm_ptr,
@@ -434,6 +439,10 @@ fn find_proc_maps_shaped_offset(bytes: &[u8]) -> Option<(usize, u32)> {
 }
 
 fn debug_record_proc_maps_shaped_write(addr: u64, op: u32, bytes: &[u8]) {
+    if !DEBUG_PROC_MAPS_SHAPED_WRITE_ENABLED {
+        let _ = (addr, op, bytes);
+        return;
+    }
     let Some((offset, pattern)) = find_proc_maps_shaped_offset(bytes) else {
         return;
     };

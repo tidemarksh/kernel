@@ -338,6 +338,11 @@ pub(crate) fn record_debug_syscall(
     arg5: u64,
     result: i64,
 ) {
+    const DEBUG_MEMORY_SYSCALL_TRACE_ENABLED: bool = false;
+    if !DEBUG_MEMORY_SYSCALL_TRACE_ENABLED {
+        let _ = (vm, nr, arg0, arg1, arg2, arg3, arg4, arg5, result);
+        return;
+    }
     unsafe {
         let next = DEBUG_MEMORY_SYSCALL_TRACE_NEXT as usize % DEBUG_MEMORY_SYSCALL_TRACE_CAPACITY;
         DEBUG_MEMORY_SYSCALL_TRACE[next] = DebugMemorySyscallEntry {
@@ -474,6 +479,11 @@ fn push_cpu_write_permit_trace(entry: CpuWritePermitTraceEntry) {
 }
 
 pub(crate) fn record_cpu_write_permit_trace(vm: &ThreadState, pc: u64, addr: u64, len: u64) {
+    const CPU_WRITE_PERMIT_TRACE_ENABLED: bool = false;
+    if !CPU_WRITE_PERMIT_TRACE_ENABLED {
+        let _ = (vm, pc, addr, len);
+        return;
+    }
     if len == 0 {
         return;
     }

@@ -14,6 +14,7 @@ const LINUX_IOV_MAX: u64 = 1024;
 pub(crate) const PIPE_READ_EOF_SYNC_RETRY_MARKER: u64 = 0x7069_7065_454f_4652;
 const PIPE_EPIPE_SYNC_RETRY_MARKER: u64 = 0x7069_7065_4550_4950;
 const PROC_MAPS_READ_TRACE_CAP: usize = 64;
+const PROC_MAPS_READ_TRACE_ENABLED: bool = false;
 
 #[derive(Clone, Copy)]
 #[allow(dead_code)]
@@ -104,6 +105,10 @@ fn record_proc_maps_read(
     result: i64,
     file_offset: u64,
 ) {
+    if !PROC_MAPS_READ_TRACE_ENABLED {
+        let _ = (vm, base, fd, ino, buf, len, result, file_offset);
+        return;
+    }
     if result <= 0 || !is_proc_self_maps_inode(ino) {
         return;
     }
