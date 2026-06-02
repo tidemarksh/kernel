@@ -92,7 +92,7 @@ pub fn init() {
             core::mem::align_of::<TimeState>() as u32,
         );
         if ptr == 0 {
-            core::arch::wasm32::unreachable();
+            crate::wasm::unreachable();
         }
         core::ptr::write(
             ptr as *mut TimeState,

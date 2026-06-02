@@ -1,4 +1,8 @@
-#![cfg_attr(all(target_arch = "wasm32", target_os = "unknown"), no_std)]
+#![cfg_attr(target_arch = "wasm64", feature(simd_wasm64))]
+#![cfg_attr(
+    all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown"),
+    no_std
+)]
 
 extern crate alloc as alloc_crate;
 
@@ -18,7 +22,7 @@ pub fn last_panic_location() -> (u32, u32, u32, u32) {
     }
 }
 
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown"))]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     unsafe {
@@ -34,7 +38,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
             LAST_PANIC_COLUMN = 0;
         }
     }
-    core::arch::wasm32::unreachable()
+    crate::wasm::unreachable()
 }
 
 pub mod abi;
@@ -44,10 +48,14 @@ pub mod elf;
 mod exports;
 pub mod fs;
 pub mod guest_mem;
-#[cfg(any(test, all(target_arch = "wasm32", feature = "harness")))]
+#[cfg(any(
+    test,
+    all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness")
+))]
 pub mod harness;
 pub mod jit;
 pub mod net;
 pub mod syscall;
 mod tracepoints;
 pub mod types;
+pub mod wasm;

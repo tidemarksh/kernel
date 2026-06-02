@@ -63,7 +63,7 @@ pub fn init() {
         // in single-instance, alloc.rs allocates from the same shared WASM Memory)
         let base = alloc::alloc_zeroed(total, 8);
         if base == 0 {
-            core::arch::wasm32::unreachable();
+            crate::wasm::unreachable();
         }
         core::ptr::write(core::ptr::addr_of_mut!(SAB_PIPE_BASE), base);
     }

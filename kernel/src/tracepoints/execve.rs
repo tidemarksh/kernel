@@ -1,4 +1,4 @@
-#[cfg(any(test, all(target_arch = "wasm32", feature = "harness")))]
+#[cfg(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness")))]
 pub(crate) use crate::harness::trace::{
     record_execve_approach, record_execve_dispatch, record_execve_ecall, record_execve_error,
     record_execve_pre_dispatch, record_execve_stage,
@@ -7,7 +7,7 @@ pub(crate) use crate::harness::trace::{
 macro_rules! noop_tracepoint {
     ($(fn $name:ident($($arg:ident : $ty:ty),* $(,)?) $(-> $ret:ty)? $body:block)*) => {
         $(
-            #[cfg(not(any(test, all(target_arch = "wasm32", feature = "harness"))))]
+            #[cfg(not(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness"))))]
             #[inline(always)]
             pub(crate) fn $name($($arg: $ty),*) $(-> $ret)? {
                 let _ = ($($arg),*);

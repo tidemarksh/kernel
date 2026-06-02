@@ -123,7 +123,7 @@ pub fn debug_validate_process_context_snapshot(
 ) -> Result<(), String> {
     let (len, cap, ptr) = snapshot.mm_state.debug_vma_vec_meta();
     let elem = core::mem::size_of::<crate::types::Vma>();
-    let mem_size = (core::arch::wasm32::memory_size(0) as usize).saturating_mul(65536);
+    let mem_size = crate::wasm::memory_size_bytes() as usize;
     if len > cap {
         return Err(format!(
             "process context snapshot invalid vmas len={} cap={} ptr=0x{:x}",

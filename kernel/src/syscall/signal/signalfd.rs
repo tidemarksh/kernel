@@ -37,7 +37,7 @@ pub(super) fn init() {
         let signalfd_align = core::mem::align_of::<SignalFdState>() as u32;
         let signalfd_ptr = crate::alloc::alloc_zeroed(signalfd_size, signalfd_align);
         if signalfd_ptr == 0 {
-            core::arch::wasm32::unreachable();
+            crate::wasm::unreachable();
         }
         core::ptr::write(
             core::ptr::addr_of_mut!(SIGNALFD_PTR),

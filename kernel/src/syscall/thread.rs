@@ -18,26 +18,26 @@ use crate::types::{
 };
 use core::sync::atomic::Ordering;
 
-#[cfg(any(test, all(target_arch = "wasm32", feature = "harness")))]
+#[cfg(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness")))]
 #[inline(always)]
 fn wake_external_waiters(caller_pid: i32, addr: u32, max_wake: u32) -> u32 {
     crate::harness::support::wake_external_futex_waits_from_pid(caller_pid, addr, max_wake)
 }
 
-#[cfg(not(any(test, all(target_arch = "wasm32", feature = "harness"))))]
+#[cfg(not(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness"))))]
 #[inline(always)]
 fn wake_external_waiters(caller_pid: i32, addr: u32, max_wake: u32) -> u32 {
     let _ = (caller_pid, addr, max_wake);
     0
 }
 
-#[cfg(any(test, all(target_arch = "wasm32", feature = "harness")))]
+#[cfg(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness")))]
 #[inline(always)]
 fn requeue_external_waiters(addr: u32, new_addr: u32, max_requeue: u32) -> u32 {
     crate::harness::support::requeue_external_futex_waits(addr, new_addr, max_requeue)
 }
 
-#[cfg(not(any(test, all(target_arch = "wasm32", feature = "harness"))))]
+#[cfg(not(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness"))))]
 #[inline(always)]
 fn requeue_external_waiters(addr: u32, new_addr: u32, max_requeue: u32) -> u32 {
     let _ = (addr, new_addr, max_requeue);
@@ -187,8 +187,8 @@ fn thread_state_from_record_ptr(thread_ptr: u32) -> Option<*mut ThreadState> {
     }
 
     let end = absolute.checked_add(core::mem::size_of::<ThreadState>())?;
-    let memory_size = core::arch::wasm32::memory_size(0).checked_mul(65536)?;
-    if end > memory_size {
+    let memory_size = crate::wasm::memory_size_bytes();
+    if end as u64 > memory_size {
         return None;
     }
 
@@ -268,13 +268,13 @@ fn wake_futex_waiters_by_process_ptr(
     woken
 }
 
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown"))]
 #[link(wasm_import_module = "env")]
 unsafe extern "C" {
     fn tidemark_memory_atomic_notify(ptr: *mut i32, max_wake: u32) -> u32;
 }
 
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown"))]
 pub(crate) fn notify_futex_addr(base: u32, addr: u32, max_wake: u32) {
     unsafe {
         let ptr = (base as u64 + addr as u64) as usize as *mut i32;
@@ -282,7 +282,7 @@ pub(crate) fn notify_futex_addr(base: u32, addr: u32, max_wake: u32) {
     }
 }
 
-#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+#[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
 pub(crate) fn notify_futex_addr(_base: u32, _addr: u32, _max_wake: u32) {}
 
 fn requeue_futex_waiters_by_process_ptr(

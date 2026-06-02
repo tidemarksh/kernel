@@ -27,7 +27,7 @@ pub(super) fn current_process_state_mut(
     }
     let absolute = (base as u64).checked_add(vm.process_ptr as u64)?;
     let end = absolute.checked_add(core::mem::size_of::<ProcessState>() as u64)?;
-    let mem_size = (core::arch::wasm32::memory_size(0) as u64).saturating_mul(65536);
+    let mem_size = crate::wasm::memory_size_bytes();
     if end > mem_size {
         None
     } else {

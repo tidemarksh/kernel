@@ -193,8 +193,7 @@ fn pending_request_selected_path_ptr(request: &ring_buffer::FsRequestInfo, secon
 }
 
 fn pending_request_path_len_inner(base: u32, path_ptr: u64) -> u32 {
-    let guest_limit =
-        ((core::arch::wasm32::memory_size(0) as u64) * 65536).saturating_sub(base as u64);
+    let guest_limit = crate::wasm::memory_size_bytes().saturating_sub(base as u64);
     if path_ptr >= guest_limit || path_ptr > u32::MAX as u64 {
         return 0;
     }

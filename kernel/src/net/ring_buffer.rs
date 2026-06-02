@@ -53,7 +53,7 @@ pub fn init() {
         let total = MAX_NET_BUFFERS as u32 * NET_BUF_SIZE;
         let base = alloc::alloc_zeroed(total, 8);
         if base == 0 {
-            core::arch::wasm32::unreachable();
+            crate::wasm::unreachable();
         }
         core::ptr::write(core::ptr::addr_of_mut!(NET_BUF_BASE), base);
     }

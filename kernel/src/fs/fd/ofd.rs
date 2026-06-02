@@ -62,7 +62,7 @@ pub fn init() {
         let align = core::mem::align_of::<OfdState>() as u32;
         let ptr = crate::alloc::alloc_zeroed(size, align);
         if ptr == 0 {
-            core::arch::wasm32::unreachable();
+            crate::wasm::unreachable();
         }
         core::ptr::write(core::ptr::addr_of_mut!(OFD_STATE_PTR), ptr as *mut OfdState);
     }

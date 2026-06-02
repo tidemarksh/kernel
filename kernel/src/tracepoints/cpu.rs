@@ -1,4 +1,4 @@
-#[cfg(any(test, all(target_arch = "wasm32", feature = "harness")))]
+#[cfg(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness")))]
 pub(crate) use crate::harness::trace::{
     guest_write_overlap_enabled, record_block_cache_budget_skip, record_block_cache_build,
     record_block_cache_build_failure, record_block_cache_build_op, record_block_cache_hit,
@@ -11,7 +11,7 @@ pub(crate) use crate::harness::trace::{
 macro_rules! noop_tracepoint {
     ($(fn $name:ident($($arg:ident : $ty:ty),* $(,)?) $(-> $ret:ty)? $body:block)*) => {
         $(
-            #[cfg(not(any(test, all(target_arch = "wasm32", feature = "harness"))))]
+            #[cfg(not(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness"))))]
             #[inline(always)]
             pub(crate) fn $name($($arg: $ty),*) $(-> $ret)? {
                 let _ = ($($arg),*);

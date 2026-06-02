@@ -32,7 +32,7 @@
 
 use crate::abi::*;
 use crate::alloc;
-#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+#[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
 use alloc_crate::vec::Vec;
 
 #[repr(C)]
@@ -42,7 +42,7 @@ struct PageCacheMeta {
     size: u64,
 }
 
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown"))]
 #[link(wasm_import_module = "env")]
 unsafe extern "C" {
     fn tidemark_page_cache_read(ino: u32, offset: u64, dst_ptr: u32, dst_len: u32) -> i64;
@@ -50,17 +50,17 @@ unsafe extern "C" {
     fn tidemark_page_cache_write(ino: u32, offset: u64, src_ptr: u32, src_len: u32) -> i64;
 }
 
-#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+#[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
 struct FallbackPageCacheEntry {
     ino: u32,
     mode: u32,
     data: Vec<u8>,
 }
 
-#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+#[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
 static mut FALLBACK_PAGE_CACHE: Option<Vec<FallbackPageCacheEntry>> = None;
 
-#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+#[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
 fn fallback_page_cache_entries() -> &'static mut Vec<FallbackPageCacheEntry> {
     unsafe {
         let entries = core::ptr::addr_of_mut!(FALLBACK_PAGE_CACHE);
@@ -71,7 +71,7 @@ fn fallback_page_cache_entries() -> &'static mut Vec<FallbackPageCacheEntry> {
     }
 }
 
-#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+#[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
 fn reset_fallback_page_cache() {
     unsafe {
         let entries = core::ptr::addr_of_mut!(FALLBACK_PAGE_CACHE);
@@ -81,14 +81,14 @@ fn reset_fallback_page_cache() {
     }
 }
 
-#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+#[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
 fn fallback_page_cache_entry(ino: u32) -> Option<&'static mut FallbackPageCacheEntry> {
     fallback_page_cache_entries()
         .iter_mut()
         .find(|entry| entry.ino == ino)
 }
 
-#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+#[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
 unsafe fn tidemark_page_cache_read(ino: u32, offset: u64, dst_ptr: u32, dst_len: u32) -> i64 {
     let Some(entry) = fallback_page_cache_entry(ino) else {
         return 0;
@@ -104,7 +104,7 @@ unsafe fn tidemark_page_cache_read(ino: u32, offset: u64, dst_ptr: u32, dst_len:
     len as i64
 }
 
-#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+#[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
 unsafe fn tidemark_page_cache_stat(ino: u32, out_ptr: u32) -> i32 {
     let Some(entry) = fallback_page_cache_entry(ino) else {
         return 0;
@@ -118,7 +118,7 @@ unsafe fn tidemark_page_cache_stat(ino: u32, out_ptr: u32) -> i32 {
     1
 }
 
-#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+#[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
 unsafe fn tidemark_page_cache_write(ino: u32, offset: u64, src_ptr: u32, src_len: u32) -> i64 {
     let Some(end) = (offset as usize).checked_add(src_len as usize) else {
         return ENOSPC;
@@ -324,7 +324,7 @@ fn dir_entries() -> &'static mut [DirEntry] {
 
 /// Initialize MemFS. Allocates all data structures via alloc.rs.
 pub fn init() {
-    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+    #[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
     reset_fallback_page_cache();
 
     unsafe {
@@ -347,7 +347,7 @@ pub fn init() {
             || dir_entries_ptr == 0
             || data_ptr == 0
         {
-            core::arch::wasm32::unreachable();
+            crate::wasm::unreachable();
         }
 
         let h = &mut *(header_ptr as *mut MemFsHeader);

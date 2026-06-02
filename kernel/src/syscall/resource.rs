@@ -92,7 +92,7 @@ fn ensure_rlimit_slots() -> *mut [*mut [Rlimit64; RLIMIT_NLIMITS]; MAX_PROCESSES
         let align = core::mem::align_of::<*mut [Rlimit64; RLIMIT_NLIMITS]>() as u32;
         let fresh = crate::alloc::alloc_zeroed(size, align);
         if fresh == 0 {
-            core::arch::wasm32::unreachable();
+            crate::wasm::unreachable();
         }
         core::ptr::write(
             core::ptr::addr_of_mut!(RLIMIT_SLOTS_PTR),

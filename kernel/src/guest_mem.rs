@@ -62,7 +62,7 @@ fn check_range(base: u32, addr: u64, len: usize, op: &str) {
         let end = absolute
             .checked_add(len as u64)
             .unwrap_or_else(|| panic!("{op}: end overflow absolute=0x{absolute:x} len=0x{len:x}"));
-        let mem_size = (core::arch::wasm32::memory_size(0) as u64).saturating_mul(65536);
+        let mem_size = crate::wasm::memory_size_bytes();
         if end > mem_size {
             panic!(
                 "{op}: out of bounds base=0x{base:x} addr=0x{addr:x} absolute=0x{absolute:x} end=0x{end:x} len=0x{len:x} mem_size=0x{mem_size:x}"

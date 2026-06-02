@@ -80,7 +80,7 @@ pub(super) fn init() {
         let pending_align = core::mem::align_of::<u64>() as u32;
         let pending_ptr = crate::alloc::alloc_zeroed(pending_size, pending_align);
         if pending_ptr == 0 {
-            core::arch::wasm32::unreachable();
+            crate::wasm::unreachable();
         }
         core::ptr::write(
             core::ptr::addr_of_mut!(PROCESS_PENDING_PTR),

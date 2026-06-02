@@ -302,7 +302,7 @@ pub fn init(brk_start: u64) {
             core::mem::align_of::<AddressSpaceState>() as u32,
         );
         if ptr == 0 {
-            core::arch::wasm32::unreachable();
+            crate::wasm::unreachable();
         }
         core::ptr::write(
             ptr as *mut AddressSpaceState,
@@ -384,7 +384,7 @@ fn validate_vma_vec_for_image(vmas: &Vec<Vma>) {
     let cap = vmas.capacity();
     let ptr = vmas.as_ptr() as usize;
     let elem = core::mem::size_of::<Vma>();
-    let mem_size = (core::arch::wasm32::memory_size(0) as usize).saturating_mul(65536);
+    let mem_size = crate::wasm::memory_size_bytes() as usize;
     if len > cap {
         panic!("address_space_state_image: len {} > cap {}", len, cap);
     }
@@ -531,7 +531,7 @@ fn max_guest_addr_limit(base: u32) -> u64 {
 }
 
 fn current_linear_guest_limit(base: u32) -> u64 {
-    ((core::arch::wasm32::memory_size(0) as u64) * 65536)
+    crate::wasm::memory_size_bytes()
         .saturating_sub(base as u64)
         .min(max_guest_addr_limit(base))
 }
@@ -746,7 +746,7 @@ fn ensure_memory_capacity_for_guest_range(base: u32, guest_end: u64) -> bool {
         return false;
     }
 
-    let mut mem_size = (core::arch::wasm32::memory_size(0) as u64) * 65536;
+    let mut mem_size = crate::wasm::memory_size_bytes();
     if needed <= mem_size {
         return true;
     }
@@ -758,10 +758,10 @@ fn ensure_memory_capacity_for_guest_range(base: u32, guest_end: u64) -> bool {
     while mem_size < needed {
         let remaining_pages = (needed - mem_size).div_ceil(WASM_PAGE_BYTES);
         let step_pages = remaining_pages.min(GROW_CHUNK_PAGES) as usize;
-        if core::arch::wasm32::memory_grow(0, step_pages) == usize::MAX {
+        if !crate::wasm::memory_grow_pages(step_pages) {
             return false;
         }
-        mem_size += (step_pages as u64) * WASM_PAGE_BYTES;
+        mem_size = crate::wasm::memory_size_bytes();
     }
     true
 }

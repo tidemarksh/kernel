@@ -223,7 +223,7 @@ pub fn init() {
         let align = core::mem::align_of::<PtySlot>() as u32;
         let ptr = alloc::alloc_zeroed(size, align);
         if ptr == 0 {
-            core::arch::wasm32::unreachable();
+            crate::wasm::unreachable();
         }
         core::ptr::write(
             core::ptr::addr_of_mut!(PTY_TABLE_PTR),

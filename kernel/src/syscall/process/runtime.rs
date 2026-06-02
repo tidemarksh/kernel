@@ -236,7 +236,7 @@ fn checked_process_runtime_state_ptr() -> *mut ProcessRuntimeState {
     if ptr.is_null() {
         return ptr;
     }
-    let mem_size = (core::arch::wasm32::memory_size(0) as u64).saturating_mul(65536);
+    let mem_size = crate::wasm::memory_size_bytes();
     let ptr_usize = ptr as usize as u64;
     let size = core::mem::size_of::<ProcessRuntimeState>() as u64;
     let end = ptr_usize.saturating_add(size);
@@ -502,7 +502,7 @@ pub fn init() {
             core::mem::align_of::<ProcessRuntimeState>() as u32,
         );
         if ptr == 0 {
-            core::arch::wasm32::unreachable();
+            crate::wasm::unreachable();
         }
         let state = ptr as *mut ProcessRuntimeState;
         core::ptr::write(
@@ -577,7 +577,7 @@ pub fn shared_heap_alloc(size: u32, align: u32) -> Option<u32> {
     let state = unsafe { &*ptr };
     loop {
         let current = state.heap_ptr.load(Ordering::Acquire);
-        let mem_size = (core::arch::wasm32::memory_size(0) as u64) * 65536;
+        let mem_size = crate::wasm::memory_size_bytes();
         #[cfg(any(test, feature = "harness"))]
         {
             if current < state.heap_base {
@@ -611,8 +611,7 @@ pub fn shared_heap_alloc(size: u32, align: u32) -> Option<u32> {
         }
         if end as u64 > mem_size {
             let pages_needed = (end as u64 - mem_size).div_ceil(65536) as usize;
-            let result = core::arch::wasm32::memory_grow(0, pages_needed);
-            if result == usize::MAX {
+            if !crate::wasm::memory_grow_pages(pages_needed) {
                 return Some(0);
             }
         }

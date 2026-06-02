@@ -71,7 +71,7 @@ unsafe impl GlobalAlloc for BumpAlloc {
     }
 }
 
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown"))]
 #[global_allocator]
 static ALLOCATOR: BumpAlloc = BumpAlloc;
 
@@ -119,11 +119,10 @@ pub unsafe fn reset(base: u32) {
 
     #[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
     {
-        let mem_size = (core::arch::wasm32::memory_size(0) as u64) * 65536;
+        let mem_size = crate::wasm::memory_size_bytes();
         if base as u64 > mem_size {
             let pages_needed = (base as u64 - mem_size).div_ceil(65536) as usize;
-            let result = core::arch::wasm32::memory_grow(0, pages_needed);
-            if result == usize::MAX {
+            if !crate::wasm::memory_grow_pages(pages_needed) {
                 invalid_heap_range("reset", base, 0, mem_size);
                 return;
             }
@@ -171,7 +170,7 @@ pub unsafe fn alloc(size: u32, align: u32) -> u32 {
 pub unsafe fn alloc(size: u32, align: u32) -> u32 {
     if let Some(ptr) = crate::syscall::process::shared_heap_alloc(size, align) {
         if ptr != 0 {
-            let mem_size = (core::arch::wasm32::memory_size(0) as u64) * 65536;
+            let mem_size = crate::wasm::memory_size_bytes();
             let Some(end) = (ptr as u64).checked_add(size as u64) else {
                 return invalid_heap_range("alloc(shared overflow)", ptr, size, mem_size);
             };
@@ -195,12 +194,11 @@ pub unsafe fn alloc(size: u32, align: u32) -> u32 {
         return 0;
     };
     // Check against WASM memory size
-    let mem_size = (core::arch::wasm32::memory_size(0) as u64) * 65536;
+    let mem_size = crate::wasm::memory_size_bytes();
     if end as u64 > mem_size {
         // Try to grow
         let pages_needed = (end as u64 - mem_size).div_ceil(65536) as usize;
-        let result = core::arch::wasm32::memory_grow(0, pages_needed);
-        if result == usize::MAX {
+        if !crate::wasm::memory_grow_pages(pages_needed) {
             return 0; // OOM
         }
     }
@@ -215,7 +213,7 @@ pub unsafe fn alloc(size: u32, align: u32) -> u32 {
 pub unsafe fn alloc_zeroed(size: u32, align: u32) -> u32 {
     let ptr = unsafe { alloc(size, align) };
     if ptr != 0 {
-        let mem_size = (core::arch::wasm32::memory_size(0) as u64) * 65536;
+        let mem_size = crate::wasm::memory_size_bytes();
         let Some(end) = (ptr as u64).checked_add(size as u64) else {
             return invalid_heap_range("alloc_zeroed overflow", ptr, size, mem_size);
         };
@@ -289,9 +287,9 @@ mod tests {
     fn alloc_returns_nonzero() {
         unsafe {
             // Ensure sufficient WASM pages are available.
-            let current_pages = core::arch::wasm32::memory_size(0);
+            let current_pages = crate::wasm::memory_size_pages() as usize;
             if current_pages < 256 {
-                core::arch::wasm32::memory_grow(0, 256 - current_pages);
+                crate::wasm::memory_grow_pages(256 - current_pages);
             }
             super::init(0x20_0000);
 
@@ -304,9 +302,9 @@ mod tests {
     #[test]
     fn sequential_allocs_non_overlapping() {
         unsafe {
-            let current_pages = core::arch::wasm32::memory_size(0);
+            let current_pages = crate::wasm::memory_size_pages() as usize;
             if current_pages < 256 {
-                core::arch::wasm32::memory_grow(0, 256 - current_pages);
+                crate::wasm::memory_grow_pages(256 - current_pages);
             }
             super::init(0x20_0000);
 
@@ -328,9 +326,9 @@ mod tests {
     #[test]
     fn alloc_zeroed_is_zeroed() {
         unsafe {
-            let current_pages = core::arch::wasm32::memory_size(0);
+            let current_pages = crate::wasm::memory_size_pages() as usize;
             if current_pages < 256 {
-                core::arch::wasm32::memory_grow(0, 256 - current_pages);
+                crate::wasm::memory_grow_pages(256 - current_pages);
             }
             super::init(0x20_0000);
 

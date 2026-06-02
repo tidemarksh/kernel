@@ -21,12 +21,34 @@ rustflags = [
   "link-arg=--global-base=50331648",
 ]
 
+[target.wasm64-unknown-unknown]
+# Memory64 target profile. Import shared linear memory from the runtime and keep
+# kernel static data high enough to avoid overlap with guest binary segments.
+rustflags = [
+  "-C",
+  "target-feature=+atomics,+bulk-memory,+mutable-globals",
+  "-C",
+  "link-arg=--import-memory",
+  "-C",
+  "link-arg=--shared-memory",
+  "-C",
+  "link-arg=--max-memory=4294967296",
+  "-C",
+  "link-arg=--export-memory",
+  "-C",
+  "link-arg=--export=__stack_pointer",
+  "-C",
+  "link-arg=--global-base=50331648",
+]
+
 [alias]
 # The no_std kernel artifact for wasm32-unknown-unknown needs core/alloc from
 # build-std. Keep that scoped to explicit kernel build aliases so the test
 # package can use the wasm32-wasip1 toolchain directly under `cargo test`.
 build-kernel = "build -p tidemark-kernel -Z build-std=core,alloc --target wasm32-unknown-unknown"
 build-kernel-release = "build -p tidemark-kernel -Z build-std=core,alloc --target wasm32-unknown-unknown --release"
+build-kernel-memory64 = "build -p tidemark-kernel -Z build-std=core,alloc --target wasm64-unknown-unknown"
+build-kernel-memory64-release = "build -p tidemark-kernel -Z build-std=core,alloc --target wasm64-unknown-unknown --release"
 test-kernel = "test"
 test-kernel-lib = "test -p tidemark-kernel --lib"
 test-kernel-riscv = "test -p tidemark-kernel-tests --test riscv_tests"

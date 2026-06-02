@@ -17,7 +17,7 @@ use crate::types::ThreadState;
 /// Return the guest-visible byte length of the shared linear memory.
 #[inline(always)]
 fn guest_memory_limit(base: u32) -> u64 {
-    ((core::arch::wasm32::memory_size(0) as u64) * 65536).saturating_sub(base as u64)
+    crate::wasm::memory_size_bytes().saturating_sub(base as u64)
 }
 
 /// Check whether `[addr, addr + len)` lies within guest memory.

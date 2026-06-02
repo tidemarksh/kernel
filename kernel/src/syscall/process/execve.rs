@@ -70,8 +70,7 @@ fn read_guest_cstr_bytes(base: u32, addr: u64) -> Result<Vec<u8>, i64> {
         return Err(EFAULT);
     }
 
-    let guest_limit =
-        ((core::arch::wasm32::memory_size(0) as u64) * 65536).saturating_sub(base as u64);
+    let guest_limit = crate::wasm::memory_size_bytes().saturating_sub(base as u64);
     if addr >= guest_limit || addr > u32::MAX as u64 {
         return Err(EFAULT);
     }
@@ -654,13 +653,13 @@ fn validate_execve_initial_stack(
 
 fn ensure_guest_memory_capacity(base: u32, guest_end: u64) -> bool {
     let needed = base as u64 + guest_end;
-    let mem_size = (core::arch::wasm32::memory_size(0) as u64) * 65536;
+    let mem_size = crate::wasm::memory_size_bytes();
     if needed <= mem_size {
         return true;
     }
 
     let pages = (needed - mem_size).div_ceil(65536);
-    core::arch::wasm32::memory_grow(0, pages as usize) != usize::MAX
+    crate::wasm::memory_grow_pages(pages as usize)
 }
 
 fn current_guest_memory_limit(base: u32) -> u64 {
@@ -668,7 +667,7 @@ fn current_guest_memory_limit(base: u32) -> u64 {
     let limit = if heap_base > base as u64 {
         heap_base - base as u64
     } else {
-        ((core::arch::wasm32::memory_size(0) as u64) * 65536).saturating_sub(base as u64)
+        crate::wasm::memory_size_bytes().saturating_sub(base as u64)
     };
     limit.min(max_execve_ram_limit(base))
 }

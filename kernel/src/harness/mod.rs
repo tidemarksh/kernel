@@ -54,9 +54,9 @@ pub unsafe fn reset_state(heap_base: u32, brk_start: u64) {
         crate::guest_mem::init(core::ptr::null(), core::ptr::null(), core::ptr::null());
     }
 
-    let current_pages = core::arch::wasm32::memory_size(0);
+    let current_pages = crate::wasm::memory_size_pages() as usize;
     if current_pages < DEFAULT_MEMORY_PAGES {
-        let _ = core::arch::wasm32::memory_grow(0, DEFAULT_MEMORY_PAGES - current_pages);
+        let _ = crate::wasm::memory_grow_pages(DEFAULT_MEMORY_PAGES - current_pages);
     }
 
     unsafe {
@@ -94,7 +94,7 @@ pub unsafe fn reset_default_state() {
 impl TestVm {
     pub fn new() -> Self {
         unsafe {
-            let current_pages = core::arch::wasm32::memory_size(0);
+            let current_pages = crate::wasm::memory_size_pages() as usize;
             let aligned = (DEFAULT_GUEST_BASE_PADDING as u64)
                 .saturating_add((DEFAULT_GUEST_RAM_ALIGN - 1) as u64)
                 & !((DEFAULT_GUEST_RAM_ALIGN - 1) as u64);
@@ -105,9 +105,8 @@ impl TestVm {
             let target_pages = target_bytes.div_ceil(65536) as usize;
             let target_pages = target_pages.max(DEFAULT_MEMORY_PAGES);
             if current_pages < target_pages {
-                let grown = core::arch::wasm32::memory_grow(0, target_pages - current_pages);
-                if grown == usize::MAX {
-                    core::arch::wasm32::unreachable();
+                if !crate::wasm::memory_grow_pages(target_pages - current_pages) {
+                    crate::wasm::unreachable();
                 }
             }
             let host_heap_base = base
