@@ -85,6 +85,14 @@ pub struct ThreadState {
     pub guest_base: u32,
     /// Maximum guest-visible RAM window available to this process image.
     pub guest_ram_limit: u32,
+    /// Guest addressability profile selected by the runtime ABI.
+    pub guest_address_profile: u32,
+    /// Maximum representable guest address range for this profile.
+    pub guest_address_limit: u64,
+    /// Optional guest-visible memory policy limit. Zero means unset.
+    pub guest_memory_policy_limit: u64,
+    /// Runtime process backing maximum, in WebAssembly pages. Zero means unset.
+    pub process_max_memory_pages: u32,
     /// Guest-relative pointer to ProcessState in guest Memory.
     pub process_ptr: u32,
 
@@ -105,9 +113,14 @@ pub struct ThreadState {
     pub spawn_kind: u32,
     /// Guest RAM size requested for an execve handoff child image.
     pub spawn_ram_size: u32,
+    /// Address profile requested for the execve/fork handoff child image.
+    pub spawn_address_profile: u32,
+    /// Optional guest memory policy requested for the spawn child image.
+    pub spawn_guest_memory_policy_limit: u64,
+    /// Process backing maximum requested for the spawn child image, in pages.
+    pub spawn_process_max_memory_pages: u32,
     /// Child PID allocated for execve/fork handoff.
     pub spawn_child_pid: i32,
-    _pad1: u32,
     /// Guest pointer to execve path string.
     pub spawn_path: u64,
     /// Guest pointer to argv vector.

@@ -48,6 +48,15 @@ fn spawn_handoff_exports_round_trip() {
 
     thread_set_guest_ram_limit(vm_ptr, 0x12345678);
     assert_eq!(thread_guest_ram_limit(vm_ptr), 0x12345678);
+    assert_eq!(thread_guest_memory_policy_limit(vm_ptr), 0x12345678);
+
+    thread_set_guest_memory_policy_limit(vm_ptr, 0x1_0000_0000);
+    assert_eq!(thread_guest_memory_policy_limit(vm_ptr), 0x1_0000_0000);
+    assert_eq!(
+        thread_guest_ram_limit(vm_ptr),
+        0,
+        "legacy u32 shim must not truncate Memory64-sized policy values",
+    );
 
     thread_set_execve_handoff(vm_ptr, 0x4444, 0xAAAA, 0xBBBB, 0xCCCC, 0x3333);
     assert_eq!(thread_process_ptr(vm_ptr), 0x4444);
@@ -56,11 +65,32 @@ fn spawn_handoff_exports_round_trip() {
     assert_eq!(thread_spawn_argv(vm_ptr), 0xBBBB);
     assert_eq!(thread_spawn_envp(vm_ptr), 0xCCCC);
     assert_eq!(thread_spawn_ram_size(vm_ptr), 0x3333);
+    assert_eq!(
+        thread_spawn_address_profile(vm_ptr),
+        abi_guest_address_profile_wasm32_compatible(),
+    );
+    assert_eq!(thread_spawn_guest_memory_policy_limit(vm_ptr), 0x3333);
+
+    thread_set_execve_memory_handoff(
+        vm_ptr,
+        0x5555,
+        0xAAAA,
+        0xBBBB,
+        0xCCCC,
+        abi_guest_address_profile_wasm32_compatible(),
+        0x1_0000_0000,
+        123,
+    );
+    assert_eq!(thread_process_ptr(vm_ptr), 0x5555);
+    assert_eq!(thread_spawn_ram_size(vm_ptr), 0);
+    assert_eq!(thread_spawn_guest_memory_policy_limit(vm_ptr), 0x1_0000_0000);
+    assert_eq!(thread_spawn_process_max_memory_pages(vm_ptr), 123);
 
     thread_clear_spawn_handoff(vm_ptr);
     assert_eq!(thread_spawn_kind(vm_ptr), SPAWN_KIND_NONE);
     assert_eq!(thread_spawn_child_pid(vm_ptr), 0);
     assert_eq!(thread_spawn_path(vm_ptr), 0);
+    assert_eq!(thread_spawn_guest_memory_policy_limit(vm_ptr), 0);
 }
 
 #[test]
@@ -201,6 +231,47 @@ fn process_create_populates_initial_stack_contract() {
     assert!(found_execfn, "AT_EXECFN must be present in auxv");
     assert!(found_hwcap, "AT_HWCAP must be present in auxv");
     assert!(found_clktck, "AT_CLKTCK must be present in auxv");
+}
+
+#[test]
+fn process_create_with_memory_policy_initializes_memory_contract() {
+    let _t = TestVm::new();
+    let ram_size = 64 * 1024 * 1024u64;
+    let stack_size = 1024 * 1024;
+    let address_profile = abi_guest_address_profile_wasm32_compatible();
+    let guest_base = process_guest_base_for_address_profile(address_profile);
+    assert_ne!(guest_base, 0);
+    assert_ne!(
+        process_guest_address_limit_for_profile(address_profile, guest_base),
+        0,
+    );
+
+    let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    let elf_ptr = unsafe { tidemark_kernel::alloc::alloc_zeroed(0x1000, 16) };
+    assert_ne!(elf_ptr, 0);
+    unsafe {
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64, &elf);
+    }
+
+    process_clear_args();
+    let vm_ptr = process_create_with_memory_policy(
+        elf_ptr,
+        elf.len() as u32,
+        address_profile,
+        ram_size,
+        2048,
+        stack_size,
+    );
+    assert_ne!(vm_ptr, 0);
+
+    let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
+    assert_eq!(vm.guest_address_profile, address_profile);
+    assert_eq!(vm.guest_memory_policy_limit, ram_size);
+    assert_eq!(vm.guest_ram_limit, ram_size as u32);
+    assert_eq!(vm.process_max_memory_pages, 2048);
+    assert_eq!(thread_guest_address_profile(vm_ptr), address_profile);
+    assert_eq!(thread_guest_memory_policy_limit(vm_ptr), ram_size);
+    assert_eq!(thread_process_max_memory_pages(vm_ptr), 2048);
 }
 
 #[test]

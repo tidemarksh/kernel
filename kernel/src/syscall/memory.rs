@@ -552,7 +552,9 @@ fn needs_sparse_linear_backing(base: u32, guest_end: u64) -> bool {
 }
 
 pub(crate) fn effective_guest_limit(vm: &ThreadState, base: u32) -> u64 {
-    if vm.guest_ram_limit != 0 {
+    if vm.guest_memory_policy_limit != 0 {
+        vm.guest_memory_policy_limit.min(max_guest_addr_limit(base))
+    } else if vm.guest_ram_limit != 0 {
         (vm.guest_ram_limit as u64).min(max_guest_addr_limit(base))
     } else {
         current_linear_guest_limit(base)

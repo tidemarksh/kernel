@@ -30,6 +30,13 @@ pub const SPAWN_KIND_EXECVE: u32 = 1;
 pub const SPAWN_KIND_FORK: u32 = 2;
 
 // =============================================================================
+// Guest addressability profiles
+// =============================================================================
+pub const GUEST_ADDRESS_PROFILE_NONE: u32 = 0;
+pub const GUEST_ADDRESS_PROFILE_WASM32_COMPATIBLE: u32 = 1;
+pub const GUEST_ADDRESS_PROFILE_MEMORY64: u32 = 2;
+
+// =============================================================================
 // FD types (internal, not Linux ABI)
 // =============================================================================
 pub const FD_TYPE_NONE: i32 = 0;
@@ -795,9 +802,36 @@ fn process_guest_base_for_ram(ram_size: u32) -> u32 {
     }
 }
 
-fn process_guest_ram_size(ram_size: u32, guest_base: u32) -> u64 {
-    let _ = guest_base;
-    ram_size as u64
+fn process_guest_base_for_profile(address_profile: u32) -> u64 {
+    match address_profile {
+        GUEST_ADDRESS_PROFILE_WASM32_COMPATIBLE => process_guest_base_for_ram(0) as u64,
+        // The ABI is typed for Memory64, but the current wasm32 kernel artifact
+        // cannot safely execute the Memory64 profile yet.
+        GUEST_ADDRESS_PROFILE_MEMORY64 => 0,
+        _ => 0,
+    }
+}
+
+fn guest_address_limit_for_profile(address_profile: u32, guest_base: u64) -> u64 {
+    match address_profile {
+        GUEST_ADDRESS_PROFILE_WASM32_COMPATIBLE => {
+            if guest_base > u32::MAX as u64 {
+                0
+            } else {
+                max_guest_window_for_base(guest_base as u32)
+            }
+        }
+        GUEST_ADDRESS_PROFILE_MEMORY64 => 0,
+        _ => 0,
+    }
+}
+
+fn checked_wasm32_guest_limit(limit: u64) -> Option<u32> {
+    if limit <= u32::MAX as u64 {
+        Some(limit as u32)
+    } else {
+        None
+    }
 }
 
 fn page_align_up(len: u64) -> u64 {
@@ -879,21 +913,71 @@ pub extern "C" fn process_clear_args() {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn abi_guest_address_profile_wasm32_compatible() -> u32 {
+    GUEST_ADDRESS_PROFILE_WASM32_COMPATIBLE
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn abi_guest_address_profile_memory64() -> u32 {
+    GUEST_ADDRESS_PROFILE_MEMORY64
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn process_guest_base_for_address_profile(address_profile: u32) -> u64 {
+    process_guest_base_for_profile(address_profile)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn process_guest_address_limit_for_profile(
+    address_profile: u32,
+    guest_base: u64,
+) -> u64 {
+    guest_address_limit_for_profile(address_profile, guest_base)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn process_guest_base(ram_size: u32) -> u32 {
-    process_guest_base_for_ram(ram_size)
+    let base = process_guest_base_for_profile(GUEST_ADDRESS_PROFILE_WASM32_COMPATIBLE);
+    let _ = ram_size;
+    checked_wasm32_guest_limit(base).unwrap_or(0)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn process_inspect_elf_brk(elf_ptr: u32, elf_len: u32, ram_size: u32) -> u64 {
+    process_inspect_elf_brk_with_memory_policy(
+        elf_ptr,
+        elf_len,
+        GUEST_ADDRESS_PROFILE_WASM32_COMPATIBLE,
+        ram_size as u64,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn process_inspect_elf_brk_with_memory_policy(
+    elf_ptr: u32,
+    elf_len: u32,
+    address_profile: u32,
+    guest_memory_policy_limit: u64,
+) -> u64 {
     unsafe {
-        let guest_base = process_guest_base_for_ram(ram_size);
+        let guest_base = process_guest_base_for_profile(address_profile);
         if guest_base == 0 {
             return 0;
         }
+        let guest_address_limit =
+            guest_address_limit_for_profile(address_profile, guest_base);
+        if guest_address_limit == 0 {
+            return 0;
+        }
+        let guest_ram_size = if guest_memory_policy_limit != 0 {
+            guest_memory_policy_limit.min(guest_address_limit)
+        } else {
+            guest_address_limit
+        };
         match crate::elf::inspect_elf(
             elf_ptr,
             elf_len,
-            process_guest_ram_size(ram_size, guest_base),
+            guest_ram_size,
         ) {
             Ok(r) => r.brk_start,
             Err(_) => 0,
@@ -910,15 +994,51 @@ pub extern "C" fn process_create(
     ram_size: u32,
     stack_size: u32,
 ) -> u32 {
+    process_create_with_memory_policy(
+        elf_ptr,
+        elf_len,
+        GUEST_ADDRESS_PROFILE_WASM32_COMPATIBLE,
+        ram_size as u64,
+        0,
+        stack_size,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn process_create_with_memory_policy(
+    elf_ptr: u32,
+    elf_len: u32,
+    address_profile: u32,
+    guest_memory_policy_limit: u64,
+    process_max_memory_pages: u32,
+    stack_size: u32,
+) -> u32 {
     unsafe {
         set_process_create_last_error(0);
         // Guest RAM lives above the kernel's reserved linear-memory region.
-        let base = process_guest_base_for_ram(ram_size);
-        if base == 0 {
+        let base_u64 = process_guest_base_for_profile(address_profile);
+        if base_u64 == 0 || base_u64 > u32::MAX as u64 {
             set_process_create_last_error(1);
             return 0;
         }
-        let guest_ram_size = process_guest_ram_size(ram_size, base);
+        let base = base_u64 as u32;
+        let guest_address_limit = guest_address_limit_for_profile(address_profile, base_u64);
+        if guest_address_limit == 0 {
+            set_process_create_last_error(1);
+            return 0;
+        }
+        let guest_ram_size = if guest_memory_policy_limit != 0 {
+            guest_memory_policy_limit.min(guest_address_limit)
+        } else {
+            guest_address_limit
+        };
+        let guest_ram_limit_compat = match checked_wasm32_guest_limit(guest_ram_size) {
+            Some(limit) => limit,
+            None => {
+                set_process_create_last_error(4);
+                return 0;
+            }
+        };
         let mut main_inspected = match crate::elf::inspect_elf(elf_ptr, elf_len, guest_ram_size) {
             Ok(r) => r,
             Err(_) => {
@@ -1200,7 +1320,11 @@ pub extern "C" fn process_create(
         ts.tid = 1;
         ts.tls_base = elf_result.tls_base;
         ts.guest_base = base;
-        ts.guest_ram_limit = guest_ram_size as u32;
+        ts.guest_ram_limit = guest_ram_limit_compat;
+        ts.guest_address_profile = address_profile;
+        ts.guest_address_limit = guest_address_limit;
+        ts.guest_memory_policy_limit = guest_memory_policy_limit;
+        ts.process_max_memory_pages = process_max_memory_pages;
         ts.process_ptr = ps_addr as u32;
         crate::fs::fd_table::init_stdio(base, ts);
         crate::syscall::thread::init_main_thread(ts_ptr, base);

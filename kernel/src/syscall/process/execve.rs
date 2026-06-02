@@ -1135,6 +1135,9 @@ fn complete_execve_in_place_inner(
 }
 
 fn effective_execve_ram_limit(vm: &ThreadState, base: u32) -> u64 {
+    if vm.guest_memory_policy_limit != 0 {
+        return vm.guest_memory_policy_limit.min(max_execve_ram_limit(base));
+    }
     if vm.guest_ram_limit != 0 {
         return (vm.guest_ram_limit as u64).min(max_execve_ram_limit(base));
     }

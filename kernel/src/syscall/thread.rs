@@ -896,6 +896,10 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
         child.fault_addr = 0;
         child.guest_base = parent.guest_base;
         child.guest_ram_limit = parent.guest_ram_limit;
+        child.guest_address_profile = parent.guest_address_profile;
+        child.guest_address_limit = parent.guest_address_limit;
+        child.guest_memory_policy_limit = parent.guest_memory_policy_limit;
+        child.process_max_memory_pages = parent.process_max_memory_pages;
         child.process_ptr = parent.process_ptr;
         child.completed_sync_effects = 0;
         child.blocked_syscall_nr = 0;

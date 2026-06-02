@@ -58,6 +58,10 @@ pub(super) struct VforkSnapshot {
     pub(super) fault_addr: u64,
     pub(super) guest_base: u32,
     pub(super) guest_ram_limit: u32,
+    pub(super) guest_address_profile: u32,
+    pub(super) guest_address_limit: u64,
+    pub(super) guest_memory_policy_limit: u64,
+    pub(super) process_max_memory_pages: u32,
     pub(super) process_ptr: u32,
     pub(super) clone_flags: u64,
     pub(super) clone_child_stack: u64,
@@ -67,6 +71,9 @@ pub(super) struct VforkSnapshot {
     pub(super) clone_pending: i32,
     pub(super) spawn_kind: u32,
     pub(super) spawn_ram_size: u32,
+    pub(super) spawn_address_profile: u32,
+    pub(super) spawn_guest_memory_policy_limit: u64,
+    pub(super) spawn_process_max_memory_pages: u32,
     pub(super) spawn_child_pid: i32,
     pub(super) spawn_path: u64,
     pub(super) spawn_argv: u64,
@@ -165,6 +172,10 @@ macro_rules! for_each_vfork_snapshot_field {
         $callback!($target, $source, fault_addr);
         $callback!($target, $source, guest_base);
         $callback!($target, $source, guest_ram_limit);
+        $callback!($target, $source, guest_address_profile);
+        $callback!($target, $source, guest_address_limit);
+        $callback!($target, $source, guest_memory_policy_limit);
+        $callback!($target, $source, process_max_memory_pages);
         $callback!($target, $source, process_ptr);
         $callback!($target, $source, clone_flags);
         $callback!($target, $source, clone_child_stack);
@@ -174,6 +185,9 @@ macro_rules! for_each_vfork_snapshot_field {
         $callback!($target, $source, clone_pending);
         $callback!($target, $source, spawn_kind);
         $callback!($target, $source, spawn_ram_size);
+        $callback!($target, $source, spawn_address_profile);
+        $callback!($target, $source, spawn_guest_memory_policy_limit);
+        $callback!($target, $source, spawn_process_max_memory_pages);
         $callback!($target, $source, spawn_child_pid);
         $callback!($target, $source, spawn_path);
         $callback!($target, $source, spawn_argv);
@@ -267,6 +281,10 @@ pub(super) fn empty_vfork_snapshot() -> VforkSnapshot {
         fault_addr: 0,
         guest_base: 0,
         guest_ram_limit: 0,
+        guest_address_profile: 0,
+        guest_address_limit: 0,
+        guest_memory_policy_limit: 0,
+        process_max_memory_pages: 0,
         process_ptr: 0,
         clone_flags: 0,
         clone_child_stack: 0,
@@ -276,6 +294,9 @@ pub(super) fn empty_vfork_snapshot() -> VforkSnapshot {
         clone_pending: 0,
         spawn_kind: 0,
         spawn_ram_size: 0,
+        spawn_address_profile: 0,
+        spawn_guest_memory_policy_limit: 0,
+        spawn_process_max_memory_pages: 0,
         spawn_child_pid: 0,
         spawn_path: 0,
         spawn_argv: 0,
