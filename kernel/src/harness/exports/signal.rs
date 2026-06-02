@@ -102,6 +102,72 @@ pub extern "C" fn debug_signal_delivery_for_vm_s11(vm_ptr: u32) -> u64 {
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
+pub extern "C" fn debug_default_signal_sig() -> u32 {
+    crate::harness::signal::last_default_signal().0
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_default_signal_code() -> i32 {
+    crate::harness::signal::last_default_signal().1
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_default_signal_vm_ptr() -> u32 {
+    crate::harness::signal::last_default_signal_vm_ptr()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_default_signal_pc() -> u64 {
+    crate::harness::signal::last_default_signal().2
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_default_signal_ra() -> u64 {
+    crate::harness::signal::last_default_signal().3
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_default_signal_sp() -> u64 {
+    crate::harness::signal::last_default_signal().4
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_default_signal_gp() -> u64 {
+    crate::harness::signal::last_default_signal().5
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_default_signal_tp() -> u64 {
+    crate::harness::signal::last_default_signal().6
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_default_signal_s11() -> u64 {
+    crate::harness::signal::last_default_signal().7
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_default_signal_fault_pc() -> u64 {
+    crate::harness::signal::last_default_signal().8
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_default_signal_fault_addr() -> u64 {
+    crate::harness::signal::last_default_signal().9
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
 pub extern "C" fn debug_sigreturn_frame_base() -> u64 {
     crate::harness::signal::last_sigreturn().1
 }
