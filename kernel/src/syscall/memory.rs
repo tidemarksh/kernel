@@ -41,6 +41,7 @@ const PERMIT_OUTCOME_DENIED: u32 = 3;
 /// https://man7.org/linux/man-pages/man2/mmap.2.html
 struct AddressSpaceState {
     vmas: Vec<Vma>,
+    kernel_owned_guest_ranges: Vec<KernelGuestRange>,
     brk_base: u64,
     brk_current: u64,
     mmap_next: u64,
@@ -48,6 +49,12 @@ struct AddressSpaceState {
     permit_cache_start: [u64; PERMIT_CACHE_SLOTS],
     permit_cache_end: [u64; PERMIT_CACHE_SLOTS],
     permit_cache_prot: [i32; PERMIT_CACHE_SLOTS],
+}
+
+#[derive(Clone, Copy)]
+struct KernelGuestRange {
+    start: u64,
+    end: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -64,7 +71,85 @@ struct DebugMemorySyscallEntry {
     process_ptr: u32,
 }
 
-const DEBUG_MEMORY_SYSCALL_TRACE_CAPACITY: usize = 32;
+const DEBUG_MEMORY_SYSCALL_TRACE_CAPACITY: usize = 256;
+const FILE_MMAP_MATERIALIZE_TRACE_CAPACITY: usize = 64;
+const CPU_WRITE_PERMIT_TRACE_CAPACITY: usize = 96;
+const MPROTECT_TRANSITION_TRACE_CAPACITY: usize = 96;
+const MMAP_EXEC_TRANSITION_TRACE_CAPACITY: usize = 96;
+
+#[derive(Clone, Copy)]
+#[allow(dead_code)]
+pub(crate) struct FileMmapMaterializeTraceEntry {
+    pub vm_ptr: u32,
+    pub ino: u32,
+    pub start: u64,
+    pub end: u64,
+    pub prot: i32,
+    pub flags: i32,
+    pub offset: u64,
+    pub source_proc_maps: u32,
+    pub old_exec_overlap: u32,
+    pub old_vma_start: u64,
+    pub old_vma_end: u64,
+    pub old_vma_fd: i32,
+    pub old_vma_offset: u64,
+    pub sample: u64,
+}
+
+#[derive(Clone, Copy)]
+#[allow(dead_code)]
+pub(crate) struct CpuWritePermitTraceEntry {
+    pub vm_ptr: u32,
+    pub tid: i32,
+    pub pc: u64,
+    pub addr: u64,
+    pub len: u64,
+    pub vma_start: u64,
+    pub vma_end: u64,
+    pub vma_prot: i32,
+    pub vma_flags: i32,
+    pub vma_fd: i32,
+    pub vma_offset: u64,
+}
+
+#[derive(Clone, Copy)]
+#[allow(dead_code)]
+pub(crate) struct MprotectTransitionTraceEntry {
+    pub vm_ptr: u32,
+    pub tid: i32,
+    pub request_start: u64,
+    pub request_end: u64,
+    pub segment_start: u64,
+    pub segment_end: u64,
+    pub old_prot: i32,
+    pub new_prot: i32,
+    pub old_flags: i32,
+    pub old_fd: i32,
+    pub old_offset: u64,
+    pub gained_exec: u32,
+    pub gained_write: u32,
+}
+
+#[derive(Clone, Copy)]
+#[allow(dead_code)]
+pub(crate) struct MmapExecTransitionTraceEntry {
+    pub vm_ptr: u32,
+    pub tid: i32,
+    pub start: u64,
+    pub end: u64,
+    pub prot: i32,
+    pub flags: i32,
+    pub fd: i32,
+    pub offset: u64,
+    pub is_anon: u32,
+    pub sparse_fixed_upgrade: u32,
+    pub old_exec_overlap: u32,
+    pub old_vma_start: u64,
+    pub old_vma_end: u64,
+    pub old_vma_fd: i32,
+    pub old_vma_offset: u64,
+    pub sample: u64,
+}
 
 static mut DEBUG_MEMORY_SYSCALL_TRACE: [DebugMemorySyscallEntry;
     DEBUG_MEMORY_SYSCALL_TRACE_CAPACITY] = [DebugMemorySyscallEntry {
@@ -81,6 +166,80 @@ static mut DEBUG_MEMORY_SYSCALL_TRACE: [DebugMemorySyscallEntry;
 }; DEBUG_MEMORY_SYSCALL_TRACE_CAPACITY];
 static mut DEBUG_MEMORY_SYSCALL_TRACE_LEN: u32 = 0;
 static mut DEBUG_MEMORY_SYSCALL_TRACE_NEXT: u32 = 0;
+static mut FILE_MMAP_MATERIALIZE_TRACE: [FileMmapMaterializeTraceEntry;
+    FILE_MMAP_MATERIALIZE_TRACE_CAPACITY] = [FileMmapMaterializeTraceEntry {
+    vm_ptr: 0,
+    ino: 0,
+    start: 0,
+    end: 0,
+    prot: 0,
+    flags: 0,
+    offset: 0,
+    source_proc_maps: 0,
+    old_exec_overlap: 0,
+    old_vma_start: 0,
+    old_vma_end: 0,
+    old_vma_fd: 0,
+    old_vma_offset: 0,
+    sample: 0,
+}; FILE_MMAP_MATERIALIZE_TRACE_CAPACITY];
+static mut FILE_MMAP_MATERIALIZE_TRACE_LEN: u32 = 0;
+static mut FILE_MMAP_MATERIALIZE_TRACE_NEXT: u32 = 0;
+static mut CPU_WRITE_PERMIT_TRACE: [CpuWritePermitTraceEntry; CPU_WRITE_PERMIT_TRACE_CAPACITY] =
+    [CpuWritePermitTraceEntry {
+        vm_ptr: 0,
+        tid: 0,
+        pc: 0,
+        addr: 0,
+        len: 0,
+        vma_start: 0,
+        vma_end: 0,
+        vma_prot: 0,
+        vma_flags: 0,
+        vma_fd: 0,
+        vma_offset: 0,
+    }; CPU_WRITE_PERMIT_TRACE_CAPACITY];
+static mut CPU_WRITE_PERMIT_TRACE_LEN: u32 = 0;
+static mut CPU_WRITE_PERMIT_TRACE_NEXT: u32 = 0;
+static mut MPROTECT_TRANSITION_TRACE: [MprotectTransitionTraceEntry;
+    MPROTECT_TRANSITION_TRACE_CAPACITY] = [MprotectTransitionTraceEntry {
+    vm_ptr: 0,
+    tid: 0,
+    request_start: 0,
+    request_end: 0,
+    segment_start: 0,
+    segment_end: 0,
+    old_prot: 0,
+    new_prot: 0,
+    old_flags: 0,
+    old_fd: 0,
+    old_offset: 0,
+    gained_exec: 0,
+    gained_write: 0,
+}; MPROTECT_TRANSITION_TRACE_CAPACITY];
+static mut MPROTECT_TRANSITION_TRACE_LEN: u32 = 0;
+static mut MPROTECT_TRANSITION_TRACE_NEXT: u32 = 0;
+static mut MMAP_EXEC_TRANSITION_TRACE: [MmapExecTransitionTraceEntry;
+    MMAP_EXEC_TRANSITION_TRACE_CAPACITY] = [MmapExecTransitionTraceEntry {
+    vm_ptr: 0,
+    tid: 0,
+    start: 0,
+    end: 0,
+    prot: 0,
+    flags: 0,
+    fd: 0,
+    offset: 0,
+    is_anon: 0,
+    sparse_fixed_upgrade: 0,
+    old_exec_overlap: 0,
+    old_vma_start: 0,
+    old_vma_end: 0,
+    old_vma_fd: 0,
+    old_vma_offset: 0,
+    sample: 0,
+}; MMAP_EXEC_TRANSITION_TRACE_CAPACITY];
+static mut MMAP_EXEC_TRANSITION_TRACE_LEN: u32 = 0;
+static mut MMAP_EXEC_TRANSITION_TRACE_NEXT: u32 = 0;
 
 #[derive(Clone, Copy)]
 enum ProcMapsLabel {
@@ -106,6 +265,7 @@ struct ProcMapsEntry {
 #[allow(dead_code)]
 pub(crate) struct AddressSpaceStateImage {
     vmas: Vec<Vma>,
+    kernel_owned_guest_ranges: Vec<KernelGuestRange>,
     brk_base: u64,
     brk_current: u64,
     mmap_next: u64,
@@ -122,6 +282,7 @@ impl AddressSpaceStateImage {
     pub(crate) fn empty() -> Self {
         Self {
             vmas: Vec::new(),
+            kernel_owned_guest_ranges: Vec::new(),
             brk_base: 0,
             brk_current: 0,
             mmap_next: 0,
@@ -238,6 +399,304 @@ fn debug_syscall_trace_entry(index: u32) -> DebugMemorySyscallEntry {
     }
 }
 
+fn is_proc_self_maps_inode(ino: u32) -> bool {
+    let mut path = [0u8; 128];
+    let len = memfs::write_path(ino, &mut path);
+    &path[..len] == b"/proc/self/maps"
+}
+
+fn current_exec_overlap(s: &AddressSpaceState, start: u64, end: u64) -> (u32, u64, u64, i32, u64) {
+    for vma in s.vmas.iter() {
+        if (vma.prot & PROT_EXEC) == 0 {
+            continue;
+        }
+        if start < vma.end && end > vma.start {
+            return (1, vma.start, vma.end, vma.fd, vma.offset);
+        }
+    }
+    (0, 0, 0, 0, 0)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_file_mmap_materialize(
+    vm: &ThreadState,
+    s: &AddressSpaceState,
+    ino: u32,
+    start: u64,
+    end: u64,
+    prot: i32,
+    flags: i32,
+    offset: u64,
+    sample: u64,
+) {
+    let source_proc_maps = is_proc_self_maps_inode(ino) as u32;
+    let (old_exec_overlap, old_vma_start, old_vma_end, old_vma_fd, old_vma_offset) =
+        current_exec_overlap(s, start, end);
+    if source_proc_maps == 0 && old_exec_overlap == 0 {
+        return;
+    }
+    let entry = FileMmapMaterializeTraceEntry {
+        vm_ptr: vm as *const ThreadState as u32,
+        ino,
+        start,
+        end,
+        prot,
+        flags,
+        offset,
+        source_proc_maps,
+        old_exec_overlap,
+        old_vma_start,
+        old_vma_end,
+        old_vma_fd,
+        old_vma_offset,
+        sample,
+    };
+    unsafe {
+        let index =
+            FILE_MMAP_MATERIALIZE_TRACE_NEXT as usize % FILE_MMAP_MATERIALIZE_TRACE_CAPACITY;
+        FILE_MMAP_MATERIALIZE_TRACE[index] = entry;
+        FILE_MMAP_MATERIALIZE_TRACE_NEXT = FILE_MMAP_MATERIALIZE_TRACE_NEXT.wrapping_add(1);
+        if FILE_MMAP_MATERIALIZE_TRACE_LEN < FILE_MMAP_MATERIALIZE_TRACE_CAPACITY as u32 {
+            FILE_MMAP_MATERIALIZE_TRACE_LEN += 1;
+        }
+    }
+}
+
+fn push_cpu_write_permit_trace(entry: CpuWritePermitTraceEntry) {
+    unsafe {
+        let index = CPU_WRITE_PERMIT_TRACE_NEXT as usize % CPU_WRITE_PERMIT_TRACE_CAPACITY;
+        CPU_WRITE_PERMIT_TRACE[index] = entry;
+        CPU_WRITE_PERMIT_TRACE_NEXT = CPU_WRITE_PERMIT_TRACE_NEXT.wrapping_add(1);
+        if CPU_WRITE_PERMIT_TRACE_LEN < CPU_WRITE_PERMIT_TRACE_CAPACITY as u32 {
+            CPU_WRITE_PERMIT_TRACE_LEN += 1;
+        }
+    }
+}
+
+pub(crate) fn record_cpu_write_permit_trace(vm: &ThreadState, pc: u64, addr: u64, len: u64) {
+    if len == 0 {
+        return;
+    }
+    let Some(end) = addr.checked_add(len) else {
+        return;
+    };
+    let s = ms();
+    for vma in s.vmas.iter() {
+        if addr >= vma.end || end <= vma.start {
+            continue;
+        }
+        if (vma.prot & PROT_EXEC) == 0 && vma.fd < 0 {
+            continue;
+        }
+        push_cpu_write_permit_trace(CpuWritePermitTraceEntry {
+            vm_ptr: vm as *const ThreadState as u32,
+            tid: vm.tid,
+            pc,
+            addr,
+            len,
+            vma_start: vma.start,
+            vma_end: vma.end,
+            vma_prot: vma.prot,
+            vma_flags: vma.flags,
+            vma_fd: vma.fd,
+            vma_offset: vma.offset,
+        });
+    }
+}
+
+fn record_mprotect_transition(
+    vm: &ThreadState,
+    request_start: u64,
+    request_end: u64,
+    segment_start: u64,
+    segment_end: u64,
+    old_vma: &Vma,
+    new_prot: i32,
+) {
+    let gained_exec = (old_vma.prot & PROT_EXEC) == 0 && (new_prot & PROT_EXEC) != 0;
+    let gained_write = (old_vma.prot & PROT_WRITE) == 0 && (new_prot & PROT_WRITE) != 0;
+    let file_backed_exec_or_write_relevant = old_vma.fd >= 0
+        && ((old_vma.prot & (PROT_EXEC | PROT_WRITE)) != 0
+            || (new_prot & (PROT_EXEC | PROT_WRITE)) != 0);
+    if !gained_exec && !gained_write && !file_backed_exec_or_write_relevant {
+        return;
+    }
+    let entry = MprotectTransitionTraceEntry {
+        vm_ptr: vm as *const ThreadState as u32,
+        tid: vm.tid,
+        request_start,
+        request_end,
+        segment_start,
+        segment_end,
+        old_prot: old_vma.prot,
+        new_prot,
+        old_flags: old_vma.flags,
+        old_fd: old_vma.fd,
+        old_offset: old_vma.offset,
+        gained_exec: gained_exec as u32,
+        gained_write: gained_write as u32,
+    };
+    unsafe {
+        let index = MPROTECT_TRANSITION_TRACE_NEXT as usize % MPROTECT_TRANSITION_TRACE_CAPACITY;
+        MPROTECT_TRANSITION_TRACE[index] = entry;
+        MPROTECT_TRANSITION_TRACE_NEXT = MPROTECT_TRANSITION_TRACE_NEXT.wrapping_add(1);
+        if MPROTECT_TRANSITION_TRACE_LEN < MPROTECT_TRANSITION_TRACE_CAPACITY as u32 {
+            MPROTECT_TRANSITION_TRACE_LEN += 1;
+        }
+    }
+}
+
+fn sample_guest_u64(base: u32, addr: u64) -> u64 {
+    let memory_len = crate::wasm::memory_size_bytes();
+    let absolute = base as u64 + addr;
+    let Some(end) = absolute.checked_add(8) else {
+        return 0;
+    };
+    if end > memory_len {
+        return 0;
+    }
+    let mut bytes = [0u8; 8];
+    unsafe {
+        guest_mem::read_bytes(base, addr, &mut bytes);
+    }
+    u64::from_le_bytes(bytes)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_mmap_exec_transition(
+    vm: &ThreadState,
+    s: &AddressSpaceState,
+    base: u32,
+    start: u64,
+    end: u64,
+    prot: i32,
+    flags: i32,
+    fd: i32,
+    offset: u64,
+    is_anon: bool,
+    sparse_fixed_upgrade: bool,
+) {
+    let (old_exec_overlap, old_vma_start, old_vma_end, old_vma_fd, old_vma_offset) =
+        current_exec_overlap(s, start, end);
+    if (prot & PROT_EXEC) == 0 && old_exec_overlap == 0 {
+        return;
+    }
+    let entry = MmapExecTransitionTraceEntry {
+        vm_ptr: vm as *const ThreadState as u32,
+        tid: vm.tid,
+        start,
+        end,
+        prot,
+        flags,
+        fd,
+        offset,
+        is_anon: is_anon as u32,
+        sparse_fixed_upgrade: sparse_fixed_upgrade as u32,
+        old_exec_overlap,
+        old_vma_start,
+        old_vma_end,
+        old_vma_fd,
+        old_vma_offset,
+        sample: sample_guest_u64(base, start),
+    };
+    unsafe {
+        let index = MMAP_EXEC_TRANSITION_TRACE_NEXT as usize % MMAP_EXEC_TRANSITION_TRACE_CAPACITY;
+        MMAP_EXEC_TRANSITION_TRACE[index] = entry;
+        MMAP_EXEC_TRANSITION_TRACE_NEXT = MMAP_EXEC_TRANSITION_TRACE_NEXT.wrapping_add(1);
+        if MMAP_EXEC_TRANSITION_TRACE_LEN < MMAP_EXEC_TRANSITION_TRACE_CAPACITY as u32 {
+            MMAP_EXEC_TRANSITION_TRACE_LEN += 1;
+        }
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn file_mmap_materialize_trace_len() -> u32 {
+    unsafe { FILE_MMAP_MATERIALIZE_TRACE_LEN }
+}
+
+#[allow(dead_code)]
+pub(crate) fn file_mmap_materialize_trace_entry(index: u32) -> FileMmapMaterializeTraceEntry {
+    unsafe {
+        if FILE_MMAP_MATERIALIZE_TRACE_LEN == 0 {
+            return FILE_MMAP_MATERIALIZE_TRACE[0];
+        }
+        let len = FILE_MMAP_MATERIALIZE_TRACE_LEN as usize;
+        let start = if len < FILE_MMAP_MATERIALIZE_TRACE_CAPACITY {
+            0
+        } else {
+            FILE_MMAP_MATERIALIZE_TRACE_NEXT as usize
+        };
+        let ring_index = (start + index as usize) % FILE_MMAP_MATERIALIZE_TRACE_CAPACITY;
+        FILE_MMAP_MATERIALIZE_TRACE[ring_index]
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn cpu_write_permit_trace_len() -> u32 {
+    unsafe { CPU_WRITE_PERMIT_TRACE_LEN }
+}
+
+#[allow(dead_code)]
+pub(crate) fn cpu_write_permit_trace_entry(index: u32) -> CpuWritePermitTraceEntry {
+    unsafe {
+        if CPU_WRITE_PERMIT_TRACE_LEN == 0 {
+            return CPU_WRITE_PERMIT_TRACE[0];
+        }
+        let len = CPU_WRITE_PERMIT_TRACE_LEN as usize;
+        let start = if len < CPU_WRITE_PERMIT_TRACE_CAPACITY {
+            0
+        } else {
+            CPU_WRITE_PERMIT_TRACE_NEXT as usize
+        };
+        let ring_index = (start + index as usize) % CPU_WRITE_PERMIT_TRACE_CAPACITY;
+        CPU_WRITE_PERMIT_TRACE[ring_index]
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn mprotect_transition_trace_len() -> u32 {
+    unsafe { MPROTECT_TRANSITION_TRACE_LEN }
+}
+
+#[allow(dead_code)]
+pub(crate) fn mprotect_transition_trace_entry(index: u32) -> MprotectTransitionTraceEntry {
+    unsafe {
+        if MPROTECT_TRANSITION_TRACE_LEN == 0 {
+            return MPROTECT_TRANSITION_TRACE[0];
+        }
+        let len = MPROTECT_TRANSITION_TRACE_LEN as usize;
+        let start = if len < MPROTECT_TRANSITION_TRACE_CAPACITY {
+            0
+        } else {
+            MPROTECT_TRANSITION_TRACE_NEXT as usize
+        };
+        let ring_index = (start + index as usize) % MPROTECT_TRANSITION_TRACE_CAPACITY;
+        MPROTECT_TRANSITION_TRACE[ring_index]
+    }
+}
+
+#[allow(dead_code)]
+pub(crate) fn mmap_exec_transition_trace_len() -> u32 {
+    unsafe { MMAP_EXEC_TRANSITION_TRACE_LEN }
+}
+
+#[allow(dead_code)]
+pub(crate) fn mmap_exec_transition_trace_entry(index: u32) -> MmapExecTransitionTraceEntry {
+    unsafe {
+        if MMAP_EXEC_TRANSITION_TRACE_LEN == 0 {
+            return MMAP_EXEC_TRANSITION_TRACE[0];
+        }
+        let len = MMAP_EXEC_TRANSITION_TRACE_LEN as usize;
+        let start = if len < MMAP_EXEC_TRANSITION_TRACE_CAPACITY {
+            0
+        } else {
+            MMAP_EXEC_TRANSITION_TRACE_NEXT as usize
+        };
+        let ring_index = (start + index as usize) % MMAP_EXEC_TRANSITION_TRACE_CAPACITY;
+        MMAP_EXEC_TRANSITION_TRACE[ring_index]
+    }
+}
+
 pub(crate) fn debug_syscall_trace_entry_nr(index: u32) -> u64 {
     debug_syscall_trace_entry(index).nr
 }
@@ -308,6 +767,7 @@ pub fn init(brk_start: u64) {
             ptr as *mut AddressSpaceState,
             AddressSpaceState {
                 vmas: Vec::new(),
+                kernel_owned_guest_ranges: Vec::new(),
                 brk_base: brk_start,
                 brk_current: brk_start,
                 mmap_next: mmap_start,
@@ -367,6 +827,9 @@ pub(crate) fn capture_state_image_into(image: &mut AddressSpaceStateImage) {
     validate_vma_vec_for_image(&s.vmas);
     let vmas = clone_vmas_for_state_image(&s.vmas);
     image.vmas = vmas;
+    image
+        .kernel_owned_guest_ranges
+        .clone_from(&s.kernel_owned_guest_ranges);
     image.brk_base = s.brk_base;
     image.brk_current = s.brk_current;
     image.mmap_next = s.mmap_next;
@@ -426,6 +889,8 @@ pub(crate) fn restore_state_from_image(image: &AddressSpaceStateImage) {
     validate_state_image_for_restore(image);
     let s = ms();
     s.vmas.clone_from(&image.vmas);
+    s.kernel_owned_guest_ranges
+        .clone_from(&image.kernel_owned_guest_ranges);
     s.brk_base = image.brk_base;
     s.brk_current = image.brk_current;
     s.mmap_next = image.mmap_next;
@@ -441,6 +906,7 @@ pub fn reset_for_execve_with_flush(base: u32, brk_start: u64, flush_shared: bool
     discard_execve_guest_address_space(base);
     let s = ms();
     s.vmas.clear();
+    s.kernel_owned_guest_ranges.clear();
     s.brk_base = brk_start;
     s.brk_current = brk_start;
     s.mmap_next = mmap_start;
@@ -525,6 +991,9 @@ pub fn guest_range_accessible(base: u32, start: u64, len: u64) -> bool {
     if start > u32::MAX as u64 || end > guest_limit || end > u32::MAX as u64 {
         return false;
     }
+    if range_overlaps_kernel_owned_guest_range(ms(), start, end) {
+        return false;
+    }
     !range_has_prot_none(start, len)
 }
 
@@ -562,22 +1031,19 @@ pub(crate) fn effective_guest_limit(vm: &ThreadState, base: u32) -> u64 {
 }
 
 fn range_cover_with_prot(s: &AddressSpaceState, addr: u64, prot: i32) -> Option<(u64, u64, i32)> {
-    let mut cover: Option<(u64, u64, i32)> = None;
-
-    if (prot & PROT_EXEC) == 0 && addr >= s.brk_base && addr < s.brk_current {
-        cover = Some((s.brk_base, s.brk_current, PROT_READ | PROT_WRITE));
-    }
-
     if let Some(index) = find_vma_containing(s, addr) {
         let v = s.vmas[index];
         if v.prot != PROT_NONE && (v.prot & prot) == prot {
-            if cover.is_none_or(|(_, cover_end, _)| v.end > cover_end) {
-                cover = Some((v.start, v.end, v.prot));
-            }
+            return Some((v.start, v.end, v.prot));
         }
+        return None;
     }
 
-    cover
+    if (prot & PROT_EXEC) == 0 && addr >= s.brk_base && addr < s.brk_current {
+        return Some((s.brk_base, s.brk_current, PROT_READ | PROT_WRITE));
+    }
+
+    None
 }
 
 fn range_cover_end_with_sparse_anon_reservation(s: &AddressSpaceState, addr: u64) -> u64 {
@@ -623,6 +1089,11 @@ pub fn guest_range_permitted(vm: &ThreadState, base: u32, start: u64, len: u64, 
     }
 
     let s = ms();
+    if range_overlaps_kernel_owned_guest_range(s, start, end) {
+        crate::tracepoints::record_guest_range_permit_check(prot as u32, PERMIT_OUTCOME_DENIED);
+        return false;
+    }
+
     let slot = permit_cache_slot(prot);
     for i in slot..slot + PERMIT_CACHE_WAYS {
         if start >= s.permit_cache_start[i]
@@ -658,6 +1129,41 @@ pub fn guest_range_permitted(vm: &ThreadState, base: u32, start: u64, len: u64, 
     }
     crate::tracepoints::record_guest_range_permit_check(prot as u32, PERMIT_OUTCOME_COVER_HIT);
     true
+}
+
+pub fn register_kernel_owned_guest_range(start: u64, len: u64) {
+    if len == 0 {
+        return;
+    }
+    let Some(end) = start.checked_add(len) else {
+        return;
+    };
+    if start >= end {
+        return;
+    }
+
+    let s = ms();
+    s.kernel_owned_guest_ranges
+        .push(KernelGuestRange { start, end });
+    invalidate_permit_cache(s);
+}
+
+pub fn debug_kernel_owned_guest_range_len() -> u32 {
+    ms().kernel_owned_guest_ranges.len() as u32
+}
+
+pub fn debug_kernel_owned_guest_range_start(index: u32) -> u64 {
+    ms().kernel_owned_guest_ranges
+        .get(index as usize)
+        .map(|range| range.start)
+        .unwrap_or(0)
+}
+
+pub fn debug_kernel_owned_guest_range_end(index: u32) -> u64 {
+    ms().kernel_owned_guest_ranges
+        .get(index as usize)
+        .map(|range| range.end)
+        .unwrap_or(0)
 }
 
 pub fn register_elf_load_segment(start: u64, end: u64, prot: i32) {
@@ -738,6 +1244,69 @@ pub(crate) fn address_space_vma_prot(index: u32) -> i32 {
 
 pub(crate) fn address_space_vma_flags(index: u32) -> i32 {
     ms().vmas.get(index as usize).map(|v| v.flags).unwrap_or(0)
+}
+
+pub(crate) fn address_space_vma_fd(index: u32) -> i32 {
+    ms().vmas.get(index as usize).map(|v| v.fd).unwrap_or(-1)
+}
+
+pub(crate) fn address_space_vma_offset(index: u32) -> u64 {
+    ms().vmas.get(index as usize).map(|v| v.offset).unwrap_or(0)
+}
+
+pub(crate) fn address_space_vma_path_len(index: u32) -> u32 {
+    let fd = address_space_vma_fd(index);
+    if fd < 0 {
+        return 0;
+    }
+    let mut buf = [0u8; 256];
+    crate::fs::memfs::write_path(fd as u32, &mut buf) as u32
+}
+
+pub(crate) fn address_space_vma_path_byte(index: u32, offset: u32) -> u32 {
+    let fd = address_space_vma_fd(index);
+    if fd < 0 {
+        return 0;
+    }
+    let mut buf = [0u8; 256];
+    let len = crate::fs::memfs::write_path(fd as u32, &mut buf);
+    buf.get(offset as usize)
+        .copied()
+        .filter(|_| (offset as usize) < len)
+        .unwrap_or(0) as u32
+}
+
+pub(crate) fn address_space_vma_file_sample(index: u32, addr: u64) -> u64 {
+    let Some(vma) = ms().vmas.get(index as usize).copied() else {
+        return 0;
+    };
+    if vma.fd < 0 || addr < vma.start || addr >= vma.end {
+        return 0;
+    }
+    let Some(file_offset) = vma.offset.checked_add(addr - vma.start) else {
+        return 0;
+    };
+    let mut bytes = [0u8; 8];
+    let n = crate::fs::memfs::read_file(vma.fd as u32, file_offset, &mut bytes);
+    if n <= 0 {
+        return 0;
+    }
+    u64::from_le_bytes(bytes)
+}
+
+pub(crate) fn address_space_vma_file_sample_len(index: u32, addr: u64) -> u32 {
+    let Some(vma) = ms().vmas.get(index as usize).copied() else {
+        return 0;
+    };
+    if vma.fd < 0 || addr < vma.start || addr >= vma.end {
+        return 0;
+    }
+    let Some(file_offset) = vma.offset.checked_add(addr - vma.start) else {
+        return 0;
+    };
+    let mut bytes = [0u8; 8];
+    let n = crate::fs::memfs::read_file(vma.fd as u32, file_offset, &mut bytes);
+    n.max(0) as u32
 }
 
 fn ensure_memory_capacity_for_guest_range(base: u32, guest_end: u64) -> bool {
@@ -1145,13 +1714,47 @@ pub fn sys_mmap(
         }
         hole
     };
+    let mapping_end = start + len;
+    if range_overlaps_kernel_owned_guest_range(s, start, mapping_end) {
+        return ENOMEM;
+    }
 
     let needs_materialization = !is_anon || prot as i32 != PROT_NONE;
+    if !is_anon && fd >= 0 && flags & (MAP_PRIVATE | MAP_SHARED) == 0 {
+        return EINVAL;
+    }
     if needs_materialization && !sparse_fixed_upgrade {
         // PROT_NONE reservations do not require backing linear-memory pages yet.
         if !ensure_memory_capacity_for_guest_range(base, start + len) {
             return ENOMEM;
         }
+    }
+
+    if !is_anon && fd >= 0 {
+        let mut sample_bytes = [0u8; 8];
+        let sample_len = memfs::read_file(backing_ino, offset, &mut sample_bytes);
+        let sample = if sample_len > 0 {
+            u64::from_le_bytes(sample_bytes)
+        } else {
+            0
+        };
+        record_file_mmap_materialize(
+            vm,
+            s,
+            backing_ino,
+            start,
+            mapping_end,
+            prot as i32,
+            flags as i32,
+            offset,
+            sample,
+        );
+    }
+
+    let mut fixed_overlap_removed = false;
+    if remove_fixed_overlap_after_validation && needs_materialization && !sparse_fixed_upgrade {
+        remove_overlap(s, start, mapping_end);
+        fixed_overlap_removed = true;
     }
 
     if is_anon {
@@ -1164,9 +1767,6 @@ pub fn sys_mmap(
         // File-backed mmap: eager-populate the mapping. For now MAP_PRIVATE and
         // MAP_SHARED use the same backing semantics inside a single guest
         // process; shared dirty-page writeback can be added later.
-        if flags & (MAP_PRIVATE | MAP_SHARED) == 0 {
-            return EINVAL;
-        }
         // Eager populate from MemFS — zero-fill beyond EOF.
         // WASM has no page fault / demand paging, so populate eagerly.
         unsafe {
@@ -1196,13 +1796,27 @@ pub fn sys_mmap(
         }
     }
 
-    if remove_fixed_overlap_after_validation {
+    record_mmap_exec_transition(
+        vm,
+        s,
+        base,
+        start,
+        mapping_end,
+        prot as i32,
+        flags as i32,
+        if is_anon { -1 } else { backing_ino as i32 },
+        offset,
+        is_anon,
+        sparse_fixed_upgrade,
+    );
+
+    if remove_fixed_overlap_after_validation && !fixed_overlap_removed {
         remove_overlap(s, start, start + len);
     }
 
     s.vmas.push(Vma {
         start,
-        end: start + len,
+        end: mapping_end,
         prot: prot as i32,
         flags: flags as i32,
         fd: if is_anon { -1 } else { backing_ino as i32 },
@@ -1399,7 +2013,7 @@ pub fn sys_mremap(
 
 /// mprotect: change VMA protection flags. Splits VMAs at boundaries if needed.
 /// Sets has_prot_none flag for SIGSEGV detection.
-pub fn sys_mprotect(_vm: &mut ThreadState, base: u32, addr: u64, length: u64, prot: u64) -> i64 {
+pub fn sys_mprotect(vm: &mut ThreadState, base: u32, addr: u64, length: u64, prot: u64) -> i64 {
     if addr & (PAGE_SIZE - 1) != 0 {
         return EINVAL;
     }
@@ -1445,6 +2059,7 @@ pub fn sys_mprotect(_vm: &mut ThreadState, base: u32, addr: u64, length: u64, pr
         };
 
         if segment.end > segment.start {
+            record_mprotect_transition(vm, addr, end, segment.start, segment.end, &v, prot as i32);
             let was_prot_none = v.prot == PROT_NONE;
             if prot as i32 != PROT_NONE
                 && was_prot_none
@@ -1580,6 +2195,15 @@ fn overlaps(s: &AddressSpaceState, start: u64, end: u64) -> bool {
         }
     }
     false
+}
+
+fn range_overlaps_kernel_owned_guest_range(s: &AddressSpaceState, start: u64, end: u64) -> bool {
+    if start >= end {
+        return false;
+    }
+    s.kernel_owned_guest_ranges
+        .iter()
+        .any(|range| start < range.end && end > range.start)
 }
 
 fn brk_growth_overlaps_vma(s: &AddressSpaceState, current_brk: u64, new_brk: u64) -> bool {

@@ -43,6 +43,110 @@ const WRITE_OP_U32: u32 = 3;
 const WRITE_OP_U64: u32 = 4;
 const WRITE_OP_BYTES: u32 = 5;
 const WRITE_OP_ZERO: u32 = 6;
+const DEBUG_GUEST_WRITE_WATCH_CAP: usize = 64;
+const DEBUG_GUEST_WRITE_OVERLAP_TRACE_CAP: usize = 128;
+const DEBUG_GUEST_WRITE_OVERLAP_BY_VM_CAP: usize = 16;
+const DEBUG_GUEST_WRITE_OVERLAP_BY_VM_RECENT_CAP: usize = 8;
+const DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE_CAP: usize = 128;
+
+#[derive(Clone, Copy)]
+pub struct DebugGuestWriteWatchRegion {
+    start: u64,
+    end: u64,
+}
+
+#[derive(Clone, Copy)]
+pub struct DebugGuestWriteOverlapTraceEntry {
+    pub slot: u32,
+    pub watch_start: u64,
+    pub watch_end: u64,
+    pub op: u32,
+    pub addr: u64,
+    pub len: u32,
+    pub sample_len: u32,
+    pub sample: u64,
+    pub vm_ptr: u32,
+    pub pc: u64,
+    pub raw: u32,
+    pub step: u64,
+}
+
+#[derive(Clone, Copy)]
+struct DebugGuestWriteContext {
+    vm_ptr: u32,
+    pc: u64,
+    raw: u32,
+    step: u64,
+}
+
+#[derive(Clone, Copy)]
+pub struct DebugProcMapsShapedWriteTraceEntry {
+    pub op: u32,
+    pub addr: u64,
+    pub len: u32,
+    pub sample_len: u32,
+    pub sample: u64,
+    pub pattern: u32,
+}
+
+const DEBUG_EMPTY_GUEST_WRITE_WATCH: DebugGuestWriteWatchRegion =
+    DebugGuestWriteWatchRegion { start: 0, end: 0 };
+const DEBUG_EMPTY_GUEST_WRITE_OVERLAP: DebugGuestWriteOverlapTraceEntry =
+    DebugGuestWriteOverlapTraceEntry {
+        slot: 0,
+        watch_start: 0,
+        watch_end: 0,
+        op: 0,
+        addr: 0,
+        len: 0,
+        sample_len: 0,
+        sample: 0,
+        vm_ptr: 0,
+        pc: 0,
+        raw: 0,
+        step: 0,
+    };
+const DEBUG_EMPTY_GUEST_WRITE_CONTEXT: DebugGuestWriteContext = DebugGuestWriteContext {
+    vm_ptr: 0,
+    pc: 0,
+    raw: 0,
+    step: 0,
+};
+const DEBUG_EMPTY_PROC_MAPS_SHAPED_WRITE: DebugProcMapsShapedWriteTraceEntry =
+    DebugProcMapsShapedWriteTraceEntry {
+        op: 0,
+        addr: 0,
+        len: 0,
+        sample_len: 0,
+        sample: 0,
+        pattern: 0,
+    };
+
+static mut DEBUG_GUEST_WRITE_WATCH: [DebugGuestWriteWatchRegion; DEBUG_GUEST_WRITE_WATCH_CAP] =
+    [DEBUG_EMPTY_GUEST_WRITE_WATCH; DEBUG_GUEST_WRITE_WATCH_CAP];
+static mut DEBUG_GUEST_WRITE_OVERLAP_TRACE: [DebugGuestWriteOverlapTraceEntry;
+    DEBUG_GUEST_WRITE_OVERLAP_TRACE_CAP] =
+    [DEBUG_EMPTY_GUEST_WRITE_OVERLAP; DEBUG_GUEST_WRITE_OVERLAP_TRACE_CAP];
+static mut DEBUG_GUEST_WRITE_OVERLAP_TRACE_LEN: u32 = 0;
+static mut DEBUG_GUEST_WRITE_OVERLAP_TRACE_CURSOR: u32 = 0;
+static mut DEBUG_GUEST_WRITE_OVERLAP_BY_VM_IDS: [u32; DEBUG_GUEST_WRITE_OVERLAP_BY_VM_CAP] =
+    [0; DEBUG_GUEST_WRITE_OVERLAP_BY_VM_CAP];
+static mut DEBUG_GUEST_WRITE_OVERLAP_BY_VM_TRACE: [[DebugGuestWriteOverlapTraceEntry;
+    DEBUG_GUEST_WRITE_OVERLAP_BY_VM_RECENT_CAP];
+    DEBUG_GUEST_WRITE_OVERLAP_BY_VM_CAP] = [[DEBUG_EMPTY_GUEST_WRITE_OVERLAP;
+    DEBUG_GUEST_WRITE_OVERLAP_BY_VM_RECENT_CAP];
+    DEBUG_GUEST_WRITE_OVERLAP_BY_VM_CAP];
+static mut DEBUG_GUEST_WRITE_OVERLAP_BY_VM_TRACE_LEN: [u32; DEBUG_GUEST_WRITE_OVERLAP_BY_VM_CAP] =
+    [0; DEBUG_GUEST_WRITE_OVERLAP_BY_VM_CAP];
+static mut DEBUG_GUEST_WRITE_OVERLAP_BY_VM_TRACE_CURSOR: [u32;
+    DEBUG_GUEST_WRITE_OVERLAP_BY_VM_CAP] = [0; DEBUG_GUEST_WRITE_OVERLAP_BY_VM_CAP];
+static mut DEBUG_GUEST_WRITE_OVERLAP_BY_VM_SLOT_CURSOR: u32 = 0;
+static mut DEBUG_GUEST_WRITE_CONTEXT: DebugGuestWriteContext = DEBUG_EMPTY_GUEST_WRITE_CONTEXT;
+static mut DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE: [DebugProcMapsShapedWriteTraceEntry;
+    DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE_CAP] =
+    [DEBUG_EMPTY_PROC_MAPS_SHAPED_WRITE; DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE_CAP];
+static mut DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE_LEN: u32 = 0;
+static mut DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE_CURSOR: u32 = 0;
 
 #[inline(always)]
 fn sample_u64(bytes: &[u8]) -> (u64, u32) {
@@ -50,6 +154,320 @@ fn sample_u64(bytes: &[u8]) -> (u64, u32) {
     let mut sample = [0u8; core::mem::size_of::<u64>()];
     sample[..sample_len].copy_from_slice(&bytes[..sample_len]);
     (u64::from_le_bytes(sample), sample_len as u32)
+}
+
+pub fn debug_clear_guest_write_watch_trace() {
+    unsafe {
+        DEBUG_GUEST_WRITE_WATCH = [DEBUG_EMPTY_GUEST_WRITE_WATCH; DEBUG_GUEST_WRITE_WATCH_CAP];
+        DEBUG_GUEST_WRITE_OVERLAP_TRACE =
+            [DEBUG_EMPTY_GUEST_WRITE_OVERLAP; DEBUG_GUEST_WRITE_OVERLAP_TRACE_CAP];
+        DEBUG_GUEST_WRITE_OVERLAP_TRACE_LEN = 0;
+        DEBUG_GUEST_WRITE_OVERLAP_TRACE_CURSOR = 0;
+        DEBUG_GUEST_WRITE_OVERLAP_BY_VM_IDS = [0; DEBUG_GUEST_WRITE_OVERLAP_BY_VM_CAP];
+        DEBUG_GUEST_WRITE_OVERLAP_BY_VM_TRACE = [[DEBUG_EMPTY_GUEST_WRITE_OVERLAP;
+            DEBUG_GUEST_WRITE_OVERLAP_BY_VM_RECENT_CAP];
+            DEBUG_GUEST_WRITE_OVERLAP_BY_VM_CAP];
+        DEBUG_GUEST_WRITE_OVERLAP_BY_VM_TRACE_LEN = [0; DEBUG_GUEST_WRITE_OVERLAP_BY_VM_CAP];
+        DEBUG_GUEST_WRITE_OVERLAP_BY_VM_TRACE_CURSOR = [0; DEBUG_GUEST_WRITE_OVERLAP_BY_VM_CAP];
+        DEBUG_GUEST_WRITE_OVERLAP_BY_VM_SLOT_CURSOR = 0;
+        DEBUG_GUEST_WRITE_CONTEXT = DEBUG_EMPTY_GUEST_WRITE_CONTEXT;
+        DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE =
+            [DEBUG_EMPTY_PROC_MAPS_SHAPED_WRITE; DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE_CAP];
+        DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE_LEN = 0;
+        DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE_CURSOR = 0;
+    }
+}
+
+pub fn debug_configure_guest_write_watch(slot: u32, start: u64, end: u64) {
+    if slot as usize >= DEBUG_GUEST_WRITE_WATCH_CAP {
+        return;
+    }
+    unsafe {
+        DEBUG_GUEST_WRITE_WATCH[slot as usize] = DebugGuestWriteWatchRegion { start, end };
+    }
+}
+
+pub fn debug_set_guest_write_context(vm_ptr: u32, pc: u64, raw: u32, step: u64) {
+    unsafe {
+        DEBUG_GUEST_WRITE_CONTEXT = DebugGuestWriteContext {
+            vm_ptr,
+            pc,
+            raw,
+            step,
+        };
+    }
+}
+
+pub fn debug_clear_guest_write_context() {
+    unsafe {
+        DEBUG_GUEST_WRITE_CONTEXT = DEBUG_EMPTY_GUEST_WRITE_CONTEXT;
+    }
+}
+
+#[inline(always)]
+fn debug_guest_write_overlap_enabled() -> bool {
+    unsafe {
+        for slot in 0..DEBUG_GUEST_WRITE_WATCH_CAP {
+            let region = DEBUG_GUEST_WRITE_WATCH[slot];
+            if region.start < region.end {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[inline(always)]
+fn debug_record_guest_write_overlap(addr: u64, len: u32, op: u32, sample: u64, sample_len: u32) {
+    if len == 0 {
+        return;
+    }
+    let end = addr.saturating_add(len as u64);
+    unsafe {
+        for slot in 0..DEBUG_GUEST_WRITE_WATCH_CAP {
+            let region = DEBUG_GUEST_WRITE_WATCH[slot];
+            if region.start >= region.end || end <= region.start || addr >= region.end {
+                continue;
+            }
+            let cursor = DEBUG_GUEST_WRITE_OVERLAP_TRACE_CURSOR as usize
+                % DEBUG_GUEST_WRITE_OVERLAP_TRACE_CAP;
+            let context = DEBUG_GUEST_WRITE_CONTEXT;
+            DEBUG_GUEST_WRITE_OVERLAP_TRACE[cursor] = DebugGuestWriteOverlapTraceEntry {
+                slot: slot as u32,
+                watch_start: region.start,
+                watch_end: region.end,
+                op,
+                addr,
+                len,
+                sample_len,
+                sample,
+                vm_ptr: context.vm_ptr,
+                pc: context.pc,
+                raw: context.raw,
+                step: context.step,
+            };
+            debug_record_guest_write_overlap_by_vm(DebugGuestWriteOverlapTraceEntry {
+                slot: slot as u32,
+                watch_start: region.start,
+                watch_end: region.end,
+                op,
+                addr,
+                len,
+                sample_len,
+                sample,
+                vm_ptr: context.vm_ptr,
+                pc: context.pc,
+                raw: context.raw,
+                step: context.step,
+            });
+            DEBUG_GUEST_WRITE_OVERLAP_TRACE_CURSOR =
+                DEBUG_GUEST_WRITE_OVERLAP_TRACE_CURSOR.wrapping_add(1);
+            if DEBUG_GUEST_WRITE_OVERLAP_TRACE_LEN < DEBUG_GUEST_WRITE_OVERLAP_TRACE_CAP as u32 {
+                DEBUG_GUEST_WRITE_OVERLAP_TRACE_LEN += 1;
+            }
+        }
+    }
+}
+
+unsafe fn debug_record_guest_write_overlap_by_vm(entry: DebugGuestWriteOverlapTraceEntry) {
+    if entry.vm_ptr == 0 {
+        return;
+    }
+    let mut vm_slot = DEBUG_GUEST_WRITE_OVERLAP_BY_VM_CAP;
+    for index in 0..DEBUG_GUEST_WRITE_OVERLAP_BY_VM_CAP {
+        if unsafe { DEBUG_GUEST_WRITE_OVERLAP_BY_VM_IDS[index] } == entry.vm_ptr {
+            vm_slot = index;
+            break;
+        }
+    }
+    if vm_slot == DEBUG_GUEST_WRITE_OVERLAP_BY_VM_CAP {
+        for index in 0..DEBUG_GUEST_WRITE_OVERLAP_BY_VM_CAP {
+            if unsafe { DEBUG_GUEST_WRITE_OVERLAP_BY_VM_IDS[index] } == 0 {
+                vm_slot = index;
+                break;
+            }
+        }
+    }
+    if vm_slot == DEBUG_GUEST_WRITE_OVERLAP_BY_VM_CAP {
+        vm_slot = unsafe { DEBUG_GUEST_WRITE_OVERLAP_BY_VM_SLOT_CURSOR as usize }
+            % DEBUG_GUEST_WRITE_OVERLAP_BY_VM_CAP;
+        unsafe {
+            DEBUG_GUEST_WRITE_OVERLAP_BY_VM_SLOT_CURSOR =
+                DEBUG_GUEST_WRITE_OVERLAP_BY_VM_SLOT_CURSOR.wrapping_add(1);
+        }
+    }
+    unsafe {
+        if DEBUG_GUEST_WRITE_OVERLAP_BY_VM_IDS[vm_slot] != entry.vm_ptr {
+            DEBUG_GUEST_WRITE_OVERLAP_BY_VM_IDS[vm_slot] = entry.vm_ptr;
+            DEBUG_GUEST_WRITE_OVERLAP_BY_VM_TRACE[vm_slot] =
+                [DEBUG_EMPTY_GUEST_WRITE_OVERLAP; DEBUG_GUEST_WRITE_OVERLAP_BY_VM_RECENT_CAP];
+            DEBUG_GUEST_WRITE_OVERLAP_BY_VM_TRACE_LEN[vm_slot] = 0;
+            DEBUG_GUEST_WRITE_OVERLAP_BY_VM_TRACE_CURSOR[vm_slot] = 0;
+        }
+        let entry_slot = DEBUG_GUEST_WRITE_OVERLAP_BY_VM_TRACE_CURSOR[vm_slot] as usize
+            % DEBUG_GUEST_WRITE_OVERLAP_BY_VM_RECENT_CAP;
+        DEBUG_GUEST_WRITE_OVERLAP_BY_VM_TRACE[vm_slot][entry_slot] = entry;
+        DEBUG_GUEST_WRITE_OVERLAP_BY_VM_TRACE_CURSOR[vm_slot] =
+            DEBUG_GUEST_WRITE_OVERLAP_BY_VM_TRACE_CURSOR[vm_slot].wrapping_add(1);
+        if DEBUG_GUEST_WRITE_OVERLAP_BY_VM_TRACE_LEN[vm_slot]
+            < DEBUG_GUEST_WRITE_OVERLAP_BY_VM_RECENT_CAP as u32
+        {
+            DEBUG_GUEST_WRITE_OVERLAP_BY_VM_TRACE_LEN[vm_slot] += 1;
+        }
+    }
+}
+
+pub fn debug_guest_write_overlap_trace_len() -> u32 {
+    unsafe { DEBUG_GUEST_WRITE_OVERLAP_TRACE_LEN }
+}
+
+pub fn debug_guest_write_overlap_trace_entry(index: u32) -> DebugGuestWriteOverlapTraceEntry {
+    unsafe {
+        let len =
+            DEBUG_GUEST_WRITE_OVERLAP_TRACE_LEN.min(DEBUG_GUEST_WRITE_OVERLAP_TRACE_CAP as u32);
+        if index >= len {
+            return DEBUG_EMPTY_GUEST_WRITE_OVERLAP;
+        }
+        let start = DEBUG_GUEST_WRITE_OVERLAP_TRACE_CURSOR.wrapping_sub(len);
+        let slot = start.wrapping_add(index) as usize % DEBUG_GUEST_WRITE_OVERLAP_TRACE_CAP;
+        DEBUG_GUEST_WRITE_OVERLAP_TRACE[slot]
+    }
+}
+
+pub fn debug_guest_write_overlap_by_vm_trace_len() -> u32 {
+    let mut total = 0u32;
+    unsafe {
+        for vm_slot in 0..DEBUG_GUEST_WRITE_OVERLAP_BY_VM_CAP {
+            if DEBUG_GUEST_WRITE_OVERLAP_BY_VM_IDS[vm_slot] == 0 {
+                continue;
+            }
+            total = total.saturating_add(
+                DEBUG_GUEST_WRITE_OVERLAP_BY_VM_TRACE_LEN[vm_slot]
+                    .min(DEBUG_GUEST_WRITE_OVERLAP_BY_VM_RECENT_CAP as u32),
+            );
+        }
+    }
+    total
+}
+
+pub fn debug_guest_write_overlap_by_vm_trace_entry(index: u32) -> DebugGuestWriteOverlapTraceEntry {
+    unsafe {
+        let mut remaining = index;
+        for vm_slot in 0..DEBUG_GUEST_WRITE_OVERLAP_BY_VM_CAP {
+            if DEBUG_GUEST_WRITE_OVERLAP_BY_VM_IDS[vm_slot] == 0 {
+                continue;
+            }
+            let len = DEBUG_GUEST_WRITE_OVERLAP_BY_VM_TRACE_LEN[vm_slot]
+                .min(DEBUG_GUEST_WRITE_OVERLAP_BY_VM_RECENT_CAP as u32);
+            if remaining >= len {
+                remaining -= len;
+                continue;
+            }
+            let start = DEBUG_GUEST_WRITE_OVERLAP_BY_VM_TRACE_CURSOR[vm_slot].wrapping_sub(len);
+            let slot =
+                start.wrapping_add(remaining) as usize % DEBUG_GUEST_WRITE_OVERLAP_BY_VM_RECENT_CAP;
+            return DEBUG_GUEST_WRITE_OVERLAP_BY_VM_TRACE[vm_slot][slot];
+        }
+        DEBUG_EMPTY_GUEST_WRITE_OVERLAP
+    }
+}
+
+pub fn debug_proc_maps_shaped_write_trace_len() -> u32 {
+    unsafe { DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE_LEN }
+}
+
+pub fn debug_proc_maps_shaped_write_trace_entry(index: u32) -> DebugProcMapsShapedWriteTraceEntry {
+    unsafe {
+        let len = DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE_LEN
+            .min(DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE_CAP as u32);
+        if index >= len {
+            return DEBUG_EMPTY_PROC_MAPS_SHAPED_WRITE;
+        }
+        let start = DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE_CURSOR.wrapping_sub(len);
+        let slot = start.wrapping_add(index) as usize % DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE_CAP;
+        DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE[slot]
+    }
+}
+
+#[inline(always)]
+fn is_ascii_hex(byte: u8) -> bool {
+    byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte) || (b'A'..=b'F').contains(&byte)
+}
+
+#[inline(always)]
+fn proc_maps_perm_at(bytes: &[u8], index: usize) -> bool {
+    index + 4 <= bytes.len()
+        && matches!(bytes[index], b'r' | b'-')
+        && matches!(bytes[index + 1], b'w' | b'-')
+        && matches!(bytes[index + 2], b'x' | b'-')
+        && matches!(bytes[index + 3], b'p' | b's')
+}
+
+fn find_proc_maps_shaped_offset(bytes: &[u8]) -> Option<(usize, u32)> {
+    let scan_len = bytes.len().min(256);
+    for start in 0..scan_len {
+        let mut cursor = start;
+        let mut left_hex = 0usize;
+        while cursor < scan_len && is_ascii_hex(bytes[cursor]) {
+            left_hex += 1;
+            cursor += 1;
+        }
+        if left_hex == 0 || cursor >= scan_len || bytes[cursor] != b'-' {
+            continue;
+        }
+        cursor += 1;
+        let mut right_hex = 0usize;
+        while cursor < scan_len && is_ascii_hex(bytes[cursor]) {
+            right_hex += 1;
+            cursor += 1;
+        }
+        if right_hex == 0 || cursor >= scan_len || bytes[cursor] != b' ' {
+            continue;
+        }
+        cursor += 1;
+        if proc_maps_perm_at(&bytes[..scan_len], cursor) {
+            return Some((start, 1));
+        }
+        return Some((start, 2));
+    }
+    None
+}
+
+fn debug_record_proc_maps_shaped_write(addr: u64, op: u32, bytes: &[u8]) {
+    let Some((offset, pattern)) = find_proc_maps_shaped_offset(bytes) else {
+        return;
+    };
+    let offset_addr = addr.saturating_add(offset as u64);
+    let tail = &bytes[offset..];
+    let len = tail.len().min(u32::MAX as usize) as u32;
+    let (sample, sample_len) = sample_u64(tail);
+    unsafe {
+        let cursor = DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE_CURSOR as usize
+            % DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE_CAP;
+        DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE[cursor] = DebugProcMapsShapedWriteTraceEntry {
+            op,
+            addr: offset_addr,
+            len,
+            sample_len,
+            sample,
+            pattern,
+        };
+        DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE_CURSOR =
+            DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE_CURSOR.wrapping_add(1);
+        if DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE_LEN < DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE_CAP as u32 {
+            DEBUG_PROC_MAPS_SHAPED_WRITE_TRACE_LEN += 1;
+        }
+    }
+}
+
+#[inline(always)]
+fn record_debug_guest_write_overlap_from_bytes(addr: u64, op: u32, bytes: &[u8]) {
+    let (sample, sample_len) = sample_u64(bytes);
+    let len = bytes.len().min(u32::MAX as usize) as u32;
+    if debug_guest_write_overlap_enabled() {
+        debug_record_guest_write_overlap(addr, len, op, sample, sample_len);
+    }
+    debug_record_proc_maps_shaped_write(addr, op, bytes);
 }
 
 #[inline(always)]
@@ -543,6 +961,7 @@ unsafe fn write_scalar_with_mode_and_sync(
             sample_len,
         );
     }
+    record_debug_guest_write_overlap_from_bytes(addr, op, bytes);
     let is_multi = unsafe { is_multi_threaded_with(thread_count) };
     let mask = if is_multi {
         stripe_mask(addr, bytes.len())
@@ -597,6 +1016,7 @@ pub unsafe fn write_u8(base: u32, addr: u64, val: u8) {
 #[inline(always)]
 pub(crate) unsafe fn write_u8_unchecked(base: u32, addr: u64, val: u8) {
     record_access(addr, 1, ACCESS_WRITE);
+    record_debug_guest_write_overlap_from_bytes(addr, WRITE_OP_U8, &[val]);
     if unsafe { is_multi_threaded() } {
         let slot = ((addr >> 3) & 63) as usize;
         unsafe { lock_slot(slot) };
@@ -626,6 +1046,8 @@ pub unsafe fn write_u16(base: u32, addr: u64, val: u16) {
 #[inline(always)]
 pub(crate) unsafe fn write_u16_unchecked(base: u32, addr: u64, val: u16) {
     record_access(addr, 2, ACCESS_WRITE);
+    let bytes = val.to_le_bytes();
+    record_debug_guest_write_overlap_from_bytes(addr, WRITE_OP_U16, &bytes);
     if unsafe { is_multi_threaded() } {
         let mask = stripe_mask(addr, 2);
         unsafe { lock_mask(mask) };
@@ -655,6 +1077,8 @@ pub unsafe fn write_u32(base: u32, addr: u64, val: u32) {
 #[inline(always)]
 pub(crate) unsafe fn write_u32_unchecked(base: u32, addr: u64, val: u32) {
     record_access(addr, 4, ACCESS_WRITE);
+    let bytes = val.to_le_bytes();
+    record_debug_guest_write_overlap_from_bytes(addr, WRITE_OP_U32, &bytes);
     if crate::tracepoints::guest_write_overlap_enabled() {
         crate::tracepoints::record_guest_write_overlap(addr, 4, WRITE_OP_U32, val as u64, 4);
     }
@@ -687,6 +1111,8 @@ pub unsafe fn write_u64(base: u32, addr: u64, val: u64) {
 #[inline(always)]
 pub(crate) unsafe fn write_u64_unchecked(base: u32, addr: u64, val: u64) {
     record_access(addr, 8, ACCESS_WRITE);
+    let bytes = val.to_le_bytes();
+    record_debug_guest_write_overlap_from_bytes(addr, WRITE_OP_U64, &bytes);
     if crate::tracepoints::guest_write_overlap_enabled() {
         crate::tracepoints::record_guest_write_overlap(addr, 8, WRITE_OP_U64, val, 8);
     }
@@ -772,6 +1198,7 @@ pub unsafe fn write_bytes(base: u32, addr: u64, data: &[u8]) {
             sample_len,
         );
     }
+    record_debug_guest_write_overlap_from_bytes(addr, WRITE_OP_BYTES, data);
     let dst = (base + addr as u32) as *mut u8;
     debug_assert!(
         !dst.is_null(),
@@ -830,6 +1257,7 @@ pub unsafe fn with_write_slice<R>(
             sample_len,
         );
     }
+    record_debug_guest_write_overlap_from_bytes(addr, WRITE_OP_BYTES, dst_slice);
     result
 }
 
@@ -853,6 +1281,8 @@ pub unsafe fn zero_mem(base: u32, addr: u64, len: usize) {
             0,
         );
     }
+    let trace_len = len.min(u32::MAX as usize) as u32;
+    debug_record_guest_write_overlap(addr, trace_len, WRITE_OP_ZERO, 0, 0);
     if unsafe { is_multi_threaded() } && len > 0 {
         let mask = stripe_mask(addr, len);
         crate::tracepoints::record_execve_stage(361, unsafe { debug_thread_count() }, mask as u64);
@@ -1015,5 +1445,19 @@ mod tests {
         assert_eq!(entry.sample, 0x1122_3344);
         assert_eq!(entry.execve_stage, 716);
         crate::harness::trace::clear_guest_write_watch_trace();
+
+        super::debug_clear_guest_write_watch_trace();
+        super::debug_configure_guest_write_watch(1, 0x3000, 0x3010);
+        unsafe {
+            super::write_u32(0, 0x3004, 0x5566_7788);
+        }
+        assert_eq!(super::debug_guest_write_overlap_trace_len(), 1);
+        let debug_entry = super::debug_guest_write_overlap_trace_entry(0);
+        assert_eq!(debug_entry.slot, 1);
+        assert_eq!(debug_entry.watch_start, 0x3000);
+        assert_eq!(debug_entry.watch_end, 0x3010);
+        assert_eq!(debug_entry.addr, 0x3004);
+        assert_eq!(debug_entry.sample, 0x5566_7788);
+        super::debug_clear_guest_write_watch_trace();
     }
 }

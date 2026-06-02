@@ -32,7 +32,10 @@
 
 use crate::abi::*;
 use crate::alloc;
-#[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
+#[cfg(not(all(
+    any(target_arch = "wasm32", target_arch = "wasm64"),
+    target_os = "unknown"
+)))]
 use alloc_crate::vec::Vec;
 
 #[repr(C)]
@@ -42,25 +45,37 @@ struct PageCacheMeta {
     size: u64,
 }
 
-#[cfg(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown"))]
+#[cfg(all(
+    any(target_arch = "wasm32", target_arch = "wasm64"),
+    target_os = "unknown"
+))]
 #[link(wasm_import_module = "env")]
 unsafe extern "C" {
-    fn tidemark_page_cache_read(ino: u32, offset: u64, dst_ptr: u32, dst_len: u32) -> i64;
-    fn tidemark_page_cache_stat(ino: u32, out_ptr: u32) -> i32;
-    fn tidemark_page_cache_write(ino: u32, offset: u64, src_ptr: u32, src_len: u32) -> i64;
+    fn tidemark_page_cache_read(ino: u32, offset: u64, dst_ptr: usize, dst_len: u32) -> i64;
+    fn tidemark_page_cache_stat(ino: u32, out_ptr: usize) -> i32;
+    fn tidemark_page_cache_write(ino: u32, offset: u64, src_ptr: usize, src_len: u32) -> i64;
 }
 
-#[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
+#[cfg(not(all(
+    any(target_arch = "wasm32", target_arch = "wasm64"),
+    target_os = "unknown"
+)))]
 struct FallbackPageCacheEntry {
     ino: u32,
     mode: u32,
     data: Vec<u8>,
 }
 
-#[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
+#[cfg(not(all(
+    any(target_arch = "wasm32", target_arch = "wasm64"),
+    target_os = "unknown"
+)))]
 static mut FALLBACK_PAGE_CACHE: Option<Vec<FallbackPageCacheEntry>> = None;
 
-#[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
+#[cfg(not(all(
+    any(target_arch = "wasm32", target_arch = "wasm64"),
+    target_os = "unknown"
+)))]
 fn fallback_page_cache_entries() -> &'static mut Vec<FallbackPageCacheEntry> {
     unsafe {
         let entries = core::ptr::addr_of_mut!(FALLBACK_PAGE_CACHE);
@@ -71,7 +86,10 @@ fn fallback_page_cache_entries() -> &'static mut Vec<FallbackPageCacheEntry> {
     }
 }
 
-#[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
+#[cfg(not(all(
+    any(target_arch = "wasm32", target_arch = "wasm64"),
+    target_os = "unknown"
+)))]
 fn reset_fallback_page_cache() {
     unsafe {
         let entries = core::ptr::addr_of_mut!(FALLBACK_PAGE_CACHE);
@@ -81,15 +99,21 @@ fn reset_fallback_page_cache() {
     }
 }
 
-#[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
+#[cfg(not(all(
+    any(target_arch = "wasm32", target_arch = "wasm64"),
+    target_os = "unknown"
+)))]
 fn fallback_page_cache_entry(ino: u32) -> Option<&'static mut FallbackPageCacheEntry> {
     fallback_page_cache_entries()
         .iter_mut()
         .find(|entry| entry.ino == ino)
 }
 
-#[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
-unsafe fn tidemark_page_cache_read(ino: u32, offset: u64, dst_ptr: u32, dst_len: u32) -> i64 {
+#[cfg(not(all(
+    any(target_arch = "wasm32", target_arch = "wasm64"),
+    target_os = "unknown"
+)))]
+unsafe fn tidemark_page_cache_read(ino: u32, offset: u64, dst_ptr: usize, dst_len: u32) -> i64 {
     let Some(entry) = fallback_page_cache_entry(ino) else {
         return 0;
     };
@@ -104,8 +128,11 @@ unsafe fn tidemark_page_cache_read(ino: u32, offset: u64, dst_ptr: u32, dst_len:
     len as i64
 }
 
-#[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
-unsafe fn tidemark_page_cache_stat(ino: u32, out_ptr: u32) -> i32 {
+#[cfg(not(all(
+    any(target_arch = "wasm32", target_arch = "wasm64"),
+    target_os = "unknown"
+)))]
+unsafe fn tidemark_page_cache_stat(ino: u32, out_ptr: usize) -> i32 {
     let Some(entry) = fallback_page_cache_entry(ino) else {
         return 0;
     };
@@ -118,8 +145,11 @@ unsafe fn tidemark_page_cache_stat(ino: u32, out_ptr: u32) -> i32 {
     1
 }
 
-#[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
-unsafe fn tidemark_page_cache_write(ino: u32, offset: u64, src_ptr: u32, src_len: u32) -> i64 {
+#[cfg(not(all(
+    any(target_arch = "wasm32", target_arch = "wasm64"),
+    target_os = "unknown"
+)))]
+unsafe fn tidemark_page_cache_write(ino: u32, offset: u64, src_ptr: usize, src_len: u32) -> i64 {
     let Some(end) = (offset as usize).checked_add(src_len as usize) else {
         return ENOSPC;
     };
@@ -324,7 +354,10 @@ fn dir_entries() -> &'static mut [DirEntry] {
 
 /// Initialize MemFS. Allocates all data structures via alloc.rs.
 pub fn init() {
-    #[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
+    #[cfg(not(all(
+        any(target_arch = "wasm32", target_arch = "wasm64"),
+        target_os = "unknown"
+    )))]
     reset_fallback_page_cache();
 
     unsafe {
@@ -431,18 +464,21 @@ pub fn reserve_inode_until(target_ino: u32) -> i64 {
     }
     while h.inode_count < target_ino {
         unsafe {
-            core::ptr::write(
-                h.inodes.add(h.inode_count as usize),
-                Inode {
-                    mode: 0,
-                    nlink: 0,
-                    uid: 0,
-                    gid: 0,
-                    size: 0,
-                    data_offset: 0,
-                    data_cap: 0,
-                },
-            );
+            let inode = h.inodes.add(h.inode_count as usize);
+            if (*inode).mode == 0 {
+                core::ptr::write(
+                    inode,
+                    Inode {
+                        mode: 0,
+                        nlink: 0,
+                        uid: 0,
+                        gid: 0,
+                        size: 0,
+                        data_offset: 0,
+                        data_cap: 0,
+                    },
+                );
+            }
         }
         h.inode_count += 1;
     }
@@ -501,7 +537,7 @@ fn materialize_external_file_data(ino: u32) -> i64 {
     let mut copied = 0usize;
     while copied < size {
         let chunk = (size - copied).min(4096);
-        let dst_ptr = unsafe { fs().data.add(off as usize + copied) as u32 };
+        let dst_ptr = unsafe { fs().data.add(off as usize + copied) as usize };
         let n = unsafe { tidemark_page_cache_read(ino, copied as u64, dst_ptr, chunk as u32) };
         if n < 0 {
             return n;
@@ -1071,37 +1107,26 @@ pub fn write_file(ino: u32, offset: u64, data: &[u8]) -> i64 {
     if external_required || inline_growth_needed {
         // Avoid growing the kernel-owned inline data pool once a file write can
         // be published to the shared page cache.
-        let mut old_published = true;
         if old_data_cap != 0 && old_size > 0 {
             let old_data_offset = inodes()[idx].data_offset as usize;
-            let old_data_ptr = unsafe { fs().data.add(old_data_offset) as u32 };
+            let old_data_ptr = unsafe { fs().data.add(old_data_offset) as usize };
             let published =
                 unsafe { tidemark_page_cache_write(ino, 0, old_data_ptr, old_size as u32) };
             if published != old_size as i64 {
-                old_published = false;
-                if external_required {
-                    return ENOSPC;
-                }
+                return ENOSPC;
             }
         }
-        if old_published {
-            let written = unsafe {
-                tidemark_page_cache_write(ino, offset, data.as_ptr() as u32, data.len() as u32)
-            };
-            if written == data.len() as i64 {
-                let inode = &mut inodes()[idx];
-                inode.size = inode.size.max(end_u64);
-                inode.data_offset = 0;
-                inode.data_cap = 0;
-                return written;
-            }
+        let written = unsafe {
+            tidemark_page_cache_write(ino, offset, data.as_ptr() as usize, data.len() as u32)
+        };
+        if written == data.len() as i64 {
+            let inode = &mut inodes()[idx];
+            inode.size = inode.size.max(end_u64);
+            inode.data_offset = 0;
+            inode.data_cap = 0;
+            return written;
         }
-        if old_data_cap == 0 {
-            let materialized = materialize_external_file_data(ino);
-            if materialized < 0 {
-                return materialized;
-            }
-        }
+        return ENOSPC;
     }
 
     let end = end_u64 as u32;
@@ -1158,7 +1183,7 @@ pub fn read_file(ino: u32, offset: u64, buf: &mut [u8]) -> i64 {
     if inode.data_cap == 0 {
         let n = buf.len().min(avail);
         return unsafe {
-            tidemark_page_cache_read(ino, offset, buf.as_mut_ptr() as u32, n as u32)
+            tidemark_page_cache_read(ino, offset, buf.as_mut_ptr() as usize, n as u32)
         };
     }
     let n = buf.len().min(avail);
@@ -1270,7 +1295,7 @@ pub fn set_file_size_shallow(ino: u32, size: u64) -> i64 {
         size: 0,
     };
     let published =
-        unsafe { tidemark_page_cache_stat(ino, (&mut meta as *mut PageCacheMeta) as u32) };
+        unsafe { tidemark_page_cache_stat(ino, (&mut meta as *mut PageCacheMeta) as usize) };
     if published != 0 {
         inodes()[idx].mode = meta.mode;
         inodes()[idx].size = meta.size;
@@ -1424,5 +1449,22 @@ mod tests {
             second_read.len() as i64
         );
         assert_eq!(second_read, second_data);
+    }
+
+    #[test]
+    fn reserve_inode_until_does_not_clear_existing_inode_after_stale_count() {
+        let _t = TestVm::new();
+
+        let parent = create_dir(1, b"parent", 0o755);
+        assert!(parent > 0);
+        let child = create_file(parent, b"child", 0o644);
+        assert!(child > parent);
+        let parent_mode = inodes()[parent as usize].mode;
+
+        fs().inode_count = parent;
+
+        assert_eq!(reserve_inode_until(child), 0);
+        assert_eq!(inodes()[parent as usize].mode, parent_mode);
+        assert_eq!(lookup(1, b"parent"), parent);
     }
 }

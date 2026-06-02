@@ -1,7 +1,17 @@
 use crate::abi::*;
 use crate::cpu::block_cache::{BlockCache, BlockEntry};
 use crate::types::{ProcessState, ThreadState};
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicU32, Ordering};
+
+static ACTIVE_THREAD_STEP_VM_PTR: AtomicU32 = AtomicU32::new(0);
+
+struct ActiveThreadStepGuard;
+
+impl Drop for ActiveThreadStepGuard {
+    fn drop(&mut self) {
+        ACTIVE_THREAD_STEP_VM_PTR.store(0, Ordering::Release);
+    }
+}
 
 unsafe fn thread_block_cache(vm: &mut ThreadState, base: u32) -> Option<BlockCache> {
     if vm.process_ptr == 0 {
@@ -29,6 +39,8 @@ unsafe fn thread_block_cache(vm: &mut ThreadState, base: u32) -> Option<BlockCac
 
 #[unsafe(no_mangle)]
 pub extern "C" fn thread_step(vm_ptr: u32, budget: i32) -> i32 {
+    ACTIVE_THREAD_STEP_VM_PTR.store(vm_ptr, Ordering::Release);
+    let _active_step = ActiveThreadStepGuard;
     unsafe {
         let vm = &mut *(vm_ptr as *mut ThreadState);
         let base = vm.guest_base;
@@ -68,6 +80,18 @@ pub extern "C" fn thread_step(vm_ptr: u32, budget: i32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+#[cfg(not(any(
+    test,
+    all(
+        any(target_arch = "wasm32", target_arch = "wasm64"),
+        feature = "harness"
+    )
+)))]
+pub extern "C" fn debug_thread_step_vm_ptr() -> u32 {
+    ACTIVE_THREAD_STEP_VM_PTR.load(Ordering::Acquire)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn thread_status(vm_ptr: u32) -> i32 {
     unsafe { (*(vm_ptr as *const ThreadState)).status }
 }
@@ -80,6 +104,11 @@ pub extern "C" fn thread_exit_code(vm_ptr: u32) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn thread_term_signal(vm_ptr: u32) -> i32 {
     unsafe { (*(vm_ptr as *const ThreadState)).term_signal }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_termination_reason(vm_ptr: u32) -> u32 {
+    unsafe { (*(vm_ptr as *const ThreadState)).termination_reason }
 }
 
 #[unsafe(no_mangle)]

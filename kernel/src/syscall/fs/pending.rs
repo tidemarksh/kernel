@@ -513,10 +513,7 @@ mod tests {
 
         assert!(fd >= 3);
         assert_eq!(child.status, STATUS_OK);
-        assert_eq!(
-            fd_table::sys_fcntl(child, vm.base, fd as u64, 2, 1),
-            0,
-        );
+        assert_eq!(fd_table::sys_fcntl(child, vm.base, fd as u64, 2, 1), 0,);
         assert_ne!(
             fd_table::load_process_fd_entry(vm.base, vm.vm.process_ptr, fd as usize).ofd_id,
             0,

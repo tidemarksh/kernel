@@ -123,6 +123,7 @@ unsafe fn read_thread_record(record: *const ThreadRecord) -> ThreadRecord {
 }
 
 unsafe fn write_thread_record(record: *mut ThreadRecord, value: ThreadRecord) {
+    crate::syscall::thread::record_thread_record_write(record, value);
     unsafe { core::ptr::write_unaligned(record, value) }
 }
 

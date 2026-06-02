@@ -426,7 +426,10 @@ export_const!(abi_status_jit_ready, STATUS_JIT_READY);
 export_const!(abi_fault_kind_none, FAULT_KIND_NONE as i32);
 export_const!(abi_fault_kind_guest_maperr, FAULT_KIND_GUEST_MAPERR as i32);
 export_const!(abi_fault_kind_guest_accerr, FAULT_KIND_GUEST_ACCERR as i32);
-export_const!(abi_fault_kind_illegal_instruction, FAULT_KIND_ILLEGAL_INSTRUCTION as i32);
+export_const!(
+    abi_fault_kind_illegal_instruction,
+    FAULT_KIND_ILLEGAL_INSTRUCTION as i32
+);
 export_const!(abi_fault_kind_guest_bus, FAULT_KIND_GUEST_BUS as i32);
 export_const!(abi_spawn_kind_none, SPAWN_KIND_NONE as i32);
 export_const!(abi_spawn_kind_execve, SPAWN_KIND_EXECVE as i32);
@@ -981,8 +984,7 @@ pub extern "C" fn process_inspect_elf_brk_with_memory_policy(
         if guest_base == 0 {
             return 0;
         }
-        let guest_address_limit =
-            guest_address_limit_for_profile(address_profile, guest_base);
+        let guest_address_limit = guest_address_limit_for_profile(address_profile, guest_base);
         if guest_address_limit == 0 {
             return 0;
         }
@@ -991,11 +993,7 @@ pub extern "C" fn process_inspect_elf_brk_with_memory_policy(
         } else {
             guest_address_limit
         };
-        match crate::elf::inspect_elf(
-            elf_ptr,
-            elf_len,
-            guest_ram_size,
-        ) {
+        match crate::elf::inspect_elf(elf_ptr, elf_len, guest_ram_size) {
             Ok(r) => r.brk_start,
             Err(_) => 0,
         }
@@ -1216,6 +1214,7 @@ pub extern "C" fn process_create_with_memory_policy(
             return 0;
         }
         crate::guest_mem::zero_mem(base, ps_addr, ps_size as usize);
+        crate::syscall::memory::register_kernel_owned_guest_range(ps_addr, ps_size);
         crate::syscall::memory::rebase_brk_after_hidden_prefix(new_brk);
         let ps_ptr = (base as u64 + ps_addr) as u32;
         let ps = &mut *(ps_ptr as *mut crate::types::ProcessState);
@@ -1401,6 +1400,51 @@ pub extern "C" fn process_thread_vm_ptr(vm_ptr: u32, slot: u32) -> u32 {
         return 0;
     }
     ps.threads[slot as usize].thread_ptr
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_thread_record_write_trace_len() -> u32 {
+    crate::syscall::thread::thread_record_write_trace_len()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_thread_record_write_trace_record_ptr(index: u32) -> u32 {
+    crate::syscall::thread::thread_record_write_trace_entry(index).record_ptr
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_thread_record_write_trace_tid(index: u32) -> i32 {
+    crate::syscall::thread::thread_record_write_trace_entry(index).tid
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_thread_record_write_trace_state(index: u32) -> i32 {
+    crate::syscall::thread::thread_record_write_trace_entry(index).state
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_thread_record_write_trace_vm_ptr(index: u32) -> u32 {
+    crate::syscall::thread::thread_record_write_trace_entry(index).thread_ptr
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_thread_record_write_trace_clear_child_tid(index: u32) -> u32 {
+    crate::syscall::thread::thread_record_write_trace_entry(index).clear_child_tid
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_thread_record_write_trace_blocked_addr(index: u32) -> u32 {
+    crate::syscall::thread::thread_record_write_trace_entry(index).blocked_addr
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_thread_record_write_trace_pending_sigset(index: u32) -> u64 {
+    crate::syscall::thread::thread_record_write_trace_entry(index).pending_sigset
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_thread_record_write_trace_pending_siginfo_code(index: u32) -> i32 {
+    crate::syscall::thread::thread_record_write_trace_entry(index).pending_siginfo_code
 }
 
 #[unsafe(no_mangle)]
@@ -1623,6 +1667,461 @@ pub extern "C" fn process_set_fd_entry(vm_ptr: u32, fd: u32, ofd_id: u32, fd_fla
         fd as usize,
         crate::types::FdEntry { ofd_id, fd_flags },
     );
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_fd_entry_write_trace_len() -> u32 {
+    crate::fs::fd_table::fd_entry_write_trace_len()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_fd_entry_write_trace_entry_ptr(index: u32) -> u32 {
+    crate::fs::fd_table::fd_entry_write_trace_entry(index).entry_ptr
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_fd_entry_write_trace_ofd_id(index: u32) -> u32 {
+    crate::fs::fd_table::fd_entry_write_trace_entry(index).ofd_id
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_fd_entry_write_trace_fd_flags(index: u32) -> u32 {
+    crate::fs::fd_table::fd_entry_write_trace_entry(index).fd_flags
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_fd_entry_write_trace_kind(index: u32) -> u32 {
+    crate::fs::fd_table::fd_entry_write_trace_entry(index).kind
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_clear_guest_write_watch_trace() {
+    crate::guest_mem::debug_clear_guest_write_watch_trace();
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_configure_guest_write_watch(slot: u32, start: u64, end: u64) {
+    crate::guest_mem::debug_configure_guest_write_watch(slot, start, end);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_trace_len() -> u32 {
+    crate::guest_mem::debug_guest_write_overlap_trace_len()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_trace_slot(index: u32) -> u32 {
+    crate::guest_mem::debug_guest_write_overlap_trace_entry(index).slot
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_trace_watch_start(index: u32) -> u64 {
+    crate::guest_mem::debug_guest_write_overlap_trace_entry(index).watch_start
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_trace_watch_end(index: u32) -> u64 {
+    crate::guest_mem::debug_guest_write_overlap_trace_entry(index).watch_end
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_trace_op(index: u32) -> u32 {
+    crate::guest_mem::debug_guest_write_overlap_trace_entry(index).op
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_trace_addr(index: u32) -> u64 {
+    crate::guest_mem::debug_guest_write_overlap_trace_entry(index).addr
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_trace_write_len(index: u32) -> u32 {
+    crate::guest_mem::debug_guest_write_overlap_trace_entry(index).len
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_trace_sample_len(index: u32) -> u32 {
+    crate::guest_mem::debug_guest_write_overlap_trace_entry(index).sample_len
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_trace_sample(index: u32) -> u64 {
+    crate::guest_mem::debug_guest_write_overlap_trace_entry(index).sample
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_trace_vm_ptr(index: u32) -> u32 {
+    crate::guest_mem::debug_guest_write_overlap_trace_entry(index).vm_ptr
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_trace_pc(index: u32) -> u64 {
+    crate::guest_mem::debug_guest_write_overlap_trace_entry(index).pc
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_trace_raw(index: u32) -> u32 {
+    crate::guest_mem::debug_guest_write_overlap_trace_entry(index).raw
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_trace_step(index: u32) -> u64 {
+    crate::guest_mem::debug_guest_write_overlap_trace_entry(index).step
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_trace_execve_stage(_index: u32) -> u32 {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_by_vm_trace_len() -> u32 {
+    crate::guest_mem::debug_guest_write_overlap_by_vm_trace_len()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_by_vm_trace_slot(index: u32) -> u32 {
+    crate::guest_mem::debug_guest_write_overlap_by_vm_trace_entry(index).slot
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_by_vm_trace_watch_start(index: u32) -> u64 {
+    crate::guest_mem::debug_guest_write_overlap_by_vm_trace_entry(index).watch_start
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_by_vm_trace_watch_end(index: u32) -> u64 {
+    crate::guest_mem::debug_guest_write_overlap_by_vm_trace_entry(index).watch_end
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_by_vm_trace_op(index: u32) -> u32 {
+    crate::guest_mem::debug_guest_write_overlap_by_vm_trace_entry(index).op
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_by_vm_trace_addr(index: u32) -> u64 {
+    crate::guest_mem::debug_guest_write_overlap_by_vm_trace_entry(index).addr
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_by_vm_trace_write_len(index: u32) -> u32 {
+    crate::guest_mem::debug_guest_write_overlap_by_vm_trace_entry(index).len
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_by_vm_trace_sample_len(index: u32) -> u32 {
+    crate::guest_mem::debug_guest_write_overlap_by_vm_trace_entry(index).sample_len
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_by_vm_trace_sample(index: u32) -> u64 {
+    crate::guest_mem::debug_guest_write_overlap_by_vm_trace_entry(index).sample
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_by_vm_trace_vm_ptr(index: u32) -> u32 {
+    crate::guest_mem::debug_guest_write_overlap_by_vm_trace_entry(index).vm_ptr
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_by_vm_trace_pc(index: u32) -> u64 {
+    crate::guest_mem::debug_guest_write_overlap_by_vm_trace_entry(index).pc
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_by_vm_trace_raw(index: u32) -> u32 {
+    crate::guest_mem::debug_guest_write_overlap_by_vm_trace_entry(index).raw
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_by_vm_trace_step(index: u32) -> u64 {
+    crate::guest_mem::debug_guest_write_overlap_by_vm_trace_entry(index).step
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_by_vm_trace_execve_stage(_index: u32) -> u32 {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_proc_maps_shaped_write_trace_len() -> u32 {
+    crate::guest_mem::debug_proc_maps_shaped_write_trace_len()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_proc_maps_shaped_write_trace_op(index: u32) -> u32 {
+    crate::guest_mem::debug_proc_maps_shaped_write_trace_entry(index).op
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_proc_maps_shaped_write_trace_addr(index: u32) -> u64 {
+    crate::guest_mem::debug_proc_maps_shaped_write_trace_entry(index).addr
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_proc_maps_shaped_write_trace_write_len(index: u32) -> u32 {
+    crate::guest_mem::debug_proc_maps_shaped_write_trace_entry(index).len
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_proc_maps_shaped_write_trace_sample_len(index: u32) -> u32 {
+    crate::guest_mem::debug_proc_maps_shaped_write_trace_entry(index).sample_len
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_proc_maps_shaped_write_trace_sample(index: u32) -> u64 {
+    crate::guest_mem::debug_proc_maps_shaped_write_trace_entry(index).sample
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_proc_maps_shaped_write_trace_pattern(index: u32) -> u32 {
+    crate::guest_mem::debug_proc_maps_shaped_write_trace_entry(index).pattern
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_set_release_exec_trace_enabled(enabled: u32) {
+    crate::debug_release_trace::debug_set_release_exec_trace_enabled(enabled);
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_clear_release_exec_trace() {
+    crate::debug_release_trace::debug_clear_release_exec_trace();
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_trace_len() -> u32 {
+    crate::debug_release_trace::debug_release_exec_trace_len()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_trace_vm_ptr(index: u32) -> u32 {
+    crate::debug_release_trace::debug_release_exec_trace_entry(index).vm_ptr
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_trace_tid(index: u32) -> i32 {
+    crate::debug_release_trace::debug_release_exec_trace_entry(index).tid
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_trace_pc(index: u32) -> u64 {
+    crate::debug_release_trace::debug_release_exec_trace_entry(index).pc
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_trace_raw(index: u32) -> u32 {
+    crate::debug_release_trace::debug_release_exec_trace_entry(index).raw
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_trace_step(index: u32) -> u32 {
+    crate::debug_release_trace::debug_release_exec_trace_entry(index).step
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_trace_ra(index: u32) -> u64 {
+    crate::debug_release_trace::debug_release_exec_trace_entry(index).ra
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_trace_sp(index: u32) -> u64 {
+    crate::debug_release_trace::debug_release_exec_trace_entry(index).sp
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_trace_a0(index: u32) -> u64 {
+    crate::debug_release_trace::debug_release_exec_trace_entry(index).a0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_trace_a1(index: u32) -> u64 {
+    crate::debug_release_trace::debug_release_exec_trace_entry(index).a1
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_trace_a7(index: u32) -> u64 {
+    crate::debug_release_trace::debug_release_exec_trace_entry(index).a7
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_trace_s11(index: u32) -> u64 {
+    crate::debug_release_trace::debug_release_exec_trace_entry(index).s11
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_mismatch_trace_len() -> u32 {
+    crate::debug_release_trace::debug_release_exec_mismatch_trace_len()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_mismatch_trace_vm_ptr(index: u32) -> u32 {
+    crate::debug_release_trace::debug_release_exec_mismatch_trace_entry(index).vm_ptr
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_mismatch_trace_tid(index: u32) -> i32 {
+    crate::debug_release_trace::debug_release_exec_mismatch_trace_entry(index).tid
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_mismatch_trace_pc(index: u32) -> u64 {
+    crate::debug_release_trace::debug_release_exec_mismatch_trace_entry(index).pc
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_mismatch_trace_raw(index: u32) -> u32 {
+    crate::debug_release_trace::debug_release_exec_mismatch_trace_entry(index).raw
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_mismatch_trace_step(index: u32) -> u32 {
+    crate::debug_release_trace::debug_release_exec_mismatch_trace_entry(index).step
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_mismatch_trace_mem_sample(index: u32) -> u64 {
+    crate::debug_release_trace::debug_release_exec_mismatch_trace_entry(index).mem_sample
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_mismatch_trace_mem_sample_len(index: u32) -> u32 {
+    crate::debug_release_trace::debug_release_exec_mismatch_trace_entry(index).mem_sample_len
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_mismatch_trace_file_sample(index: u32) -> u64 {
+    crate::debug_release_trace::debug_release_exec_mismatch_trace_entry(index).file_sample
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_mismatch_trace_file_sample_len(index: u32) -> u32 {
+    crate::debug_release_trace::debug_release_exec_mismatch_trace_entry(index).file_sample_len
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_mismatch_trace_vma_start(index: u32) -> u64 {
+    crate::debug_release_trace::debug_release_exec_mismatch_trace_entry(index).vma_start
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_mismatch_trace_vma_end(index: u32) -> u64 {
+    crate::debug_release_trace::debug_release_exec_mismatch_trace_entry(index).vma_end
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_mismatch_trace_vma_prot(index: u32) -> i32 {
+    crate::debug_release_trace::debug_release_exec_mismatch_trace_entry(index).vma_prot
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_mismatch_trace_vma_fd(index: u32) -> i32 {
+    crate::debug_release_trace::debug_release_exec_mismatch_trace_entry(index).vma_fd
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_exec_mismatch_trace_vma_offset(index: u32) -> u64 {
+    crate::debug_release_trace::debug_release_exec_mismatch_trace_entry(index).vma_offset
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_default_signal_sig() -> u32 {
+    crate::debug_release_trace::debug_release_default_signal().sig
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_default_signal_code() -> i32 {
+    crate::debug_release_trace::debug_release_default_signal().code
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_default_signal_vm_ptr() -> u32 {
+    crate::debug_release_trace::debug_release_default_signal().vm_ptr
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_default_signal_pc() -> u64 {
+    crate::debug_release_trace::debug_release_default_signal().pc
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_default_signal_ra() -> u64 {
+    crate::debug_release_trace::debug_release_default_signal().ra
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_default_signal_sp() -> u64 {
+    crate::debug_release_trace::debug_release_default_signal().sp
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_default_signal_gp() -> u64 {
+    crate::debug_release_trace::debug_release_default_signal().gp
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_default_signal_tp() -> u64 {
+    crate::debug_release_trace::debug_release_default_signal().tp
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_default_signal_s11() -> u64 {
+    crate::debug_release_trace::debug_release_default_signal().s11
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_default_signal_a0() -> u64 {
+    crate::debug_release_trace::debug_release_default_signal().a0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_default_signal_a1() -> u64 {
+    crate::debug_release_trace::debug_release_default_signal().a1
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_default_signal_a2() -> u64 {
+    crate::debug_release_trace::debug_release_default_signal().a2
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_default_signal_a3() -> u64 {
+    crate::debug_release_trace::debug_release_default_signal().a3
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_default_signal_a4() -> u64 {
+    crate::debug_release_trace::debug_release_default_signal().a4
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_default_signal_a5() -> u64 {
+    crate::debug_release_trace::debug_release_default_signal().a5
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_default_signal_a6() -> u64 {
+    crate::debug_release_trace::debug_release_default_signal().a6
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_default_signal_a7() -> u64 {
+    crate::debug_release_trace::debug_release_default_signal().a7
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_default_signal_fault_pc() -> u64 {
+    crate::debug_release_trace::debug_release_default_signal().fault_pc
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_default_signal_fault_addr() -> u64 {
+    crate::debug_release_trace::debug_release_default_signal().fault_addr
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_release_default_signal_pending() -> u64 {
+    crate::debug_release_trace::debug_release_default_signal().pending
 }
 
 #[unsafe(no_mangle)]

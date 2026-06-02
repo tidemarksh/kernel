@@ -3447,6 +3447,7 @@ pub(crate) fn prepare_elf_vm(elf_bytes: &[u8], use_cache: bool) -> Result<Prepar
             return Err("ProcessState brk allocation failed".into());
         }
         tidemark_kernel::guest_mem::zero_mem(base, ps_addr, ps_size as usize);
+        tidemark_kernel::syscall::memory::register_kernel_owned_guest_range(ps_addr, ps_size);
         vm.process_ptr = ps_addr as u32;
 
         let pid_off = core::mem::offset_of!(ProcessState, pid) as u64;

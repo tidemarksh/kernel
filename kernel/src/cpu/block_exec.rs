@@ -467,6 +467,7 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                         return BlockOutcome::Return;
                     }
                 }
+                guest_mem::debug_set_guest_write_context(vm as *const _ as u32, cur_pc, 0, step);
                 match f3 {
                     0 => unsafe { guest_mem::write_u8_unchecked(base, addr, x[r2] as u8) },
                     1 => unsafe { guest_mem::write_u16_unchecked(base, addr, x[r2] as u16) },
@@ -474,6 +475,7 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                     3 => unsafe { guest_mem::write_u64_unchecked(base, addr, x[r2]) },
                     _ => {}
                 }
+                guest_mem::debug_clear_guest_write_context();
             }
             7 => {
                 if rd != 0 {
