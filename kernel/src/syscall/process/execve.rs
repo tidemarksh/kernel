@@ -889,7 +889,7 @@ fn complete_execve_in_place_inner(
     );
     crate::tracepoints::record_execve_dispatch(vm_ptr, 1224);
     crate::tracepoints::record_execve_stage(33, load_brk_start, flush_shared_mappings as u64);
-    let main_result = match load_execve_elf_bytes_at(base, ram_size, &main_bytes, main_bias) {
+    let main_result = match load_execve_elf_bytes_at(base, guest_limit, &main_bytes, main_bias) {
         Ok(result) => result,
         Err(errno) => return errno,
     };
@@ -897,7 +897,7 @@ fn complete_execve_in_place_inner(
     crate::tracepoints::record_execve_stage(34, main_result.entry, main_result.brk_start);
     let mut elf_result = match interp_bytes.as_ref() {
         Some(interp_bytes) => {
-            match load_execve_elf_bytes_at(base, ram_size, interp_bytes, interp_bias) {
+            match load_execve_elf_bytes_at(base, guest_limit, interp_bytes, interp_bias) {
                 Ok(result) => result,
                 Err(errno) => return errno,
             }

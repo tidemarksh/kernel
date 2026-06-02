@@ -469,11 +469,13 @@ fn discard_execve_guest_address_space(base: u32) {
     if s.brk_current > s.brk_base {
         ranges.push((page_align_down(s.brk_base), page_align_up(s.brk_current)));
     }
+    let backed_limit = current_linear_guest_limit(base);
     for (start, end) in ranges {
-        if end > start {
-            crate::tracepoints::record_execve_stage(370, start, end);
+        let zero_end = end.min(backed_limit);
+        if zero_end > start {
+            crate::tracepoints::record_execve_stage(370, start, zero_end);
             unsafe {
-                guest_mem::zero_mem(base, start, (end - start) as usize);
+                guest_mem::zero_mem(base, start, (zero_end - start) as usize);
             }
         }
     }
