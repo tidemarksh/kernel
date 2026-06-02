@@ -142,7 +142,7 @@ impl AddressSpaceStateImage {
 /// Pointer to AddressSpaceState in kernel Worker linear memory (allocated via alloc.rs).
 static mut MEM_STATE: *mut AddressSpaceState = core::ptr::null_mut();
 
-pub const DEFAULT_STACK_SIZE: u64 = 1024 * 1024;
+pub const DEFAULT_STACK_SIZE: u64 = 8 * 1024 * 1024;
 const MIN_STACK_SIZE: u64 = 64 * 1024;
 const INITIAL_STACK_HEADROOM: u64 = 64 * 1024 * 1024;
 
