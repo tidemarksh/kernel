@@ -31,6 +31,10 @@ fn contract_spawn_from_clone_initializes_child_thread_state() {
     t.vm.x[3] = 0x2345_6789;
     t.vm.x[27] = 0x3456_789a;
     t.vm.pc = 0x4567_89ab;
+    t.vm.guest_address_profile = tidemark_kernel::abi::GUEST_ADDRESS_PROFILE_WASM32_COMPATIBLE;
+    t.vm.guest_address_limit = 0xffff_ffff;
+    t.vm.guest_memory_policy_limit = 0x1_0000_0000;
+    t.vm.process_max_memory_pages = 123;
 
     let ps_ptr = t.vm.process_ptr as u64;
 
@@ -72,6 +76,10 @@ fn contract_spawn_from_clone_initializes_child_thread_state() {
     assert_eq!(child.sigaltstack_sp, 0);
     assert_eq!(child.sigaltstack_size, 0);
     assert_eq!(child.sigaltstack_flags, SS_DISABLE);
+    assert_eq!(child.guest_address_profile, t.vm.guest_address_profile);
+    assert_eq!(child.guest_address_limit, t.vm.guest_address_limit);
+    assert_eq!(child.guest_memory_policy_limit, t.vm.guest_memory_policy_limit);
+    assert_eq!(child.process_max_memory_pages, t.vm.process_max_memory_pages);
 
     let written_tid = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, child_tidptr) };
     assert_eq!(written_tid, ret as u32);
