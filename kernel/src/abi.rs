@@ -937,6 +937,11 @@ pub extern "C" fn abi_guest_address_profile_memory64() -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn abi_guest_address_profile_target() -> u32 {
+    GUEST_ADDRESS_PROFILE_MEMORY64
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn process_guest_base_for_address_profile(address_profile: u32) -> u64 {
     process_guest_base_for_profile(address_profile)
 }
