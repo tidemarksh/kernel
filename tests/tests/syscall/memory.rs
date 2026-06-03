@@ -712,7 +712,7 @@ fn prot_none_reservation_does_not_grow_linear_memory() {
 }
 
 #[test]
-fn guest_ram_limit_caps_high_prot_none_reservations() {
+fn guest_memory_policy_limit_caps_high_prot_none_reservations() {
     let mut t = TestVm::new();
     let guest_limit = 0x6000_0000u64;
     t.vm.guest_memory_policy_limit = guest_limit;
@@ -748,7 +748,7 @@ fn prot_none_reservations_stay_within_linux_shaped_topdown_window() {
 }
 
 #[test]
-fn guest_ram_limit_caps_brk_growth() {
+fn guest_memory_policy_limit_caps_brk_growth() {
     let mut t = TestVm::new();
     let cur = t.sys_brk(0) as u64;
     let guest_limit = cur + 2 * PAGE_SIZE;
