@@ -108,10 +108,10 @@ fn target_address_profile_is_memory64_and_not_wasm32_fallback() {
     let target_base = process_guest_base_for_address_profile(target_profile);
     assert_ne!(target_base, 0);
     assert_ne!(process_guest_base_for_address_profile(wasm32_profile), 0);
-    assert_ne!(
-        process_guest_address_limit_for_profile(target_profile, target_base),
-        0,
-    );
+    let target_limit = process_guest_address_limit_for_profile(target_profile, target_base);
+    let wasm32_limit = process_guest_address_limit_for_profile(wasm32_profile, target_base);
+    assert!(target_limit > u32::MAX as u64);
+    assert!(wasm32_limit <= u32::MAX as u64);
 }
 
 #[test]
@@ -293,6 +293,40 @@ fn process_create_with_memory_policy_initializes_memory_contract() {
     assert_eq!(thread_guest_memory_policy_limit(vm_ptr), ram_size);
     assert_eq!(thread_guest_memory_policy_limit(vm_ptr), ram_size);
     assert_eq!(thread_process_max_memory_pages(vm_ptr), 2048);
+}
+
+#[test]
+fn process_create_memory64_policy_accepts_above_wasm32_range() {
+    let _t = TestVm::new();
+    let policy_limit = 0x1_0000_0000u64;
+    let stack_size = 1024 * 1024;
+    let address_profile = abi_guest_address_profile_target();
+    let guest_base = process_guest_base_for_address_profile(address_profile);
+    assert_ne!(guest_base, 0);
+    assert!(process_guest_address_limit_for_profile(address_profile, guest_base) > u32::MAX as u64);
+
+    let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    let elf_ptr = unsafe { tidemark_kernel::alloc::alloc_zeroed(0x1000, 16) };
+    assert_ne!(elf_ptr, 0);
+    unsafe {
+        tidemark_kernel::guest_mem::write_bytes(0, elf_ptr as u64, &elf);
+    }
+
+    process_clear_args();
+    let vm_ptr = process_create_with_memory_policy(
+        elf_ptr,
+        elf.len() as u32,
+        address_profile,
+        policy_limit,
+        2048,
+        stack_size,
+    );
+    assert_ne!(vm_ptr, 0);
+
+    let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
+    assert_eq!(vm.guest_address_profile, address_profile);
+    assert_eq!(vm.guest_memory_policy_limit, policy_limit);
+    assert_eq!(thread_guest_memory_policy_limit(vm_ptr), policy_limit);
 }
 
 #[test]

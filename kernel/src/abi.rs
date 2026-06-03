@@ -761,10 +761,15 @@ pub extern "C" fn monotonic_ticks_current() -> u64 {
 const MAX_ARGS: usize = 64;
 const GUEST_GUARD_BYTES: u64 = 4 * 1024 * 1024;
 const GUEST_EXEC_SCRATCH_HEADROOM_BYTES: u64 = 256 * 1024 * 1024;
-const LINEAR_MEMORY_LIMIT: u64 = 0x1_0000_0000;
+const WASM32_LINEAR_MEMORY_LIMIT: u64 = 0x1_0000_0000;
+const MEMORY64_GUEST_ADDRESS_LIMIT: u64 = i64::MAX as u64;
 
 pub const fn max_guest_window_for_base(base: u32) -> u64 {
-    LINEAR_MEMORY_LIMIT.saturating_sub(base as u64)
+    MEMORY64_GUEST_ADDRESS_LIMIT.saturating_sub(base as u64)
+}
+
+pub const fn max_wasm32_guest_window_for_base(base: u32) -> u64 {
+    WASM32_LINEAR_MEMORY_LIMIT.saturating_sub(base as u64)
 }
 
 struct StagedArgs {
@@ -809,7 +814,7 @@ fn process_guest_base_for_ram(ram_size: u32) -> u32 {
         + GUEST_EXEC_SCRATCH_HEADROOM_BYTES
         + 0xF_FFFF)
         & !0xF_FFFF) as u32;
-    if aligned as u64 >= LINEAR_MEMORY_LIMIT {
+    if aligned as u64 >= WASM32_LINEAR_MEMORY_LIMIT {
         0
     } else {
         aligned
@@ -827,22 +832,15 @@ fn process_guest_base_for_profile(address_profile: u32) -> u64 {
 
 fn guest_address_limit_for_profile(address_profile: u32, guest_base: u64) -> u64 {
     match address_profile {
-        GUEST_ADDRESS_PROFILE_WASM32_COMPATIBLE | GUEST_ADDRESS_PROFILE_MEMORY64 => {
+        GUEST_ADDRESS_PROFILE_WASM32_COMPATIBLE => {
             if guest_base > u32::MAX as u64 {
                 0
             } else {
-                max_guest_window_for_base(guest_base as u32)
+                max_wasm32_guest_window_for_base(guest_base as u32)
             }
         }
+        GUEST_ADDRESS_PROFILE_MEMORY64 => MEMORY64_GUEST_ADDRESS_LIMIT.saturating_sub(guest_base),
         _ => 0,
-    }
-}
-
-fn checked_wasm32_guest_limit(limit: u64) -> Option<u32> {
-    if limit <= u32::MAX as u64 {
-        Some(limit as u32)
-    } else {
-        None
     }
 }
 
@@ -1013,10 +1011,6 @@ pub extern "C" fn process_create_with_memory_policy(
         } else {
             guest_address_limit
         };
-        if checked_wasm32_guest_limit(guest_ram_size).is_none() {
-            set_process_create_last_error(4);
-            return 0;
-        }
         let mut main_inspected = match crate::elf::inspect_elf(elf_ptr, elf_len, guest_ram_size) {
             Ok(r) => r,
             Err(_) => {
