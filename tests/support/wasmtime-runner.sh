@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-args=(--dir=/ --env "TIDEMARK_KERNEL_ROOT=$PWD")
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+kernel_root=$(cd -- "$script_dir/../.." && pwd)
+
+args=(--dir=/ --env "TIDEMARK_KERNEL_ROOT=$kernel_root")
 
 for forwarded in \
   WASMTIME_BACKTRACE_DETAILS

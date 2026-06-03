@@ -1,9 +1,6 @@
 [build]
 target = "wasm64-unknown-unknown"
 
-[unstable]
-build-std = ["core", "alloc"]
-
 [target.wasm64-unknown-unknown]
 # Memory64 target profile. Import shared linear memory from the runtime and keep
 # kernel static data high enough to avoid overlap with guest binary segments.
@@ -24,8 +21,8 @@ rustflags = [
   "link-arg=--global-base=50331648",
 ]
 
-[alias]
-test-kernel = "test"
-test-kernel-lib = "test -p tidemark-kernel --lib"
-test-kernel-riscv = "test -p tidemark-kernel-tests --test riscv_tests"
-test-kernel-ltp = "test -p tidemark-kernel-tests --test ltp ltp_"
+[target.wasm32-wasip1]
+runner = ["./tests/support/wasmtime-runner.sh"]
+
+[unstable]
+build-std = ["core", "alloc"]

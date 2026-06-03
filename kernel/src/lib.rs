@@ -48,10 +48,7 @@ pub mod elf;
 mod exports;
 pub mod fs;
 pub mod guest_mem;
-#[cfg(any(
-    test,
-    all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness")
-))]
+#[cfg(any(test, feature = "harness"))]
 pub mod harness;
 pub mod jit;
 pub mod net;
