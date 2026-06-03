@@ -3,7 +3,7 @@ use super::support::*;
 #[test]
 fn process_inspect_elf_brk_accepts_et_dyn() {
     let _t = TestVm::new();
-    let ram_size = 64 * 1024 * 1024;
+    let guest_memory_policy_limit = 64 * 1024 * 1024;
     let elf = build_test_elf_dyn(&[0x13, 0x05, 0x70, 0x00]);
 
     let elf_ptr = unsafe { tidemark_kernel::alloc::alloc_zeroed(0x1000, 16) };
@@ -13,7 +13,7 @@ fn process_inspect_elf_brk_accepts_et_dyn() {
     }
 
     assert_eq!(
-        test_process_inspect_elf_brk(elf_ptr, elf.len() as u32, ram_size as u64),
+        test_process_inspect_elf_brk(elf_ptr, elf.len() as u32, guest_memory_policy_limit as u64),
         0x2000
     );
 }

@@ -129,7 +129,7 @@ fn resume_vfork_parent_export_restores_parent_view() {
 #[test]
 fn process_create_populates_initial_stack_contract() {
     let _t = TestVm::new();
-    let ram_size = 64 * 1024 * 1024;
+    let guest_memory_policy_limit = 64 * 1024 * 1024;
     let stack_size = 1024 * 1024;
     let guest_base = test_process_guest_base();
     assert_ne!(guest_base, 0);
@@ -174,7 +174,7 @@ fn process_create_populates_initial_stack_contract() {
     process_push_arg(arg1_ptr);
     process_push_env(env0_ptr);
 
-    let vm_ptr = test_process_create(elf_ptr, elf.len() as u32, ram_size as u64, stack_size);
+    let vm_ptr = test_process_create(elf_ptr, elf.len() as u32, guest_memory_policy_limit as u64, stack_size);
     assert_ne!(vm_ptr, 0);
 
     let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
@@ -252,7 +252,7 @@ fn process_create_populates_initial_stack_contract() {
 #[test]
 fn process_create_with_memory_policy_initializes_memory_contract() {
     let _t = TestVm::new();
-    let ram_size = 64 * 1024 * 1024u64;
+    let guest_memory_policy_limit = 64 * 1024 * 1024u64;
     let stack_size = 1024 * 1024;
     let address_profile = abi_guest_address_profile_target();
     let guest_base = process_guest_base_for_address_profile(address_profile);
@@ -274,7 +274,7 @@ fn process_create_with_memory_policy_initializes_memory_contract() {
         elf_ptr,
         elf.len() as u32,
         address_profile,
-        ram_size,
+        guest_memory_policy_limit,
         2048,
         stack_size,
     );
@@ -282,11 +282,11 @@ fn process_create_with_memory_policy_initializes_memory_contract() {
 
     let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
     assert_eq!(vm.guest_address_profile, address_profile);
-    assert_eq!(vm.guest_memory_policy_limit, ram_size);
+    assert_eq!(vm.guest_memory_policy_limit, guest_memory_policy_limit);
     assert_eq!(vm.process_max_memory_pages, 2048);
     assert_eq!(thread_guest_address_profile(vm_ptr), address_profile);
-    assert_eq!(thread_guest_memory_policy_limit(vm_ptr), ram_size);
-    assert_eq!(thread_guest_memory_policy_limit(vm_ptr), ram_size);
+    assert_eq!(thread_guest_memory_policy_limit(vm_ptr), guest_memory_policy_limit);
+    assert_eq!(thread_guest_memory_policy_limit(vm_ptr), guest_memory_policy_limit);
     assert_eq!(thread_process_max_memory_pages(vm_ptr), 2048);
 }
 
@@ -327,7 +327,7 @@ fn process_create_memory64_policy_accepts_above_wasm32_range() {
 #[test]
 fn process_create_keeps_initial_stack_compact_for_large_ram_limit() {
     let _t = TestVm::new();
-    let ram_size = 512 * 1024 * 1024;
+    let guest_memory_policy_limit = 512 * 1024 * 1024;
     let stack_size = 1024 * 1024;
     let guest_base = test_process_guest_base();
     assert_ne!(guest_base, 0);
@@ -340,13 +340,13 @@ fn process_create_keeps_initial_stack_compact_for_large_ram_limit() {
     }
 
     process_clear_args();
-    let vm_ptr = test_process_create(elf_ptr, elf.len() as u32, ram_size as u64, stack_size);
+    let vm_ptr = test_process_create(elf_ptr, elf.len() as u32, guest_memory_policy_limit as u64, stack_size);
     assert_ne!(vm_ptr, 0);
 
     let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
-    assert_eq!(vm.guest_memory_policy_limit, ram_size as u64);
+    assert_eq!(vm.guest_memory_policy_limit, guest_memory_policy_limit as u64);
     assert!(
-        vm.x[2] < (ram_size as u64 / 2),
+        vm.x[2] < (guest_memory_policy_limit as u64 / 2),
         "initial stack should not force materializing the full RAM window: sp=0x{:x}",
         vm.x[2],
     );
@@ -363,7 +363,7 @@ fn process_create_keeps_initial_stack_compact_for_large_ram_limit() {
     }
     assert_ne!(stack_vma_end, 0, "initial stack VMA must cover sp");
     assert!(
-        stack_vma_end < (ram_size as u64 / 2),
+        stack_vma_end < (guest_memory_policy_limit as u64 / 2),
         "stack VMA should be placed below the logical RAM ceiling: end=0x{stack_vma_end:x}",
     );
 }
@@ -383,7 +383,7 @@ fn process_guest_base_reserves_exec_scratch_headroom() {
 #[test]
 fn process_create_rebases_user_brk_after_hidden_process_state() {
     let _t = TestVm::new();
-    let ram_size = 64 * 1024 * 1024;
+    let guest_memory_policy_limit = 64 * 1024 * 1024;
     let stack_size = 1024 * 1024;
     let guest_base = test_process_guest_base();
     assert_ne!(guest_base, 0);
@@ -419,7 +419,7 @@ fn process_create_rebases_user_brk_after_hidden_process_state() {
 
     process_clear_args();
     process_push_arg(elf_ptr + 0x400);
-    let vm_ptr = test_process_create(elf_ptr, elf.len() as u32, ram_size as u64, stack_size);
+    let vm_ptr = test_process_create(elf_ptr, elf.len() as u32, guest_memory_policy_limit as u64, stack_size);
     assert_ne!(vm_ptr, 0);
 
     let process_ptr = thread_process_ptr(vm_ptr) as u64;
