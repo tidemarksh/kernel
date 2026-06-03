@@ -1339,6 +1339,9 @@ pub fn sys_mremap(
     }
 
     let grow_end = old_addr + new_len;
+    if grow_end > guest_limit {
+        return ENOMEM;
+    }
     if !overlaps_except(s, old_addr + old_len, grow_end, idx) {
         unsafe {
             if !ensure_memory_capacity_for_guest_range(base, grow_end) {

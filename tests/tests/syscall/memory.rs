@@ -78,6 +78,27 @@ fn memory_syscalls() {
 }
 
 #[test]
+fn mremap_in_place_growth_respects_guest_memory_policy_limit() {
+    let mut t = TestVm::new();
+    let addr = 0x40_0000u64;
+    let len = PAGE_SIZE;
+    t.vm.guest_memory_policy_limit = addr + len;
+
+    let mapped = t.sys_mmap(
+        addr,
+        len,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED,
+        -1,
+        0,
+    );
+    assert_eq!(mapped as u64, addr);
+
+    let ret = memory::sys_mremap(&mut t.vm, t.base, addr, len, len * 2, 0, 0);
+    assert_eq!(ret, ENOMEM);
+}
+
+#[test]
 fn vmas_are_sorted_after_multiple_mmaps() {
     let mut t = TestVm::new();
     let a1 = t.sys_mmap(0, 4096, PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);

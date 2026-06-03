@@ -54,7 +54,7 @@ fn restore_parent_thread_after_vfork(vm: &ThreadState, base: u32) {
         vm.tid,
         THREAD_RUNNING,
         vm as *const ThreadState as u32,
-        vm.clear_child_tid as u32,
+        vm.clear_child_tid,
         0,
     );
     if needs_count_restore {

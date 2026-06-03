@@ -421,7 +421,7 @@ pub fn init_main_thread(vm_ptr: u32, base: u32) {
 
         if vm.tid > 0 && vm.tid as usize <= MAX_THREADS {
             ps.threads[(vm.tid - 1) as usize] =
-                ThreadRecord::new(vm.tid, THREAD_RUNNING, vm_ptr, vm.clear_child_tid as u32, 0);
+                ThreadRecord::new(vm.tid, THREAD_RUNNING, vm_ptr, vm.clear_child_tid, 0);
         }
 
         let gen_ptr =
@@ -480,7 +480,7 @@ pub fn discard_other_threads_for_exec(vm: &ThreadState, base: u32) -> u32 {
                 crate::fs::fd_table::clear_blocked_ofd_pin(&mut *thread_vm);
             }
             if record.clear_child_tid != 0 {
-                clear_tid_and_wake(vm.process_ptr, base, record.clear_child_tid as u64);
+                clear_tid_and_wake(vm.process_ptr, base, record.clear_child_tid);
             }
             *record = ThreadRecord::empty();
             discarded += 1;
@@ -492,7 +492,7 @@ pub fn discard_other_threads_for_exec(vm: &ThreadState, base: u32) -> u32 {
                 vm.tid,
                 THREAD_RUNNING,
                 current_ptr,
-                vm.clear_child_tid as u32,
+                vm.clear_child_tid,
                 0,
             );
             ps.thread_count.store(1, Ordering::Release);
@@ -587,7 +587,7 @@ pub fn sys_exit(vm: &mut ThreadState, base: u32, exit_code: u64) -> i32 {
             updated.state = THREAD_EXITING;
             updated.blocked_addr = 0;
             updated.thread_ptr = 0;
-            updated.clear_child_tid = vm.clear_child_tid as u32;
+            updated.clear_child_tid = vm.clear_child_tid;
             write_thread_record(record, updated);
         }
     }
@@ -671,7 +671,7 @@ pub fn terminate_process_with_reason(
                     crate::fs::fd_table::clear_blocked_ofd_pin(thread_vm);
                 }
                 if record.clear_child_tid != 0 {
-                    clear_tid_and_wake(vm.process_ptr, base, record.clear_child_tid as u64);
+                    clear_tid_and_wake(vm.process_ptr, base, record.clear_child_tid);
                 }
                 *record = ThreadRecord::empty();
             }
@@ -942,7 +942,7 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
             parent.clone_child_tid,
             THREAD_RUNNING,
             child_ptr,
-            child.clear_child_tid as u32,
+            child.clear_child_tid,
             0,
         );
 
@@ -1071,7 +1071,7 @@ pub fn sys_futex(
                     let mut updated = read_thread_record(record);
                     updated.state = THREAD_BLOCKED_FUTEX;
                     updated.blocked_addr = addr;
-                    updated.clear_child_tid = vm.clear_child_tid as u32;
+                    updated.clear_child_tid = vm.clear_child_tid;
                     write_thread_record(record, updated);
                 }
             }
@@ -1160,7 +1160,7 @@ pub fn resume_futex_wait_result(vm: &mut ThreadState, base: u32, result: i64) {
             if updated.state == THREAD_BLOCKED_FUTEX {
                 updated.state = THREAD_RUNNING;
                 updated.blocked_addr = 0;
-                updated.clear_child_tid = vm.clear_child_tid as u32;
+                updated.clear_child_tid = vm.clear_child_tid;
                 write_thread_record(record, updated);
             }
         }
