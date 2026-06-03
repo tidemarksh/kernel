@@ -69,7 +69,7 @@ pub unsafe fn exec(
         exec_at_base(
             vm,
             budget,
-            ram_base(vm),
+            guest_base(vm),
             cache,
             hot_counts,
             jit_bitmap,
@@ -78,9 +78,9 @@ pub unsafe fn exec(
     }
 }
 
-/// Execute up to `budget` guest instructions from a caller-specified RAM base.
+/// Execute up to `budget` guest instructions from a caller-specified guest base.
 ///
-/// The production runtime always uses RAM base 0. Tests may place guest RAM at
+/// The production runtime always uses guest base 0. Tests may place guest memory at
 /// a non-zero offset to avoid overlapping the host WASI runtime's own memory.
 ///
 /// # Safety
@@ -386,11 +386,11 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
     *remaining
 }
 
-/// Get RAM base address. Always 0 because each thread-worker WASM instance
+/// Get guest base address. Always 0 because each thread-worker WASM instance
 /// imports the per-process shared Memory as memory index 0. The base of
 /// guest memory is the base of WASM linear memory.
 #[inline(always)]
-fn ram_base(vm: &ThreadState) -> u32 {
+fn guest_base(vm: &ThreadState) -> u32 {
     vm.guest_base
 }
 

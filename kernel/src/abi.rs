@@ -803,8 +803,7 @@ fn staged_args() -> &'static mut StagedArgs {
     unsafe { &mut *core::ptr::addr_of_mut!(STAGED) }
 }
 
-fn process_guest_base_for_ram(ram_size: u32) -> u32 {
-    let _ = ram_size;
+fn process_guest_base_for_reserved_guest_window() -> u32 {
     // Keep a guard plus exec scratch headroom between kernel-owned linear
     // memory and the live guest window. execve() stages large ELF bytes in
     // kernel memory before rebuilding the guest image, so a single guard page
@@ -824,7 +823,7 @@ fn process_guest_base_for_ram(ram_size: u32) -> u32 {
 fn process_guest_base_for_profile(address_profile: u32) -> u64 {
     match address_profile {
         GUEST_ADDRESS_PROFILE_WASM32_COMPATIBLE | GUEST_ADDRESS_PROFILE_MEMORY64 => {
-            process_guest_base_for_ram(0) as u64
+            process_guest_base_for_reserved_guest_window() as u64
         }
         _ => 0,
     }
@@ -967,7 +966,7 @@ pub extern "C" fn process_inspect_elf_brk_with_memory_policy(
         if guest_address_limit == 0 {
             return 0;
         }
-        let guest_ram_size = if guest_memory_policy_limit != 0 {
+        let guest_limit = if guest_memory_policy_limit != 0 {
             guest_memory_policy_limit.min(guest_address_limit)
         } else {
             guest_address_limit
@@ -975,7 +974,7 @@ pub extern "C" fn process_inspect_elf_brk_with_memory_policy(
         match crate::elf::inspect_elf(
             elf_ptr,
             elf_len,
-            guest_ram_size,
+            guest_limit,
         ) {
             Ok(r) => r.brk_start,
             Err(_) => 0,
@@ -994,7 +993,7 @@ pub extern "C" fn process_create_with_memory_policy(
 ) -> u32 {
     unsafe {
         set_process_create_last_error(0);
-        // Guest RAM lives above the kernel's reserved linear-memory region.
+        // The guest address window lives above the kernel's reserved linear-memory region.
         let base_u64 = process_guest_base_for_profile(address_profile);
         if base_u64 == 0 || base_u64 > u32::MAX as u64 {
             set_process_create_last_error(1);
@@ -1006,12 +1005,12 @@ pub extern "C" fn process_create_with_memory_policy(
             set_process_create_last_error(1);
             return 0;
         }
-        let guest_ram_size = if guest_memory_policy_limit != 0 {
+        let guest_limit = if guest_memory_policy_limit != 0 {
             guest_memory_policy_limit.min(guest_address_limit)
         } else {
             guest_address_limit
         };
-        let mut main_inspected = match crate::elf::inspect_elf(elf_ptr, elf_len, guest_ram_size) {
+        let mut main_inspected = match crate::elf::inspect_elf(elf_ptr, elf_len, guest_limit) {
             Ok(r) => r,
             Err(_) => {
                 set_process_create_last_error(2);
@@ -1067,7 +1066,7 @@ pub extern "C" fn process_create_with_memory_policy(
                     return 0;
                 }
                 let interp_inspected =
-                    match crate::elf::inspect_elf(interp_ptr, interp_len, guest_ram_size) {
+                    match crate::elf::inspect_elf(interp_ptr, interp_len, guest_limit) {
                         Ok(r) => r,
                         Err(_) => {
                             set_process_create_last_error(9);
@@ -1106,7 +1105,7 @@ pub extern "C" fn process_create_with_memory_policy(
             return 0;
         }
         let main_loaded =
-            match crate::elf::load_elf_at(base, guest_ram_size, elf_ptr, elf_len, main_load_bias) {
+            match crate::elf::load_elf_at(base, guest_limit, elf_ptr, elf_len, main_load_bias) {
                 Ok(r) => r,
                 Err(_) => {
                     set_process_create_last_error(11);
@@ -1117,7 +1116,7 @@ pub extern "C" fn process_create_with_memory_policy(
             Some((interp_ptr, interp_len, interp_bias, _interp_inspected)) => {
                 match crate::elf::load_elf_at(
                     base,
-                    guest_ram_size,
+                    guest_limit,
                     interp_ptr,
                     interp_len,
                     interp_bias,
@@ -1210,7 +1209,7 @@ pub extern "C" fn process_create_with_memory_policy(
         ts.lr_addr = u64::MAX;
 
         let stack_top =
-            crate::syscall::memory::map_initial_stack(base, guest_ram_size, stack_size as u64);
+            crate::syscall::memory::map_initial_stack(base, guest_limit, stack_size as u64);
         if stack_top < 0 {
             set_process_create_last_error(18);
             return 0;

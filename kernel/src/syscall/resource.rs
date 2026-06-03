@@ -60,12 +60,12 @@ fn default_limits() -> [Rlimit64; RLIMIT_NLIMITS] {
         max: MAX_FDS as u64,
     };
     limits[RLIMIT_DATA] = Rlimit64 {
-        cur: crate::syscall::process::EXECVE_RAM_LIMIT,
-        max: crate::syscall::process::EXECVE_RAM_LIMIT,
+        cur: crate::syscall::process::EXECVE_GUEST_MEMORY_LIMIT,
+        max: crate::syscall::process::EXECVE_GUEST_MEMORY_LIMIT,
     };
     limits[RLIMIT_AS] = Rlimit64 {
-        cur: crate::syscall::process::EXECVE_RAM_LIMIT,
-        max: crate::syscall::process::EXECVE_RAM_LIMIT,
+        cur: crate::syscall::process::EXECVE_GUEST_MEMORY_LIMIT,
+        max: crate::syscall::process::EXECVE_GUEST_MEMORY_LIMIT,
     };
     limits[RLIMIT_NPROC] = Rlimit64 {
         cur: MAX_PROCESSES as u64,

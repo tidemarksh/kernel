@@ -1160,15 +1160,15 @@ pub extern "C" fn thread_complete_execve_handoff(vm_ptr: u32) -> i64 {
         let spawn_address_profile = vm.spawn_address_profile;
         let spawn_guest_memory_policy_limit = vm.spawn_guest_memory_policy_limit;
         let spawn_process_max_memory_pages = vm.spawn_process_max_memory_pages;
-        let exec_ram_size = if spawn_guest_memory_policy_limit != 0 {
+        let exec_guest_limit = if spawn_guest_memory_policy_limit != 0 {
             spawn_guest_memory_policy_limit
         } else {
-            crate::syscall::process::max_execve_ram_limit(vm.guest_base)
+            crate::syscall::process::max_execve_guest_memory_limit(vm.guest_base)
         };
         let ret = crate::syscall::process::complete_execve_in_place_from_handoff(
             vm,
             vm.guest_base,
-            exec_ram_size,
+            exec_guest_limit,
         );
         if ret == 0 {
             if spawn_address_profile != 0 {

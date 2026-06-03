@@ -14,13 +14,13 @@ pub const MAX_BLOCK_OPS: usize = 32;
 pub const BLOCK_LOOP_SIMPLE_LOAD_SCAN: u16 = 1 << 0;
 
 #[inline(always)]
-fn block_fetch_permitted(vm: Option<&ThreadState>, ram_base: u32, pc: u64, width: u64) -> bool {
+fn block_fetch_permitted(vm: Option<&ThreadState>, guest_base: u32, pc: u64, width: u64) -> bool {
     let Some(thread) = vm else {
         return true;
     };
     crate::syscall::memory::guest_range_permitted(
         thread,
-        ram_base,
+        guest_base,
         pc,
         width,
         crate::abi::PROT_EXEC,
@@ -225,10 +225,10 @@ impl BlockCache {
     /// Returns the block entry, or None if the first instruction is unsupported.
     ///
     /// # Safety
-    /// `ram_base` must point at readable guest RAM containing instructions for
+    /// `guest_base` must point at readable guest memory containing instructions for
     /// every byte touched while decoding the block rooted at `pc`.
-    pub unsafe fn build_block(&mut self, pc: u64, ram_base: u32) -> Option<&BlockEntry> {
-        unsafe { self.build_block_inner(None, pc, ram_base) }
+    pub unsafe fn build_block(&mut self, pc: u64, guest_base: u32) -> Option<&BlockEntry> {
+        unsafe { self.build_block_inner(None, pc, guest_base) }
     }
 
     /// Look up a block or build it after verifying each fetched instruction has
@@ -238,7 +238,7 @@ impl BlockCache {
         &mut self,
         vm: &ThreadState,
         pc: u64,
-        ram_base: u32,
+        guest_base: u32,
     ) -> Option<&BlockEntry> {
         let idx = ((pc >> 1) as usize) & (CACHE_SIZE - 1);
         let entry = unsafe { &*self.entries.add(idx) };
@@ -247,7 +247,7 @@ impl BlockCache {
             return Some(entry);
         }
         crate::tracepoints::record_block_cache_miss(pc, idx as u32, entry.start_pc);
-        let built = unsafe { self.build_block_inner(Some(vm), pc, ram_base) };
+        let built = unsafe { self.build_block_inner(Some(vm), pc, guest_base) };
         if let Some(entry) = built {
             crate::tracepoints::record_block_cache_build(
                 entry.len as u32,
@@ -263,7 +263,7 @@ impl BlockCache {
         &mut self,
         vm: Option<&ThreadState>,
         pc: u64,
-        ram_base: u32,
+        guest_base: u32,
     ) -> Option<&BlockEntry> {
         unsafe {
             let idx = ((pc >> 1) as usize) & (CACHE_SIZE - 1);
@@ -277,10 +277,10 @@ impl BlockCache {
             let mut count = 0u16;
 
             while (count as usize) < MAX_BLOCK_OPS {
-                if !block_fetch_permitted(vm, ram_base, cur_pc, 2) {
+                if !block_fetch_permitted(vm, guest_base, cur_pc, 2) {
                     break;
                 }
-                let raw16 = guest_mem::read_u16(ram_base, cur_pc);
+                let raw16 = guest_mem::read_u16(guest_base, cur_pc);
                 let (raw, step) = if decode::is_compressed(raw16) {
                     let expanded = decode::expand_compressed(raw16);
                     if expanded == 0 {
@@ -288,10 +288,10 @@ impl BlockCache {
                     } // unknown compressed
                     (expanded, 2u64)
                 } else {
-                    if !block_fetch_permitted(vm, ram_base, cur_pc, 4) {
+                    if !block_fetch_permitted(vm, guest_base, cur_pc, 4) {
                         break;
                     }
-                    (guest_mem::read_u32(ram_base, cur_pc), 4u64)
+                    (guest_mem::read_u32(guest_base, cur_pc), 4u64)
                 };
 
                 let opc = decode::opcode(raw);

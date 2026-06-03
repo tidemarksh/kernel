@@ -8,7 +8,7 @@ use crate::guest_mem;
 use crate::types::{FdEntry, ProcessState, ThreadState};
 use alloc_crate::{vec, vec::Vec};
 
-pub const EXECVE_RAM_LIMIT: u64 = 0x8000_0000;
+pub const EXECVE_GUEST_MEMORY_LIMIT: u64 = 0x8000_0000;
 const EXECVE_PATH_MAX: usize = 4096;
 const EXECVE_NAME_MAX: usize = 255;
 pub(super) const PROC_SELF_EXE_SNAPSHOT_MAX: usize = 512;
@@ -237,7 +237,7 @@ fn parse_interpreter_script_header(
 
 fn inspect_execve_elf_bytes(
     elf_bytes: &[u8],
-    ram_size: u64,
+    guest_limit: u64,
 ) -> Result<crate::elf::ElfLoadResult, i64> {
     let file_head0 = elf_bytes
         .iter()
@@ -251,7 +251,7 @@ fn inspect_execve_elf_bytes(
         .enumerate()
         .fold(0u64, |acc, (idx, byte)| acc | ((*byte as u64) << (idx * 8)));
     unsafe {
-        match crate::elf::inspect_elf(elf_bytes.as_ptr() as u32, elf_bytes.len() as u32, ram_size) {
+        match crate::elf::inspect_elf(elf_bytes.as_ptr() as u32, elf_bytes.len() as u32, guest_limit) {
             Ok(result) => Ok(result),
             Err(error) => {
                 crate::tracepoints::record_execve_stage(
@@ -268,13 +268,13 @@ fn inspect_execve_elf_bytes(
 
 fn load_execve_elf_bytes_at(
     base: u32,
-    ram_size: u64,
+    guest_limit: u64,
     elf_bytes: &ExecveFileBytes,
     load_bias: u64,
 ) -> Result<crate::elf::ElfLoadResult, i64> {
     crate::tracepoints::record_execve_stage(330, elf_bytes.ptr as u64, elf_bytes.len as u64);
     unsafe {
-        crate::elf::load_elf_at(base, ram_size, elf_bytes.ptr, elf_bytes.len, load_bias)
+        crate::elf::load_elf_at(base, guest_limit, elf_bytes.ptr, elf_bytes.len, load_bias)
             .map_err(|_| ENOEXEC)
     }
 }
@@ -285,7 +285,7 @@ fn load_execve_image(
     path_addr: u64,
     argv_addr: u64,
     envp_addr: u64,
-    ram_size: u64,
+    guest_limit: u64,
 ) -> Result<ExecveImage, i64> {
     let vm_ptr = vm as *const ThreadState as u32;
     crate::tracepoints::record_execve_dispatch(vm_ptr, 123);
@@ -393,7 +393,7 @@ fn load_execve_image(
             None => (path_bytes, file_bytes, argv),
         };
     crate::tracepoints::record_execve_dispatch(vm_ptr, 128);
-    let mut elf = inspect_execve_elf_bytes(main_bytes.as_slice(), ram_size)?;
+    let mut elf = inspect_execve_elf_bytes(main_bytes.as_slice(), guest_limit)?;
     let interp_path = match crate::elf::read_interp_path_bytes(main_bytes.as_slice()) {
         Ok(path) => path,
         Err(error) => {
@@ -422,7 +422,7 @@ fn load_execve_image(
                 return Err(ENOEXEC);
             }
             let interp_bytes = read_execve_elf_bytes(vm_ptr, interp_ino, interp_len)?;
-            let mut interp_elf = inspect_execve_elf_bytes(interp_bytes.as_slice(), ram_size)?;
+            let mut interp_elf = inspect_execve_elf_bytes(interp_bytes.as_slice(), guest_limit)?;
             let interp_bias = crate::elf::interpreter_load_bias(elf.brk_start);
             interp_elf = crate::elf::bias_load_result(interp_elf, interp_bias);
             crate::elf::preserve_main_executable_process_image(&mut interp_elf, &elf);
@@ -669,15 +669,15 @@ fn current_guest_memory_limit(base: u32) -> u64 {
     } else {
         crate::wasm::memory_size_bytes().saturating_sub(base as u64)
     };
-    limit.min(max_execve_ram_limit(base))
+    limit.min(max_execve_guest_memory_limit(base))
 }
 
-fn execve_guest_limit(base: u32, brk_start: u64, stack_size: u64, ram_limit: u64) -> u64 {
+fn execve_guest_limit(base: u32, brk_start: u64, stack_size: u64, guest_limit: u64) -> u64 {
     const EXECVE_STACK_HEADROOM: u64 = 64 * 1024 * 1024;
-    let max_limit = if ram_limit != 0 {
-        ram_limit.min(max_execve_ram_limit(base))
+    let max_limit = if guest_limit != 0 {
+        guest_limit.min(max_execve_guest_memory_limit(base))
     } else {
-        max_execve_ram_limit(base)
+        max_execve_guest_memory_limit(base)
     };
     let current_limit = current_guest_memory_limit(base);
     let usable_stack = ((stack_size.max(64 * 1024) + 4095) & !4095).saturating_add(4096);
@@ -695,7 +695,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn execve_guest_limit_respects_explicit_guest_ram_limit() {
+    fn execve_guest_limit_respects_explicit_guest_policy_limit() {
         let limit = execve_guest_limit(
             0,
             0x83000,
@@ -707,7 +707,7 @@ mod tests {
     }
 
     #[test]
-    fn execve_guest_limit_treats_large_ram_limit_as_cap_not_allocation_target() {
+    fn execve_guest_limit_treats_large_guest_limit_as_cap_not_allocation_target() {
         let limit = execve_guest_limit(
             0,
             0x83000,
@@ -723,14 +723,14 @@ mod tests {
 fn complete_execve_in_place_inner(
     vm: &mut ThreadState,
     base: u32,
-    ram_size: u64,
+    guest_limit: u64,
     flush_shared_mappings: bool,
 ) -> i64 {
     let vm_ptr = vm as *mut ThreadState as u32;
     if vm.spawn_kind != SPAWN_KIND_EXECVE {
         return EINVAL;
     }
-    crate::tracepoints::record_execve_stage(1, base as u64, ram_size);
+    crate::tracepoints::record_execve_stage(1, base as u64, guest_limit);
     crate::tracepoints::record_execve_stage(
         100,
         vm.process_ptr as u64 + core::mem::offset_of!(ProcessState, pid) as u64,
@@ -754,7 +754,7 @@ fn complete_execve_in_place_inner(
         vm.spawn_path,
         vm.spawn_argv,
         vm.spawn_envp,
-        ram_size,
+        guest_limit,
     ) {
         Ok(image) => image,
         Err(errno) => return errno,
@@ -865,7 +865,7 @@ fn complete_execve_in_place_inner(
         base,
         load_brk_start,
         crate::syscall::memory::DEFAULT_STACK_SIZE,
-        ram_size,
+        guest_limit,
     );
 
     let ps_size = core::mem::size_of::<ProcessState>() as u64;
@@ -1148,23 +1148,23 @@ fn complete_execve_in_place_inner(
     0
 }
 
-fn effective_execve_ram_limit(vm: &ThreadState, base: u32) -> u64 {
+fn effective_execve_guest_memory_limit(vm: &ThreadState, base: u32) -> u64 {
     if vm.guest_memory_policy_limit != 0 {
-        return vm.guest_memory_policy_limit.min(max_execve_ram_limit(base));
+        return vm.guest_memory_policy_limit.min(max_execve_guest_memory_limit(base));
     }
     current_guest_memory_limit(base)
 }
 
-pub fn complete_execve_in_place(vm: &mut ThreadState, base: u32, ram_size: u64) -> i64 {
-    complete_execve_in_place_inner(vm, base, ram_size, true)
+pub fn complete_execve_in_place(vm: &mut ThreadState, base: u32, guest_limit: u64) -> i64 {
+    complete_execve_in_place_inner(vm, base, guest_limit, true)
 }
 
 pub fn complete_execve_in_place_from_handoff(
     vm: &mut ThreadState,
     base: u32,
-    ram_size: u64,
+    guest_limit: u64,
 ) -> i64 {
-    complete_execve_in_place_inner(vm, base, ram_size, true)
+    complete_execve_in_place_inner(vm, base, guest_limit, true)
 }
 
 /// execve: replace process image.
@@ -1203,11 +1203,11 @@ pub fn sys_execve(
     };
     crate::tracepoints::record_execve_dispatch(vm as *const ThreadState as u32, 11);
     let is_vfork_exec = prs().vfork_active != 0;
-    let execve_ram_limit = effective_execve_ram_limit(vm, base);
+    let execve_guest_limit = effective_execve_guest_memory_limit(vm, base);
 
     if is_vfork_exec {
         if let Err(errno) =
-            load_execve_image(vm, base, path_addr, argv_addr, envp_addr, execve_ram_limit)
+            load_execve_image(vm, base, path_addr, argv_addr, envp_addr, execve_guest_limit)
         {
             crate::tracepoints::record_execve_error(errno);
             crate::tracepoints::record_path_syscall(
@@ -1269,7 +1269,7 @@ pub fn sys_execve(
         envp_addr,
     );
     crate::tracepoints::record_execve_dispatch(vm as *const ThreadState as u32, 13);
-    let ret = complete_execve_in_place(vm, base, execve_ram_limit);
+    let ret = complete_execve_in_place(vm, base, execve_guest_limit);
     crate::tracepoints::record_execve_dispatch(vm as *const ThreadState as u32, 14);
     if ret < 0 {
         crate::tracepoints::record_execve_error(ret);
@@ -1326,6 +1326,6 @@ pub fn sys_execveat(
     sys_execve(vm, base, path_addr, argv_addr, envp_addr)
 }
 
-pub fn max_execve_ram_limit(base: u32) -> u64 {
+pub fn max_execve_guest_memory_limit(base: u32) -> u64 {
     crate::abi::max_guest_window_for_base(base)
 }
