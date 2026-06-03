@@ -16,7 +16,7 @@
 //! };
 //! https://github.com/torvalds/linux/blob/v6.12/include/linux/mm_types.h
 
-use alloc_crate::{format, vec::Vec};
+use alloc_crate::{format, vec, vec::Vec};
 
 use crate::abi::*;
 use crate::fs::{fd_table, memfs};
@@ -33,6 +33,7 @@ const PERMIT_CACHE_SLOTS: usize = PERMIT_CACHE_PROT_SLOTS * PERMIT_CACHE_WAYS;
 const PERMIT_OUTCOME_CACHE_HIT: u32 = 1;
 const PERMIT_OUTCOME_COVER_HIT: u32 = 2;
 const PERMIT_OUTCOME_DENIED: u32 = 3;
+const FILE_MMAP_POPULATE_CHUNK_BYTES: usize = 1024 * 1024;
 
 /// Address space state — shared by all threads of a process.
 /// Allocated in kernel Worker linear memory via alloc.rs.
@@ -1174,7 +1175,7 @@ pub fn sys_mmap(
             let copy_end = (offset + len).min(file_size);
             if copy_end > copy_start {
                 let copy_len = (copy_end - copy_start) as usize;
-                let mut tmp = [0u8; 4096];
+                let mut tmp = vec![0u8; FILE_MMAP_POPULATE_CHUNK_BYTES];
                 let mut off = 0usize;
                 while off < copy_len {
                     let chunk = (copy_len - off).min(tmp.len());
