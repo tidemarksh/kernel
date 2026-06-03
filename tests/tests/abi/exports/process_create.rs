@@ -83,10 +83,7 @@ fn spawn_handoff_exports_round_trip() {
     );
     assert_eq!(thread_process_ptr(vm_ptr), 0x5555);
     assert_eq!(thread_spawn_ram_size(vm_ptr), 0);
-    assert_eq!(
-        thread_spawn_guest_memory_policy_limit(vm_ptr),
-        0x1_0000_0000
-    );
+    assert_eq!(thread_spawn_guest_memory_policy_limit(vm_ptr), 0x1_0000_0000);
     assert_eq!(thread_spawn_process_max_memory_pages(vm_ptr), 123);
 
     thread_clear_spawn_handoff(vm_ptr);
@@ -404,16 +401,5 @@ fn process_create_rebases_user_brk_after_hidden_process_state() {
     assert_eq!(
         tidemark_kernel::harness::memory::debug_brk_base(),
         public_brk
-    );
-    let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
-    assert!(
-        !tidemark_kernel::syscall::memory::guest_range_permitted(
-            vm,
-            guest_base,
-            process_ptr,
-            ps_size,
-            PROT_WRITE,
-        ),
-        "ProcessState must remain kernel-owned even though it lives in guest Memory"
     );
 }

@@ -1,10 +1,4 @@
-#[cfg(any(
-    test,
-    all(
-        any(target_arch = "wasm32", target_arch = "wasm64"),
-        feature = "harness"
-    )
-))]
+#[cfg(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness")))]
 pub(crate) use crate::harness::trace::{
     guest_write_overlap_enabled, record_block_cache_budget_skip, record_block_cache_build,
     record_block_cache_build_failure, record_block_cache_build_op, record_block_cache_hit,

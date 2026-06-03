@@ -76,8 +76,6 @@ pub use pending::{
     pending_request_target_ino, process_pending_requests, resume_from_fs,
 };
 pub(crate) use read_write::PIPE_READ_EOF_SYNC_RETRY_MARKER;
-#[allow(unused_imports)]
-pub(crate) use read_write::{proc_maps_read_trace_entry, proc_maps_read_trace_len};
 pub use read_write::{sys_pread64, sys_pwrite64, sys_read, sys_readv, sys_write};
 pub(crate) use state::sys_umask;
 pub use xattr::{

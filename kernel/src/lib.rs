@@ -1,9 +1,6 @@
 #![cfg_attr(target_arch = "wasm64", feature(simd_wasm64))]
 #![cfg_attr(
-    all(
-        any(target_arch = "wasm32", target_arch = "wasm64"),
-        target_os = "unknown"
-    ),
+    all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown"),
     no_std
 )]
 
@@ -25,10 +22,7 @@ pub fn last_panic_location() -> (u32, u32, u32, u32) {
     }
 }
 
-#[cfg(all(
-    any(target_arch = "wasm32", target_arch = "wasm64"),
-    target_os = "unknown"
-))]
+#[cfg(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown"))]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     unsafe {
@@ -50,17 +44,13 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 pub mod abi;
 pub mod alloc;
 pub mod cpu;
-pub mod debug_release_trace;
 pub mod elf;
 mod exports;
 pub mod fs;
 pub mod guest_mem;
 #[cfg(any(
     test,
-    all(
-        any(target_arch = "wasm32", target_arch = "wasm64"),
-        feature = "harness"
-    )
+    all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness")
 ))]
 pub mod harness;
 pub mod jit;

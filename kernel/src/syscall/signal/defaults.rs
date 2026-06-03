@@ -12,7 +12,6 @@ pub(super) fn default_action_interrupts_blocked_syscall(sig: usize) -> bool {
 
 pub(super) fn terminate_with_default_action(vm: &mut ThreadState, base: u32, sig: usize) {
     record_default_signal(vm, sig);
-    crate::debug_release_trace::record_default_signal(vm, sig);
     crate::syscall::thread::terminate_process_with_reason(
         vm,
         base,

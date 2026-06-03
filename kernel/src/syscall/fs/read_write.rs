@@ -13,148 +13,6 @@ const IOVEC_SIZE: u64 = 16;
 const LINUX_IOV_MAX: u64 = 1024;
 pub(crate) const PIPE_READ_EOF_SYNC_RETRY_MARKER: u64 = 0x7069_7065_454f_4652;
 const PIPE_EPIPE_SYNC_RETRY_MARKER: u64 = 0x7069_7065_4550_4950;
-const PROC_MAPS_READ_TRACE_CAP: usize = 64;
-const PROC_MAPS_READ_TRACE_ENABLED: bool = false;
-
-#[derive(Clone, Copy)]
-#[allow(dead_code)]
-pub(crate) struct ProcMapsReadTraceEntry {
-    pub vm_ptr: u32,
-    pub fd: u64,
-    pub ino: u32,
-    pub buf: u64,
-    pub len: u64,
-    pub result: i64,
-    pub file_offset: u64,
-    pub writable: u32,
-    pub exec_overlap: u32,
-    pub vma_start: u64,
-    pub vma_end: u64,
-    pub vma_prot: i32,
-    pub vma_fd: i32,
-    pub vma_offset: u64,
-}
-
-static mut PROC_MAPS_READ_TRACE: [ProcMapsReadTraceEntry; PROC_MAPS_READ_TRACE_CAP] =
-    [ProcMapsReadTraceEntry {
-        vm_ptr: 0,
-        fd: 0,
-        ino: 0,
-        buf: 0,
-        len: 0,
-        result: 0,
-        file_offset: 0,
-        writable: 0,
-        exec_overlap: 0,
-        vma_start: 0,
-        vma_end: 0,
-        vma_prot: 0,
-        vma_fd: 0,
-        vma_offset: 0,
-    }; PROC_MAPS_READ_TRACE_CAP];
-static mut PROC_MAPS_READ_TRACE_LEN: u32 = 0;
-static mut PROC_MAPS_READ_TRACE_NEXT: u32 = 0;
-
-fn guest_range_readable(vm: &ThreadState, base: u32, start: u64, len: u64) -> bool {
-    crate::syscall::memory::guest_range_permitted(vm, base, start, len, PROT_READ)
-}
-
-fn guest_range_writable(vm: &ThreadState, base: u32, start: u64, len: u64) -> bool {
-    crate::syscall::memory::guest_range_permitted(vm, base, start, len, PROT_WRITE)
-}
-
-fn is_proc_self_maps_inode(ino: u32) -> bool {
-    let mut path = [0u8; 128];
-    let len = memfs::write_path(ino, &mut path);
-    &path[..len] == b"/proc/self/maps"
-}
-
-fn executable_overlap(start: u64, len: u64) -> (u32, u64, u64, i32, i32, u64) {
-    let Some(end) = start.checked_add(len) else {
-        return (0, 0, 0, 0, 0, 0);
-    };
-    let vma_len = crate::syscall::memory::address_space_vma_len();
-    for index in 0..vma_len {
-        let prot = crate::syscall::memory::address_space_vma_prot(index);
-        if (prot & PROT_EXEC) == 0 {
-            continue;
-        }
-        let vma_start = crate::syscall::memory::address_space_vma_start(index);
-        let vma_end = crate::syscall::memory::address_space_vma_end(index);
-        if start < vma_end && end > vma_start {
-            return (
-                1,
-                vma_start,
-                vma_end,
-                prot,
-                crate::syscall::memory::address_space_vma_fd(index),
-                crate::syscall::memory::address_space_vma_offset(index),
-            );
-        }
-    }
-    (0, 0, 0, 0, 0, 0)
-}
-
-fn record_proc_maps_read(
-    vm: &ThreadState,
-    base: u32,
-    fd: u64,
-    ino: u32,
-    buf: u64,
-    len: u64,
-    result: i64,
-    file_offset: u64,
-) {
-    if !PROC_MAPS_READ_TRACE_ENABLED {
-        let _ = (vm, base, fd, ino, buf, len, result, file_offset);
-        return;
-    }
-    if result <= 0 || !is_proc_self_maps_inode(ino) {
-        return;
-    }
-    let writable = guest_range_writable(vm, base, buf, len) as u32;
-    let (exec_overlap, vma_start, vma_end, vma_prot, vma_fd, vma_offset) =
-        executable_overlap(buf, len);
-    let entry = ProcMapsReadTraceEntry {
-        vm_ptr: vm as *const ThreadState as u32,
-        fd,
-        ino,
-        buf,
-        len,
-        result,
-        file_offset,
-        writable,
-        exec_overlap,
-        vma_start,
-        vma_end,
-        vma_prot,
-        vma_fd,
-        vma_offset,
-    };
-    unsafe {
-        let index = PROC_MAPS_READ_TRACE_NEXT as usize % PROC_MAPS_READ_TRACE_CAP;
-        PROC_MAPS_READ_TRACE[index] = entry;
-        PROC_MAPS_READ_TRACE_NEXT = PROC_MAPS_READ_TRACE_NEXT.wrapping_add(1);
-        if PROC_MAPS_READ_TRACE_LEN < PROC_MAPS_READ_TRACE_CAP as u32 {
-            PROC_MAPS_READ_TRACE_LEN += 1;
-        }
-    }
-}
-
-#[allow(dead_code)]
-pub(crate) fn proc_maps_read_trace_len() -> u32 {
-    unsafe { PROC_MAPS_READ_TRACE_LEN }
-}
-
-#[allow(dead_code)]
-pub(crate) fn proc_maps_read_trace_entry(index: u32) -> ProcMapsReadTraceEntry {
-    unsafe {
-        if PROC_MAPS_READ_TRACE_LEN == 0 {
-            return PROC_MAPS_READ_TRACE[0];
-        }
-        PROC_MAPS_READ_TRACE[index as usize % PROC_MAPS_READ_TRACE_CAP]
-    }
-}
 
 // =========================================================================
 // read / pread64
@@ -195,7 +53,7 @@ pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) 
                 crate::syscall::pty::output_pipe_slot(ofd.ino)
             };
             mark_pipe_sync_effect(vm, pipe_slot, false);
-            if !guest_range_writable(vm, base, buf, n as u64) {
+            if !crate::syscall::memory::guest_range_accessible(base, buf, n as u64) {
                 return EFAULT;
             }
             unsafe {
@@ -235,7 +93,7 @@ pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) 
             mark_pipe_sync_effect(vm, ofd.ino, false);
             vm.fault_addr = 0;
             vm.fault_pc = 0;
-            if !guest_range_writable(vm, base, buf, n as u64) {
+            if !crate::syscall::memory::guest_range_accessible(base, buf, n as u64) {
                 return EFAULT;
             }
             unsafe {
@@ -264,7 +122,7 @@ pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) 
 
         let value = if ofd.host_fd != 0 { 1 } else { counter };
         let next = if ofd.host_fd != 0 { counter - 1 } else { 0 };
-        if !guest_range_writable(vm, base, buf, 8) {
+        if !crate::syscall::memory::guest_range_accessible(base, buf, 8) {
             return EFAULT;
         }
         unsafe {
@@ -317,7 +175,7 @@ pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) 
 
 /// readv: scatter read into multiple guest buffers.
 pub fn sys_readv(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt: u64) -> i64 {
-    let validation = validate_readv_iovecs(vm, base, iov_addr, iovcnt);
+    let validation = validate_readv_iovecs(base, iov_addr, iovcnt);
     if validation < 0 {
         return validation;
     }
@@ -357,7 +215,7 @@ pub fn sys_readv(vm: &mut ThreadState, base: u32, fd: u64, iov_addr: u64, iovcnt
     total
 }
 
-fn validate_readv_iovecs(vm: &ThreadState, base: u32, iov_addr: u64, iovcnt: u64) -> i64 {
+fn validate_readv_iovecs(base: u32, iov_addr: u64, iovcnt: u64) -> i64 {
     if iovcnt == 0 {
         return 0;
     }
@@ -367,7 +225,7 @@ fn validate_readv_iovecs(vm: &ThreadState, base: u32, iov_addr: u64, iovcnt: u64
     let Some(iov_bytes) = iovcnt.checked_mul(IOVEC_SIZE) else {
         return EINVAL;
     };
-    if !guest_range_readable(vm, base, iov_addr, iov_bytes) {
+    if !crate::syscall::memory::guest_range_accessible(base, iov_addr, iov_bytes) {
         return EFAULT;
     }
 
@@ -385,7 +243,7 @@ fn validate_readv_iovecs(vm: &ThreadState, base: u32, iov_addr: u64, iovcnt: u64
             return EINVAL;
         }
         total = next_total;
-        if iov_len > 0 && !guest_range_writable(vm, base, iov_base, iov_len) {
+        if iov_len > 0 && !crate::syscall::memory::guest_range_accessible(base, iov_base, iov_len) {
             return EFAULT;
         }
     }
@@ -462,29 +320,9 @@ fn read_regular_file_to_guest(
         if n == 0 {
             break;
         }
-        if !guest_range_writable(vm, base, guest_buf + total, n as u64) {
-            record_proc_maps_read(
-                vm,
-                base,
-                fd,
-                ofd.ino,
-                guest_buf + total,
-                n as u64,
-                EFAULT,
-                start_offset + total,
-            );
+        if !crate::syscall::memory::guest_range_accessible(base, guest_buf + total, n as u64) {
             return if total > 0 { total as i64 } else { EFAULT };
         }
-        record_proc_maps_read(
-            vm,
-            base,
-            fd,
-            ofd.ino,
-            guest_buf + total,
-            n as u64,
-            n,
-            start_offset + total,
-        );
         unsafe {
             guest_mem::write_bytes(base, guest_buf + total, &tmp[..n as usize]);
         }

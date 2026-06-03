@@ -319,7 +319,6 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
             step,
             x,
         );
-        crate::debug_release_trace::record_exec(vm, instr_pc, raw, step, x);
         crate::tracepoints::record_interpreter_op(block_cache::op_id_for_raw(raw) as u32);
         if x[17] == crate::abi::SYS_EXECVE {
             crate::tracepoints::record_execve_approach(

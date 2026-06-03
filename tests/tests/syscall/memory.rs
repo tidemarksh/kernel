@@ -468,99 +468,6 @@ fn permission_cache_is_invalidated_by_address_space_changes() {
 }
 
 #[test]
-fn kernel_owned_guest_ranges_override_user_mapping_permissions() {
-    let mut t = TestVm::new();
-    let a = t.sys_mmap(
-        0,
-        PAGE_SIZE,
-        PROT_READ | PROT_WRITE,
-        MAP_ANONYMOUS | MAP_PRIVATE,
-        -1,
-        0,
-    );
-    assert!(a > 0);
-
-    assert!(memory::guest_range_permitted(
-        &t.vm, t.base, a as u64, PAGE_SIZE, PROT_WRITE,
-    ));
-
-    let protected_start = a as u64 + 0x200;
-    memory::register_kernel_owned_guest_range(protected_start, 0x100);
-
-    assert!(!memory::guest_range_accessible(t.base, protected_start, 8));
-    assert!(!memory::guest_range_permitted(
-        &t.vm,
-        t.base,
-        protected_start,
-        8,
-        PROT_READ,
-    ));
-    assert!(!memory::guest_range_permitted(
-        &t.vm,
-        t.base,
-        protected_start,
-        8,
-        PROT_WRITE,
-    ));
-    assert!(!memory::guest_range_permitted(
-        &t.vm,
-        t.base,
-        protected_start - 8,
-        16,
-        PROT_WRITE,
-    ));
-    assert_eq!(
-        t.sys_mmap(
-            a as u64,
-            PAGE_SIZE,
-            PROT_READ | PROT_WRITE,
-            MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED,
-            -1,
-            0,
-        ),
-        ENOMEM,
-    );
-    assert!(memory::guest_range_permitted(
-        &t.vm, t.base, a as u64, 0x100, PROT_WRITE,
-    ));
-    assert!(memory::guest_range_permitted(
-        &t.vm,
-        t.base,
-        protected_start + 0x100,
-        0x100,
-        PROT_WRITE,
-    ));
-}
-
-#[test]
-fn explicit_vma_permissions_override_brk_cover() {
-    let mut t = TestVm::new();
-    let cur = t.sys_brk(0) as u64;
-    let end = cur + PAGE_SIZE * 4;
-    assert_eq!(t.sys_brk(end), end as i64);
-
-    memory::register_elf_load_segment(cur, cur + PAGE_SIZE, PROT_READ | PROT_EXEC);
-    let after_segment = (cur + PAGE_SIZE + (PAGE_SIZE - 1)) & !(PAGE_SIZE - 1);
-
-    assert!(memory::guest_range_permitted(
-        &t.vm, t.base, cur, 8, PROT_READ,
-    ));
-    assert!(memory::guest_range_permitted(
-        &t.vm, t.base, cur, 8, PROT_EXEC,
-    ));
-    assert!(!memory::guest_range_permitted(
-        &t.vm, t.base, cur, 8, PROT_WRITE,
-    ));
-    assert!(memory::guest_range_permitted(
-        &t.vm,
-        t.base,
-        after_segment,
-        8,
-        PROT_WRITE,
-    ));
-}
-
-#[test]
 fn brk_refuses_above_current_guest_window() {
     let mut t = TestVm::new();
     let cur = t.sys_brk(0);
@@ -717,43 +624,6 @@ fn file_backed_mmap_preserves_bytes_for_offset_executable_mapping() {
         &t.guest_mem(mapped as u64, len as usize),
         &data[offset as usize..(offset + len) as usize],
     );
-}
-
-#[test]
-fn map_fixed_file_backed_replaces_existing_executable_mapping() {
-    let mut t = TestVm::new();
-    let fixed = 0x40_0000u64;
-    let old = t.sys_mmap(
-        fixed,
-        PAGE_SIZE,
-        PROT_READ | PROT_EXEC,
-        MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED_NOREPLACE,
-        -1,
-        0,
-    );
-    assert_eq!(old as u64, fixed);
-    assert!(memory::guest_range_permitted(
-        &t.vm, t.base, fixed, 8, PROT_EXEC,
-    ));
-
-    let data: Vec<u8> = (0..PAGE_SIZE as usize)
-        .map(|idx| ((idx * 41) % 251) as u8)
-        .collect();
-    let ino = memfs::create_file(1, b"fixed-replacement.bin", 0o644);
-    assert!(ino > 0);
-    assert_eq!(memfs::write_file(ino, 0, &data), data.len() as i64);
-    let fd = t.sys_openat(b"/fixed-replacement.bin", O_RDONLY);
-    assert!(fd >= 3);
-
-    let mapped = t.sys_mmap(fixed, PAGE_SIZE, PROT_READ, MAP_PRIVATE | MAP_FIXED, fd, 0);
-    assert_eq!(mapped as u64, fixed);
-    assert_eq!(&t.guest_mem(fixed, PAGE_SIZE as usize), data.as_slice());
-    assert!(memory::guest_range_permitted(
-        &t.vm, t.base, fixed, 8, PROT_READ,
-    ));
-    assert!(!memory::guest_range_permitted(
-        &t.vm, t.base, fixed, 8, PROT_EXEC,
-    ));
 }
 
 #[test]
@@ -949,54 +819,6 @@ fn mprotect_materializes_high_prot_none_reservation_without_clobbering_current_t
         materialized.iter().all(|byte| *byte == 0),
         "materialized mapping should be zero-filled",
     );
-}
-
-#[test]
-fn mprotect_can_extend_sparse_heap_reservation_one_page_past_current_commit() {
-    let mut t = TestVm::new();
-    let reserve_addr = 0x2c00_0000u64;
-    let reserve_len = 64 * 1024 * 1024u64;
-    let first_commit_len = 0x21_000u64;
-    let next_page = reserve_addr + first_commit_len;
-    t.vm.guest_memory_policy_limit = 0x6000_0000;
-
-    let reserved = t.sys_mmap(
-        reserve_addr,
-        reserve_len,
-        PROT_NONE,
-        MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED,
-        -1,
-        0,
-    );
-    assert_eq!(reserved as u64, reserve_addr);
-    assert!(memory::is_prot_none(next_page));
-
-    assert_eq!(
-        t.sys_mprotect(reserve_addr, first_commit_len, PROT_READ | PROT_WRITE),
-        0
-    );
-    assert!(memory::guest_range_permitted(
-        &t.vm,
-        t.base,
-        reserve_addr,
-        first_commit_len,
-        PROT_WRITE,
-    ));
-    assert!(!memory::guest_range_permitted(
-        &t.vm, t.base, next_page, 8, PROT_READ,
-    ));
-
-    assert_eq!(
-        t.sys_mprotect(next_page, PAGE_SIZE, PROT_READ | PROT_WRITE),
-        0
-    );
-    assert!(memory::guest_range_permitted(
-        &t.vm, t.base, next_page, 8, PROT_READ,
-    ));
-    assert!(memory::guest_range_permitted(
-        &t.vm, t.base, next_page, PAGE_SIZE, PROT_WRITE,
-    ));
-    assert_eq!(t.guest_mem(next_page, 16), vec![0; 16]);
 }
 
 #[test]

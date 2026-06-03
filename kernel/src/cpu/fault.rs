@@ -65,9 +65,6 @@ pub(super) unsafe fn ensure_guest_access(
         }
         return AccessOutcome::Restart;
     }
-    if (prot & abi::PROT_WRITE) != 0 {
-        crate::syscall::memory::record_cpu_write_permit_trace(vm, *pc, addr, width);
-    }
     AccessOutcome::Ok
 }
 

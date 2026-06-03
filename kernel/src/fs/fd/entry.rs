@@ -2,65 +2,6 @@ use crate::abi::*;
 use crate::types::{FdEntry, ProcessState, ThreadState};
 use core::sync::atomic::{AtomicU32, Ordering};
 
-const FD_ENTRY_WRITE_TRACE_CAP: usize = 32;
-const FD_ENTRY_WRITE_TRACE_ENABLED: bool = false;
-
-#[derive(Clone, Copy)]
-pub struct FdEntryWriteTrace {
-    pub entry_ptr: u32,
-    pub ofd_id: u32,
-    pub fd_flags: u32,
-    pub kind: u32,
-}
-
-const EMPTY_FD_ENTRY_WRITE_TRACE: FdEntryWriteTrace = FdEntryWriteTrace {
-    entry_ptr: 0,
-    ofd_id: 0,
-    fd_flags: 0,
-    kind: 0,
-};
-
-static mut FD_ENTRY_WRITE_TRACE: [FdEntryWriteTrace; FD_ENTRY_WRITE_TRACE_CAP] =
-    [EMPTY_FD_ENTRY_WRITE_TRACE; FD_ENTRY_WRITE_TRACE_CAP];
-static mut FD_ENTRY_WRITE_TRACE_LEN: u32 = 0;
-static mut FD_ENTRY_WRITE_TRACE_CURSOR: u32 = 0;
-
-fn record_fd_entry_write(entry: *mut FdEntry, value: FdEntry, kind: u32) {
-    if !FD_ENTRY_WRITE_TRACE_ENABLED {
-        let _ = (entry, value, kind);
-        return;
-    }
-    unsafe {
-        let cursor = FD_ENTRY_WRITE_TRACE_CURSOR as usize % FD_ENTRY_WRITE_TRACE_CAP;
-        FD_ENTRY_WRITE_TRACE[cursor] = FdEntryWriteTrace {
-            entry_ptr: entry as u32,
-            ofd_id: value.ofd_id,
-            fd_flags: value.fd_flags,
-            kind,
-        };
-        FD_ENTRY_WRITE_TRACE_CURSOR = FD_ENTRY_WRITE_TRACE_CURSOR.wrapping_add(1);
-        if FD_ENTRY_WRITE_TRACE_LEN < FD_ENTRY_WRITE_TRACE_CAP as u32 {
-            FD_ENTRY_WRITE_TRACE_LEN += 1;
-        }
-    }
-}
-
-pub fn fd_entry_write_trace_len() -> u32 {
-    unsafe { FD_ENTRY_WRITE_TRACE_LEN }
-}
-
-pub fn fd_entry_write_trace_entry(index: u32) -> FdEntryWriteTrace {
-    unsafe {
-        let len = FD_ENTRY_WRITE_TRACE_LEN.min(FD_ENTRY_WRITE_TRACE_CAP as u32);
-        if index >= len {
-            return EMPTY_FD_ENTRY_WRITE_TRACE;
-        }
-        let start = FD_ENTRY_WRITE_TRACE_CURSOR.wrapping_sub(len);
-        let slot = start.wrapping_add(index) as usize % FD_ENTRY_WRITE_TRACE_CAP;
-        FD_ENTRY_WRITE_TRACE[slot]
-    }
-}
-
 pub(in crate::fs) fn get_process_state(base: u32, vm: &ThreadState) -> *mut ProcessState {
     (base as u64 + vm.process_ptr as u64) as *mut ProcessState
 }
@@ -99,7 +40,6 @@ pub(in crate::fs) unsafe fn load_fd_entry_ptr(entry: *const FdEntry) -> FdEntry 
 
 #[inline(always)]
 pub(in crate::fs) unsafe fn store_fd_entry_ptr(entry: *mut FdEntry, value: FdEntry) {
-    record_fd_entry_write(entry, value, 1);
     unsafe {
         (&*(core::ptr::addr_of!((*entry).fd_flags) as *const AtomicU32))
             .store(value.fd_flags, Ordering::Relaxed);
@@ -110,14 +50,6 @@ pub(in crate::fs) unsafe fn store_fd_entry_ptr(entry: *mut FdEntry, value: FdEnt
 
 #[inline(always)]
 pub(in crate::fs) unsafe fn clear_fd_entry_ptr(entry: *mut FdEntry) {
-    record_fd_entry_write(
-        entry,
-        FdEntry {
-            ofd_id: 0,
-            fd_flags: 0,
-        },
-        2,
-    );
     unsafe {
         (&*(core::ptr::addr_of!((*entry).ofd_id) as *const AtomicU32)).store(0, Ordering::Release);
         (&*(core::ptr::addr_of!((*entry).fd_flags) as *const AtomicU32))

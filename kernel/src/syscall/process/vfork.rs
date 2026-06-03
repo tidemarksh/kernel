@@ -121,7 +121,6 @@ fn clone_process_state_for_vfork(
     }
 
     retain_process_ofds(base, child_ps_addr as u32);
-    crate::syscall::memory::register_kernel_owned_guest_range(child_ps_addr, ps_size);
     Some(child_ps_addr as u32)
 }
 

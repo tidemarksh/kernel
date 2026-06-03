@@ -1,10 +1,4 @@
-#[cfg(any(
-    test,
-    all(
-        any(target_arch = "wasm32", target_arch = "wasm64"),
-        feature = "harness"
-    )
-))]
+#[cfg(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness")))]
 pub(crate) use crate::harness::trace::{
     record_execve_approach, record_execve_dispatch, record_execve_ecall, record_execve_error,
     record_execve_pre_dispatch, record_execve_stage,

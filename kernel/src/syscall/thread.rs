@@ -18,50 +18,26 @@ use crate::types::{
 };
 use core::sync::atomic::Ordering;
 
-#[cfg(any(
-    test,
-    all(
-        any(target_arch = "wasm32", target_arch = "wasm64"),
-        feature = "harness"
-    )
-))]
+#[cfg(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness")))]
 #[inline(always)]
 fn wake_external_waiters(caller_pid: i32, addr: u32, max_wake: u32) -> u32 {
     crate::harness::support::wake_external_futex_waits_from_pid(caller_pid, addr, max_wake)
 }
 
-#[cfg(not(any(
-    test,
-    all(
-        any(target_arch = "wasm32", target_arch = "wasm64"),
-        feature = "harness"
-    )
-)))]
+#[cfg(not(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness"))))]
 #[inline(always)]
 fn wake_external_waiters(caller_pid: i32, addr: u32, max_wake: u32) -> u32 {
     let _ = (caller_pid, addr, max_wake);
     0
 }
 
-#[cfg(any(
-    test,
-    all(
-        any(target_arch = "wasm32", target_arch = "wasm64"),
-        feature = "harness"
-    )
-))]
+#[cfg(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness")))]
 #[inline(always)]
 fn requeue_external_waiters(addr: u32, new_addr: u32, max_requeue: u32) -> u32 {
     crate::harness::support::requeue_external_futex_waits(addr, new_addr, max_requeue)
 }
 
-#[cfg(not(any(
-    test,
-    all(
-        any(target_arch = "wasm32", target_arch = "wasm64"),
-        feature = "harness"
-    )
-)))]
+#[cfg(not(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness"))))]
 #[inline(always)]
 fn requeue_external_waiters(addr: u32, new_addr: u32, max_requeue: u32) -> u32 {
     let _ = (addr, new_addr, max_requeue);
@@ -108,36 +84,6 @@ static mut LAST_CLONE_SPAWN: CloneSpawnTrace = CloneSpawnTrace {
 };
 
 static mut NEXT_TID_HINTS: [i32; MAX_PROCESSES] = [0; MAX_PROCESSES];
-
-const THREAD_RECORD_WRITE_TRACE_CAP: usize = 32;
-
-#[derive(Clone, Copy)]
-pub struct ThreadRecordWriteTrace {
-    pub record_ptr: u32,
-    pub tid: i32,
-    pub state: i32,
-    pub thread_ptr: u32,
-    pub clear_child_tid: u32,
-    pub blocked_addr: u32,
-    pub pending_sigset: u64,
-    pub pending_siginfo_code: i32,
-}
-
-const EMPTY_THREAD_RECORD_WRITE_TRACE: ThreadRecordWriteTrace = ThreadRecordWriteTrace {
-    record_ptr: 0,
-    tid: 0,
-    state: THREAD_NONE,
-    thread_ptr: 0,
-    clear_child_tid: 0,
-    blocked_addr: 0,
-    pending_sigset: 0,
-    pending_siginfo_code: 0,
-};
-
-static mut THREAD_RECORD_WRITE_TRACE: [ThreadRecordWriteTrace; THREAD_RECORD_WRITE_TRACE_CAP] =
-    [EMPTY_THREAD_RECORD_WRITE_TRACE; THREAD_RECORD_WRITE_TRACE_CAP];
-static mut THREAD_RECORD_WRITE_TRACE_LEN: u32 = 0;
-static mut THREAD_RECORD_WRITE_TRACE_CURSOR: u32 = 0;
 
 const THREAD_COUNT_TRACE_INIT_MAIN: u32 = 1;
 const THREAD_COUNT_TRACE_CLONE_INC: u32 = 2;
@@ -225,50 +171,8 @@ unsafe fn read_thread_record(record: *const ThreadRecord) -> ThreadRecord {
     unsafe { core::ptr::read_unaligned(record) }
 }
 
-pub(crate) fn record_thread_record_write(record: *mut ThreadRecord, value: ThreadRecord) {
-    const THREAD_RECORD_WRITE_TRACE_ENABLED: bool = false;
-    if !THREAD_RECORD_WRITE_TRACE_ENABLED {
-        let _ = (record, value);
-        return;
-    }
-    unsafe {
-        let cursor = THREAD_RECORD_WRITE_TRACE_CURSOR as usize % THREAD_RECORD_WRITE_TRACE_CAP;
-        THREAD_RECORD_WRITE_TRACE[cursor] = ThreadRecordWriteTrace {
-            record_ptr: record as u32,
-            tid: value.tid,
-            state: value.state,
-            thread_ptr: value.thread_ptr,
-            clear_child_tid: value.clear_child_tid,
-            blocked_addr: value.blocked_addr,
-            pending_sigset: value.pending_sigset,
-            pending_siginfo_code: value.pending_siginfo_code,
-        };
-        THREAD_RECORD_WRITE_TRACE_CURSOR = THREAD_RECORD_WRITE_TRACE_CURSOR.wrapping_add(1);
-        if THREAD_RECORD_WRITE_TRACE_LEN < THREAD_RECORD_WRITE_TRACE_CAP as u32 {
-            THREAD_RECORD_WRITE_TRACE_LEN += 1;
-        }
-    }
-}
-
 unsafe fn write_thread_record(record: *mut ThreadRecord, value: ThreadRecord) {
-    record_thread_record_write(record, value);
     unsafe { core::ptr::write_unaligned(record, value) };
-}
-
-pub fn thread_record_write_trace_len() -> u32 {
-    unsafe { THREAD_RECORD_WRITE_TRACE_LEN }
-}
-
-pub fn thread_record_write_trace_entry(index: u32) -> ThreadRecordWriteTrace {
-    unsafe {
-        let len = THREAD_RECORD_WRITE_TRACE_LEN.min(THREAD_RECORD_WRITE_TRACE_CAP as u32);
-        if index >= len {
-            return EMPTY_THREAD_RECORD_WRITE_TRACE;
-        }
-        let start = THREAD_RECORD_WRITE_TRACE_CURSOR.wrapping_sub(len);
-        let slot = start.wrapping_add(index) as usize % THREAD_RECORD_WRITE_TRACE_CAP;
-        THREAD_RECORD_WRITE_TRACE[slot]
-    }
 }
 
 fn thread_state_from_record_ptr(thread_ptr: u32) -> Option<*mut ThreadState> {
@@ -364,19 +268,13 @@ fn wake_futex_waiters_by_process_ptr(
     woken
 }
 
-#[cfg(all(
-    any(target_arch = "wasm32", target_arch = "wasm64"),
-    target_os = "unknown"
-))]
+#[cfg(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown"))]
 #[link(wasm_import_module = "env")]
 unsafe extern "C" {
     fn tidemark_memory_atomic_notify(ptr: *mut i32, max_wake: u32) -> u32;
 }
 
-#[cfg(all(
-    any(target_arch = "wasm32", target_arch = "wasm64"),
-    target_os = "unknown"
-))]
+#[cfg(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown"))]
 pub(crate) fn notify_futex_addr(base: u32, addr: u32, max_wake: u32) {
     unsafe {
         let ptr = (base as u64 + addr as u64) as usize as *mut i32;
@@ -384,10 +282,7 @@ pub(crate) fn notify_futex_addr(base: u32, addr: u32, max_wake: u32) {
     }
 }
 
-#[cfg(not(all(
-    any(target_arch = "wasm32", target_arch = "wasm64"),
-    target_os = "unknown"
-)))]
+#[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
 pub(crate) fn notify_futex_addr(_base: u32, _addr: u32, _max_wake: u32) {}
 
 fn requeue_futex_waiters_by_process_ptr(
@@ -680,7 +575,6 @@ pub fn sys_get_robust_list(
 pub fn sys_exit(vm: &mut ThreadState, base: u32, exit_code: u64) -> i32 {
     vm.exit_code = exit_code as i32;
     vm.term_signal = 0;
-    vm.termination_reason = TERMINATE_REASON_UNKNOWN;
 
     if crate::syscall::process::vfork_active() {
         vm.status = STATUS_FAULT;
@@ -733,11 +627,10 @@ pub fn terminate_process_with_reason(
     base: u32,
     exit_code: i32,
     term_signal: i32,
-    reason: u32,
+    _reason: u32,
 ) -> i32 {
     vm.exit_code = exit_code;
     vm.term_signal = term_signal;
-    vm.termination_reason = reason;
 
     if crate::syscall::process::vfork_active() {
         vm.status = STATUS_FAULT;
@@ -771,7 +664,6 @@ pub fn terminate_process_with_reason(
                     let thread_vm = &mut *thread_vm;
                     thread_vm.exit_code = exit_code;
                     thread_vm.term_signal = term_signal;
-                    thread_vm.termination_reason = reason;
                     thread_vm.status = STATUS_FAULT;
                     thread_vm.robust_list_head = 0;
                     thread_vm.robust_list_len = 0;
@@ -1021,7 +913,6 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
         child.status = STATUS_OK;
         child.exit_code = 0;
         child.term_signal = 0;
-        child.termination_reason = 0;
 
         if parent.clone_child_stack != 0 {
             child.x[2] = parent.clone_child_stack;

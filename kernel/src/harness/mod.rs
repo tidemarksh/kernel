@@ -20,7 +20,6 @@ pub const DEFAULT_GUEST_RAM_SIZE: u32 = 0x100_0000;
 pub const DEFAULT_GUEST_RAM_ALIGN: u32 = 0x20_0000;
 pub const DEFAULT_GUEST_BASE_PADDING: u32 = 0x200_00000;
 pub const DEFAULT_HOST_HEAP_PADDING: u32 = 0x040_00000;
-const TEST_SCRATCH_BYTES: u64 = 0x40000;
 
 static mut TEST_GUEST_BASE: u32 = 0;
 
@@ -126,9 +125,8 @@ impl TestVm {
             let brk = syscall::memory::current_brk();
             let ps_addr = (brk + ps_align - 1) & !(ps_align - 1);
             let scratch = (ps_addr + ps_size + 15) & !15;
-            syscall::memory::grow_brk(base, scratch + TEST_SCRATCH_BYTES);
+            syscall::memory::grow_brk(base, scratch + 0x10000);
             crate::guest_mem::zero_mem(base, ps_addr, ps_size as usize);
-            syscall::memory::register_kernel_owned_guest_range(ps_addr, ps_size);
             vm.process_ptr = ps_addr as u32;
 
             let pid_off = core::mem::offset_of!(ProcessState, pid) as u64;
@@ -156,7 +154,7 @@ impl TestVm {
             let tc_ptr = core::ptr::addr_of!(ps.thread_count);
             crate::guest_mem::init(gen_ptr, lock_ptr, tc_ptr);
 
-            crate::guest_mem::zero_mem(base, scratch, TEST_SCRATCH_BYTES as usize);
+            crate::guest_mem::zero_mem(base, scratch, 0x10000);
 
             let mut test_vm = Self {
                 vm,

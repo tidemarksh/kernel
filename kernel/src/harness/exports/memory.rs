@@ -48,6 +48,18 @@ pub extern "C" fn debug_memory_permit_denied_by_prot(prot: u32) -> u64 {
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
+pub extern "C" fn debug_clear_guest_write_watch_trace() {
+    crate::harness::trace::clear_guest_write_watch_trace();
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_configure_guest_write_watch(slot: u32, start: u64, end: u64) {
+    crate::harness::trace::configure_guest_write_watch(slot, start, end);
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_trace_nr() -> u64 {
     crate::harness::debug::memory_trace_summary().nr
 }
@@ -170,40 +182,4 @@ pub extern "C" fn debug_memory_vma_prot(index: u32) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_vma_flags(index: u32) -> i32 {
     crate::harness::memory::debug_vma_flags(index)
-}
-
-#[cfg(any(test, feature = "harness"))]
-#[unsafe(no_mangle)]
-pub extern "C" fn debug_memory_vma_fd(index: u32) -> i32 {
-    crate::harness::memory::debug_vma_fd(index)
-}
-
-#[cfg(any(test, feature = "harness"))]
-#[unsafe(no_mangle)]
-pub extern "C" fn debug_memory_vma_offset(index: u32) -> u64 {
-    crate::harness::memory::debug_vma_offset(index)
-}
-
-#[cfg(any(test, feature = "harness"))]
-#[unsafe(no_mangle)]
-pub extern "C" fn debug_memory_vma_path_len(index: u32) -> u32 {
-    crate::harness::memory::debug_vma_path_len(index)
-}
-
-#[cfg(any(test, feature = "harness"))]
-#[unsafe(no_mangle)]
-pub extern "C" fn debug_memory_vma_path_byte(index: u32, offset: u32) -> u32 {
-    crate::harness::memory::debug_vma_path_byte(index, offset)
-}
-
-#[cfg(any(test, feature = "harness"))]
-#[unsafe(no_mangle)]
-pub extern "C" fn debug_memory_vma_file_sample(index: u32, addr: u64) -> u64 {
-    crate::harness::memory::debug_vma_file_sample(index, addr)
-}
-
-#[cfg(any(test, feature = "harness"))]
-#[unsafe(no_mangle)]
-pub extern "C" fn debug_memory_vma_file_sample_len(index: u32, addr: u64) -> u32 {
-    crate::harness::memory::debug_vma_file_sample_len(index, addr)
 }

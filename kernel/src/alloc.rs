@@ -71,10 +71,7 @@ unsafe impl GlobalAlloc for BumpAlloc {
     }
 }
 
-#[cfg(all(
-    any(target_arch = "wasm32", target_arch = "wasm64"),
-    target_os = "unknown"
-))]
+#[cfg(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown"))]
 #[global_allocator]
 static ALLOCATOR: BumpAlloc = BumpAlloc;
 

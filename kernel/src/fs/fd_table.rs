@@ -54,10 +54,7 @@ pub use super::fd::close::{
     release_ofd_id_deferred, sys_close, sys_close_range,
 };
 pub use super::fd::dup::{sys_dup, sys_dup3};
-pub use super::fd::entry::{
-    fd_entry_write_trace_entry, fd_entry_write_trace_len, load_process_fd_entry,
-    store_process_fd_entry,
-};
+pub use super::fd::entry::{load_process_fd_entry, store_process_fd_entry};
 pub use super::fd::fcntl::{sys_fcntl, sys_flock};
 pub use super::fd::nonseekable::is_nonseekable_fd_type;
 pub use super::fd::ofd::{

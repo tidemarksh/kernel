@@ -685,7 +685,9 @@ fn execve_guest_limit(base: u32, brk_start: u64, stack_size: u64, ram_limit: u64
         .saturating_add(usable_stack)
         .saturating_add(EXECVE_STACK_HEADROOM);
     let rounded_limit = (required_limit + 0xF_FFFF) & !0xF_FFFF;
-    current_limit.max(rounded_limit).min(max_limit)
+    current_limit
+        .max(rounded_limit)
+        .min(max_limit)
 }
 
 #[cfg(test)]
@@ -969,7 +971,6 @@ fn complete_execve_in_place_inner(
     unsafe {
         guest_mem::zero_mem(base, ps_addr, ps_size as usize);
     }
-    crate::syscall::memory::register_kernel_owned_guest_range(ps_addr, ps_size);
     crate::tracepoints::record_execve_dispatch(vm_ptr, 1229);
     crate::syscall::memory::rebase_brk_after_hidden_prefix(hidden_end);
     crate::tracepoints::record_execve_stage(62, ps_addr, ps_size);
@@ -1089,7 +1090,6 @@ fn complete_execve_in_place_inner(
     vm.robust_list_len = 0;
     vm.sig_info_code = 0;
     vm.term_signal = 0;
-    vm.termination_reason = 0;
     vm.lr_addr = u64::MAX;
     vm.lr_val = 0;
     vm.lr_gen = 0;

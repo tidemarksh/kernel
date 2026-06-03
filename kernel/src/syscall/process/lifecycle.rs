@@ -443,7 +443,6 @@ pub fn prepare_fork_child_after_handoff(vm: &mut ThreadState, base: u32, pid: i3
     vm.status = STATUS_OK;
     vm.exit_code = 0;
     vm.term_signal = 0;
-    vm.termination_reason = 0;
     vm.fault_pc = 0;
     vm.fault_addr = 0;
     fd_table::clear_blocked_ofd_pin(vm);
@@ -507,7 +506,6 @@ pub fn restore_fork_parent_after_handoff(
     vm.status = STATUS_OK;
     vm.exit_code = 0;
     vm.term_signal = 0;
-    vm.termination_reason = 0;
     vm.fault_pc = 0;
     vm.fault_addr = 0;
     fd_table::clear_blocked_ofd_pin(vm);
