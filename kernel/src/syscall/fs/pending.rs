@@ -1104,6 +1104,40 @@ pub fn dispatch_pread64(
     )
 }
 
+pub fn dispatch_mmap(
+    vm: &mut ThreadState,
+    base: u32,
+    addr: u64,
+    length: u64,
+    prot: u64,
+    flags: u64,
+    fd: i64,
+    offset: u64,
+) -> i64 {
+    if flags & MAP_ANONYMOUS != 0 {
+        return crate::syscall::memory::sys_mmap(vm, base, addr, length, prot, flags, fd, offset);
+    }
+    let ofd = match fd_table::get_ofd(base, vm, fd as u64) {
+        Some(o) => o,
+        None => return EBADF,
+    };
+    if ofd.fd_type != FD_TYPE_FILE {
+        return crate::syscall::memory::sys_mmap(vm, base, addr, length, prot, flags, fd, offset);
+    }
+    submit_fs_request(
+        vm,
+        base,
+        ring_buffer::FS_OP_MMAP,
+        fd as i32,
+        offset,
+        length,
+        addr,
+        0,
+        flags as u32,
+        prot as u32,
+    )
+}
+
 pub fn dispatch_ftruncate(vm: &mut ThreadState, base: u32, fd: u64, length: u64) -> i64 {
     submit_fs_request(
         vm,

@@ -1,7 +1,7 @@
 use tidemark_kernel::abi::*;
 use tidemark_kernel::fs::memfs;
 use tidemark_kernel::harness::TestVm;
-use tidemark_kernel::syscall::memory;
+use tidemark_kernel::syscall::{fs, memory};
 use tidemark_kernel::types::ProcessState;
 
 fn encode_i(opcode: u32, rd: u32, funct3: u32, rs1: u32, imm: i32) -> u32 {
@@ -641,6 +641,41 @@ fn file_backed_mmap_preserves_bytes_for_offset_executable_mapping() {
     let len = 0x2000u64;
     let mapped = t.sys_mmap(0, len, PROT_READ | PROT_EXEC, MAP_PRIVATE, fd, offset);
     assert!(mapped > 0, "mapped={mapped}");
+    assert_eq!(
+        &t.guest_mem(mapped as u64, len as usize),
+        &data[offset as usize..(offset + len) as usize],
+    );
+}
+
+#[test]
+fn syscall_dispatch_routes_file_backed_mmap_through_fs_ring() {
+    let mut t = TestVm::new();
+    let data: Vec<u8> = (0..0x3000).map(|idx| ((idx * 17) % 251) as u8).collect();
+    let ino = memfs::create_file(1, b"dispatch-mmap.bin", 0o644);
+    assert!(ino > 0);
+    assert_eq!(memfs::write_file(ino, 0, &data), data.len() as i64);
+
+    let fd = t.sys_openat(b"/dispatch-mmap.bin", O_RDONLY);
+    assert!(fd >= 3);
+
+    let offset = 0x1000u64;
+    let len = 0x1000u64;
+    t.vm.x[10] = 0;
+    t.vm.x[11] = len;
+    t.vm.x[12] = PROT_READ as u64;
+    t.vm.x[13] = MAP_PRIVATE;
+    t.vm.x[14] = fd as u64;
+    t.vm.x[15] = offset;
+    t.vm.x[17] = SYS_MMAP;
+
+    assert_eq!(tidemark_kernel::syscall::dispatch(&mut t.vm, t.base), STATUS_FS);
+
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    fs::process_pending_requests(vm_ptr, t.base);
+    let mapped = fs::resume_from_fs(vm_ptr, t.base);
+
+    assert!(mapped > 0, "mapped={mapped}");
+    assert_eq!(t.vm.status, STATUS_OK);
     assert_eq!(
         &t.guest_mem(mapped as u64, len as usize),
         &data[offset as usize..(offset + len) as usize],

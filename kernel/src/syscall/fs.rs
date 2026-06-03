@@ -70,11 +70,11 @@ pub use path::{sys_chdir, sys_getcwd};
 pub use pending::{
     FS_EFFECT_MEMFS_FILE_DATA, FS_EFFECT_MEMFS_MUTATION, FS_EFFECT_SHARED_OFD_STATE,
     dispatch_fstat, dispatch_ftruncate, dispatch_getdents64, dispatch_lseek, dispatch_mkdirat,
-    dispatch_openat, dispatch_pread64, dispatch_pwrite64, dispatch_read, dispatch_renameat2,
-    dispatch_truncate, dispatch_unlinkat, dispatch_write, pending_request_absolute_path,
-    pending_request_effects, pending_request_opcode, pending_request_path_len,
-    pending_request_path_ptr, pending_request_secondary_absolute_path, pending_request_target_ino,
-    process_pending_requests, resume_from_fs,
+    dispatch_mmap, dispatch_openat, dispatch_pread64, dispatch_pwrite64, dispatch_read,
+    dispatch_renameat2, dispatch_truncate, dispatch_unlinkat, dispatch_write,
+    pending_request_absolute_path, pending_request_effects, pending_request_opcode,
+    pending_request_path_len, pending_request_path_ptr, pending_request_secondary_absolute_path,
+    pending_request_target_ino, process_pending_requests, resume_from_fs,
 };
 pub(crate) use read_write::PIPE_READ_EOF_SYNC_RETRY_MARKER;
 pub use read_write::{sys_pread64, sys_pwrite64, sys_read, sys_readv, sys_write};

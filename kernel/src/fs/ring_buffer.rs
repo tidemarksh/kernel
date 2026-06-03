@@ -53,6 +53,7 @@ pub const FS_OP_RENAME: u32 = 8;
 pub const FS_OP_GETDENTS: u32 = 9;
 pub const FS_OP_TRUNCATE: u32 = 10;
 pub const FS_OP_LSEEK: u32 = 11;
+pub const FS_OP_MMAP: u32 = 12;
 pub const FS_REQ_FLAG_PWRITE: u32 = 1 << 0;
 pub const FS_REQ_FLAG_WRITEV: u32 = 1 << 1;
 
@@ -421,6 +422,16 @@ pub fn process_requests(ring_base: u32, vm_ptr: u32, base: u32) {
                         flags as u64, // whence
                     )
                 }
+                FS_OP_MMAP => crate::syscall::memory::sys_mmap(
+                    vm,
+                    base,
+                    buf_ptr,
+                    len,
+                    mode as u64,
+                    flags as u64,
+                    fd as i64,
+                    offset,
+                ),
                 _ => ENOSYS,
             };
 

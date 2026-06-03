@@ -109,7 +109,13 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
 
         // memory
         SYS_BRK => memory::sys_brk(vm, base, a0),
-        SYS_MMAP => memory::sys_mmap(vm, base, a0, a1, a2, a3, a4 as i64, vm.x[15]),
+        SYS_MMAP => {
+            let r = fs::dispatch_mmap(vm, base, a0, a1, a2, a3, a4 as i64, vm.x[15]);
+            if vm.status == abi::STATUS_FS {
+                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_FS);
+            }
+            r
+        }
         SYS_MUNMAP => memory::sys_munmap(vm, base, a0, a1),
         SYS_MSYNC => memory::sys_msync(vm, base, a0, a1, a2),
         SYS_MREMAP => memory::sys_mremap(vm, base, a0, a1, a2, a3, a4),
