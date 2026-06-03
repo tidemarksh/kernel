@@ -803,15 +803,15 @@ fn process_guest_base_for_reserved_guest_window() -> u32 {
     // memory and the live guest window. execve() stages large ELF bytes in
     // kernel memory before rebuilding the guest image, so a single guard page
     // is not enough once workloads include browser-shell child exec.
-    let aligned = ((crate::alloc::heap_ptr() as u64
+    let aligned = (crate::alloc::heap_ptr() as u64
         + GUEST_GUARD_BYTES
         + GUEST_EXEC_SCRATCH_HEADROOM_BYTES
         + 0xF_FFFF)
-        & !0xF_FFFF) as u32;
-    if aligned as u64 >= WASM32_LINEAR_MEMORY_LIMIT {
+        & !0xF_FFFF;
+    if aligned >= WASM32_LINEAR_MEMORY_LIMIT {
         0
     } else {
-        aligned
+        aligned as u32
     }
 }
 
