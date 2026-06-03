@@ -42,7 +42,6 @@ pub const SPAWN_KIND_FORK: u32 = 2;
 // Guest addressability profiles
 // =============================================================================
 pub const GUEST_ADDRESS_PROFILE_NONE: u32 = 0;
-pub const GUEST_ADDRESS_PROFILE_WASM32_COMPATIBLE: u32 = 1;
 pub const GUEST_ADDRESS_PROFILE_MEMORY64: u32 = 2;
 
 // =============================================================================
@@ -768,10 +767,6 @@ pub const fn max_guest_window_for_base(base: u32) -> u64 {
     MEMORY64_GUEST_ADDRESS_LIMIT.saturating_sub(base as u64)
 }
 
-pub const fn max_wasm32_guest_window_for_base(base: u32) -> u64 {
-    WASM32_LINEAR_MEMORY_LIMIT.saturating_sub(base as u64)
-}
-
 struct StagedArgs {
     argv: [u32; MAX_ARGS],
     envp: [u32; MAX_ARGS],
@@ -822,22 +817,13 @@ fn process_guest_base_for_reserved_guest_window() -> u32 {
 
 fn process_guest_base_for_profile(address_profile: u32) -> u64 {
     match address_profile {
-        GUEST_ADDRESS_PROFILE_WASM32_COMPATIBLE | GUEST_ADDRESS_PROFILE_MEMORY64 => {
-            process_guest_base_for_reserved_guest_window() as u64
-        }
+        GUEST_ADDRESS_PROFILE_MEMORY64 => process_guest_base_for_reserved_guest_window() as u64,
         _ => 0,
     }
 }
 
 fn guest_address_limit_for_profile(address_profile: u32, guest_base: u64) -> u64 {
     match address_profile {
-        GUEST_ADDRESS_PROFILE_WASM32_COMPATIBLE => {
-            if guest_base > u32::MAX as u64 {
-                0
-            } else {
-                max_wasm32_guest_window_for_base(guest_base as u32)
-            }
-        }
         GUEST_ADDRESS_PROFILE_MEMORY64 => MEMORY64_GUEST_ADDRESS_LIMIT.saturating_sub(guest_base),
         _ => 0,
     }
@@ -919,11 +905,6 @@ pub extern "C" fn process_clear_args() {
     let s = staged_args();
     s.argc = 0;
     s.envc = 0;
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn abi_guest_address_profile_wasm32_compatible() -> u32 {
-    GUEST_ADDRESS_PROFILE_WASM32_COMPATIBLE
 }
 
 #[unsafe(no_mangle)]

@@ -80,7 +80,7 @@ fn spawn_handoff_exports_round_trip() {
         0xAAAA,
         0xBBBB,
         0xCCCC,
-        abi_guest_address_profile_wasm32_compatible(),
+        abi_guest_address_profile_target(),
         0x1_0000_0000,
         123,
     );
@@ -96,22 +96,17 @@ fn spawn_handoff_exports_round_trip() {
 }
 
 #[test]
-fn target_address_profile_is_memory64_and_not_wasm32_fallback() {
+fn target_address_profile_is_memory64() {
     let _t = TestVm::new();
-    let wasm32_profile = abi_guest_address_profile_wasm32_compatible();
     let memory64_profile = abi_guest_address_profile_memory64();
     let target_profile = abi_guest_address_profile_target();
 
     assert_ne!(memory64_profile, 0);
-    assert_ne!(memory64_profile, wasm32_profile);
     assert_eq!(target_profile, memory64_profile);
     let target_base = process_guest_base_for_address_profile(target_profile);
     assert_ne!(target_base, 0);
-    assert_ne!(process_guest_base_for_address_profile(wasm32_profile), 0);
     let target_limit = process_guest_address_limit_for_profile(target_profile, target_base);
-    let wasm32_limit = process_guest_address_limit_for_profile(wasm32_profile, target_base);
     assert!(target_limit > u32::MAX as u64);
-    assert!(wasm32_limit <= u32::MAX as u64);
 }
 
 #[test]

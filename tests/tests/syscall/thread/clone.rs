@@ -31,8 +31,8 @@ fn contract_spawn_from_clone_initializes_child_thread_state() {
     t.vm.x[3] = 0x2345_6789;
     t.vm.x[27] = 0x3456_789a;
     t.vm.pc = 0x4567_89ab;
-    t.vm.guest_address_profile = tidemark_kernel::abi::GUEST_ADDRESS_PROFILE_WASM32_COMPATIBLE;
-    t.vm.guest_address_limit = 0xffff_ffff;
+    t.vm.guest_address_profile = tidemark_kernel::abi::GUEST_ADDRESS_PROFILE_MEMORY64;
+    t.vm.guest_address_limit = tidemark_kernel::abi::max_guest_window_for_base(t.base);
     t.vm.guest_memory_policy_limit = 0x1_0000_0000;
     t.vm.process_max_memory_pages = 123;
 
