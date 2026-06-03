@@ -1,25 +1,8 @@
 [build]
-target = "wasm32-wasip1"
+target = "wasm64-unknown-unknown"
 
-[target.wasm32-unknown-unknown]
-# Import shared linear memory from the runtime and place kernel static data
-# high enough to avoid overlap with guest binary segments.
-rustflags = [
-  "-C",
-  "target-feature=+atomics,+bulk-memory,+mutable-globals",
-  "-C",
-  "link-arg=--import-memory",
-  "-C",
-  "link-arg=--shared-memory",
-  "-C",
-  "link-arg=--max-memory=4294967296",
-  "-C",
-  "link-arg=--export-memory",
-  "-C",
-  "link-arg=--export=__stack_pointer",
-  "-C",
-  "link-arg=--global-base=50331648",
-]
+[unstable]
+build-std = ["core", "alloc"]
 
 [target.wasm64-unknown-unknown]
 # Memory64 target profile. Import shared linear memory from the runtime and keep
@@ -42,12 +25,7 @@ rustflags = [
 ]
 
 [alias]
-# The production kernel artifact uses the target process-memory profile.
-build-kernel = "build -p tidemark-kernel -Z build-std=core,alloc --target wasm64-unknown-unknown"
-build-kernel-release = "build -p tidemark-kernel -Z build-std=core,alloc --target wasm64-unknown-unknown --release"
 test-kernel = "test"
 test-kernel-lib = "test -p tidemark-kernel --lib"
 test-kernel-riscv = "test -p tidemark-kernel-tests --test riscv_tests"
 test-kernel-ltp = "test -p tidemark-kernel-tests --test ltp ltp_"
-[target.wasm32-wasip1]
-runner = ["./tests/support/wasmtime-runner.sh"]

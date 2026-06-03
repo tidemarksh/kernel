@@ -1,5 +1,6 @@
 [workspace]
 members = ["kernel", "tests"]
+default-members = ["kernel"]
 resolver = "3"
 
 [profile.release]
