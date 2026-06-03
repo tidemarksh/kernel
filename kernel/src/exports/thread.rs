@@ -317,10 +317,10 @@ pub extern "C" fn thread_pending_fs_opcode(vm_ptr: u32) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn thread_pending_fs_path_ptr(vm_ptr: u32) -> u32 {
+pub extern "C" fn thread_pending_fs_path_ptr(vm_ptr: u32) -> u64 {
     unsafe {
         let vm = &*(vm_ptr as *const ThreadState);
-        crate::syscall::fs::pending_request_path_ptr(vm_ptr, vm.guest_base) as u32
+        crate::syscall::fs::pending_request_path_ptr(vm_ptr, vm.guest_base)
     }
 }
 
