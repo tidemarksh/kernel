@@ -522,7 +522,7 @@ pub fn guest_range_accessible(base: u32, start: u64, len: u64) -> bool {
         return false;
     };
     let guest_limit = current_linear_guest_limit(base);
-    if start > u32::MAX as u64 || end > guest_limit || end > u32::MAX as u64 {
+    if end > guest_limit {
         return false;
     }
     !range_has_prot_none(start, len)
@@ -617,7 +617,7 @@ pub fn guest_range_permitted(vm: &ThreadState, base: u32, start: u64, len: u64, 
         return false;
     };
     let guest_limit = effective_guest_limit(vm, base);
-    if start > u32::MAX as u64 || end > guest_limit || end > u32::MAX as u64 {
+    if end > guest_limit {
         crate::tracepoints::record_guest_range_permit_check(prot as u32, PERMIT_OUTCOME_DENIED);
         return false;
     }
@@ -744,10 +744,6 @@ fn ensure_memory_capacity_for_guest_range(base: u32, guest_end: u64) -> bool {
     let Some(needed) = (base as u64).checked_add(guest_end) else {
         return false;
     };
-    if needed > 0x1_0000_0000 {
-        return false;
-    }
-
     let mut mem_size = crate::wasm::memory_size_bytes();
     if needed <= mem_size {
         return true;
@@ -1364,8 +1360,8 @@ pub fn sys_mremap(
         if !ensure_memory_capacity_for_guest_range(base, new_start + new_len) {
             return ENOMEM;
         }
-        let src = (base as u64 + old_addr) as u32 as *const u8;
-        let dst = (base as u64 + new_start) as u32 as *mut u8;
+        let src = (base as u64 + old_addr) as usize as *const u8;
+        let dst = (base as u64 + new_start) as usize as *mut u8;
         let src_start = old_addr;
         let src_end = old_addr + old_len;
         let dst_start = new_start;
