@@ -363,6 +363,9 @@ pub fn resume_from_fs(vm_ptr: u32, base: u32) -> i64 {
             return EAGAIN;
         };
         vm.x[10] = result as u64;
+        if vm.status == STATUS_EXECVE_SPAWN {
+            return result;
+        }
         vm.status = STATUS_OK;
         result
     }
@@ -1135,6 +1138,27 @@ pub fn dispatch_mmap(
         0,
         flags as u32,
         prot as u32,
+    )
+}
+
+pub fn dispatch_execve(
+    vm: &mut ThreadState,
+    base: u32,
+    path_addr: u64,
+    argv_addr: u64,
+    envp_addr: u64,
+) -> i64 {
+    submit_fs_request(
+        vm,
+        base,
+        ring_buffer::FS_OP_EXECVE,
+        AT_FDCWD,
+        envp_addr,
+        0,
+        argv_addr,
+        path_addr,
+        0,
+        0,
     )
 }
 

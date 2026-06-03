@@ -17,6 +17,58 @@ fn contract_execve_completes_in_place_without_spawn() {
 }
 
 #[test]
+fn syscall_dispatch_routes_execve_through_fs_ring() {
+    let mut t = TestVm::new();
+    let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    let path_addr = install_exec_file(&t, b"test", &elf);
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+
+    t.vm.x[17] = SYS_EXECVE;
+    t.vm.x[10] = path_addr;
+    t.vm.x[11] = 0;
+    t.vm.x[12] = 0;
+
+    let status = tidemark_kernel::syscall::dispatch(&mut t.vm, t.base);
+    assert_eq!(status, STATUS_FS);
+    assert_eq!(t.vm.status, STATUS_FS);
+
+    tidemark_kernel::syscall::fs::process_pending_requests(vm_ptr, t.base);
+    let ret = tidemark_kernel::syscall::fs::resume_from_fs(vm_ptr, t.base);
+
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.spawn_kind, SPAWN_KIND_NONE);
+    assert_eq!(t.vm.pc, 0x1000);
+}
+
+#[test]
+fn syscall_dispatch_preserves_vfork_execve_spawn_after_fs_ring() {
+    let mut t = TestVm::new();
+    let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    let path_addr = install_exec_file(&t, b"test", &elf);
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    let vfork_status = process_impl::sys_vfork(&mut t.vm, t.base);
+    assert_eq!(vfork_status, STATUS_VFORK_WAIT);
+
+    t.vm.x[17] = SYS_EXECVE;
+    t.vm.x[10] = path_addr;
+    t.vm.x[11] = 0;
+    t.vm.x[12] = 0;
+
+    let status = tidemark_kernel::syscall::dispatch(&mut t.vm, t.base);
+    assert_eq!(status, STATUS_FS);
+    assert_eq!(t.vm.status, STATUS_FS);
+
+    tidemark_kernel::syscall::fs::process_pending_requests(vm_ptr, t.base);
+    let child_pid = tidemark_kernel::syscall::fs::resume_from_fs(vm_ptr, t.base);
+
+    assert!(child_pid > 0);
+    assert_eq!(t.vm.status, STATUS_EXECVE_SPAWN);
+    assert_eq!(t.vm.spawn_kind, SPAWN_KIND_EXECVE);
+    assert_eq!(t.vm.spawn_child_pid, child_pid as i32);
+}
+
+#[test]
 fn contract_execve_initializes_tp_from_pt_tls() {
     let mut t = TestVm::new();
     let elf = build_test_elf_with_tls(&[0x13, 0x05, 0x70, 0x00], &[0x41, 0x42, 0x43, 0x44], 0x20);

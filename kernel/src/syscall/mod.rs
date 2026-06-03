@@ -635,8 +635,11 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             ret
         }
         SYS_EXECVE => {
-            let ret = process::sys_execve(vm, base, a0, a1, a2);
+            let ret = fs::dispatch_execve(vm, base, a0, a1, a2);
             crate::tracepoints::record_execve_dispatch(vm as *const ThreadState as u32, 2);
+            if vm.status == abi::STATUS_FS {
+                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, ret, abi::STATUS_FS);
+            }
             if vm.status == abi::STATUS_EXECVE_SPAWN {
                 return debug_return(
                     vm,

@@ -54,6 +54,7 @@ pub const FS_OP_GETDENTS: u32 = 9;
 pub const FS_OP_TRUNCATE: u32 = 10;
 pub const FS_OP_LSEEK: u32 = 11;
 pub const FS_OP_MMAP: u32 = 12;
+pub const FS_OP_EXECVE: u32 = 13;
 pub const FS_REQ_FLAG_PWRITE: u32 = 1 << 0;
 pub const FS_REQ_FLAG_WRITEV: u32 = 1 << 1;
 
@@ -432,6 +433,13 @@ pub fn process_requests(ring_base: u32, vm_ptr: u32, base: u32) {
                     fd as i64,
                     offset,
                 ),
+                FS_OP_EXECVE => {
+                    if path_ptr == 0 {
+                        EINVAL
+                    } else {
+                        crate::syscall::process::sys_execve(vm, base, path_ptr, buf_ptr, offset)
+                    }
+                }
                 _ => ENOSYS,
             };
 
