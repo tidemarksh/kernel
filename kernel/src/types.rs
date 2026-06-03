@@ -258,7 +258,7 @@ pub struct ThreadRecord {
     pub state: i32,
     pub thread_ptr: u32, // absolute pointer to ThreadState in WASM linear memory
     pub clear_child_tid: u32,
-    pub blocked_addr: u32,
+    pub blocked_addr: u64,
     /// Thread-directed pending signals queued from another worker.
     pub pending_sigset: u64,
     /// `siginfo.si_code` paired with `pending_sigset` delivery.
@@ -283,7 +283,7 @@ impl ThreadRecord {
         state: i32,
         thread_ptr: u32,
         clear_child_tid: u32,
-        blocked_addr: u32,
+        blocked_addr: u64,
     ) -> Self {
         Self {
             tid,

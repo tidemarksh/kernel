@@ -48,7 +48,7 @@ fn tgkill_masked_signal_does_not_wake_blocked_futex_thread() {
     let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
     let record = &mut ps.threads[(child_tid - 1) as usize];
     record.state = THREAD_BLOCKED_FUTEX;
-    record.blocked_addr = futex_addr as u32;
+    record.blocked_addr = futex_addr;
     record.thread_ptr = child_ptr;
 
     let child = unsafe { &mut *(child_ptr as *mut ThreadState) };
@@ -65,7 +65,7 @@ fn tgkill_masked_signal_does_not_wake_blocked_futex_thread() {
     assert_eq!(record.pending_siginfo_code, SI_TKILL);
     assert_eq!(
         thread_impl::thread_record_blocked_addr(child, t.base),
-        futex_addr as u32
+        futex_addr
     );
 }
 
@@ -85,7 +85,7 @@ fn tgkill_unmasked_signal_delivers_default_action_for_blocked_futex_thread() {
     let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
     let record = &mut ps.threads[(child_tid - 1) as usize];
     record.state = THREAD_BLOCKED_FUTEX;
-    record.blocked_addr = futex_addr as u32;
+    record.blocked_addr = futex_addr;
     record.thread_ptr = child_ptr;
 
     let child = unsafe { &mut *(child_ptr as *mut ThreadState) };
@@ -102,7 +102,7 @@ fn tgkill_unmasked_signal_delivers_default_action_for_blocked_futex_thread() {
     assert_eq!(record.pending_siginfo_code, SI_TKILL);
     assert_eq!(
         thread_impl::thread_record_blocked_addr(child, t.base),
-        futex_addr as u32
+        futex_addr
     );
 
     assert!(signal::check_pending(child, t.base));

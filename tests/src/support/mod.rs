@@ -271,16 +271,16 @@ fn saved_ctx_validation_enabled() -> bool {
     std::env::var_os("TIDEMARK_VALIDATE_SAVED_CTX").is_some()
 }
 
-pub(crate) fn cmp_requeue_shared_words(base: u32, futex_addr: u32) -> Option<(u32, u32, u32, u32)> {
+pub(crate) fn cmp_requeue_shared_words(base: u32, futex_addr: u64) -> Option<(u32, u32, u32, u32)> {
     if futex_addr == 0 {
         return None;
     }
     unsafe {
         Some((
-            guest_mem::read_u32(base, futex_addr as u64),
-            guest_mem::read_u32(base, futex_addr as u64 + 4),
-            guest_mem::read_u32(base, futex_addr as u64 + 8),
-            guest_mem::read_u32(base, futex_addr as u64 + 12),
+            guest_mem::read_u32(base, futex_addr),
+            guest_mem::read_u32(base, futex_addr + 4),
+            guest_mem::read_u32(base, futex_addr + 8),
+            guest_mem::read_u32(base, futex_addr + 12),
         ))
     }
 }
@@ -348,7 +348,7 @@ pub(crate) struct SavedProcessCtx {
     pub(crate) shared_overlay_key: i32,
     child_entries: Vec<(i32, bool, i32)>,
     vm: ThreadState,
-    last_futex_addr: u32,
+    last_futex_addr: u64,
     // True when this saved child no longer needs a full guest-memory snapshot
     // because the harness will only wait for `test_done` and then record exit.
     waiter_placeholder: bool,
@@ -361,7 +361,7 @@ pub(crate) struct SavedProcessCtx {
 // siblings that would otherwise repeat the same setup work.
 pub(crate) struct SavedWaiterTemplate {
     vm: ThreadState,
-    last_futex_addr: u32,
+    last_futex_addr: u64,
 }
 
 impl SavedProcessCtx {
@@ -456,7 +456,7 @@ impl SavedProcessCtx {
         self.waiter_placeholder
     }
 
-    pub(crate) fn last_futex_addr(&self) -> u32 {
+    pub(crate) fn last_futex_addr(&self) -> u64 {
         self.last_futex_addr
     }
 
@@ -501,7 +501,7 @@ impl SavedProcessCtx {
         let futex_addr = if template.last_futex_addr != 0 {
             template.last_futex_addr
         } else {
-            vm.futex_wait_addr as u32
+            vm.futex_wait_addr
         };
         if vm.status == STATUS_FUTEX_WAIT && futex_addr != 0 {
             tidemark_kernel::harness::support::register_external_futex_wait(
@@ -2288,7 +2288,7 @@ fn run_vm_inner(
             STATUS_FUTEX_WAIT if yield_blocked_status => {
                 refresh_proc_pid_stat(vm, base, b'S')?;
                 if vm.process_ptr != 0 && process_pid(base, vm.process_ptr) == vm.tid {
-                    let futex_addr = vm.futex_wait_addr as u32;
+                    let futex_addr = vm.futex_wait_addr;
                     tidemark_kernel::harness::support::register_external_futex_wait(
                         process_pid(base, vm.process_ptr),
                         futex_addr,
@@ -3743,7 +3743,7 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
                     tidemark_kernel::syscall::process::resume_wait4(vm_ptr, base);
                 }
                 STATUS_FUTEX_WAIT => {
-                    let futex_addr = saved.vm.futex_wait_addr as u32;
+                    let futex_addr = saved.vm.futex_wait_addr;
                     if futex_addr != 0 {
                         saved.last_futex_addr = futex_addr;
                     }
@@ -3973,7 +3973,7 @@ pub(crate) fn step_saved_process_ctx_for_ltp(
                     {
                         tidemark_kernel::harness::support::register_external_futex_wait(
                             saved.pid,
-                            saved.vm.futex_wait_addr as u32,
+                            saved.vm.futex_wait_addr,
                         );
                     }
                     refresh_proc_pid_stat(&saved.vm, base, b'S')?;

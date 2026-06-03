@@ -356,7 +356,22 @@ fn contract_futex_wake_unblocks_waiting_thread_record() {
     let mut t = TestVm::new();
     let addr = t.scratch + 0x500;
     let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
-    ps.threads[1] = ThreadRecord::new(2, THREAD_BLOCKED_FUTEX, 0xDEAD_BEEFu32, 0, addr as u32);
+    ps.threads[1] = ThreadRecord::new(2, THREAD_BLOCKED_FUTEX, 0xDEAD_BEEFu32, 0, addr);
+    ps.thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
+
+    let ret = thread_impl::sys_futex(&mut t.vm, t.base, addr, FUTEX_WAKE as u64, 1, 0, 0, 0);
+    assert_eq!(ret, 1);
+    assert_eq!(ps.threads[1].state, THREAD_RUNNING);
+    assert_eq!(ps.threads[1].blocked_addr, 0);
+}
+
+#[test]
+fn contract_futex_wake_matches_memory64_blocked_thread_record_address() {
+    let mut t = TestVm::new();
+    let addr = u32::MAX as u64 + 0x400;
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    ps.threads[1] = ThreadRecord::new(2, THREAD_BLOCKED_FUTEX, 0xDEAD_BEEFu32, 0, addr);
     ps.thread_count
         .store(2, core::sync::atomic::Ordering::Release);
 
@@ -383,7 +398,7 @@ fn contract_futex_wake_bitset_only_wakes_matching_waiters() {
     let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
     ps.thread_count
         .store(2, core::sync::atomic::Ordering::Release);
-    ps.threads[1] = ThreadRecord::new(2, THREAD_BLOCKED_FUTEX, waiter_ptr, 0, addr as u32);
+    ps.threads[1] = ThreadRecord::new(2, THREAD_BLOCKED_FUTEX, waiter_ptr, 0, addr);
 
     let mismatch = thread_impl::sys_futex(
         &mut t.vm,
@@ -397,7 +412,7 @@ fn contract_futex_wake_bitset_only_wakes_matching_waiters() {
     );
     assert_eq!(mismatch, 0);
     assert_eq!(ps.threads[1].state, THREAD_BLOCKED_FUTEX);
-    assert_eq!(ps.threads[1].blocked_addr, addr as u32);
+    assert_eq!(ps.threads[1].blocked_addr, addr);
 
     let matched = thread_impl::sys_futex(
         &mut t.vm,
@@ -510,7 +525,7 @@ fn contract_resume_timed_futex_wait_without_pending_signal_preserves_context() {
             [(t.vm.tid - 1) as usize]
     };
     record.state = THREAD_BLOCKED_FUTEX;
-    record.blocked_addr = addr as u32;
+    record.blocked_addr = addr;
 
     thread_impl::resume_futex_wait_result(&mut t.vm, t.base, ETIMEDOUT);
 
@@ -574,7 +589,7 @@ fn contract_resume_timed_futex_wait_delivers_pending_signal_and_restores_timeout
             [(t.vm.tid - 1) as usize]
     };
     record.state = THREAD_BLOCKED_FUTEX;
-    record.blocked_addr = addr as u32;
+    record.blocked_addr = addr;
 
     thread_impl::resume_futex_wait_result(&mut t.vm, t.base, ETIMEDOUT);
 
@@ -606,8 +621,8 @@ fn contract_futex_cmp_requeue_moves_remaining_waiters() {
     let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
     ps.thread_count
         .store(3, core::sync::atomic::Ordering::Release);
-    ps.threads[1] = ThreadRecord::new(2, THREAD_BLOCKED_FUTEX, 0, 0, from_addr as u32);
-    ps.threads[2] = ThreadRecord::new(3, THREAD_BLOCKED_FUTEX, 0, 0, from_addr as u32);
+    ps.threads[1] = ThreadRecord::new(2, THREAD_BLOCKED_FUTEX, 0, 0, from_addr);
+    ps.threads[2] = ThreadRecord::new(3, THREAD_BLOCKED_FUTEX, 0, 0, from_addr);
 
     let ret = thread_impl::sys_futex(
         &mut t.vm,
@@ -624,7 +639,7 @@ fn contract_futex_cmp_requeue_moves_remaining_waiters() {
     assert_eq!(ps.threads[1].state, THREAD_RUNNING);
     assert_eq!(ps.threads[1].blocked_addr, 0);
     assert_eq!(ps.threads[2].state, THREAD_BLOCKED_FUTEX);
-    assert_eq!(ps.threads[2].blocked_addr, to_addr as u32);
+    assert_eq!(ps.threads[2].blocked_addr, to_addr);
 }
 
 #[test]

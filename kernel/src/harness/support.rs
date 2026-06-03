@@ -33,7 +33,7 @@ pub struct SharedMappingOverlay {
 struct ExternalFutexWait {
     #[cfg_attr(not(any(test, feature = "harness")), allow(dead_code))]
     pid: i32,
-    addr: u32,
+    addr: u64,
     woken: bool,
 }
 
@@ -42,7 +42,7 @@ struct ExternalFutexWait {
 struct ExternalFutexTraceEntry {
     op: u32,
     pid: i32,
-    addr: u32,
+    addr: u64,
     value: u32,
 }
 
@@ -74,14 +74,14 @@ static mut EXTERNAL_FUTEX_TAKE_COUNT: u32 = 0;
 #[cfg(any(test, feature = "harness"))]
 static mut EXTERNAL_FUTEX_LAST_REG_PID: i32 = 0;
 #[cfg(any(test, feature = "harness"))]
-static mut EXTERNAL_FUTEX_LAST_REG_ADDR: u32 = 0;
+static mut EXTERNAL_FUTEX_LAST_REG_ADDR: u64 = 0;
 #[cfg(any(test, feature = "harness"))]
-static mut EXTERNAL_FUTEX_LAST_WAKE_ADDR: u32 = 0;
+static mut EXTERNAL_FUTEX_LAST_WAKE_ADDR: u64 = 0;
 #[cfg(any(test, feature = "harness"))]
 static mut EXTERNAL_FUTEX_LAST_WAKE_RESULT: u32 = 0;
 
 #[cfg(any(test, feature = "harness"))]
-fn record_external_futex_trace(op: u32, pid: i32, addr: u32, value: u32) {
+fn record_external_futex_trace(op: u32, pid: i32, addr: u64, value: u32) {
     unsafe {
         if EXTERNAL_FUTEX_TRACE_LEN < EXTERNAL_FUTEX_TRACE_CAP as u32 {
             let idx = EXTERNAL_FUTEX_TRACE_LEN as usize;
@@ -214,7 +214,7 @@ pub fn clear_external_futex_waits() {
 }
 
 #[cfg(any(test, feature = "harness"))]
-pub fn register_external_futex_wait(pid: i32, addr: u32) {
+pub fn register_external_futex_wait(pid: i32, addr: u64) {
     if !HARNESS_RUNTIME_SUPPORT_ENABLED {
         return;
     }
@@ -256,11 +256,11 @@ pub fn clear_external_futex_wait(pid: i32) {
     }
 }
 
-pub fn wake_external_futex_waits(addr: u32, max_wake: u32) -> u32 {
+pub fn wake_external_futex_waits(addr: u64, max_wake: u32) -> u32 {
     wake_external_futex_waits_from_pid(0, addr, max_wake)
 }
 
-pub fn wake_external_futex_waits_from_pid(caller_pid: i32, addr: u32, max_wake: u32) -> u32 {
+pub fn wake_external_futex_waits_from_pid(caller_pid: i32, addr: u64, max_wake: u32) -> u32 {
     if !HARNESS_RUNTIME_SUPPORT_ENABLED {
         return 0;
     }
@@ -453,7 +453,7 @@ pub fn describe_exec_trace_for_vm(vm_ptr: u32) -> String {
     }
 }
 
-pub fn requeue_external_futex_waits(addr: u32, new_addr: u32, max_requeue: u32) -> u32 {
+pub fn requeue_external_futex_waits(addr: u64, new_addr: u64, max_requeue: u32) -> u32 {
     if !HARNESS_RUNTIME_SUPPORT_ENABLED {
         return 0;
     }
@@ -485,7 +485,7 @@ pub fn requeue_external_futex_waits(addr: u32, new_addr: u32, max_requeue: u32) 
 }
 
 #[cfg(any(test, feature = "harness"))]
-pub fn take_external_futex_wake(pid: i32, addr: u32) -> bool {
+pub fn take_external_futex_wake(pid: i32, addr: u64) -> bool {
     if !HARNESS_RUNTIME_SUPPORT_ENABLED {
         return false;
     }
@@ -723,9 +723,9 @@ pub fn read_u32_from_shared_mapping_overlay(
 #[cfg(any(test, feature = "harness"))]
 pub fn cmp_requeue_shared_words_from_shared_mapping_overlay(
     mappings: &SharedMappingOverlay,
-    futex_addr: u32,
+    futex_addr: u64,
 ) -> Option<(u32, u32, u32, u32)> {
-    let addr = futex_addr as u64;
+    let addr = futex_addr;
     Some((
         read_u32_from_shared_mapping_overlay(mappings, addr)?,
         read_u32_from_shared_mapping_overlay(mappings, addr + 4)?,

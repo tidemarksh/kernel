@@ -20,26 +20,26 @@ use core::sync::atomic::Ordering;
 
 #[cfg(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness")))]
 #[inline(always)]
-fn wake_external_waiters(caller_pid: i32, addr: u32, max_wake: u32) -> u32 {
+fn wake_external_waiters(caller_pid: i32, addr: u64, max_wake: u32) -> u32 {
     crate::harness::support::wake_external_futex_waits_from_pid(caller_pid, addr, max_wake)
 }
 
 #[cfg(not(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness"))))]
 #[inline(always)]
-fn wake_external_waiters(caller_pid: i32, addr: u32, max_wake: u32) -> u32 {
+fn wake_external_waiters(caller_pid: i32, addr: u64, max_wake: u32) -> u32 {
     let _ = (caller_pid, addr, max_wake);
     0
 }
 
 #[cfg(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness")))]
 #[inline(always)]
-fn requeue_external_waiters(addr: u32, new_addr: u32, max_requeue: u32) -> u32 {
+fn requeue_external_waiters(addr: u64, new_addr: u64, max_requeue: u32) -> u32 {
     crate::harness::support::requeue_external_futex_waits(addr, new_addr, max_requeue)
 }
 
 #[cfg(not(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness"))))]
 #[inline(always)]
-fn requeue_external_waiters(addr: u32, new_addr: u32, max_requeue: u32) -> u32 {
+fn requeue_external_waiters(addr: u64, new_addr: u64, max_requeue: u32) -> u32 {
     let _ = (addr, new_addr, max_requeue);
     0
 }
@@ -223,7 +223,7 @@ fn clear_tid_and_wake(process_ptr: u32, base: u32, addr: u64) -> u32 {
     wake_futex_waiters_by_process_ptr(
         process_ptr,
         base,
-        addr as u32,
+        addr,
         u32::MAX,
         FUTEX_BITSET_MATCH_ANY,
     )
@@ -232,7 +232,7 @@ fn clear_tid_and_wake(process_ptr: u32, base: u32, addr: u64) -> u32 {
 fn wake_futex_waiters_by_process_ptr(
     process_ptr: u32,
     base: u32,
-    addr: u32,
+    addr: u64,
     max_wake: u32,
     wake_bitset: u32,
 ) -> u32 {
@@ -275,7 +275,7 @@ unsafe extern "C" {
 }
 
 #[cfg(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown"))]
-pub(crate) fn notify_futex_addr(base: u32, addr: u32, max_wake: u32) {
+pub(crate) fn notify_futex_addr(base: u32, addr: u64, max_wake: u32) {
     unsafe {
         let ptr = (base as u64 + addr as u64) as usize as *mut i32;
         let _ = tidemark_memory_atomic_notify(ptr, max_wake);
@@ -283,13 +283,13 @@ pub(crate) fn notify_futex_addr(base: u32, addr: u32, max_wake: u32) {
 }
 
 #[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
-pub(crate) fn notify_futex_addr(_base: u32, _addr: u32, _max_wake: u32) {}
+pub(crate) fn notify_futex_addr(_base: u32, _addr: u64, _max_wake: u32) {}
 
 fn requeue_futex_waiters_by_process_ptr(
     process_ptr: u32,
     base: u32,
-    addr: u32,
-    new_addr: u32,
+    addr: u64,
+    new_addr: u64,
     max_requeue: u32,
 ) -> u32 {
     if process_ptr == 0 || max_requeue == 0 || addr == new_addr {
@@ -347,7 +347,7 @@ fn mark_robust_futex_owner_died(
     wake_futex_waiters_by_process_ptr(
         process_ptr,
         base,
-        futex_addr as u32,
+        futex_addr,
         u32::MAX,
         FUTEX_BITSET_MATCH_ANY,
     );
@@ -1001,14 +1001,14 @@ pub fn process_thread_count(vm_ptr: u32, base: u32) -> u32 {
 }
 
 /// Read the blocked_addr for the given thread from its ThreadRecord.
-/// Returns 0 if woken (FUTEX_WAKE clears this), u32::MAX if not found.
-pub fn thread_record_blocked_addr(vm: &ThreadState, base: u32) -> u32 {
+/// Returns 0 if woken (FUTEX_WAKE clears this), u64::MAX if not found.
+pub fn thread_record_blocked_addr(vm: &ThreadState, base: u32) -> u64 {
     unsafe {
         if vm.tid <= 0 || vm.tid as usize > MAX_THREADS {
-            return u32::MAX;
+            return u64::MAX;
         }
         let Some(record) = thread_record_ptr(base, vm.process_ptr, vm.tid) else {
-            return u32::MAX;
+            return u64::MAX;
         };
         core::ptr::read_unaligned(core::ptr::addr_of!((*record).blocked_addr))
     }
@@ -1070,7 +1070,7 @@ pub fn sys_futex(
                 if let Some(record) = thread_record_ptr(base, vm.process_ptr, vm.tid) {
                     let mut updated = read_thread_record(record);
                     updated.state = THREAD_BLOCKED_FUTEX;
-                    updated.blocked_addr = addr as u32;
+                    updated.blocked_addr = addr;
                     updated.clear_child_tid = vm.clear_child_tid as u32;
                     write_thread_record(record, updated);
                 }
@@ -1099,7 +1099,7 @@ pub fn sys_futex(
             let local = wake_futex_waiters_by_process_ptr(
                 vm.process_ptr,
                 base,
-                addr as u32,
+                addr,
                 val.min(u32::MAX as u64) as u32,
                 wake_bitset,
             );
@@ -1108,7 +1108,7 @@ pub fn sys_futex(
             // executing, so external waiters must be counted separately.
             let caller_pid = crate::syscall::process::current_process_pid(vm, base);
             let external =
-                wake_external_waiters(caller_pid, addr as u32, val.min(u32::MAX as u64) as u32);
+                wake_external_waiters(caller_pid, addr, val.min(u32::MAX as u64) as u32);
             (local + external) as i64
         }
         FUTEX_CMP_REQUEUE => {
@@ -1127,22 +1127,21 @@ pub fn sys_futex(
             let local_wake = wake_futex_waiters_by_process_ptr(
                 vm.process_ptr,
                 base,
-                addr as u32,
+                addr,
                 wake_count,
                 FUTEX_BITSET_MATCH_ANY,
             );
             let caller_pid = crate::syscall::process::current_process_pid(vm, base);
-            let external_wake = wake_external_waiters(caller_pid, addr as u32, wake_count);
+            let external_wake = wake_external_waiters(caller_pid, addr, wake_count);
 
             let local_requeue = requeue_futex_waiters_by_process_ptr(
                 vm.process_ptr,
                 base,
-                addr as u32,
-                addr2 as u32,
+                addr,
+                addr2,
                 requeue_count,
             );
-            let external_requeue =
-                requeue_external_waiters(addr as u32, addr2 as u32, requeue_count);
+            let external_requeue = requeue_external_waiters(addr, addr2, requeue_count);
 
             (local_wake + external_wake + local_requeue + external_requeue) as i64
         }

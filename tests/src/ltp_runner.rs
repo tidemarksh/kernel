@@ -1247,7 +1247,7 @@ fn run_ltp_process_tree(
                         0
                     };
                     let is_process_leader = pid > 0 && prepared.vm.tid == pid;
-                    let futex_addr = prepared.vm.futex_wait_addr as u32;
+                    let futex_addr = prepared.vm.futex_wait_addr;
                     if is_process_leader
                         && futex_addr != 0
                         && !tidemark_kernel::harness::support::has_external_futex_wait(pid)

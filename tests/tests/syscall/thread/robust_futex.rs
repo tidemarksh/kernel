@@ -79,7 +79,7 @@ fn contract_exit_marks_owned_robust_futex_owner_died_and_wakes_waiters() {
         THREAD_BLOCKED_FUTEX,
         0xDEAD_BEEFu32,
         0,
-        futex_addr as u32,
+        futex_addr,
     );
     ps.thread_count
         .store(2, core::sync::atomic::Ordering::Release);

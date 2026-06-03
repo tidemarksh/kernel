@@ -1260,7 +1260,7 @@ pub extern "C" fn thread_sleep_deadline_ticks(vm_ptr: u32) -> u64 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn thread_record_blocked_addr(vm_ptr: u32) -> u32 {
+pub extern "C" fn thread_record_blocked_addr(vm_ptr: u32) -> u64 {
     unsafe {
         let vm = &*(vm_ptr as *const ThreadState);
         crate::syscall::thread::thread_record_blocked_addr(vm, vm.guest_base)
