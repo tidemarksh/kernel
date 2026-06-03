@@ -16,7 +16,7 @@ fn process_create_initializes_tp_from_pt_tls() {
     process_clear_args();
     process_push_arg(elf_ptr + 0x400);
 
-    let vm_ptr = process_create(elf_ptr, elf.len() as u32, ram_size, 1024 * 1024);
+    let vm_ptr = test_process_create(elf_ptr, elf.len() as u32, ram_size as u64, 1024 * 1024);
     assert_ne!(vm_ptr, 0);
 
     let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };

@@ -953,23 +953,6 @@ pub extern "C" fn process_guest_address_limit_for_profile(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn process_guest_base(ram_size: u32) -> u32 {
-    let base = process_guest_base_for_profile(GUEST_ADDRESS_PROFILE_WASM32_COMPATIBLE);
-    let _ = ram_size;
-    checked_wasm32_guest_limit(base).unwrap_or(0)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn process_inspect_elf_brk(elf_ptr: u32, elf_len: u32, ram_size: u32) -> u64 {
-    process_inspect_elf_brk_with_memory_policy(
-        elf_ptr,
-        elf_len,
-        GUEST_ADDRESS_PROFILE_WASM32_COMPATIBLE,
-        ram_size as u64,
-    )
-}
-
-#[unsafe(no_mangle)]
 pub extern "C" fn process_inspect_elf_brk_with_memory_policy(
     elf_ptr: u32,
     elf_len: u32,
@@ -1000,25 +983,6 @@ pub extern "C" fn process_inspect_elf_brk_with_memory_policy(
             Err(_) => 0,
         }
     }
-}
-
-/// Create a new process. Loads ELF from `elf_ptr` in WASM memory.
-/// Returns pointer to ThreadState, or 0 on failure.
-#[unsafe(no_mangle)]
-pub extern "C" fn process_create(
-    elf_ptr: u32,
-    elf_len: u32,
-    ram_size: u32,
-    stack_size: u32,
-) -> u32 {
-    process_create_with_memory_policy(
-        elf_ptr,
-        elf_len,
-        GUEST_ADDRESS_PROFILE_WASM32_COMPATIBLE,
-        ram_size as u64,
-        0,
-        stack_size,
-    )
 }
 
 #[unsafe(no_mangle)]

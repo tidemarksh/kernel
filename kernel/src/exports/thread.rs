@@ -1010,23 +1010,6 @@ pub extern "C" fn thread_spawn_kind(vm_ptr: u32) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn thread_guest_ram_limit(vm_ptr: u32) -> u32 {
-    unsafe {
-        let limit = (*(vm_ptr as *const ThreadState)).guest_memory_policy_limit;
-        if limit <= u32::MAX as u64 {
-            limit as u32
-        } else {
-            0
-        }
-    }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn thread_set_guest_ram_limit(vm_ptr: u32, ram_size: u32) {
-    thread_set_guest_memory_policy_limit(vm_ptr, ram_size as u64);
-}
-
-#[unsafe(no_mangle)]
 pub extern "C" fn thread_guest_address_profile(vm_ptr: u32) -> u32 {
     unsafe { (*(vm_ptr as *const ThreadState)).guest_address_profile }
 }
@@ -1095,18 +1078,6 @@ pub extern "C" fn thread_spawn_envp(vm_ptr: u32) -> u64 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn thread_spawn_ram_size(vm_ptr: u32) -> u32 {
-    unsafe {
-        let limit = (*(vm_ptr as *const ThreadState)).spawn_guest_memory_policy_limit;
-        if limit <= u32::MAX as u64 {
-            limit as u32
-        } else {
-            0
-        }
-    }
-}
-
-#[unsafe(no_mangle)]
 pub extern "C" fn thread_spawn_address_profile(vm_ptr: u32) -> u32 {
     unsafe { (*(vm_ptr as *const ThreadState)).spawn_address_profile }
 }
@@ -1119,27 +1090,6 @@ pub extern "C" fn thread_spawn_guest_memory_policy_limit(vm_ptr: u32) -> u64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn thread_spawn_process_max_memory_pages(vm_ptr: u32) -> u32 {
     unsafe { (*(vm_ptr as *const ThreadState)).spawn_process_max_memory_pages }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn thread_set_execve_handoff(
-    vm_ptr: u32,
-    process_ptr: u32,
-    path_addr: u64,
-    argv_addr: u64,
-    envp_addr: u64,
-    ram_size: u32,
-) {
-    thread_set_execve_memory_handoff(
-        vm_ptr,
-        process_ptr,
-        path_addr,
-        argv_addr,
-        envp_addr,
-        crate::abi::GUEST_ADDRESS_PROFILE_WASM32_COMPATIBLE,
-        ram_size as u64,
-        0,
-    );
 }
 
 #[unsafe(no_mangle)]

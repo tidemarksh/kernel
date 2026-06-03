@@ -46,30 +46,33 @@ fn spawn_handoff_exports_round_trip() {
     assert_eq!(thread_spawn_argv(vm_ptr), 0x1111);
     assert_eq!(thread_spawn_envp(vm_ptr), 0x2222);
 
-    thread_set_guest_ram_limit(vm_ptr, 0x12345678);
-    assert_eq!(thread_guest_ram_limit(vm_ptr), 0x12345678);
+    thread_set_guest_memory_policy_limit(vm_ptr, 0x12345678);
     assert_eq!(thread_guest_memory_policy_limit(vm_ptr), 0x12345678);
 
     thread_set_guest_memory_policy_limit(vm_ptr, 0x1_0000_0000);
     assert_eq!(thread_guest_memory_policy_limit(vm_ptr), 0x1_0000_0000);
-    assert_eq!(
-        thread_guest_ram_limit(vm_ptr),
-        0,
-        "legacy u32 shim must not truncate Memory64-sized policy values",
-    );
 
-    thread_set_execve_handoff(vm_ptr, 0x4444, 0xAAAA, 0xBBBB, 0xCCCC, 0x3333);
+    thread_set_execve_memory_handoff(
+        vm_ptr,
+        0x4444,
+        0xAAAA,
+        0xBBBB,
+        0xCCCC,
+        abi_guest_address_profile_target(),
+        0x3333,
+        456,
+    );
     assert_eq!(thread_process_ptr(vm_ptr), 0x4444);
     assert_eq!(thread_spawn_kind(vm_ptr), SPAWN_KIND_EXECVE);
     assert_eq!(thread_spawn_path(vm_ptr), 0xAAAA);
     assert_eq!(thread_spawn_argv(vm_ptr), 0xBBBB);
     assert_eq!(thread_spawn_envp(vm_ptr), 0xCCCC);
-    assert_eq!(thread_spawn_ram_size(vm_ptr), 0x3333);
     assert_eq!(
         thread_spawn_address_profile(vm_ptr),
-        abi_guest_address_profile_wasm32_compatible(),
+        abi_guest_address_profile_target(),
     );
     assert_eq!(thread_spawn_guest_memory_policy_limit(vm_ptr), 0x3333);
+    assert_eq!(thread_spawn_process_max_memory_pages(vm_ptr), 456);
 
     thread_set_execve_memory_handoff(
         vm_ptr,
@@ -82,7 +85,6 @@ fn spawn_handoff_exports_round_trip() {
         123,
     );
     assert_eq!(thread_process_ptr(vm_ptr), 0x5555);
-    assert_eq!(thread_spawn_ram_size(vm_ptr), 0);
     assert_eq!(thread_spawn_guest_memory_policy_limit(vm_ptr), 0x1_0000_0000);
     assert_eq!(thread_spawn_process_max_memory_pages(vm_ptr), 123);
 
@@ -134,7 +136,7 @@ fn process_create_populates_initial_stack_contract() {
     let _t = TestVm::new();
     let ram_size = 64 * 1024 * 1024;
     let stack_size = 1024 * 1024;
-    let guest_base = process_guest_base(ram_size);
+    let guest_base = test_process_guest_base();
     assert_ne!(guest_base, 0);
 
     let mut elf = vec![0u8; 0x104];
@@ -177,7 +179,7 @@ fn process_create_populates_initial_stack_contract() {
     process_push_arg(arg1_ptr);
     process_push_env(env0_ptr);
 
-    let vm_ptr = process_create(elf_ptr, elf.len() as u32, ram_size, stack_size);
+    let vm_ptr = test_process_create(elf_ptr, elf.len() as u32, ram_size as u64, stack_size);
     assert_ne!(vm_ptr, 0);
 
     let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
@@ -289,7 +291,7 @@ fn process_create_with_memory_policy_initializes_memory_contract() {
     assert_eq!(vm.process_max_memory_pages, 2048);
     assert_eq!(thread_guest_address_profile(vm_ptr), address_profile);
     assert_eq!(thread_guest_memory_policy_limit(vm_ptr), ram_size);
-    assert_eq!(thread_guest_ram_limit(vm_ptr), ram_size as u32);
+    assert_eq!(thread_guest_memory_policy_limit(vm_ptr), ram_size);
     assert_eq!(thread_process_max_memory_pages(vm_ptr), 2048);
 }
 
@@ -298,7 +300,7 @@ fn process_create_keeps_initial_stack_compact_for_large_ram_limit() {
     let _t = TestVm::new();
     let ram_size = 512 * 1024 * 1024;
     let stack_size = 1024 * 1024;
-    let guest_base = process_guest_base(ram_size);
+    let guest_base = test_process_guest_base();
     assert_ne!(guest_base, 0);
 
     let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
@@ -309,7 +311,7 @@ fn process_create_keeps_initial_stack_compact_for_large_ram_limit() {
     }
 
     process_clear_args();
-    let vm_ptr = process_create(elf_ptr, elf.len() as u32, ram_size, stack_size);
+    let vm_ptr = test_process_create(elf_ptr, elf.len() as u32, ram_size as u64, stack_size);
     assert_ne!(vm_ptr, 0);
 
     let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
@@ -340,8 +342,7 @@ fn process_create_keeps_initial_stack_compact_for_large_ram_limit() {
 #[test]
 fn process_guest_base_reserves_exec_scratch_headroom() {
     let _t = TestVm::new();
-    let ram_size = 64 * 1024 * 1024;
-    let guest_base = process_guest_base(ram_size);
+    let guest_base = test_process_guest_base();
     assert_ne!(guest_base, 0);
 
     let expected_floor =
@@ -355,7 +356,7 @@ fn process_create_rebases_user_brk_after_hidden_process_state() {
     let _t = TestVm::new();
     let ram_size = 64 * 1024 * 1024;
     let stack_size = 1024 * 1024;
-    let guest_base = process_guest_base(ram_size);
+    let guest_base = test_process_guest_base();
     assert_ne!(guest_base, 0);
 
     let mut elf = vec![0u8; 0x104];
@@ -389,7 +390,7 @@ fn process_create_rebases_user_brk_after_hidden_process_state() {
 
     process_clear_args();
     process_push_arg(elf_ptr + 0x400);
-    let vm_ptr = process_create(elf_ptr, elf.len() as u32, ram_size, stack_size);
+    let vm_ptr = test_process_create(elf_ptr, elf.len() as u32, ram_size as u64, stack_size);
     assert_ne!(vm_ptr, 0);
 
     let process_ptr = thread_process_ptr(vm_ptr) as u64;

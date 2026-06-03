@@ -13,7 +13,7 @@ fn process_inspect_elf_brk_accepts_et_dyn() {
     }
 
     assert_eq!(
-        process_inspect_elf_brk(elf_ptr, elf.len() as u32, ram_size),
+        test_process_inspect_elf_brk(elf_ptr, elf.len() as u32, ram_size as u64),
         0x2000
     );
 }
