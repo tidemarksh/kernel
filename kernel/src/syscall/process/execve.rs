@@ -71,7 +71,7 @@ fn read_guest_cstr_bytes(base: u32, addr: u64) -> Result<Vec<u8>, i64> {
     }
 
     let guest_limit = crate::wasm::memory_size_bytes().saturating_sub(base as u64);
-    if addr >= guest_limit || addr > u32::MAX as u64 {
+    if addr >= guest_limit {
         return Err(EFAULT);
     }
 
@@ -81,7 +81,7 @@ fn read_guest_cstr_bytes(base: u32, addr: u64) -> Result<Vec<u8>, i64> {
         let Some(cur) = addr.checked_add(offset) else {
             return Err(EFAULT);
         };
-        if cur >= guest_limit || cur > u32::MAX as u64 {
+        if cur >= guest_limit {
             return Err(EFAULT);
         }
         if crate::syscall::memory::range_has_prot_none(cur, 1) {

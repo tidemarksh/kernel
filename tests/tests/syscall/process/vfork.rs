@@ -222,7 +222,7 @@ fn semantics_vfork_execve_preserves_stdio_fds() {
     let ret = process_impl::complete_execve_in_place_from_handoff(
         &mut t.vm,
         t.base,
-        process_impl::max_execve_ram_limit(t.base),
+        process_impl::max_execve_guest_memory_limit(t.base),
     );
     assert_eq!(ret, 0);
 
@@ -284,7 +284,7 @@ fn semantics_vfork_execve_preserves_distinct_capture_pipe_ofds() {
     let ret = process_impl::complete_execve_in_place_from_handoff(
         &mut t.vm,
         t.base,
-        process_impl::max_execve_ram_limit(t.base),
+        process_impl::max_execve_guest_memory_limit(t.base),
     );
     assert_eq!(ret, 0);
 

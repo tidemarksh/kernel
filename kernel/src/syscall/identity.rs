@@ -56,9 +56,11 @@ const GRND_RANDOM: u64 = 0x0002;
 
 static mut GETRANDOM_STATE: u64 = 0;
 
-fn guest_range_valid(addr: u64, len: usize) -> bool {
-    let len = len as u64;
-    addr != 0 && addr <= u32::MAX as u64 && len <= (u32::MAX as u64 + 1).saturating_sub(addr)
+fn guest_range_valid(base: u32, addr: u64, len: usize) -> bool {
+    let Ok(len) = u64::try_from(len) else {
+        return false;
+    };
+    addr != 0 && crate::syscall::memory::guest_range_accessible(base, addr, len)
 }
 
 fn splitmix64_next(state: &mut u64) -> u64 {
@@ -139,9 +141,7 @@ pub fn sys_gettid(vm: &ThreadState) -> i64 {
 /// struct utsname { char sysname[65]; nodename[65]; release[65]; version[65]; machine[65]; domainname[65]; }
 pub fn sys_uname(vm: &ThreadState, base: u32, buf_addr: u64) -> i64 {
     let _ = vm;
-    if !guest_range_valid(buf_addr, 390)
-        || crate::syscall::memory::range_has_prot_none(buf_addr, 390)
-    {
+    if !guest_range_valid(base, buf_addr, 390) {
         return crate::abi::EFAULT;
     }
     let fields: [&[u8]; 6] = [
@@ -165,9 +165,7 @@ pub fn sys_uname(vm: &ThreadState, base: u32, buf_addr: u64) -> i64 {
 /// sysinfo: write basic system info.
 /// struct sysinfo { uptime, loads[3], totalram, freeram, ... }
 pub fn sys_sysinfo(_vm: &ThreadState, base: u32, buf_addr: u64) -> i64 {
-    if !guest_range_valid(buf_addr, 112)
-        || crate::syscall::memory::range_has_prot_none(buf_addr, 112)
-    {
+    if !guest_range_valid(base, buf_addr, 112) {
         return crate::abi::EFAULT;
     }
     // Zero the entire struct (112 bytes on 64-bit)
@@ -201,7 +199,7 @@ pub fn sys_getrandom(vm: &ThreadState, base: u32, buf: u64, len: u64, flags: u64
         Ok(count) => count,
         Err(_) => return EFAULT,
     };
-    if !guest_range_valid(buf, count) || crate::syscall::memory::range_has_prot_none(buf, len) {
+    if !guest_range_valid(base, buf, count) {
         return EFAULT;
     }
 
@@ -256,15 +254,13 @@ pub fn sys_riscv_hwprobe(
         None => return EFAULT,
     };
     if pair_count != 0
-        && (!guest_range_valid(pairs_addr, pairs_len)
-            || crate::syscall::memory::range_has_prot_none(pairs_addr, pairs_len as u64))
+        && !guest_range_valid(base, pairs_addr, pairs_len)
     {
         return EFAULT;
     }
     if cpus_addr != 0
         && cpusetsize != 0
-        && (!guest_range_valid(cpus_addr, cpusetsize as usize)
-            || crate::syscall::memory::range_has_prot_none(cpus_addr, cpusetsize))
+        && !guest_range_valid(base, cpus_addr, cpusetsize as usize)
     {
         return EFAULT;
     }
@@ -350,7 +346,7 @@ pub fn sys_getresuid(
     suid_addr: u64,
 ) -> i64 {
     for addr in [ruid_addr, euid_addr, suid_addr] {
-        if !guest_range_valid(addr, 4) || crate::syscall::memory::range_has_prot_none(addr, 4) {
+        if !guest_range_valid(base, addr, 4) {
             return EFAULT;
         }
     }
@@ -371,7 +367,7 @@ pub fn sys_getresgid(
     sgid_addr: u64,
 ) -> i64 {
     for addr in [rgid_addr, egid_addr, sgid_addr] {
-        if !guest_range_valid(addr, 4) || crate::syscall::memory::range_has_prot_none(addr, 4) {
+        if !guest_range_valid(base, addr, 4) {
             return EFAULT;
         }
     }
@@ -469,9 +465,7 @@ pub fn sys_getgroups(base: u32, size: i64, list_addr: u64) -> i64 {
         Some(bytes) => bytes,
         None => return EINVAL,
     };
-    if !guest_range_valid(list_addr, bytes)
-        || crate::syscall::memory::range_has_prot_none(list_addr, bytes as u64)
-    {
+    if !guest_range_valid(base, list_addr, bytes) {
         return EFAULT;
     }
     unsafe {
@@ -489,9 +483,7 @@ pub fn sys_setgroups(vm: &ThreadState, size: i64, list_addr: u64) -> i64 {
             Some(bytes) => bytes,
             None => return EINVAL,
         };
-        if !guest_range_valid(list_addr, bytes)
-            || crate::syscall::memory::range_has_prot_none(list_addr, bytes as u64)
-        {
+        if !guest_range_valid(vm.guest_base, list_addr, bytes) {
             return EFAULT;
         }
     }

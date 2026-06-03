@@ -194,7 +194,7 @@ fn pending_request_selected_path_ptr(request: &ring_buffer::FsRequestInfo, secon
 
 fn pending_request_path_len_inner(base: u32, path_ptr: u64) -> u32 {
     let guest_limit = crate::wasm::memory_size_bytes().saturating_sub(base as u64);
-    if path_ptr >= guest_limit || path_ptr > u32::MAX as u64 {
+    if path_ptr >= guest_limit {
         return 0;
     }
     let mut len = 0u32;
@@ -202,7 +202,7 @@ fn pending_request_path_len_inner(base: u32, path_ptr: u64) -> u32 {
         let Some(cur) = path_ptr.checked_add(len as u64) else {
             return 0;
         };
-        if cur >= guest_limit || cur > u32::MAX as u64 {
+        if cur >= guest_limit {
             return 0;
         }
         if crate::syscall::memory::range_has_prot_none(cur, 1) {
