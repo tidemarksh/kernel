@@ -458,6 +458,18 @@ pub extern "C" fn debug_memory_vma_flags(index: u32) -> i32 {
     crate::syscall::memory::address_space_vma_flags(index)
 }
 
+#[cfg(not(any(test, feature = "harness")))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_vma_fd(index: u32) -> i32 {
+    crate::syscall::memory::address_space_vma_fd(index)
+}
+
+#[cfg(not(any(test, feature = "harness")))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_vma_offset(index: u32) -> u64 {
+    crate::syscall::memory::address_space_vma_offset(index)
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_reset_memfs() {
     crate::fs::memfs::reset();

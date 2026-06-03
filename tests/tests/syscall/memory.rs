@@ -641,6 +641,17 @@ fn file_backed_mmap_preserves_bytes_for_offset_executable_mapping() {
     let len = 0x2000u64;
     let mapped = t.sys_mmap(0, len, PROT_READ | PROT_EXEC, MAP_PRIVATE, fd, offset);
     assert!(mapped > 0, "mapped={mapped}");
+    let vma_index = (0..tidemark_kernel::harness::memory::debug_vma_len())
+        .find(|index| tidemark_kernel::harness::memory::debug_vma_start(*index) == mapped as u64)
+        .expect("file-backed mapping should have a debug VMA");
+    assert_eq!(
+        tidemark_kernel::harness::memory::debug_vma_fd(vma_index),
+        ino as i32,
+    );
+    assert_eq!(
+        tidemark_kernel::harness::memory::debug_vma_offset(vma_index),
+        offset,
+    );
     assert_eq!(
         &t.guest_mem(mapped as u64, len as usize),
         &data[offset as usize..(offset + len) as usize],

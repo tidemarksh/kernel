@@ -68,3 +68,11 @@ pub fn debug_vma_prot(index: u32) -> i32 {
 pub fn debug_vma_flags(index: u32) -> i32 {
     crate::syscall::memory::address_space_vma_flags(index)
 }
+
+pub fn debug_vma_fd(index: u32) -> i32 {
+    crate::syscall::memory::address_space_vma_fd(index)
+}
+
+pub fn debug_vma_offset(index: u32) -> u64 {
+    crate::syscall::memory::address_space_vma_offset(index)
+}

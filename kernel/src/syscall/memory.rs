@@ -741,6 +741,14 @@ pub(crate) fn address_space_vma_flags(index: u32) -> i32 {
     ms().vmas.get(index as usize).map(|v| v.flags).unwrap_or(0)
 }
 
+pub(crate) fn address_space_vma_fd(index: u32) -> i32 {
+    ms().vmas.get(index as usize).map(|v| v.fd).unwrap_or(-1)
+}
+
+pub(crate) fn address_space_vma_offset(index: u32) -> u64 {
+    ms().vmas.get(index as usize).map(|v| v.offset).unwrap_or(0)
+}
+
 fn ensure_memory_capacity_for_guest_range(base: u32, guest_end: u64) -> bool {
     let Some(needed) = (base as u64).checked_add(guest_end) else {
         return false;

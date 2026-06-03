@@ -183,3 +183,15 @@ pub extern "C" fn debug_memory_vma_prot(index: u32) -> i32 {
 pub extern "C" fn debug_memory_vma_flags(index: u32) -> i32 {
     crate::harness::memory::debug_vma_flags(index)
 }
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_vma_fd(index: u32) -> i32 {
+    crate::harness::memory::debug_vma_fd(index)
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_memory_vma_offset(index: u32) -> u64 {
+    crate::harness::memory::debug_vma_offset(index)
+}
