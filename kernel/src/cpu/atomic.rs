@@ -21,6 +21,22 @@ unsafe fn process_reservation_state(process_ptr: u32, base: u32) -> &'static Pro
     unsafe { &*(((base as u64) + process_ptr as u64) as *const ProcessState) }
 }
 
+#[inline(always)]
+fn guest_atomic_addr(base: u32, addr: u64, len: usize, op: &str) -> usize {
+    let absolute = (base as u64).checked_add(addr).unwrap_or_else(|| {
+        panic!("{op}: address overflow base=0x{base:x} addr=0x{addr:x} len=0x{len:x}")
+    });
+    let end = absolute
+        .checked_add(len as u64)
+        .unwrap_or_else(|| panic!("{op}: end overflow absolute=0x{absolute:x} len=0x{len:x}"));
+    if end > usize::MAX as u64 {
+        panic!(
+            "{op}: address exceeds pointer width absolute=0x{absolute:x} end=0x{end:x} len=0x{len:x}"
+        );
+    }
+    absolute as usize
+}
+
 // =============================================================================
 // AMO dispatch
 // =============================================================================
@@ -41,10 +57,10 @@ pub(super) unsafe fn exec_amo(
     let amo_op = decode::funct5(raw);
     let funct3 = decode::funct3(raw);
     let addr = x[rs1];
-    let host_ptr = (base + addr as u32) as usize;
 
     match funct3 {
         2 => {
+            let host_ptr = guest_atomic_addr(base, addr, 4, "cpu::atomic::exec_amo32");
             if (host_ptr & 3) == 0 {
                 unsafe { exec_amo32_atomic(vm, host_ptr, x, rd, rs2, amo_op, addr, base) };
             } else {
@@ -52,6 +68,7 @@ pub(super) unsafe fn exec_amo(
             }
         }
         3 => {
+            let host_ptr = guest_atomic_addr(base, addr, 8, "cpu::atomic::exec_amo64");
             if (host_ptr & 7) == 0 {
                 unsafe { exec_amo64_atomic(vm, host_ptr, x, rd, rs2, amo_op, addr, base) };
             } else {
@@ -325,7 +342,7 @@ unsafe fn exec_amo32_nonatomic(
                     core::hint::spin_loop();
                 }
             }
-            let ptr = (base + addr as u32) as *const u32;
+            let ptr = guest_atomic_addr(base, addr, 4, "cpu::atomic::amo32_lr") as *const u32;
             let val = unsafe { ptr.read_unaligned() as i32 };
             vm.lr_addr = addr;
             vm.lr_val = val as u32 as u64;
@@ -379,7 +396,7 @@ unsafe fn exec_amo32_nonatomic(
                         x[rd] = 1;
                     }
                 } else {
-                    let ptr = (base + addr as u32) as *mut u32;
+                    let ptr = guest_atomic_addr(base, addr, 4, "cpu::atomic::amo32_sc") as *mut u32;
                     unsafe { ptr.write_unaligned(x[rs2] as u32) };
                     ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
                     if end_idx != gen_idx {
@@ -424,7 +441,7 @@ unsafe fn exec_amo32_nonatomic(
                     core::hint::spin_loop();
                 }
             }
-            let rptr = (base + addr as u32) as *const u32;
+            let rptr = guest_atomic_addr(base, addr, 4, "cpu::atomic::amo32_read") as *const u32;
             let old = unsafe { rptr.read_unaligned() as i32 };
             let src = x[rs2] as i32;
             let new_val = match amo_op {
@@ -463,7 +480,7 @@ unsafe fn exec_amo32_nonatomic(
                 }
                 _ => old,
             };
-            let wptr = (base + addr as u32) as *mut u32;
+            let wptr = guest_atomic_addr(base, addr, 4, "cpu::atomic::amo32_write") as *mut u32;
             unsafe { wptr.write_unaligned(new_val as u32) };
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             if end_idx != gen_idx {
@@ -742,7 +759,7 @@ unsafe fn exec_amo64_nonatomic(
                     core::hint::spin_loop();
                 }
             }
-            let ptr = (base + addr as u32) as *const u64;
+            let ptr = guest_atomic_addr(base, addr, 8, "cpu::atomic::amo64_lr") as *const u64;
             let val = unsafe { ptr.read_unaligned() };
             vm.lr_addr = addr;
             vm.lr_val = val;
@@ -796,7 +813,7 @@ unsafe fn exec_amo64_nonatomic(
                         x[rd] = 1;
                     }
                 } else {
-                    let ptr = (base + addr as u32) as *mut u64;
+                    let ptr = guest_atomic_addr(base, addr, 8, "cpu::atomic::amo64_sc") as *mut u64;
                     unsafe { ptr.write_unaligned(x[rs2]) };
                     ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
                     if end_idx != gen_idx {
@@ -841,7 +858,7 @@ unsafe fn exec_amo64_nonatomic(
                     core::hint::spin_loop();
                 }
             }
-            let rptr = (base + addr as u32) as *const u64;
+            let rptr = guest_atomic_addr(base, addr, 8, "cpu::atomic::amo64_read") as *const u64;
             let old = unsafe { rptr.read_unaligned() };
             let src = x[rs2];
             let new_val = match amo_op {
@@ -880,7 +897,7 @@ unsafe fn exec_amo64_nonatomic(
                 }
                 _ => old,
             };
-            let wptr = (base + addr as u32) as *mut u64;
+            let wptr = guest_atomic_addr(base, addr, 8, "cpu::atomic::amo64_write") as *mut u64;
             unsafe { wptr.write_unaligned(new_val) };
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             if end_idx != gen_idx {

@@ -53,15 +53,20 @@ fn sample_u64(bytes: &[u8]) -> (u64, u32) {
 }
 
 #[inline(always)]
-fn check_range(base: u32, addr: u64, len: usize, op: &str) {
+fn checked_addr(base: u32, addr: u64, len: usize, op: &str) -> usize {
+    let absolute = (base as u64).checked_add(addr).unwrap_or_else(|| {
+        panic!("{op}: address overflow base=0x{base:x} addr=0x{addr:x} len=0x{len:x}")
+    });
+    let end = absolute
+        .checked_add(len as u64)
+        .unwrap_or_else(|| panic!("{op}: end overflow absolute=0x{absolute:x} len=0x{len:x}"));
+    if end > usize::MAX as u64 {
+        panic!(
+            "{op}: address exceeds pointer width absolute=0x{absolute:x} end=0x{end:x} len=0x{len:x}"
+        );
+    }
     #[cfg(any(test, feature = "harness"))]
     {
-        let absolute = (base as u64).checked_add(addr).unwrap_or_else(|| {
-            panic!("{op}: address overflow base=0x{base:x} addr=0x{addr:x} len=0x{len:x}")
-        });
-        let end = absolute
-            .checked_add(len as u64)
-            .unwrap_or_else(|| panic!("{op}: end overflow absolute=0x{absolute:x} len=0x{len:x}"));
         let mem_size = crate::wasm::memory_size_bytes();
         if end > mem_size {
             panic!(
@@ -69,9 +74,18 @@ fn check_range(base: u32, addr: u64, len: usize, op: &str) {
             );
         }
     }
+    absolute as usize
+}
 
-    #[cfg(not(any(test, feature = "harness")))]
-    let _ = (base, addr, len, op);
+#[inline(always)]
+fn unchecked_addr(base: u32, addr: u64, op: &str) -> usize {
+    let absolute = (base as u64).checked_add(addr).unwrap_or_else(|| {
+        panic!("{op}: address overflow base=0x{base:x} addr=0x{addr:x}")
+    });
+    if absolute > usize::MAX as u64 {
+        panic!("{op}: address exceeds pointer width absolute=0x{absolute:x}");
+    }
+    absolute as usize
 }
 
 #[inline(always)]
@@ -256,8 +270,8 @@ unsafe fn read_gen(slot: usize) -> u32 {
 #[inline(always)]
 pub unsafe fn read_u8(base: u32, addr: u64) -> u8 {
     record_access(addr, 1, ACCESS_READ);
-    check_range(base, addr, 1, "guest_mem::read_u8");
-    unsafe { *((base + addr as u32) as *const u8) }
+    let ptr = checked_addr(base, addr, 1, "guest_mem::read_u8");
+    unsafe { *(ptr as *const u8) }
 }
 
 /// Read one byte after the caller has already validated guest access.
@@ -268,7 +282,8 @@ pub unsafe fn read_u8(base: u32, addr: u64) -> u8 {
 #[inline(always)]
 pub(crate) unsafe fn read_u8_unchecked(base: u32, addr: u64) -> u8 {
     record_access(addr, 1, ACCESS_READ);
-    unsafe { *((base + addr as u32) as *const u8) }
+    let ptr = unchecked_addr(base, addr, "guest_mem::read_u8_unchecked");
+    unsafe { *(ptr as *const u8) }
 }
 
 /// Read an unaligned little-endian `u16` from guest memory.
@@ -278,8 +293,8 @@ pub(crate) unsafe fn read_u8_unchecked(base: u32, addr: u64) -> u8 {
 #[inline(always)]
 pub unsafe fn read_u16(base: u32, addr: u64) -> u16 {
     record_access(addr, 2, ACCESS_READ);
-    check_range(base, addr, 2, "guest_mem::read_u16");
-    unsafe { ((base + addr as u32) as *const u16).read_unaligned() }
+    let ptr = checked_addr(base, addr, 2, "guest_mem::read_u16");
+    unsafe { (ptr as *const u16).read_unaligned() }
 }
 
 /// Read a `u32` from guest memory.
@@ -289,8 +304,7 @@ pub unsafe fn read_u16(base: u32, addr: u64) -> u16 {
 #[inline(always)]
 pub unsafe fn read_u32(base: u32, addr: u64) -> u32 {
     record_access(addr, 4, ACCESS_READ);
-    check_range(base, addr, 4, "guest_mem::read_u32");
-    let ptr = (base + addr as u32) as usize;
+    let ptr = checked_addr(base, addr, 4, "guest_mem::read_u32");
     unsafe { (ptr as *const u32).read_unaligned() }
 }
 
@@ -301,8 +315,7 @@ pub unsafe fn read_u32(base: u32, addr: u64) -> u32 {
 #[inline(always)]
 pub unsafe fn read_u64(base: u32, addr: u64) -> u64 {
     record_access(addr, 8, ACCESS_READ);
-    check_range(base, addr, 8, "guest_mem::read_u64");
-    let ptr = (base + addr as u32) as usize;
+    let ptr = checked_addr(base, addr, 8, "guest_mem::read_u64");
     unsafe { (ptr as *const u64).read_unaligned() }
 }
 
@@ -348,8 +361,7 @@ pub unsafe fn read_bytes(base: u32, addr: u64, buf: &mut [u8]) {
         return;
     }
     record_access(addr, buf.len() as u32, ACCESS_READ);
-    check_range(base, addr, buf.len(), "guest_mem::read_bytes");
-    let src = (base + addr as u32) as *const u8;
+    let src = checked_addr(base, addr, buf.len(), "guest_mem::read_bytes") as *const u8;
     debug_assert!(
         !src.is_null(),
         "guest_mem::read_bytes null src: base=0x{base:x} addr=0x{addr:x} len={}",
@@ -368,8 +380,7 @@ pub unsafe fn read_slice<'a>(base: u32, addr: u64, len: usize) -> &'a [u8] {
         return &[];
     }
     record_access(addr, len as u32, ACCESS_READ);
-    check_range(base, addr, len, "guest_mem::read_slice");
-    let src = (base + addr as u32) as *const u8;
+    let src = checked_addr(base, addr, len, "guest_mem::read_slice") as *const u8;
     debug_assert!(
         !src.is_null(),
         "guest_mem::read_slice null src: base=0x{base:x} addr=0x{addr:x} len={len}"
@@ -522,7 +533,12 @@ unsafe fn write_scalar_with_mode_and_sync(
     bytewise: bool,
     sync: Option<GuestMemorySyncContext>,
 ) {
-    let dst = (base + addr as u32) as *mut u8;
+    let dst = checked_addr(
+        base,
+        addr,
+        bytes.len(),
+        "guest_mem::write_scalar_with_mode_and_sync",
+    ) as *mut u8;
     let reservation_gen = sync.map_or(unsafe { RESERVATION_GEN }, |ctx| ctx.reservation_gen);
     let reservation_lock = sync.map_or(unsafe { RESERVATION_LOCK }, |ctx| ctx.reservation_lock);
     let thread_count = sync.map_or(unsafe { THREAD_COUNT }, |ctx| ctx.thread_count);
@@ -585,7 +601,7 @@ unsafe fn write_scalar_with_mode_and_sync(
 /// linear memory.
 #[inline(always)]
 pub unsafe fn write_u8(base: u32, addr: u64, val: u8) {
-    check_range(base, addr, 1, "guest_mem::write_u8");
+    checked_addr(base, addr, 1, "guest_mem::write_u8");
     unsafe { write_u8_unchecked(base, addr, val) };
 }
 
@@ -597,15 +613,16 @@ pub unsafe fn write_u8(base: u32, addr: u64, val: u8) {
 #[inline(always)]
 pub(crate) unsafe fn write_u8_unchecked(base: u32, addr: u64, val: u8) {
     record_access(addr, 1, ACCESS_WRITE);
+    let ptr = unchecked_addr(base, addr, "guest_mem::write_u8_unchecked") as *mut u8;
     if unsafe { is_multi_threaded() } {
         let slot = ((addr >> 3) & 63) as usize;
         unsafe { lock_slot(slot) };
         unsafe { bump_gen(slot) }; // odd  → write-in-progress
-        unsafe { *((base + addr as u32) as *mut u8) = val };
+        unsafe { *ptr = val };
         unsafe { bump_gen(slot) }; // even → write-complete
         unsafe { unlock_slot(slot) };
     } else {
-        unsafe { *((base + addr as u32) as *mut u8) = val };
+        unsafe { *ptr = val };
     }
 }
 
@@ -615,7 +632,7 @@ pub(crate) unsafe fn write_u8_unchecked(base: u32, addr: u64, val: u8) {
 /// `base + addr..base + addr + 2` must be writable guest memory.
 #[inline(always)]
 pub unsafe fn write_u16(base: u32, addr: u64, val: u16) {
-    check_range(base, addr, 2, "guest_mem::write_u16");
+    checked_addr(base, addr, 2, "guest_mem::write_u16");
     unsafe { write_u16_unchecked(base, addr, val) };
 }
 
@@ -626,15 +643,16 @@ pub unsafe fn write_u16(base: u32, addr: u64, val: u16) {
 #[inline(always)]
 pub(crate) unsafe fn write_u16_unchecked(base: u32, addr: u64, val: u16) {
     record_access(addr, 2, ACCESS_WRITE);
+    let ptr = unchecked_addr(base, addr, "guest_mem::write_u16_unchecked") as *mut u16;
     if unsafe { is_multi_threaded() } {
         let mask = stripe_mask(addr, 2);
         unsafe { lock_mask(mask) };
         unsafe { seqlock_begin_mask(mask) };
-        unsafe { ((base + addr as u32) as *mut u16).write_unaligned(val) };
+        unsafe { ptr.write_unaligned(val) };
         unsafe { seqlock_end_mask(mask) };
         unsafe { unlock_mask(mask) };
     } else {
-        unsafe { ((base + addr as u32) as *mut u16).write_unaligned(val) };
+        unsafe { ptr.write_unaligned(val) };
     }
 }
 
@@ -644,7 +662,7 @@ pub(crate) unsafe fn write_u16_unchecked(base: u32, addr: u64, val: u16) {
 /// `base + addr..base + addr + 4` must be writable guest memory.
 #[inline(always)]
 pub unsafe fn write_u32(base: u32, addr: u64, val: u32) {
-    check_range(base, addr, 4, "guest_mem::write_u32");
+    checked_addr(base, addr, 4, "guest_mem::write_u32");
     unsafe { write_u32_unchecked(base, addr, val) };
 }
 
@@ -655,6 +673,7 @@ pub unsafe fn write_u32(base: u32, addr: u64, val: u32) {
 #[inline(always)]
 pub(crate) unsafe fn write_u32_unchecked(base: u32, addr: u64, val: u32) {
     record_access(addr, 4, ACCESS_WRITE);
+    let ptr = unchecked_addr(base, addr, "guest_mem::write_u32_unchecked") as *mut u32;
     if crate::tracepoints::guest_write_overlap_enabled() {
         crate::tracepoints::record_guest_write_overlap(addr, 4, WRITE_OP_U32, val as u64, 4);
     }
@@ -662,11 +681,11 @@ pub(crate) unsafe fn write_u32_unchecked(base: u32, addr: u64, val: u32) {
         let mask = stripe_mask(addr, 4);
         unsafe { lock_mask(mask) };
         unsafe { seqlock_begin_mask(mask) };
-        unsafe { ((base + addr as u32) as *mut u32).write_unaligned(val) };
+        unsafe { ptr.write_unaligned(val) };
         unsafe { seqlock_end_mask(mask) };
         unsafe { unlock_mask(mask) };
     } else {
-        unsafe { ((base + addr as u32) as *mut u32).write_unaligned(val) };
+        unsafe { ptr.write_unaligned(val) };
     }
 }
 
@@ -676,7 +695,7 @@ pub(crate) unsafe fn write_u32_unchecked(base: u32, addr: u64, val: u32) {
 /// `base + addr..base + addr + 8` must be writable guest memory.
 #[inline(always)]
 pub unsafe fn write_u64(base: u32, addr: u64, val: u64) {
-    check_range(base, addr, 8, "guest_mem::write_u64");
+    checked_addr(base, addr, 8, "guest_mem::write_u64");
     unsafe { write_u64_unchecked(base, addr, val) };
 }
 
@@ -687,6 +706,7 @@ pub unsafe fn write_u64(base: u32, addr: u64, val: u64) {
 #[inline(always)]
 pub(crate) unsafe fn write_u64_unchecked(base: u32, addr: u64, val: u64) {
     record_access(addr, 8, ACCESS_WRITE);
+    let ptr = unchecked_addr(base, addr, "guest_mem::write_u64_unchecked") as *mut u64;
     if crate::tracepoints::guest_write_overlap_enabled() {
         crate::tracepoints::record_guest_write_overlap(addr, 8, WRITE_OP_U64, val, 8);
     }
@@ -694,11 +714,11 @@ pub(crate) unsafe fn write_u64_unchecked(base: u32, addr: u64, val: u64) {
         let mask = stripe_mask(addr, 8);
         unsafe { lock_mask(mask) };
         unsafe { seqlock_begin_mask(mask) };
-        unsafe { ((base + addr as u32) as *mut u64).write_unaligned(val) };
+        unsafe { ptr.write_unaligned(val) };
         unsafe { seqlock_end_mask(mask) };
         unsafe { unlock_mask(mask) };
     } else {
-        unsafe { ((base + addr as u32) as *mut u64).write_unaligned(val) };
+        unsafe { ptr.write_unaligned(val) };
     }
 }
 
@@ -710,13 +730,13 @@ pub unsafe fn sync_context_from_process(
     if process_ptr == 0 {
         return None;
     }
-    check_range(
+    let ps_ptr = checked_addr(
         base,
         process_ptr as u64,
         core::mem::size_of::<crate::types::ProcessState>(),
         "guest_mem::sync_context_from_process",
     );
-    let ps = unsafe { &*((base as u64 + process_ptr as u64) as *const crate::types::ProcessState) };
+    let ps = unsafe { &*(ps_ptr as *const crate::types::ProcessState) };
     Some(GuestMemorySyncContext::new(
         core::ptr::addr_of!(ps.reservation_gen) as *const AtomicU32,
         core::ptr::addr_of!(ps.reservation_lock) as *const AtomicU32,
@@ -761,7 +781,7 @@ pub unsafe fn write_bytes(base: u32, addr: u64, data: &[u8]) {
         return;
     }
     record_access(addr, data.len() as u32, ACCESS_WRITE);
-    check_range(base, addr, data.len(), "guest_mem::write_bytes");
+    let dst = checked_addr(base, addr, data.len(), "guest_mem::write_bytes") as *mut u8;
     if crate::tracepoints::guest_write_overlap_enabled() {
         let (sample, sample_len) = sample_u64(data);
         crate::tracepoints::record_guest_write_overlap(
@@ -772,7 +792,6 @@ pub unsafe fn write_bytes(base: u32, addr: u64, data: &[u8]) {
             sample_len,
         );
     }
-    let dst = (base + addr as u32) as *mut u8;
     debug_assert!(
         !dst.is_null(),
         "guest_mem::write_bytes null dst: base=0x{base:x} addr=0x{addr:x} len={}",
@@ -802,8 +821,7 @@ pub unsafe fn with_write_slice<R>(
     f: impl FnOnce(&mut [u8]) -> R,
 ) -> R {
     record_access(addr, len.min(u32::MAX as usize) as u32, ACCESS_WRITE);
-    check_range(base, addr, len, "guest_mem::with_write_slice");
-    let dst = (base + addr as u32) as *mut u8;
+    let dst = checked_addr(base, addr, len, "guest_mem::with_write_slice") as *mut u8;
     debug_assert!(
         !dst.is_null(),
         "guest_mem::with_write_slice null dst: base=0x{base:x} addr=0x{addr:x} len={len}"
@@ -842,7 +860,7 @@ pub unsafe fn zero_mem(base: u32, addr: u64, len: usize) {
         return;
     }
     record_access(addr, len.min(u32::MAX as usize) as u32, ACCESS_ZERO);
-    check_range(base, addr, len, "guest_mem::zero_mem");
+    let dst = checked_addr(base, addr, len, "guest_mem::zero_mem") as *mut u8;
     crate::tracepoints::record_execve_stage(360, addr, len as u64);
     if crate::tracepoints::guest_write_overlap_enabled() {
         crate::tracepoints::record_guest_write_overlap(
@@ -859,7 +877,6 @@ pub unsafe fn zero_mem(base: u32, addr: u64, len: usize) {
         unsafe { lock_mask(mask) };
         crate::tracepoints::record_execve_stage(362, addr, len as u64);
         unsafe { seqlock_begin_mask(mask) };
-        let dst = (base + addr as u32) as *mut u8;
         unsafe { core::ptr::write_bytes(dst, 0, len) };
         crate::tracepoints::record_execve_stage(363, addr, len as u64);
         unsafe { seqlock_end_mask(mask) };
@@ -867,7 +884,6 @@ pub unsafe fn zero_mem(base: u32, addr: u64, len: usize) {
         crate::tracepoints::record_execve_stage(364, addr, len as u64);
     } else {
         crate::tracepoints::record_execve_stage(365, unsafe { debug_thread_count() }, len as u64);
-        let dst = (base + addr as u32) as *mut u8;
         unsafe { core::ptr::write_bytes(dst, 0, len) };
         crate::tracepoints::record_execve_stage(366, addr, len as u64);
     }
@@ -879,8 +895,8 @@ pub unsafe fn zero_mem(base: u32, addr: u64, len: usize) {
 /// `base + addr` must point to a readable NUL-terminated guest string, and
 /// the string including its terminator must fit in `buf`.
 pub unsafe fn read_cstr(base: u32, addr: u64, buf: &mut [u8]) -> usize {
-    let src = (base + addr as u32) as *const u8;
     let max = buf.len() - 1;
+    let src = checked_addr(base, addr, max + 1, "guest_mem::read_cstr") as *const u8;
     let mut i = 0;
     while i < max {
         let b = unsafe { src.add(i).read() };
