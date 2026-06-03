@@ -135,7 +135,10 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             r
         }
         SYS_READ => {
-            let r = fs::sys_read(vm, base, a0, a1, a2);
+            let r = fs::dispatch_read(vm, base, a0, a1, a2);
+            if vm.status == abi::STATUS_FS {
+                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_FS);
+            }
             if vm.status == abi::STATUS_PIPE_WAIT {
                 save_blocked_syscall_args(vm, nr, a0, a1, a2, a3, a4, a5);
                 return debug_return_fd_arg0(
@@ -170,7 +173,13 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             }
             r
         }
-        SYS_PREAD64 => fs::sys_pread64(vm, base, a0, a1, a2, a3),
+        SYS_PREAD64 => {
+            let r = fs::dispatch_pread64(vm, base, a0, a1, a2, a3);
+            if vm.status == abi::STATUS_FS {
+                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_FS);
+            }
+            r
+        }
         SYS_WRITE | SYS_WRITEV => {
             let r = fs::dispatch_write(vm, base, a0, a1, a2, nr);
             if vm.status == abi::STATUS_FS {

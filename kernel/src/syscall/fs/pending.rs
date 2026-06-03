@@ -1053,6 +1053,57 @@ pub fn dispatch_lseek(vm: &mut ThreadState, base: u32, fd: u64, offset: i64, whe
     crate::syscall::fs::sys_lseek(vm, base, fd, offset, whence)
 }
 
+pub fn dispatch_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) -> i64 {
+    let ofd = match fd_table::get_ofd(base, vm, fd) {
+        Some(o) => o,
+        None => return EBADF,
+    };
+    if ofd.fd_type != FD_TYPE_FILE {
+        return crate::syscall::fs::sys_read(vm, base, fd, buf, count);
+    }
+    submit_fs_request(
+        vm,
+        base,
+        ring_buffer::FS_OP_READ,
+        fd as i32,
+        0,
+        count,
+        buf,
+        0,
+        0,
+        0,
+    )
+}
+
+pub fn dispatch_pread64(
+    vm: &mut ThreadState,
+    base: u32,
+    fd: u64,
+    buf: u64,
+    count: u64,
+    offset: u64,
+) -> i64 {
+    let ofd = match fd_table::get_ofd(base, vm, fd) {
+        Some(o) => o,
+        None => return EBADF,
+    };
+    if ofd.fd_type != FD_TYPE_FILE {
+        return crate::syscall::fs::sys_pread64(vm, base, fd, buf, count, offset);
+    }
+    submit_fs_request(
+        vm,
+        base,
+        ring_buffer::FS_OP_READ,
+        fd as i32,
+        offset,
+        count,
+        buf,
+        0,
+        ring_buffer::FS_REQ_FLAG_PWRITE,
+        0,
+    )
+}
+
 pub fn dispatch_ftruncate(vm: &mut ThreadState, base: u32, fd: u64, length: u64) -> i64 {
     submit_fs_request(
         vm,

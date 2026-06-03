@@ -326,7 +326,11 @@ pub fn process_requests(ring_base: u32, vm_ptr: u32, base: u32) {
 
             let result: i64 = match opcode {
                 FS_OP_READ => {
-                    crate::syscall::fs::sys_pread64(vm, base, fd as u64, buf_ptr, len, offset)
+                    if flags & FS_REQ_FLAG_PWRITE != 0 {
+                        crate::syscall::fs::sys_pread64(vm, base, fd as u64, buf_ptr, len, offset)
+                    } else {
+                        crate::syscall::fs::sys_read(vm, base, fd as u64, buf_ptr, len)
+                    }
                 }
                 FS_OP_WRITE => {
                     if flags & FS_REQ_FLAG_PWRITE != 0 {
