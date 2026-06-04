@@ -226,6 +226,31 @@ fn contract_vfork_rebases_brk_after_child_process_state() {
 }
 
 #[test]
+fn contract_vfork_parent_resume_restores_parent_address_space() {
+    let mut t = TestVm::new();
+    let parent_brk = t.sys_brk(0x39c000) as u64;
+    let parent_brk_base = tidemark_kernel::harness::memory::debug_brk_base();
+
+    let status = process_impl::sys_vfork(&mut t.vm, t.base);
+    let child_pid = process_impl::vfork_child_pid();
+
+    assert_eq!(status, STATUS_VFORK_WAIT);
+    assert!(child_pid > 0);
+    assert!(
+        tidemark_kernel::harness::memory::debug_brk_base() > parent_brk_base,
+        "vfork child must be allowed to hide its ProcessState above parent brk"
+    );
+
+    process_impl::vfork_parent_resume(&mut t.vm, child_pid);
+
+    assert_eq!(
+        tidemark_kernel::harness::memory::debug_brk_base(),
+        parent_brk_base
+    );
+    assert_eq!(tidemark_kernel::harness::memory::current_brk(), parent_brk);
+}
+
+#[test]
 fn semantics_vfork_execve_preserves_stdio_fds() {
     let mut t = TestVm::new();
     let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };

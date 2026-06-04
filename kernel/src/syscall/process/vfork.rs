@@ -10,8 +10,39 @@ use super::runtime::{
 use crate::abi::*;
 use crate::fs::fd_table;
 use crate::guest_mem;
-use crate::types::{ProcessState, THREAD_NONE, THREAD_RUNNING, ThreadRecord, ThreadState};
+use crate::syscall::memory::AddressSpaceStateImage;
+use crate::types::{ProcessState, ThreadRecord, ThreadState, THREAD_NONE, THREAD_RUNNING};
 use core::sync::atomic::Ordering;
+
+static mut VFORK_ADDRESS_SPACE_SNAPSHOT: Option<AddressSpaceStateImage> = None;
+
+fn store_vfork_address_space_snapshot(snapshot: AddressSpaceStateImage) {
+    unsafe {
+        let slot = core::ptr::addr_of_mut!(VFORK_ADDRESS_SPACE_SNAPSHOT);
+        if let Some(old) = (*slot).take() {
+            drop(old);
+        }
+        *slot = Some(snapshot);
+    }
+}
+
+fn restore_vfork_address_space_snapshot() {
+    unsafe {
+        let slot = core::ptr::addr_of_mut!(VFORK_ADDRESS_SPACE_SNAPSHOT);
+        if let Some(snapshot) = (*slot).take() {
+            crate::syscall::memory::restore_state_from_image(&snapshot);
+        }
+    }
+}
+
+fn clear_vfork_address_space_snapshot() {
+    unsafe {
+        let slot = core::ptr::addr_of_mut!(VFORK_ADDRESS_SPACE_SNAPSHOT);
+        if let Some(snapshot) = (*slot).take() {
+            drop(snapshot);
+        }
+    }
+}
 
 pub(super) fn reattach_guest_thread_count(vm: &mut ThreadState, base: u32) {
     if let Some(ps) = current_process_state_mut(vm, base) {
@@ -89,8 +120,7 @@ fn clone_process_state_for_vfork(
     let child_ps_addr = (brk + ps_align - 1) & !(ps_align - 1);
     let hidden_end = child_ps_addr + ps_size;
     let public_brk = crate::syscall::memory::user_brk_start_after_hidden_prefix(hidden_end);
-    if crate::syscall::memory::grow_brk(base, public_brk) < public_brk as i64
-    {
+    if crate::syscall::memory::grow_brk(base, public_brk) < public_brk as i64 {
         return None;
     }
     crate::syscall::memory::rebase_brk_after_hidden_prefix(hidden_end);
@@ -162,6 +192,10 @@ fn sys_vfork_inner(
     } else {
         0
     };
+    let mut parent_address_space = AddressSpaceStateImage::empty();
+    if child_pid > 0 {
+        crate::syscall::memory::capture_state_image_into(&mut parent_address_space);
+    }
     let child_process_ptr = if child_pid > 0 {
         match clone_process_state_for_vfork(vm, base, parent_pid, child_pid) {
             Some(ptr) => ptr,
@@ -184,6 +218,9 @@ fn sys_vfork_inner(
     }
     prs().vfork_snapshot = capture_thread_snapshot(vm, child_pid);
     prs().vfork_active = 1;
+    if child_pid > 0 {
+        store_vfork_address_space_snapshot(parent_address_space);
+    }
     detach_parent_thread_for_vfork(base, parent_process_ptr, parent_tid);
     vm.sig_pending = 0;
     vm.tid = child_pid;
@@ -262,6 +299,7 @@ fn vfork_parent_resume_inner(vm: &mut ThreadState, child_pid: i32, cleanup_child
     if child_process_ptr != 0 {
         retire_vfork_child_process(vm.guest_base, child_process_ptr);
     }
+    restore_vfork_address_space_snapshot();
     restore_parent_thread_after_vfork(vm, vm.guest_base);
     reattach_guest_thread_count(vm, vm.guest_base);
     vm.x[10] = child_pid as u64;
@@ -296,4 +334,5 @@ pub fn vfork_restore_parent_proc_self_exe_snapshot() {
 
 pub fn clear_vfork_runtime_state() {
     clear_vfork_runtime_snapshot();
+    clear_vfork_address_space_snapshot();
 }
