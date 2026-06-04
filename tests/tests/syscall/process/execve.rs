@@ -229,6 +229,62 @@ fn syscall_dispatch_keeps_vfork_execve_preflight_from_copying_large_image() {
 }
 
 #[test]
+fn syscall_dispatch_completes_vfork_execve_handoff_with_large_image_argv() {
+    let mut t = TestVm::new();
+    let mut code = vec![0x13, 0x05, 0x70, 0x00];
+    code.resize(3_600_000, 0);
+    let elf = build_test_elf(&code);
+    let path_addr = install_exec_file(&t, b"test_large_complete", &elf);
+    let argv_addr = write_strvec(&t, 0x400, &[b"/bin/test_large_complete", b"arg1"]);
+    let envp_addr = write_strvec(&t, 0x800, &[b"KEY=VALUE"]);
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    let vfork_status = process_impl::sys_vfork(&mut t.vm, t.base);
+    let child_pid = process_impl::vfork_child_pid();
+
+    assert_eq!(vfork_status, STATUS_VFORK_WAIT);
+    assert!(child_pid > 0);
+
+    t.vm.x[17] = SYS_EXECVE;
+    t.vm.x[10] = path_addr;
+    t.vm.x[11] = argv_addr;
+    t.vm.x[12] = envp_addr;
+
+    let status = tidemark_kernel::syscall::dispatch(&mut t.vm, t.base);
+    assert_eq!(status, STATUS_FS);
+    assert_eq!(t.vm.status, STATUS_FS);
+
+    tidemark_kernel::syscall::fs::process_pending_requests(vm_ptr, t.base);
+    let ret = tidemark_kernel::syscall::fs::resume_from_fs(vm_ptr, t.base);
+
+    assert_eq!(ret, child_pid as i64);
+    assert_eq!(t.vm.status, STATUS_EXECVE_SPAWN);
+    assert_eq!(t.vm.spawn_kind, SPAWN_KIND_EXECVE);
+    assert_eq!(t.vm.spawn_child_pid, child_pid);
+
+    process_impl::clear_vfork_runtime_state();
+    let ret = process_impl::complete_execve_in_place_from_handoff(
+        &mut t.vm,
+        t.base,
+        process_impl::max_execve_guest_memory_limit(t.base),
+    );
+
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.pc, 0x1000);
+    let argc = unsafe { guest_mem::read_u64(t.base, t.vm.x[2]) };
+    assert_eq!(argc, 2);
+    let argv0 = unsafe { guest_mem::read_u64(t.base, t.vm.x[2] + 8) };
+    let argv1 = unsafe { guest_mem::read_u64(t.base, t.vm.x[2] + 16) };
+    let env0 = unsafe { guest_mem::read_u64(t.base, t.vm.x[2] + 32) };
+    let mut buf = [0u8; 64];
+    let len0 = unsafe { guest_mem::read_cstr(t.base, argv0, &mut buf) };
+    assert_eq!(&buf[..len0], b"/bin/test_large_complete");
+    let len1 = unsafe { guest_mem::read_cstr(t.base, argv1, &mut buf) };
+    assert_eq!(&buf[..len1], b"arg1");
+    let env_len = unsafe { guest_mem::read_cstr(t.base, env0, &mut buf) };
+    assert_eq!(&buf[..env_len], b"KEY=VALUE");
+}
+
+#[test]
 fn contract_execve_initializes_tp_from_pt_tls() {
     let mut t = TestVm::new();
     let elf = build_test_elf_with_tls(&[0x13, 0x05, 0x70, 0x00], &[0x41, 0x42, 0x43, 0x44], 0x20);

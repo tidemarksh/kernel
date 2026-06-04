@@ -387,9 +387,6 @@ fn load_execve_image(
         Ok(len) if len > 0 => len,
         _ => return Err(ENOEXEC),
     };
-    crate::tracepoints::record_execve_stage(107, st.size, elf_len as u64);
-    let file_bytes = read_execve_elf_bytes(vm_ptr, ino, elf_len)?;
-    crate::tracepoints::record_execve_dispatch(vm_ptr, 125);
     crate::tracepoints::record_execve_stage(101, argv_addr, envp_addr);
     crate::tracepoints::record_execve_stage(
         104,
@@ -402,6 +399,9 @@ fn load_execve_image(
     let envp = read_guest_strvec(base, envp_addr)?;
     crate::tracepoints::record_execve_dispatch(vm_ptr, 127);
     crate::tracepoints::record_execve_stage(103, envp.len() as u64, envp_addr);
+    crate::tracepoints::record_execve_stage(107, st.size, elf_len as u64);
+    let file_bytes = read_execve_elf_bytes(vm_ptr, ino, elf_len)?;
+    crate::tracepoints::record_execve_dispatch(vm_ptr, 125);
     let file_head0 = file_bytes
         .as_slice()
         .iter()
@@ -839,34 +839,6 @@ fn complete_execve_in_place_inner(
     );
     crate::tracepoints::record_execve_dispatch(vm_ptr, 121);
 
-    let ExecveImage {
-        path_bytes,
-        argv,
-        envp,
-        main_bytes,
-        main_bias,
-        main_elf,
-        interp_bytes,
-        interp_bias,
-        interp_elf,
-    } = match load_execve_image(
-        vm,
-        base,
-        vm.spawn_path,
-        vm.spawn_argv,
-        vm.spawn_envp,
-        guest_limit,
-    ) {
-        Ok(image) => image,
-        Err(errno) => return errno,
-    };
-    crate::tracepoints::record_execve_dispatch(vm_ptr, 122);
-    let load_brk_start = main_elf
-        .brk_start
-        .max(interp_elf.as_ref().map(|elf| elf.brk_start).unwrap_or(0));
-    let active_elf = interp_elf.as_ref().copied().unwrap_or(main_elf);
-    crate::tracepoints::record_execve_stage(2, load_brk_start, active_elf.entry);
-
     let ps_addr = vm.process_ptr as u64;
     let old_pid = unsafe {
         guest_mem::read_i32(
@@ -929,7 +901,6 @@ fn complete_execve_in_place_inner(
     for (idx, entry) in old_fd_table.iter_mut().enumerate() {
         *entry = fd_table::load_process_fd_entry(base, ps_addr as u32, idx);
     }
-    fd_table::clear_blocked_ofd_pin(vm);
     let target_pid = if vm.spawn_child_pid != 0 {
         vm.spawn_child_pid
     } else {
@@ -958,6 +929,36 @@ fn complete_execve_in_place_inner(
         }
         inherited_fds[idx] = entry;
     }
+
+    let ExecveImage {
+        path_bytes,
+        argv,
+        envp,
+        main_bytes,
+        main_bias,
+        main_elf,
+        interp_bytes,
+        interp_bias,
+        interp_elf,
+    } = match load_execve_image(
+        vm,
+        base,
+        vm.spawn_path,
+        vm.spawn_argv,
+        vm.spawn_envp,
+        guest_limit,
+    ) {
+        Ok(image) => image,
+        Err(errno) => return errno,
+    };
+    crate::tracepoints::record_execve_dispatch(vm_ptr, 122);
+    let load_brk_start = main_elf
+        .brk_start
+        .max(interp_elf.as_ref().map(|elf| elf.brk_start).unwrap_or(0));
+    let active_elf = interp_elf.as_ref().copied().unwrap_or(main_elf);
+    crate::tracepoints::record_execve_stage(2, load_brk_start, active_elf.entry);
+
+    fd_table::clear_blocked_ofd_pin(vm);
 
     let mut argv_ptrs = vec![0u64; argv.len()];
     let mut envp_ptrs = vec![0u64; envp.len()];
