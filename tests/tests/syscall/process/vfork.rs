@@ -205,6 +205,27 @@ fn contract_vfork_execve_failure_does_not_publish_spawn_handoff() {
 }
 
 #[test]
+fn contract_vfork_rebases_brk_after_child_process_state() {
+    let mut t = TestVm::new();
+
+    let status = process_impl::sys_vfork(&mut t.vm, t.base);
+    let child_process_ptr = t.vm.process_ptr as u64;
+    let ps_size = core::mem::size_of::<ProcessState>() as u64;
+    let public_brk = (child_process_ptr + ps_size + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+
+    assert_eq!(status, STATUS_VFORK_WAIT);
+    assert!(process_impl::vfork_child_pid() > 0);
+    assert!(
+        tidemark_kernel::harness::memory::debug_brk_base() >= public_brk,
+        "vfork child ProcessState must not remain inside the user brk floor"
+    );
+    assert!(
+        tidemark_kernel::harness::memory::current_brk() >= public_brk,
+        "vfork child ProcessState must not remain inside the user brk interval"
+    );
+}
+
+#[test]
 fn semantics_vfork_execve_preserves_stdio_fds() {
     let mut t = TestVm::new();
     let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };

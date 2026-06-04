@@ -87,11 +87,13 @@ fn clone_process_state_for_vfork(
     let ps_align = core::mem::align_of::<ProcessState>() as u64;
     let brk = crate::syscall::memory::current_brk();
     let child_ps_addr = (brk + ps_align - 1) & !(ps_align - 1);
-    if crate::syscall::memory::grow_brk(base, child_ps_addr + ps_size)
-        < (child_ps_addr + ps_size) as i64
+    let hidden_end = child_ps_addr + ps_size;
+    let public_brk = crate::syscall::memory::user_brk_start_after_hidden_prefix(hidden_end);
+    if crate::syscall::memory::grow_brk(base, public_brk) < public_brk as i64
     {
         return None;
     }
+    crate::syscall::memory::rebase_brk_after_hidden_prefix(hidden_end);
 
     unsafe {
         core::ptr::copy_nonoverlapping(

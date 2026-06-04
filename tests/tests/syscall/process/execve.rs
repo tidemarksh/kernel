@@ -69,6 +69,50 @@ fn syscall_dispatch_preserves_vfork_execve_spawn_after_fs_ring() {
 }
 
 #[test]
+fn syscall_dispatch_preserves_vfork_execve_fault_after_fs_ring() {
+    let mut t = TestVm::new();
+    let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    let path_addr = install_exec_file(&t, b"test", &elf);
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    let vfork_status = process_impl::sys_vfork(&mut t.vm, t.base);
+    let child_pid = process_impl::vfork_child_pid();
+    let child_process_ptr = t.vm.process_ptr;
+    let fs_ring_off = core::mem::offset_of!(ProcessState, fs_ring_base) as u64;
+    let child_fs_ring_base = unsafe {
+        guest_mem::read_u32(t.base, child_process_ptr as u64 + fs_ring_off)
+    };
+    let invalid_argv = tidemark_kernel::wasm::memory_size_bytes().saturating_sub(t.base as u64);
+
+    assert_eq!(vfork_status, STATUS_VFORK_WAIT);
+    assert!(child_pid > 0);
+    assert_ne!(child_fs_ring_base, 0);
+
+    t.vm.x[17] = SYS_EXECVE;
+    t.vm.x[10] = path_addr;
+    t.vm.x[11] = invalid_argv;
+    t.vm.x[12] = 0;
+
+    let status = tidemark_kernel::syscall::dispatch(&mut t.vm, t.base);
+    assert_eq!(status, STATUS_FS);
+    assert_eq!(t.vm.status, STATUS_FS);
+
+    tidemark_kernel::syscall::fs::process_pending_requests(vm_ptr, t.base);
+    let ret = tidemark_kernel::syscall::fs::resume_from_fs(vm_ptr, t.base);
+
+    assert_eq!(ret, EFAULT);
+    assert_eq!(t.vm.x[10] as i64, EFAULT);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.spawn_kind, SPAWN_KIND_NONE);
+    assert_eq!(t.vm.spawn_child_pid, 0);
+    assert_eq!(t.vm.process_ptr, child_process_ptr);
+    assert_eq!(signal::pid_from_vm(&t.vm, t.base), child_pid);
+    assert_eq!(
+        unsafe { guest_mem::read_u32(t.base, child_process_ptr as u64 + fs_ring_off) },
+        child_fs_ring_base
+    );
+}
+
+#[test]
 fn contract_execve_initializes_tp_from_pt_tls() {
     let mut t = TestVm::new();
     let elf = build_test_elf_with_tls(&[0x13, 0x05, 0x70, 0x00], &[0x41, 0x42, 0x43, 0x44], 0x20);
