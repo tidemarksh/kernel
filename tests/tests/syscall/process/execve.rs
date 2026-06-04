@@ -81,6 +81,10 @@ fn syscall_dispatch_preserves_vfork_execve_fault_after_fs_ring() {
     let child_fs_ring_base = unsafe {
         guest_mem::read_u32(t.base, child_process_ptr as u64 + fs_ring_off)
     };
+    let child_ps = unsafe { &*((t.base as u64 + child_process_ptr as u64) as *const ProcessState) };
+    let child_fd0 = child_ps.fd_table[0].ofd_id;
+    let child_fd1 = child_ps.fd_table[1].ofd_id;
+    let child_fd2 = child_ps.fd_table[2].ofd_id;
     let invalid_argv = tidemark_kernel::wasm::memory_size_bytes().saturating_sub(t.base as u64);
 
     assert_eq!(vfork_status, STATUS_VFORK_WAIT);
@@ -110,6 +114,10 @@ fn syscall_dispatch_preserves_vfork_execve_fault_after_fs_ring() {
         unsafe { guest_mem::read_u32(t.base, child_process_ptr as u64 + fs_ring_off) },
         child_fs_ring_base
     );
+    let child_ps = unsafe { &*((t.base as u64 + child_process_ptr as u64) as *const ProcessState) };
+    assert_eq!(child_ps.fd_table[0].ofd_id, child_fd0);
+    assert_eq!(child_ps.fd_table[1].ofd_id, child_fd1);
+    assert_eq!(child_ps.fd_table[2].ofd_id, child_fd2);
 }
 
 #[test]
