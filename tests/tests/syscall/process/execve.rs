@@ -842,3 +842,42 @@ fn semantics_execve_failure_preserves_thread_group_and_altstack() {
     );
     assert_eq!(ps.threads[1].state, THREAD_RUNNING);
 }
+
+#[test]
+fn semantics_execve_late_enomem_preserves_process_identity_and_fds() {
+    let mut t = TestVm::new();
+    let mut code = vec![0x13, 0x05, 0x70, 0x00];
+    code.resize(4_500_000, 0);
+    let elf = build_test_elf(&code);
+    let path_addr = install_exec_file(&t, b"large_exec", &elf);
+    let old_process_ptr = t.vm.process_ptr;
+    let old_pid = signal::pid_from_vm(&t.vm, t.base);
+    let fs_ring_off = core::mem::offset_of!(ProcessState, fs_ring_base) as u64;
+    let old_fs_ring_base =
+        unsafe { guest_mem::read_u32(t.base, old_process_ptr as u64 + fs_ring_off) };
+    let old_ps = unsafe { &*((t.base as u64 + old_process_ptr as u64) as *const ProcessState) };
+    let old_fd0 = old_ps.fd_table[0];
+    let old_fd1 = old_ps.fd_table[1];
+    let old_fd2 = old_ps.fd_table[2];
+
+    t.vm.guest_memory_policy_limit = 5 * 1024 * 1024;
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+
+    assert_eq!(ret, ENOMEM);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(signal::pid_from_vm(&t.vm, t.base), old_pid);
+    let current_process_ptr = t.vm.process_ptr;
+    let current_ps =
+        unsafe { &*((t.base as u64 + current_process_ptr as u64) as *const ProcessState) };
+    assert_eq!(current_ps.pid, old_pid);
+    assert_eq!(current_ps.fd_table[0].ofd_id, old_fd0.ofd_id);
+    assert_eq!(current_ps.fd_table[0].fd_flags, old_fd0.fd_flags);
+    assert_eq!(current_ps.fd_table[1].ofd_id, old_fd1.ofd_id);
+    assert_eq!(current_ps.fd_table[1].fd_flags, old_fd1.fd_flags);
+    assert_eq!(current_ps.fd_table[2].ofd_id, old_fd2.ofd_id);
+    assert_eq!(current_ps.fd_table[2].fd_flags, old_fd2.fd_flags);
+    assert_eq!(
+        unsafe { guest_mem::read_u32(t.base, current_process_ptr as u64 + fs_ring_off) },
+        old_fs_ring_base
+    );
+}

@@ -5,7 +5,7 @@ use super::runtime::prs;
 use crate::abi::*;
 use crate::fs::{fd_table, memfs};
 use crate::guest_mem;
-use crate::types::{FdEntry, ProcessState, ThreadState};
+use crate::types::{FdEntry, ProcessState, ThreadRecord, ThreadState, THREAD_RUNNING};
 use alloc_crate::{vec, vec::Vec};
 
 pub const EXECVE_GUEST_MEMORY_LIMIT: u64 = 0x8000_0000;
@@ -42,7 +42,11 @@ impl ExecveFileBytes {
 fn current_cwd_ino(vm: &ThreadState, base: u32) -> u32 {
     let cwd_off = core::mem::offset_of!(ProcessState, cwd_ino) as u64;
     let cwd = unsafe { guest_mem::read_u32(base, vm.process_ptr as u64 + cwd_off) };
-    if cwd == 0 { 1 } else { cwd }
+    if cwd == 0 {
+        1
+    } else {
+        cwd
+    }
 }
 
 fn current_effective_uid(vm: &ThreadState) -> u32 {
@@ -672,6 +676,50 @@ fn execve_guest_limit(base: u32, brk_start: u64, stack_size: u64, guest_limit: u
     current_limit.max(rounded_limit).min(max_limit)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn install_execve_process_state(
+    vm: &mut ThreadState,
+    vm_ptr: u32,
+    base: u32,
+    ps_addr: u64,
+    pid: i32,
+    ppid: i32,
+    cwd_ino: u32,
+    stdin_pipe_slot: u32,
+    stdout_pipe_slot: u32,
+    stderr_pipe_slot: u32,
+    tty_pty_slot: u32,
+    fs_ring_base: u32,
+    umask: u32,
+    fd_table: &[FdEntry; MAX_FDS],
+) {
+    let ps_size = core::mem::size_of::<ProcessState>() as u64;
+    unsafe {
+        guest_mem::zero_mem(base, ps_addr, ps_size as usize);
+    }
+    let ps = unsafe { &mut *((base as u64 + ps_addr) as *mut ProcessState) };
+    let gen_ptr = core::ptr::addr_of!(ps.reservation_gen) as *const core::sync::atomic::AtomicU32;
+    let lock_ptr = core::ptr::addr_of!(ps.reservation_lock) as *const core::sync::atomic::AtomicU32;
+    let tc_ptr = core::ptr::addr_of!(ps.thread_count);
+    unsafe {
+        guest_mem::init(gen_ptr, lock_ptr, tc_ptr);
+    }
+    ps.pid = pid;
+    ps.ppid = ppid;
+    ps.cwd_ino = cwd_ino;
+    ps.stdin_pipe_slot = stdin_pipe_slot;
+    ps.stdout_pipe_slot = stdout_pipe_slot;
+    ps.stderr_pipe_slot = stderr_pipe_slot;
+    ps.tty_pty_slot = tty_pty_slot;
+    ps.fs_ring_base = fs_ring_base;
+    ps.umask = umask;
+    ps.fd_table.copy_from_slice(fd_table);
+    ps.thread_count
+        .store(1, core::sync::atomic::Ordering::Release);
+    ps.threads[0] = ThreadRecord::new(1, THREAD_RUNNING, vm_ptr, vm.clear_child_tid, 0);
+    vm.process_ptr = ps_addr as u32;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -853,8 +901,10 @@ fn complete_execve_in_place_inner(
     let ps_size = core::mem::size_of::<ProcessState>() as u64;
     let ps_align = core::mem::align_of::<ProcessState>() as u64;
     let new_ps_addr = (load_brk_start + ps_align - 1) & !(ps_align - 1);
+    let hidden_end = new_ps_addr + ps_size;
+    let public_brk = crate::syscall::memory::user_brk_start_after_hidden_prefix(hidden_end);
     crate::tracepoints::record_execve_stage(3, guest_limit, new_ps_addr + ps_size);
-    if !crate::syscall::memory::ensure_guest_memory_capacity(base, new_ps_addr + ps_size) {
+    if !crate::syscall::memory::ensure_guest_memory_capacity(base, hidden_end) {
         crate::tracepoints::record_execve_stage(11, guest_limit, new_ps_addr + ps_size);
         return ENOMEM;
     }
@@ -868,6 +918,27 @@ fn complete_execve_in_place_inner(
         base,
         load_brk_start,
         flush_shared_mappings,
+    );
+    if crate::syscall::memory::grow_brk(base, public_brk) < public_brk as i64 {
+        crate::tracepoints::record_execve_stage(13, load_brk_start, hidden_end);
+        return ENOMEM;
+    }
+    crate::syscall::memory::rebase_brk_after_hidden_prefix(hidden_end);
+    install_execve_process_state(
+        vm,
+        vm_ptr,
+        base,
+        new_ps_addr,
+        target_pid,
+        target_ppid,
+        old_cwd,
+        old_stdin_pipe_slot,
+        old_stdout_pipe_slot,
+        old_stderr_pipe_slot,
+        old_tty_pty_slot,
+        old_fs_ring_base,
+        old_umask,
+        &old_fd_table,
     );
     crate::tracepoints::record_execve_dispatch(vm_ptr, 1224);
     crate::tracepoints::record_execve_stage(33, load_brk_start, flush_shared_mappings as u64);
@@ -944,29 +1015,16 @@ fn complete_execve_in_place_inner(
     crate::tracepoints::record_execve_stage(5, guest_limit, stack_top);
 
     let brk = crate::syscall::memory::current_brk();
-    let ps_addr = (brk + ps_align - 1) & !(ps_align - 1);
-    let hidden_end = ps_addr + ps_size;
-    let public_brk = crate::syscall::memory::user_brk_start_after_hidden_prefix(hidden_end);
     if crate::syscall::memory::grow_brk(base, public_brk) < public_brk as i64 {
-        crate::tracepoints::record_execve_stage(13, brk, ps_addr + ps_size);
+        crate::tracepoints::record_execve_stage(13, brk, hidden_end);
         return ENOMEM;
     }
     crate::tracepoints::record_execve_dispatch(vm_ptr, 1228);
-    crate::tracepoints::record_execve_stage(6, brk, ps_addr + ps_size);
-    crate::tracepoints::record_execve_stage(61, ps_addr, ps_size);
-    unsafe {
-        guest_mem::zero_mem(base, ps_addr, ps_size as usize);
-    }
+    crate::tracepoints::record_execve_stage(6, brk, hidden_end);
+    crate::tracepoints::record_execve_stage(61, new_ps_addr, ps_size);
     crate::tracepoints::record_execve_dispatch(vm_ptr, 1229);
     crate::syscall::memory::rebase_brk_after_hidden_prefix(hidden_end);
-    crate::tracepoints::record_execve_stage(62, ps_addr, ps_size);
-    let ps = unsafe { &mut *((base as u64 + ps_addr) as *mut ProcessState) };
-    let gen_ptr = core::ptr::addr_of!(ps.reservation_gen) as *const core::sync::atomic::AtomicU32;
-    let lock_ptr = core::ptr::addr_of!(ps.reservation_lock) as *const core::sync::atomic::AtomicU32;
-    let tc_ptr = core::ptr::addr_of!(ps.thread_count);
-    unsafe {
-        guest_mem::init(gen_ptr, lock_ptr, tc_ptr);
-    }
+    crate::tracepoints::record_execve_stage(62, new_ps_addr, ps_size);
 
     for entry in old_fd_table.iter().copied() {
         if entry.ofd_id == 0
@@ -983,34 +1041,28 @@ fn complete_execve_in_place_inner(
 
     let vm = unsafe { &mut *(vm_ptr as *mut ThreadState) };
     crate::tracepoints::record_execve_dispatch(vm_ptr, 131);
-    vm.process_ptr = ps_addr as u32;
+    install_execve_process_state(
+        vm,
+        vm_ptr,
+        base,
+        new_ps_addr,
+        target_pid,
+        target_ppid,
+        old_cwd,
+        old_stdin_pipe_slot,
+        old_stdout_pipe_slot,
+        old_stderr_pipe_slot,
+        old_tty_pty_slot,
+        old_fs_ring_base,
+        old_umask,
+        &inherited_fds,
+    );
     crate::tracepoints::record_execve_dispatch(vm_ptr, 132);
-    for (idx, entry) in inherited_fds.iter().enumerate() {
-        fd_table::store_process_fd_entry(base, ps_addr as u32, idx, *entry);
-    }
-    crate::tracepoints::record_execve_stage(63, ps_addr, inherited_fds.len() as u64);
+    crate::tracepoints::record_execve_stage(63, new_ps_addr, inherited_fds.len() as u64);
     let pid_off = core::mem::offset_of!(ProcessState, pid) as u64;
-    let ppid_off = core::mem::offset_of!(ProcessState, ppid) as u64;
-    let cwd_off = core::mem::offset_of!(ProcessState, cwd_ino) as u64;
-    let stdin_pipe_off = core::mem::offset_of!(ProcessState, stdin_pipe_slot) as u64;
-    let stdout_pipe_off = core::mem::offset_of!(ProcessState, stdout_pipe_slot) as u64;
-    let stderr_pipe_off = core::mem::offset_of!(ProcessState, stderr_pipe_slot) as u64;
-    let tty_pty_off = core::mem::offset_of!(ProcessState, tty_pty_slot) as u64;
     let fs_ring_off = core::mem::offset_of!(ProcessState, fs_ring_base) as u64;
-    let umask_off = core::mem::offset_of!(ProcessState, umask) as u64;
-    unsafe {
-        guest_mem::write_u32(base, ps_addr + pid_off, target_pid as u32);
-        guest_mem::write_u32(base, ps_addr + ppid_off, target_ppid as u32);
-        guest_mem::write_u32(base, ps_addr + cwd_off, old_cwd);
-        guest_mem::write_u32(base, ps_addr + stdin_pipe_off, old_stdin_pipe_slot);
-        guest_mem::write_u32(base, ps_addr + stdout_pipe_off, old_stdout_pipe_slot);
-        guest_mem::write_u32(base, ps_addr + stderr_pipe_off, old_stderr_pipe_slot);
-        guest_mem::write_u32(base, ps_addr + tty_pty_off, old_tty_pty_slot);
-        guest_mem::write_u32(base, ps_addr + fs_ring_off, old_fs_ring_base);
-        guest_mem::write_u32(base, ps_addr + umask_off, old_umask);
-    }
     crate::tracepoints::record_execve_dispatch(vm_ptr, 133);
-    crate::tracepoints::record_execve_stage(64, ps_addr + pid_off, ps_addr + fs_ring_off);
+    crate::tracepoints::record_execve_stage(64, new_ps_addr + pid_off, new_ps_addr + fs_ring_off);
 
     let random_addr = stack_top.saturating_sub(16);
     crate::tracepoints::record_execve_stage(65, stack_top, random_addr);
