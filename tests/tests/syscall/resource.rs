@@ -3,6 +3,9 @@ use tidemark_kernel::harness::TestVm;
 const RLIMIT_STACK: u64 = 3;
 const RLIMIT_NOFILE: u64 = 7;
 const RLIMIT_SIGPENDING: u64 = 11;
+const RUSAGE_CHILDREN: i64 = -1;
+const RUSAGE_SELF: i64 = 0;
+const RUSAGE_THREAD: i64 = 1;
 
 #[test]
 fn prlimit64_reports_linux_shaped_defaults() {
@@ -129,6 +132,56 @@ fn syscall_dispatch_reports_enosys_for_prctl() {
     t.vm.x[17] = tidemark_kernel::abi::SYS_PRCTL;
     assert_eq!(tidemark_kernel::syscall::dispatch(&mut t.vm, t.base), 0);
     assert_eq!(t.vm.x[10] as i64, tidemark_kernel::abi::ENOSYS);
+}
+
+#[test]
+fn getrusage_reports_linux_shaped_zero_usage() {
+    let t = TestVm::new();
+    let usage_addr = t.scratch;
+
+    assert_eq!(
+        tidemark_kernel::syscall::resource::sys_getrusage(&t.vm, t.base, RUSAGE_SELF, usage_addr),
+        0
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, usage_addr) },
+        0
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, usage_addr + 16) },
+        0
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, usage_addr + 32) },
+        0
+    );
+
+    assert_eq!(
+        tidemark_kernel::syscall::resource::sys_getrusage(
+            &t.vm,
+            t.base,
+            RUSAGE_CHILDREN,
+            usage_addr
+        ),
+        0
+    );
+    assert_eq!(
+        tidemark_kernel::syscall::resource::sys_getrusage(&t.vm, t.base, RUSAGE_THREAD, usage_addr),
+        0
+    );
+}
+
+#[test]
+fn getrusage_rejects_invalid_requests() {
+    let t = TestVm::new();
+    assert_eq!(
+        tidemark_kernel::syscall::resource::sys_getrusage(&t.vm, t.base, -2, t.scratch),
+        tidemark_kernel::abi::EINVAL
+    );
+    assert_eq!(
+        tidemark_kernel::syscall::resource::sys_getrusage(&t.vm, t.base, RUSAGE_SELF, u64::MAX),
+        tidemark_kernel::abi::EFAULT
+    );
 }
 
 #[test]

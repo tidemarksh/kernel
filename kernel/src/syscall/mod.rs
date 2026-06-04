@@ -706,6 +706,7 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         }
         SYS_GETRLIMIT => resource::sys_getrlimit(vm, base, a0, a1),
         SYS_SETRLIMIT => resource::sys_setrlimit(vm, base, a0, a1),
+        SYS_GETRUSAGE => resource::sys_getrusage(vm, base, a0 as i64, a1),
         SYS_PRCTL => ENOSYS,
         SYS_UMASK => fs::sys_umask(vm, base, a0),
         SYS_RISCV_HWPROBE => identity::sys_riscv_hwprobe(vm, base, a0, a1, a2, a3, a4),

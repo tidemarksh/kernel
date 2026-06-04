@@ -1534,6 +1534,7 @@ fn spawn_drive_mode_for_ltp(binary: &str) -> Result<SpawnDriveMode, String> {
         | "getpgid01"
         | "getpgid02"
         | "getpgrp01"
+        | "getrusage01"
         | "getgid01"
         | "getgid03"
         | "getpid01"

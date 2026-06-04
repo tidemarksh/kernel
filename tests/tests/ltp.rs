@@ -154,6 +154,7 @@ ltp_case!(ltp_getgid03);
 ltp_case!(ltp_getpgid01);
 ltp_case!(ltp_getpgid02);
 ltp_case!(ltp_getpgrp01);
+ltp_case!(ltp_getrusage01);
 ltp_case!(ltp_getpid01);
 ltp_case!(ltp_getpid02);
 ltp_case!(ltp_getppid01);

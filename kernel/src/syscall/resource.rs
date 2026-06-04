@@ -1,4 +1,4 @@
-//! Resource limit syscalls: getrlimit, setrlimit, prlimit64.
+//! Resource syscalls: getrlimit, setrlimit, prlimit64, getrusage.
 //!
 //! Linux UAPI reference:
 //! - include/uapi/asm-generic/resource.h
@@ -20,6 +20,10 @@ const RLIMIT_NLIMITS: usize = 16;
 const RLIM64_INFINITY: u64 = !0u64;
 const LINUX_DEFAULT_STACK_LIMIT: u64 = 8 * 1024 * 1024;
 const LINUX_DEFAULT_MEMLOCK_LIMIT: u64 = 8 * 1024 * 1024;
+const RUSAGE_SELF: i64 = 0;
+const RUSAGE_CHILDREN: i64 = -1;
+const RUSAGE_THREAD: i64 = 1;
+const RUSAGE_SIZE: u64 = 144;
 
 #[derive(Clone, Copy)]
 struct Rlimit64 {
@@ -147,6 +151,16 @@ fn write_limit(base: u32, addr: u64, limit: Rlimit64) {
     unsafe {
         guest_mem::write_u64(base, addr, limit.cur);
         guest_mem::write_u64(base, addr + 8, limit.max);
+    }
+}
+
+fn guest_range_valid(base: u32, addr: u64, len: u64) -> bool {
+    addr != 0 && crate::syscall::memory::guest_range_accessible(base, addr, len)
+}
+
+fn write_zero_rusage(base: u32, addr: u64) {
+    unsafe {
+        guest_mem::zero_mem(base, addr, RUSAGE_SIZE as usize);
     }
 }
 
@@ -282,4 +296,17 @@ pub fn sys_getrlimit(vm: &ThreadState, base: u32, resource: u64, rlimit_addr: u6
 
 pub fn sys_setrlimit(vm: &ThreadState, base: u32, resource: u64, rlimit_addr: u64) -> i64 {
     sys_prlimit64(vm, base, 0, resource, rlimit_addr, 0)
+}
+
+pub fn sys_getrusage(_vm: &ThreadState, base: u32, who: i64, usage_addr: u64) -> i64 {
+    match who {
+        RUSAGE_SELF | RUSAGE_CHILDREN | RUSAGE_THREAD => {}
+        _ => return EINVAL,
+    }
+    if !guest_range_valid(base, usage_addr, RUSAGE_SIZE) {
+        return EFAULT;
+    }
+
+    write_zero_rusage(base, usage_addr);
+    0
 }

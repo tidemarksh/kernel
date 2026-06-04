@@ -326,8 +326,7 @@ testcases/kernel/syscalls/getresuid/getresuid03.c requires saved-setuid state to
 testcases/kernel/syscalls/getrlimit/getrlimit01.c requires getrlimit success across the full Linux resource matrix; current prlimit64-backed model preserves a narrower synthetic limit table
 testcases/kernel/syscalls/getrlimit/getrlimit02.c requires EFAULT for invalid rlimit output pointers; current prlimit64 writes old limits without prevalidating the destination range
 testcases/kernel/syscalls/getrlimit/getrlimit03.c compares legacy getrlimit/ugetrlimit and prlimit64 results across all resources; legacy/ugetrlimit compatibility and full RLIM_INFINITY capping are outside the current RISC-V resource-limit profile
-testcases/kernel/syscalls/getrusage/getrusage01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/getrusage/getrusage02.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/getrusage/getrusage02.c syscall variant passes EINVAL/EFAULT, but libc EFAULT reports expected TCONF and the current LTP runner treats any TCONF as failure; Rust resource syscall coverage owns the supported error contract
 testcases/kernel/syscalls/getrusage/getrusage03.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getrusage/getrusage03_child.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/getrusage/getrusage04.c not yet enabled in current syscall-conformance profile
