@@ -155,6 +155,28 @@ fn semantics_wait4_zero_reaps_exited_child_after_process_entry_removed() {
 }
 
 #[test]
+fn semantics_wait4_zero_reaps_late_exit_record_with_active_sibling() {
+    let mut t = TestVm::new();
+    let wstatus_addr = t.scratch + 0x13c0;
+    let parent_pid = process_impl::current_process_pid(&t.vm, t.base);
+
+    let exited_child = process_impl::sys_fork(&mut t.vm, t.base, 0, 0, 0, 0, 0) as i32;
+    assert!(exited_child > 0);
+    t.vm.status = STATUS_OK;
+    process_impl::remove_process_entry(exited_child);
+    process_impl::record_child_exit_for_parent(parent_pid, exited_child, 6 << 8);
+
+    let active_child = process_impl::sys_fork(&mut t.vm, t.base, 0, 0, 0, 0, 0) as i32;
+    assert!(active_child > 0);
+    assert_ne!(active_child, exited_child);
+    t.vm.status = STATUS_OK;
+
+    let ret = process_impl::sys_wait4(&mut t.vm, t.base, 0, wstatus_addr, 0, 0);
+    assert_eq!(ret, exited_child as i64);
+    assert_eq!(unsafe { guest_mem::read_u32(t.base, wstatus_addr) }, 6 << 8);
+}
+
+#[test]
 fn semantics_wait4_reap_discards_pending_sigchld_when_no_other_child_status_is_available() {
     let mut t = TestVm::new();
     let wstatus_addr = t.scratch + 0x1400;
