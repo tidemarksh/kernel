@@ -26,28 +26,16 @@ struct ExecveImage {
 }
 
 struct ExecveFileBytes {
-    ptr: u32,
-    len: u32,
-    owned: Option<Vec<u8>>,
+    owned: Vec<u8>,
 }
 
 impl ExecveFileBytes {
     fn from_owned(bytes: Vec<u8>) -> Self {
-        let ptr = bytes.as_ptr() as u32;
-        let len = bytes.len() as u32;
-        Self {
-            ptr,
-            len,
-            owned: Some(bytes),
-        }
+        Self { owned: bytes }
     }
 
     fn as_slice(&self) -> &[u8] {
-        if let Some(bytes) = self.owned.as_ref() {
-            bytes.as_slice()
-        } else {
-            unsafe { core::slice::from_raw_parts(self.ptr as *const u8, self.len as usize) }
-        }
+        self.owned.as_slice()
     }
 }
 
@@ -164,7 +152,16 @@ fn read_guest_strvec(base: u32, vec_addr: u64) -> Result<Vec<Vec<u8>>, i64> {
 
     let mut idx = 0u64;
     loop {
-        let ptr = unsafe { guest_mem::read_u64(base, vec_addr + idx * 8) };
+        let Some(slot_offset) = idx.checked_mul(8) else {
+            return Err(EFAULT);
+        };
+        let Some(slot_addr) = vec_addr.checked_add(slot_offset) else {
+            return Err(EFAULT);
+        };
+        if !crate::syscall::memory::guest_range_accessible(base, slot_addr, 8) {
+            return Err(EFAULT);
+        }
+        let ptr = unsafe { guest_mem::read_u64(base, slot_addr) };
         if ptr == 0 {
             break;
         }
@@ -250,18 +247,16 @@ fn inspect_execve_elf_bytes(
         .take(8)
         .enumerate()
         .fold(0u64, |acc, (idx, byte)| acc | ((*byte as u64) << (idx * 8)));
-    unsafe {
-        match crate::elf::inspect_elf(elf_bytes.as_ptr() as u32, elf_bytes.len() as u32, guest_limit) {
-            Ok(result) => Ok(result),
-            Err(error) => {
-                crate::tracepoints::record_execve_stage(
-                    180,
-                    error as i64 as u64,
-                    elf_bytes.len() as u64,
-                );
-                crate::tracepoints::record_execve_stage(181, file_head0, file_head1);
-                Err(ENOEXEC)
-            }
+    match crate::elf::inspect_elf_bytes(elf_bytes, guest_limit) {
+        Ok(result) => Ok(result),
+        Err(error) => {
+            crate::tracepoints::record_execve_stage(
+                180,
+                error as i64 as u64,
+                elf_bytes.len() as u64,
+            );
+            crate::tracepoints::record_execve_stage(181, file_head0, file_head1);
+            Err(ENOEXEC)
         }
     }
 }
@@ -272,10 +267,10 @@ fn load_execve_elf_bytes_at(
     elf_bytes: &ExecveFileBytes,
     load_bias: u64,
 ) -> Result<crate::elf::ElfLoadResult, i64> {
-    crate::tracepoints::record_execve_stage(330, elf_bytes.ptr as u64, elf_bytes.len as u64);
+    let bytes = elf_bytes.as_slice();
+    crate::tracepoints::record_execve_stage(330, bytes.as_ptr() as u64, bytes.len() as u64);
     unsafe {
-        crate::elf::load_elf_at(base, guest_limit, elf_bytes.ptr, elf_bytes.len, load_bias)
-            .map_err(|_| ENOEXEC)
+        crate::elf::load_elf_bytes_at(base, guest_limit, bytes, load_bias).map_err(|_| ENOEXEC)
     }
 }
 
@@ -400,7 +395,7 @@ fn load_execve_image(
             crate::tracepoints::record_execve_stage(
                 182,
                 error as i64 as u64,
-                main_bytes.len as u64,
+                main_bytes.as_slice().len() as u64,
             );
             return Err(ENOEXEC);
         }
@@ -651,17 +646,6 @@ fn validate_execve_initial_stack(
     Ok(())
 }
 
-fn ensure_guest_memory_capacity(base: u32, guest_end: u64) -> bool {
-    let needed = base as u64 + guest_end;
-    let mem_size = crate::wasm::memory_size_bytes();
-    if needed <= mem_size {
-        return true;
-    }
-
-    let pages = (needed - mem_size).div_ceil(65536);
-    crate::wasm::memory_grow_pages(pages as usize)
-}
-
 fn current_guest_memory_limit(base: u32) -> u64 {
     let heap_base = crate::alloc::heap_base() as u64;
     let limit = if heap_base > base as u64 {
@@ -685,9 +669,7 @@ fn execve_guest_limit(base: u32, brk_start: u64, stack_size: u64, guest_limit: u
         .saturating_add(usable_stack)
         .saturating_add(EXECVE_STACK_HEADROOM);
     let rounded_limit = (required_limit + 0xF_FFFF) & !0xF_FFFF;
-    current_limit
-        .max(rounded_limit)
-        .min(max_limit)
+    current_limit.max(rounded_limit).min(max_limit)
 }
 
 #[cfg(test)]
@@ -872,7 +854,7 @@ fn complete_execve_in_place_inner(
     let ps_align = core::mem::align_of::<ProcessState>() as u64;
     let new_ps_addr = (load_brk_start + ps_align - 1) & !(ps_align - 1);
     crate::tracepoints::record_execve_stage(3, guest_limit, new_ps_addr + ps_size);
-    if !ensure_guest_memory_capacity(base, new_ps_addr + ps_size) {
+    if !crate::syscall::memory::ensure_guest_memory_capacity(base, new_ps_addr + ps_size) {
         crate::tracepoints::record_execve_stage(11, guest_limit, new_ps_addr + ps_size);
         return ENOMEM;
     }
@@ -914,24 +896,28 @@ fn complete_execve_in_place_inner(
         .max(interp_elf.map(|elf| elf.load_end).unwrap_or(0));
     crate::elf::zero_fill_load_padding(base, loaded_end, load_brk_start);
     elf_result.brk_start = load_brk_start;
-    let main_segments =
-        unsafe { crate::elf::collect_load_segments(main_bytes.ptr, main_bytes.len, main_bias) };
+    let main_bytes_slice = main_bytes.as_slice();
+    let main_segments = crate::elf::collect_load_segments_bytes(main_bytes_slice, main_bias);
     let Ok(main_segments) = main_segments else {
-        crate::tracepoints::record_execve_stage(184, main_bytes.ptr as u64, main_bytes.len as u64);
+        crate::tracepoints::record_execve_stage(
+            184,
+            main_bytes_slice.as_ptr() as u64,
+            main_bytes_slice.len() as u64,
+        );
         return ENOEXEC;
     };
     for segment in main_segments {
         crate::syscall::memory::register_elf_load_segment(segment.start, segment.end, segment.prot);
     }
     if let Some(interp_bytes) = interp_bytes.as_ref() {
-        let interp_segments = unsafe {
-            crate::elf::collect_load_segments(interp_bytes.ptr, interp_bytes.len, interp_bias)
-        };
+        let interp_bytes_slice = interp_bytes.as_slice();
+        let interp_segments =
+            crate::elf::collect_load_segments_bytes(interp_bytes_slice, interp_bias);
         let Ok(interp_segments) = interp_segments else {
             crate::tracepoints::record_execve_stage(
                 185,
-                interp_bytes.ptr as u64,
-                interp_bytes.len as u64,
+                interp_bytes_slice.as_ptr() as u64,
+                interp_bytes_slice.len() as u64,
             );
             return ENOEXEC;
         };
@@ -1150,7 +1136,9 @@ fn complete_execve_in_place_inner(
 
 fn effective_execve_guest_memory_limit(vm: &ThreadState, base: u32) -> u64 {
     if vm.guest_memory_policy_limit != 0 {
-        return vm.guest_memory_policy_limit.min(max_execve_guest_memory_limit(base));
+        return vm
+            .guest_memory_policy_limit
+            .min(max_execve_guest_memory_limit(base));
     }
     current_guest_memory_limit(base)
 }
@@ -1206,9 +1194,14 @@ pub fn sys_execve(
     let execve_guest_limit = effective_execve_guest_memory_limit(vm, base);
 
     if is_vfork_exec {
-        if let Err(errno) =
-            load_execve_image(vm, base, path_addr, argv_addr, envp_addr, execve_guest_limit)
-        {
+        if let Err(errno) = load_execve_image(
+            vm,
+            base,
+            path_addr,
+            argv_addr,
+            envp_addr,
+            execve_guest_limit,
+        ) {
             crate::tracepoints::record_execve_error(errno);
             crate::tracepoints::record_path_syscall(
                 vm as *mut ThreadState as u32,

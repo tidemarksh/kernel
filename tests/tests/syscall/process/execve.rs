@@ -654,6 +654,20 @@ fn semantics_execve_in_place_reload_rebuilds_process_state() {
 }
 
 #[test]
+fn contract_execve_rejects_unbacked_argument_vector() {
+    let mut t = TestVm::new();
+    let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    let path_addr = install_exec_file(&t, b"test", &elf);
+    let guest_limit = tidemark_kernel::wasm::memory_size_bytes().saturating_sub(t.base as u64);
+    let argv_addr = guest_limit - 4;
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, argv_addr, 0);
+
+    assert_eq!(ret, EFAULT);
+    assert_eq!(t.vm.status, STATUS_OK);
+}
+
+#[test]
 fn semantics_execve_clears_blocked_resume_scratch() {
     let mut t = TestVm::new();
     let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };

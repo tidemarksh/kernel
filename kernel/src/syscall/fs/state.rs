@@ -3,6 +3,13 @@ use crate::types::{ProcessState, ThreadState};
 const DEFAULT_UMASK: u32 = 0o022;
 
 fn process_state(base: u32, vm: &ThreadState) -> Option<&'static mut ProcessState> {
+    if !crate::syscall::memory::guest_range_accessible(
+        base,
+        vm.process_ptr as u64,
+        core::mem::size_of::<ProcessState>() as u64,
+    ) {
+        return None;
+    }
     let ptr = (base as u64 + vm.process_ptr as u64) as *mut ProcessState;
     if ptr.is_null() {
         None
@@ -19,9 +26,14 @@ pub(super) fn current_dir_ino(base: u32, vm: &ThreadState) -> u32 {
 }
 
 pub(super) fn process_fs_ring_base(base: u32, vm: &ThreadState) -> u32 {
-    process_state(base, vm)
+    let ring_base = process_state(base, vm)
         .map(|ps| ps.fs_ring_base)
-        .unwrap_or(0)
+        .unwrap_or(0);
+    if crate::fs::ring_buffer::ring_backed(ring_base) {
+        ring_base
+    } else {
+        0
+    }
 }
 
 pub(super) fn set_current_dir_ino(base: u32, vm: &ThreadState, ino: u32) {

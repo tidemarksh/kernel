@@ -1,5 +1,26 @@
 use super::support::*;
 
+#[test]
+fn resume_from_fs_rejects_unbacked_fs_ring_base() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    let invalid_ring_base = tidemark_kernel::wasm::memory_size_bytes().saturating_sub(4) as u32;
+    let fs_ring_off = core::mem::offset_of!(ProcessState, fs_ring_base) as u64;
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(
+            t.base,
+            t.vm.process_ptr as u64 + fs_ring_off,
+            invalid_ring_base,
+        );
+    }
+
+    let ret = fs::resume_from_fs(vm_ptr, t.base);
+
+    assert_eq!(ret, ENOMEM);
+    assert_eq!(t.vm.status, STATUS_OK);
+}
+
 fn dispatch_openat_marks_fork_shared_ofd_sync_effect_without_harness_trace() {
     let mut t = TestVm::new();
     t.memfs.create_file(b"shared-open.txt", b"contents");

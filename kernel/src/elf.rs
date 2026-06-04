@@ -100,17 +100,13 @@ pub struct ElfLoadSegment {
 
 /// Validate an ELF image and compute the metadata needed for loading it
 /// without mutating guest memory.
-///
-/// # Safety
-/// `elf_ptr..elf_ptr+elf_len` must reference readable bytes in the current
-/// WASM linear memory for the duration of the call.
-pub unsafe fn inspect_elf(elf_ptr: u32, elf_len: u32, guest_limit: u64) -> Result<ElfLoadResult, i32> {
+pub fn inspect_elf_bytes(elf: &[u8], guest_limit: u64) -> Result<ElfLoadResult, i32> {
     unsafe {
-        if elf_len < 64 {
+        if elf.len() < 64 {
             return Err(-1); // too small for ELF header
         }
 
-        let e = elf_ptr as *const u8;
+        let e = elf.as_ptr();
 
         if *e.add(0) != EI_MAG0
             || *e.add(1) != EI_MAG1
@@ -143,7 +139,7 @@ pub unsafe fn inspect_elf(elf_ptr: u32, elf_len: u32, guest_limit: u64) -> Resul
         let ph_entsize = read_u16(e, E_PHENTSIZE) as usize;
         let ph_num = read_u16(e, E_PHNUM) as usize;
 
-        if ph_entsize < 56 || ph_off + ph_num * ph_entsize > elf_len as usize {
+        if ph_entsize < 56 || ph_off + ph_num * ph_entsize > elf.len() {
             return Err(-6);
         }
 
@@ -165,7 +161,7 @@ pub unsafe fn inspect_elf(elf_ptr: u32, elf_len: u32, guest_limit: u64) -> Resul
                     if p_vaddr + p_memsz > guest_limit {
                         return Err(-7);
                     }
-                    if p_offset + p_filesz > elf_len as u64 {
+                    if p_offset + p_filesz > elf.len() as u64 {
                         return Err(-8);
                     }
 
@@ -186,7 +182,7 @@ pub unsafe fn inspect_elf(elf_ptr: u32, elf_len: u32, guest_limit: u64) -> Resul
                     if p_vaddr + p_memsz > guest_limit {
                         return Err(-7);
                     }
-                    if p_offset + p_filesz > elf_len as u64 {
+                    if p_offset + p_filesz > elf.len() as u64 {
                         return Err(-8);
                     }
                     tls_base = p_vaddr;
@@ -213,6 +209,21 @@ pub unsafe fn inspect_elf(elf_ptr: u32, elf_len: u32, guest_limit: u64) -> Resul
             aux_base: 0,
         })
     }
+}
+
+/// Validate an ELF image and compute the metadata needed for loading it
+/// without mutating guest memory.
+///
+/// # Safety
+/// `elf_ptr..elf_ptr+elf_len` must reference readable bytes in the current
+/// WASM linear memory for the duration of the call.
+pub unsafe fn inspect_elf(
+    elf_ptr: u32,
+    elf_len: u32,
+    guest_limit: u64,
+) -> Result<ElfLoadResult, i32> {
+    let elf = unsafe { core::slice::from_raw_parts(elf_ptr as *const u8, elf_len as usize) };
+    inspect_elf_bytes(elf, guest_limit)
 }
 
 /// Load an ELF binary from `elf_data` (byte slice in WASM memory at `elf_ptr`)
@@ -284,64 +295,66 @@ pub fn zero_fill_load_padding(guest_base: u32, load_end: u64, brk_start: u64) {
     }
 }
 
+pub fn collect_load_segments_bytes(elf: &[u8], load_bias: u64) -> Result<Vec<ElfLoadSegment>, i32> {
+    if elf.len() < 64 {
+        return Err(-1);
+    }
+    if elf[0] != EI_MAG0 || elf[1] != EI_MAG1 || elf[2] != EI_MAG2 || elf[3] != EI_MAG3 {
+        return Err(-1);
+    }
+    let ph_off = read_u64_le(elf, E_PHOFF).ok_or(-6)? as usize;
+    let ph_entsize = read_u16_le(elf, E_PHENTSIZE).ok_or(-6)? as usize;
+    let ph_num = read_u16_le(elf, E_PHNUM).ok_or(-6)? as usize;
+    if ph_entsize < 56 {
+        return Err(-6);
+    }
+    let ph_size = ph_num.checked_mul(ph_entsize).ok_or(-6)?;
+    let ph_end = ph_off.checked_add(ph_size).ok_or(-6)?;
+    if ph_end > elf.len() {
+        return Err(-6);
+    }
+
+    let mut segments = Vec::new();
+    for index in 0..ph_num {
+        let start = ph_off + index * ph_entsize;
+        let ph = &elf[start..start + ph_entsize];
+        if read_u32_le(ph, P_TYPE) != Some(PT_LOAD) {
+            continue;
+        }
+        let p_vaddr = read_u64_le(ph, P_VADDR).ok_or(-6)?;
+        let p_memsz = read_u64_le(ph, P_MEMSZ).ok_or(-6)?;
+        if p_memsz == 0 {
+            continue;
+        }
+        let seg_start = p_vaddr.checked_add(load_bias).ok_or(-6)?;
+        let seg_end = seg_start.checked_add(p_memsz).ok_or(-6)?;
+        let flags = read_u32_le(ph, P_FLAGS).ok_or(-6)?;
+        let mut prot = crate::abi::PROT_NONE;
+        if (flags & PF_R) != 0 {
+            prot |= crate::abi::PROT_READ;
+        }
+        if (flags & PF_W) != 0 {
+            prot |= crate::abi::PROT_WRITE;
+        }
+        if (flags & PF_X) != 0 {
+            prot |= crate::abi::PROT_EXEC;
+        }
+        segments.push(ElfLoadSegment {
+            start: seg_start,
+            end: seg_end,
+            prot,
+        });
+    }
+    Ok(segments)
+}
+
 pub unsafe fn collect_load_segments(
     elf_ptr: u32,
     elf_len: u32,
     load_bias: u64,
 ) -> Result<Vec<ElfLoadSegment>, i32> {
-    unsafe {
-        let elf = core::slice::from_raw_parts(elf_ptr as *const u8, elf_len as usize);
-        if elf.len() < 64 {
-            return Err(-1);
-        }
-        if elf[0] != EI_MAG0 || elf[1] != EI_MAG1 || elf[2] != EI_MAG2 || elf[3] != EI_MAG3 {
-            return Err(-1);
-        }
-        let ph_off = read_u64_le(elf, E_PHOFF).ok_or(-6)? as usize;
-        let ph_entsize = read_u16_le(elf, E_PHENTSIZE).ok_or(-6)? as usize;
-        let ph_num = read_u16_le(elf, E_PHNUM).ok_or(-6)? as usize;
-        if ph_entsize < 56 {
-            return Err(-6);
-        }
-        let ph_size = ph_num.checked_mul(ph_entsize).ok_or(-6)?;
-        let ph_end = ph_off.checked_add(ph_size).ok_or(-6)?;
-        if ph_end > elf.len() {
-            return Err(-6);
-        }
-
-        let mut segments = Vec::new();
-        for index in 0..ph_num {
-            let start = ph_off + index * ph_entsize;
-            let ph = &elf[start..start + ph_entsize];
-            if read_u32_le(ph, P_TYPE) != Some(PT_LOAD) {
-                continue;
-            }
-            let p_vaddr = read_u64_le(ph, P_VADDR).ok_or(-6)?;
-            let p_memsz = read_u64_le(ph, P_MEMSZ).ok_or(-6)?;
-            if p_memsz == 0 {
-                continue;
-            }
-            let seg_start = p_vaddr.checked_add(load_bias).ok_or(-6)?;
-            let seg_end = seg_start.checked_add(p_memsz).ok_or(-6)?;
-            let flags = read_u32_le(ph, P_FLAGS).ok_or(-6)?;
-            let mut prot = crate::abi::PROT_NONE;
-            if (flags & PF_R) != 0 {
-                prot |= crate::abi::PROT_READ;
-            }
-            if (flags & PF_W) != 0 {
-                prot |= crate::abi::PROT_WRITE;
-            }
-            if (flags & PF_X) != 0 {
-                prot |= crate::abi::PROT_EXEC;
-            }
-            segments.push(ElfLoadSegment {
-                start: seg_start,
-                end: seg_end,
-                prot,
-            });
-        }
-        Ok(segments)
-    }
+    let elf = unsafe { core::slice::from_raw_parts(elf_ptr as *const u8, elf_len as usize) };
+    collect_load_segments_bytes(elf, load_bias)
 }
 
 pub fn read_interp_path_bytes(elf: &[u8]) -> Result<Option<Vec<u8>>, i32> {
@@ -408,19 +421,18 @@ pub unsafe fn read_interp_path(elf_ptr: u32, elf_len: u32) -> Result<Option<Vec<
 /// Load an ELF image at the given guest guest base using the provided load bias.
 ///
 /// # Safety
-/// `elf_ptr..elf_ptr+elf_len` must be readable, and `guest_base..guest_base+guest_limit`
-/// must be valid writable guest memory for every PT_LOAD segment selected.
-pub unsafe fn load_elf_at(
+/// `guest_base..guest_base+guest_limit` must be valid writable guest memory for
+/// every PT_LOAD segment selected.
+pub unsafe fn load_elf_bytes_at(
     guest_base: u32,
     guest_limit: u64,
-    elf_ptr: u32,
-    elf_len: u32,
+    elf: &[u8],
     load_bias: u64,
 ) -> Result<ElfLoadResult, i32> {
     unsafe {
-        crate::tracepoints::record_execve_stage(340, elf_ptr as u64, elf_len as u64);
-        let inspected = inspect_elf(elf_ptr, elf_len, guest_limit)?;
-        let e = elf_ptr as *const u8;
+        crate::tracepoints::record_execve_stage(340, elf.as_ptr() as u64, elf.len() as u64);
+        let inspected = inspect_elf_bytes(elf, guest_limit)?;
+        let e = elf.as_ptr();
         let ph_off = read_u64(e, E_PHOFF) as usize;
         let ph_entsize = read_u16(e, E_PHENTSIZE) as usize;
         let ph_num = read_u16(e, E_PHNUM) as usize;
@@ -468,6 +480,22 @@ pub unsafe fn load_elf_at(
         crate::tracepoints::record_execve_stage(346, inspected.entry, inspected.brk_start);
         Ok(apply_load_bias(inspected, load_bias))
     }
+}
+
+/// Load an ELF image at the given guest guest base using the provided load bias.
+///
+/// # Safety
+/// `elf_ptr..elf_ptr+elf_len` must be readable, and `guest_base..guest_base+guest_limit`
+/// must be valid writable guest memory for every PT_LOAD segment selected.
+pub unsafe fn load_elf_at(
+    guest_base: u32,
+    guest_limit: u64,
+    elf_ptr: u32,
+    elf_len: u32,
+    load_bias: u64,
+) -> Result<ElfLoadResult, i32> {
+    let elf = unsafe { core::slice::from_raw_parts(elf_ptr as *const u8, elf_len as usize) };
+    unsafe { load_elf_bytes_at(guest_base, guest_limit, elf, load_bias) }
 }
 
 /// Load an ELF image at load bias 0.

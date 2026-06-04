@@ -67,6 +67,16 @@ pub const OFF_NOTIFY: u32 = 16;
 pub const OFF_SQ_BASE: u32 = HEADER_SIZE as u32;
 pub const OFF_CQ_BASE: u32 = (HEADER_SIZE + SQ_SIZE * REQ_SIZE) as u32;
 
+pub fn ring_backed(ring_base: u32) -> bool {
+    if ring_base == 0 {
+        return false;
+    }
+    let Some(end) = (ring_base as u64).checked_add(RING_BUFFER_SIZE as u64) else {
+        return false;
+    };
+    end <= crate::wasm::memory_size_bytes()
+}
+
 #[derive(Clone, Copy)]
 pub struct FsRequestInfo {
     pub opcode: u32,

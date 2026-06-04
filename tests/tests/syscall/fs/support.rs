@@ -6,6 +6,7 @@ pub(super) use tidemark_kernel::fs::{fd_table, memfs};
 pub(super) use tidemark_kernel::harness::TestVm;
 pub(super) use tidemark_kernel::syscall::fs;
 pub(super) use tidemark_kernel::syscall::process as process_impl;
+pub(super) use tidemark_kernel::types::ProcessState;
 
 pub(super) const AT_FDCWD: u64 = (-100i64) as u64;
 pub(super) const AT_REMOVEDIR: u64 = 0x200;
