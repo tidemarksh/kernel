@@ -11,6 +11,7 @@ use alloc_crate::{vec, vec::Vec};
 pub const EXECVE_GUEST_MEMORY_LIMIT: u64 = 0x8000_0000;
 const EXECVE_PATH_MAX: usize = 4096;
 const EXECVE_NAME_MAX: usize = 255;
+const EXECVE_PREFLIGHT_ELF_PREFIX_MAX: usize = 64 * 1024;
 pub(super) const PROC_SELF_EXE_SNAPSHOT_MAX: usize = 512;
 
 struct ExecveImage {
@@ -200,6 +201,16 @@ fn read_execve_elf_bytes(vm_ptr: u32, ino: u32, elf_len: u32) -> Result<ExecveFi
     Ok(ExecveFileBytes::from_owned(elf_bytes))
 }
 
+fn read_execve_elf_prefix(ino: u32, elf_len: u32) -> Result<Vec<u8>, i64> {
+    let prefix_len = (elf_len as usize).min(EXECVE_PREFLIGHT_ELF_PREFIX_MAX);
+    let mut prefix = vec![0u8; prefix_len];
+    let read = memfs::read_file(ino, 0, &mut prefix);
+    if read != prefix_len as i64 {
+        return Err(EIO);
+    }
+    Ok(prefix)
+}
+
 fn parse_interpreter_script_header(
     file_bytes: &[u8],
 ) -> Result<Option<(Vec<u8>, Option<Vec<u8>>)>, i64> {
@@ -234,6 +245,66 @@ fn parse_interpreter_script_header(
     } else {
         Ok(Some((interp_path, Some(optional_arg.to_vec()))))
     }
+}
+
+fn validate_execve_file_for_preflight(
+    vm: &ThreadState,
+    base: u32,
+    ino: u32,
+    guest_limit: u64,
+) -> Result<(), i64> {
+    let st = match memfs::stat(ino) {
+        Some(st) => st,
+        None => return Err(ENOENT),
+    };
+    if st.mode & memfs::S_IFMT != memfs::S_IFREG {
+        return Err(EACCES);
+    }
+    let exec_mask = if current_effective_uid(vm) == 0 {
+        st.mode & 0o111
+    } else if current_effective_uid(vm) == st.uid {
+        st.mode & 0o100
+    } else if current_effective_gid(vm) == st.gid {
+        st.mode & 0o010
+    } else {
+        st.mode & 0o001
+    };
+    if exec_mask == 0 {
+        return Err(EACCES);
+    }
+    if fd_table::inode_has_write_open(ino) {
+        return Err(ETXTBSY);
+    }
+    let elf_len = match u32::try_from(st.size) {
+        Ok(len) if len > 0 => len,
+        _ => return Err(ENOEXEC),
+    };
+    let prefix = read_execve_elf_prefix(ino, elf_len)?;
+    if let Some((interp_path, _optional_arg)) = parse_interpreter_script_header(&prefix)? {
+        let interp_ino = memfs::resolve_path_following_symlinks_with_errno(&interp_path)?;
+        validate_execve_file_for_preflight(vm, base, interp_ino, guest_limit)
+    } else {
+        crate::elf::inspect_elf_metadata_bytes(&prefix, st.size, guest_limit)
+            .map(|_| ())
+            .map_err(|_| {
+                crate::tracepoints::record_execve_stage(183, ino as u64, prefix.len() as u64);
+                ENOEXEC
+            })
+    }
+}
+
+fn validate_vfork_execve_preflight(
+    vm: &ThreadState,
+    base: u32,
+    path_addr: u64,
+    argv_addr: u64,
+    envp_addr: u64,
+    guest_limit: u64,
+) -> Result<(), i64> {
+    let (ino, _path_bytes) = resolve_execve_inode(vm, base, path_addr)?;
+    let _argv = read_guest_strvec(base, argv_addr)?;
+    let _envp = read_guest_strvec(base, envp_addr)?;
+    validate_execve_file_for_preflight(vm, base, ino, guest_limit)
 }
 
 fn inspect_execve_elf_bytes(
@@ -1246,7 +1317,7 @@ pub fn sys_execve(
     let execve_guest_limit = effective_execve_guest_memory_limit(vm, base);
 
     if is_vfork_exec {
-        if let Err(errno) = load_execve_image(
+        if let Err(errno) = validate_vfork_execve_preflight(
             vm,
             base,
             path_addr,

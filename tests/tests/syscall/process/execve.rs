@@ -182,6 +182,53 @@ fn syscall_dispatch_preserves_vfork_execve_state_after_valid_large_image_fs_ring
 }
 
 #[test]
+fn syscall_dispatch_keeps_vfork_execve_preflight_from_copying_large_image() {
+    let mut t = TestVm::new();
+    let mut code = vec![0x13, 0x05, 0x70, 0x00];
+    code.resize(3_600_000, 0);
+    let elf = build_test_elf(&code);
+    let path_addr = install_exec_file(&t, b"test_large_preflight", &elf);
+    let argv_addr = write_strvec(&t, 0x400, &[b"/bin/test_large_preflight", b"arg1"]);
+    let envp_addr = write_strvec(&t, 0x800, &[b"KEY=VALUE"]);
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    let vfork_status = process_impl::sys_vfork(&mut t.vm, t.base);
+    let child_pid = process_impl::vfork_child_pid();
+    let child_process_ptr = t.vm.process_ptr;
+    let ps_size = core::mem::size_of::<ProcessState>();
+    let process_before = t.guest_mem(child_process_ptr as u64, ps_size);
+    let argv_before = t.guest_mem(argv_addr, 128);
+    let heap_before = tidemark_kernel::alloc::heap_ptr();
+
+    assert_eq!(vfork_status, STATUS_VFORK_WAIT);
+    assert!(child_pid > 0);
+
+    t.vm.x[17] = SYS_EXECVE;
+    t.vm.x[10] = path_addr;
+    t.vm.x[11] = argv_addr;
+    t.vm.x[12] = envp_addr;
+
+    let status = tidemark_kernel::syscall::dispatch(&mut t.vm, t.base);
+    assert_eq!(status, STATUS_FS);
+    assert_eq!(t.vm.status, STATUS_FS);
+
+    tidemark_kernel::syscall::fs::process_pending_requests(vm_ptr, t.base);
+
+    let heap_after = tidemark_kernel::alloc::heap_ptr();
+    assert!(
+        heap_after.saturating_sub(heap_before) < 512 * 1024,
+        "vfork execve preflight must not copy the whole executable into kernel heap"
+    );
+    assert_eq!(t.vm.status, STATUS_EXECVE_SPAWN);
+    assert_eq!(t.vm.process_ptr, child_process_ptr);
+    assert_eq!(signal::pid_from_vm(&t.vm, t.base), child_pid);
+    assert_eq!(
+        t.guest_mem(child_process_ptr as u64, ps_size),
+        process_before
+    );
+    assert_eq!(t.guest_mem(argv_addr, 128), argv_before);
+}
+
+#[test]
 fn contract_execve_initializes_tp_from_pt_tls() {
     let mut t = TestVm::new();
     let elf = build_test_elf_with_tls(&[0x13, 0x05, 0x70, 0x00], &[0x41, 0x42, 0x43, 0x44], 0x20);

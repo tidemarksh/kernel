@@ -211,6 +211,123 @@ pub fn inspect_elf_bytes(elf: &[u8], guest_limit: u64) -> Result<ElfLoadResult, 
     }
 }
 
+/// Validate an ELF image from a header/program-header prefix without requiring
+/// the full file body to be copied into kernel heap memory.
+pub fn inspect_elf_metadata_bytes(
+    elf: &[u8],
+    file_len: u64,
+    guest_limit: u64,
+) -> Result<ElfLoadResult, i32> {
+    unsafe {
+        if elf.len() < 64 {
+            return Err(-1);
+        }
+
+        let e = elf.as_ptr();
+
+        if *e.add(0) != EI_MAG0
+            || *e.add(1) != EI_MAG1
+            || *e.add(2) != EI_MAG2
+            || *e.add(3) != EI_MAG3
+        {
+            return Err(-1);
+        }
+
+        if *e.add(EI_CLASS) != ELFCLASS64 {
+            return Err(-2);
+        }
+
+        if *e.add(EI_DATA) != ELFDATA2LSB {
+            return Err(-3);
+        }
+
+        let e_type = read_u16(e, E_TYPE);
+        if e_type != ET_EXEC && e_type != ET_DYN {
+            return Err(-4);
+        }
+
+        let e_machine = read_u16(e, E_MACHINE);
+        if e_machine != EM_RISCV {
+            return Err(-5);
+        }
+
+        let entry = read_u64(e, E_ENTRY);
+        let ph_off = read_u64(e, E_PHOFF) as usize;
+        let ph_entsize = read_u16(e, E_PHENTSIZE) as usize;
+        let ph_num = read_u16(e, E_PHNUM) as usize;
+
+        if ph_entsize < 56 || ph_off + ph_num * ph_entsize > elf.len() {
+            return Err(-6);
+        }
+
+        let mut load_end: u64 = 0;
+        let mut phdr_addr: u64 = 0;
+        let mut tls_base: u64 = 0;
+
+        for i in 0..ph_num {
+            let ph = e.add(ph_off + i * ph_entsize);
+            let p_type = read_u32(ph, P_TYPE);
+
+            match p_type {
+                PT_LOAD => {
+                    let p_offset = read_u64(ph, P_OFFSET);
+                    let p_vaddr = read_u64(ph, P_VADDR);
+                    let p_filesz = read_u64(ph, P_FILESZ);
+                    let p_memsz = read_u64(ph, P_MEMSZ);
+
+                    if p_vaddr + p_memsz > guest_limit {
+                        return Err(-7);
+                    }
+                    if p_offset + p_filesz > file_len {
+                        return Err(-8);
+                    }
+
+                    let seg_end = p_vaddr + p_memsz;
+                    if seg_end > load_end {
+                        load_end = seg_end;
+                    }
+
+                    if phdr_addr == 0 && p_offset == 0 {
+                        phdr_addr = p_vaddr + ph_off as u64;
+                    }
+                }
+                PT_TLS => {
+                    let p_offset = read_u64(ph, P_OFFSET);
+                    let p_vaddr = read_u64(ph, P_VADDR);
+                    let p_filesz = read_u64(ph, P_FILESZ);
+                    let p_memsz = read_u64(ph, P_MEMSZ);
+                    if p_vaddr + p_memsz > guest_limit {
+                        return Err(-7);
+                    }
+                    if p_offset + p_filesz > file_len {
+                        return Err(-8);
+                    }
+                    tls_base = p_vaddr;
+                }
+                _ => {}
+            }
+        }
+
+        let brk_end = (load_end + 4095) & !4095;
+
+        Ok(ElfLoadResult {
+            is_dyn: e_type == ET_DYN,
+            entry,
+            load_end,
+            brk_start: brk_end,
+            tls_base,
+            phdr_addr,
+            phent: ph_entsize as u16,
+            phnum: ph_num as u16,
+            aux_entry: entry,
+            aux_phdr_addr: phdr_addr,
+            aux_phent: ph_entsize as u16,
+            aux_phnum: ph_num as u16,
+            aux_base: 0,
+        })
+    }
+}
+
 /// Validate an ELF image and compute the metadata needed for loading it
 /// without mutating guest memory.
 ///
