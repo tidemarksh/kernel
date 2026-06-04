@@ -551,6 +551,26 @@ pub fn attach_process_runtime_state_ptr(ptr: u32) {
     }
 }
 
+pub fn advance_shared_heap_ptr(heap_ptr: u32) {
+    let ptr = checked_process_runtime_state_ptr();
+    if ptr.is_null() {
+        return;
+    }
+    let state = unsafe { &*ptr };
+    let mut current = state.heap_ptr.load(Ordering::Acquire);
+    while heap_ptr > current {
+        match state.heap_ptr.compare_exchange(
+            current,
+            heap_ptr,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return,
+            Err(next) => current = next,
+        }
+    }
+}
+
 pub fn shared_heap_base() -> Option<u32> {
     let ptr = checked_process_runtime_state_ptr();
     if ptr.is_null() {

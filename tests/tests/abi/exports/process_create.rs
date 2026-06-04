@@ -394,6 +394,54 @@ fn process_guest_base_reserves_exec_scratch_headroom() {
 }
 
 #[test]
+fn runtime_state_attach_advances_shared_heap_without_rewind() {
+    let _t = TestVm::new();
+    let heap_base = kernel_heap_base();
+    let initial_heap_ptr = kernel_heap_ptr();
+    let advanced_heap_ptr = initial_heap_ptr + 0x4000;
+
+    kernel_attach_runtime_state(
+        heap_base,
+        advanced_heap_ptr,
+        kernel_ofd_state_ptr(),
+        kernel_memfs_ptr(),
+        kernel_mem_state_ptr(),
+        kernel_epoll_table_ptr(),
+        kernel_socket_state_ptr(),
+        kernel_socket_used(),
+        kernel_pipe_base(),
+        kernel_pipe_used(),
+        kernel_net_buf_base(),
+        kernel_net_buf_used(),
+        kernel_sig_slots_ptr(),
+        kernel_process_pending_ptr(),
+        kernel_process_runtime_state_ptr(),
+        kernel_time_state_ptr(),
+    );
+    assert_eq!(kernel_heap_ptr(), advanced_heap_ptr);
+
+    kernel_attach_runtime_state(
+        heap_base,
+        initial_heap_ptr,
+        kernel_ofd_state_ptr(),
+        kernel_memfs_ptr(),
+        kernel_mem_state_ptr(),
+        kernel_epoll_table_ptr(),
+        kernel_socket_state_ptr(),
+        kernel_socket_used(),
+        kernel_pipe_base(),
+        kernel_pipe_used(),
+        kernel_net_buf_base(),
+        kernel_net_buf_used(),
+        kernel_sig_slots_ptr(),
+        kernel_process_pending_ptr(),
+        kernel_process_runtime_state_ptr(),
+        kernel_time_state_ptr(),
+    );
+    assert_eq!(kernel_heap_ptr(), advanced_heap_ptr);
+}
+
+#[test]
 fn process_create_rebases_user_brk_after_hidden_process_state() {
     let _t = TestVm::new();
     let guest_memory_policy_limit = 64 * 1024 * 1024;

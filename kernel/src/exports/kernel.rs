@@ -494,7 +494,8 @@ pub extern "C" fn kernel_attach_runtime_state(
     process_runtime_state_ptr: u32,
     time_state_ptr: u32,
 ) {
-    crate::alloc::attach_heap_state(heap_base, heap_ptr);
+    let attach_heap_ptr = crate::alloc::heap_ptr().max(heap_ptr);
+    crate::alloc::attach_heap_state(heap_base, attach_heap_ptr);
     crate::fs::fd_table::attach_ofd_state_ptr(ofd_state_ptr);
     crate::fs::memfs::attach_memfs_ptr(memfs_ptr);
     crate::syscall::memory::attach_mem_state_ptr(mem_state_ptr);
@@ -505,6 +506,7 @@ pub extern "C" fn kernel_attach_runtime_state(
     crate::syscall::signal::attach_signal_action_state(sig_slots_ptr);
     crate::syscall::signal::attach_process_pending_state(process_pending_ptr);
     crate::syscall::process::attach_process_runtime_state_ptr(process_runtime_state_ptr);
+    crate::syscall::process::advance_shared_heap_ptr(attach_heap_ptr);
     crate::syscall::time::attach_time_state_ptr(time_state_ptr);
 }
 

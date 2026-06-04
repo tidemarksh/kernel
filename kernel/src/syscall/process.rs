@@ -22,8 +22,8 @@ mod vfork;
 mod wait;
 
 pub use execve::{
-    EXECVE_GUEST_MEMORY_LIMIT, complete_execve_in_place, complete_execve_in_place_from_handoff,
-    install_procfs_snapshot, max_execve_guest_memory_limit, sys_execve, sys_execveat,
+    complete_execve_in_place, complete_execve_in_place_from_handoff, install_procfs_snapshot,
+    max_execve_guest_memory_limit, sys_execve, sys_execveat, EXECVE_GUEST_MEMORY_LIMIT,
 };
 pub use fork::sys_fork;
 #[cfg(any(test, feature = "harness"))]
@@ -35,15 +35,16 @@ pub use lifecycle::{
     restore_fork_parent_after_handoff, rewrite_child_pid, sys_getpgid, sys_setpgid, sys_setsid,
     upsert_process_entry,
 };
+pub use runtime::{
+    advance_shared_heap_ptr, attach_process_runtime_state_ptr, init, process_runtime_state_bytes,
+    process_runtime_state_ptr, shared_heap_alloc, shared_heap_base, shared_heap_ptr, vfork_active,
+    vfork_child_pid,
+};
 #[cfg(any(test, feature = "harness"))]
 pub(crate) use runtime::{
-    ProcessRuntimeStateImage, child_entries_for_parent, child_entry_state,
-    exited_children_for_parent, reset_for_tests, restore_runtime_state_from,
-    snapshot_runtime_state_into, sync_child_entry,
-};
-pub use runtime::{
-    attach_process_runtime_state_ptr, init, process_runtime_state_bytes, process_runtime_state_ptr,
-    shared_heap_alloc, shared_heap_base, shared_heap_ptr, vfork_active, vfork_child_pid,
+    child_entries_for_parent, child_entry_state, exited_children_for_parent, reset_for_tests,
+    restore_runtime_state_from, snapshot_runtime_state_into, sync_child_entry,
+    ProcessRuntimeStateImage,
 };
 pub use vfork::{
     clear_vfork_runtime_state, sys_clone_vfork, sys_vfork, vfork_parent_restore_without_cleanup,
