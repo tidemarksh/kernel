@@ -12,6 +12,7 @@ const VFORK_PROC_SELF_EXE_MAX: usize = super::execve::PROC_SELF_EXE_SNAPSHOT_MAX
 pub(super) struct ChildEntry {
     pub(super) pid: i32,
     pub(super) parent_pid: i32,
+    pub(super) pgid: i32,
     pub(super) exited: bool,
     pub(super) wait_status: i32,
 }
@@ -470,9 +471,21 @@ pub(crate) fn sync_child_entry(parent_pid: i32, pid: i32, exited: bool, wait_sta
     if parent_pid <= 0 || pid <= 0 {
         return;
     }
+    let pgid = processes()
+        .iter()
+        .find(|process| process.pid == pid)
+        .map(|process| process.pgid)
+        .or_else(|| {
+            processes()
+                .iter()
+                .find(|process| process.pid == parent_pid)
+                .map(|process| process.pgid)
+        })
+        .unwrap_or(parent_pid);
     for child in children().iter_mut() {
         if child.pid == pid {
             child.parent_pid = parent_pid;
+            child.pgid = if pgid > 0 { pgid } else { child.pgid };
             child.exited = exited;
             child.wait_status = wait_status;
             return;
@@ -483,6 +496,7 @@ pub(crate) fn sync_child_entry(parent_pid: i32, pid: i32, exited: bool, wait_sta
             *child = ChildEntry {
                 pid,
                 parent_pid,
+                pgid,
                 exited,
                 wait_status,
             };
@@ -513,6 +527,7 @@ pub fn init() {
                 children: [ChildEntry {
                     pid: 0,
                     parent_pid: 0,
+                    pgid: 0,
                     exited: false,
                     wait_status: 0,
                 }; MAX_CHILDREN],

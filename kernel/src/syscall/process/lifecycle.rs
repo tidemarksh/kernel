@@ -71,6 +71,13 @@ pub fn process_pgid(pid: i32) -> i32 {
     process_entry(pid).map(|entry| entry.pgid).unwrap_or(0)
 }
 
+fn child_record_pgid(parent_pid: i32, child_pid: i32) -> i32 {
+    process_entry(child_pid)
+        .map(|entry| entry.pgid)
+        .or_else(|| process_entry(parent_pid).map(|entry| entry.pgid))
+        .unwrap_or(parent_pid)
+}
+
 fn inherit_group_from_parent(ppid: i32) -> (i32, i32) {
     match process_entry(ppid) {
         Some(parent) => (parent.pgid, parent.sid),
@@ -254,6 +261,17 @@ pub fn remove_process_entry(pid: i32) {
         sid: 0,
         did_exec: false,
     };
+}
+
+fn update_child_record_pgid(pid: i32, pgid: i32) {
+    if pid <= 0 || pgid <= 0 {
+        return;
+    }
+    for child in children().iter_mut() {
+        if child.pid == pid {
+            child.pgid = pgid;
+        }
+    }
 }
 
 pub fn rewrite_child_pid(
@@ -516,17 +534,20 @@ pub(super) fn empty_child_entry() -> super::runtime::ChildEntry {
     super::runtime::ChildEntry {
         pid: 0,
         parent_pid: 0,
+        pgid: 0,
         exited: false,
         wait_status: 0,
     }
 }
 
 pub(super) fn record_child(parent_pid: i32, pid: i32) {
+    let pgid = child_record_pgid(parent_pid, pid);
     for c in children().iter_mut() {
         if c.pid == 0 {
             *c = super::runtime::ChildEntry {
                 pid,
                 parent_pid,
+                pgid,
                 exited: false,
                 wait_status: 0,
             };
@@ -538,6 +559,10 @@ pub(super) fn record_child(parent_pid: i32, pid: i32) {
 pub fn record_child_exit(pid: i32, wait_status: i32) {
     for c in children().iter_mut() {
         if c.pid == pid && !c.exited {
+            let pgid = child_record_pgid(c.parent_pid, pid);
+            if c.pgid <= 0 && pgid > 0 {
+                c.pgid = pgid;
+            }
             c.exited = true;
             c.wait_status = wait_status;
             crate::syscall::signal::queue_process_signal(c.parent_pid, SIGCHLD);
@@ -550,9 +575,13 @@ pub fn record_child_exit_for_parent(parent_pid: i32, pid: i32, wait_status: i32)
     if parent_pid <= 0 || pid <= 0 {
         return;
     }
+    let pgid = child_record_pgid(parent_pid, pid);
     for c in children().iter_mut() {
         if c.pid == pid {
             c.parent_pid = parent_pid;
+            if c.pgid <= 0 && pgid > 0 {
+                c.pgid = pgid;
+            }
             c.exited = true;
             c.wait_status = wait_status;
             crate::syscall::signal::queue_process_signal(parent_pid, SIGCHLD);
@@ -564,6 +593,7 @@ pub fn record_child_exit_for_parent(parent_pid: i32, pid: i32, wait_status: i32)
             *c = super::runtime::ChildEntry {
                 pid,
                 parent_pid,
+                pgid,
                 exited: true,
                 wait_status,
             };
@@ -599,14 +629,14 @@ pub(super) fn child_matches_wait_target(
                 .unwrap_or(caller_pid);
             process_entry(child.pid)
                 .map(|slot| slot.pgid == caller_pgid)
-                .unwrap_or(false)
+                .unwrap_or(child.pgid == caller_pgid)
         }
         target if target > 0 => child.pid as i64 == target,
         target => {
             let wanted_pgid = (-target) as i32;
             process_entry(child.pid)
                 .map(|slot| slot.pgid == wanted_pgid)
-                .unwrap_or(false)
+                .unwrap_or(child.pgid == wanted_pgid)
         }
     }
 }
@@ -699,48 +729,51 @@ pub fn sys_setpgid(vm: &ThreadState, base: u32, pid: i64, pgid: i64) -> i64 {
     let target_pid = if pid == 0 { caller.pid } else { pid as i32 };
     let target_pgid = if pgid == 0 { target_pid } else { pgid as i32 };
 
-    let target = match process_entry(target_pid) {
-        Some(slot) => slot,
-        None if target_pid == caller.pid => match ensure_current_process(vm, base) {
+    {
+        let target = match process_entry(target_pid) {
             Some(slot) => slot,
+            None if target_pid == caller.pid => match ensure_current_process(vm, base) {
+                Some(slot) => slot,
+                None => return ESRCH,
+            },
             None => return ESRCH,
-        },
-        None => return ESRCH,
-    };
+        };
 
-    if target_pid != caller.pid {
-        if target.ppid != caller.pid {
-            return ESRCH;
+        if target_pid != caller.pid {
+            if target.ppid != caller.pid {
+                return ESRCH;
+            }
+            if target.did_exec {
+                return EACCES;
+            }
         }
-        if target.did_exec {
-            return EACCES;
+
+        if target.sid == 0 {
+            target.sid = caller.sid.max(caller.pid);
         }
+        if target.sid != caller.sid {
+            return EPERM;
+        }
+        if target.pid == target.sid {
+            return EPERM;
+        }
+
+        if target_pgid != target.pid && !group_exists_in_session(target_pgid, target.sid) {
+            return EPERM;
+        }
+
+        target.pgid = target_pgid;
     }
 
-    if target.sid == 0 {
-        target.sid = caller.sid.max(caller.pid);
-    }
-    if target.sid != caller.sid {
-        return EPERM;
-    }
-    if target.pid == target.sid {
-        return EPERM;
-    }
-
-    if target_pgid != target.pid && !group_exists_in_session(target_pgid, target.sid) {
-        return EPERM;
-    }
-
-    target.pgid = target_pgid;
+    update_child_record_pgid(target_pid, target_pgid);
     0
 }
 
 pub fn sys_setsid(vm: &ThreadState, base: u32) -> i64 {
-    let caller = match ensure_current_process(vm, base) {
-        Some(slot) => slot,
+    let caller_pid = match ensure_current_process(vm, base) {
+        Some(slot) => slot.pid,
         None => return ESRCH,
     };
-    let caller_pid = caller.pid;
 
     if processes()
         .iter()
@@ -749,7 +782,13 @@ pub fn sys_setsid(vm: &ThreadState, base: u32) -> i64 {
         return EPERM;
     }
 
-    caller.sid = caller_pid;
-    caller.pgid = caller_pid;
+    match ensure_current_process(vm, base) {
+        Some(slot) => {
+            slot.sid = caller_pid;
+            slot.pgid = caller_pid;
+        }
+        None => return ESRCH,
+    }
+    update_child_record_pgid(caller_pid, caller_pid);
     caller_pid as i64
 }
