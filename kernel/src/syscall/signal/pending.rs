@@ -2,8 +2,8 @@ use super::actions::sig_slots;
 use crate::abi::*;
 use crate::guest_mem;
 use crate::types::{
-    MAX_SIGNALS, ProcessState, THREAD_BLOCKED_FUTEX, THREAD_DEAD, THREAD_NONE, ThreadRecord,
-    ThreadState,
+    ProcessState, ThreadRecord, ThreadState, MAX_SIGNALS, THREAD_BLOCKED_FUTEX, THREAD_DEAD,
+    THREAD_NONE,
 };
 
 // sigprocmask how
@@ -176,6 +176,12 @@ pub fn sys_rt_sigprocmask(
 ) -> i64 {
     if sigsetsize != 8 {
         return EINVAL;
+    }
+    if oldset_addr != 0 && !crate::syscall::memory::guest_range_accessible(base, oldset_addr, 8) {
+        return EFAULT;
+    }
+    if set_addr != 0 && !crate::syscall::memory::guest_range_accessible(base, set_addr, 8) {
+        return EFAULT;
     }
 
     unsafe {

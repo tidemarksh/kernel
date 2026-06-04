@@ -58,4 +58,14 @@ fn signal_syscalls() {
         0
     );
     assert_eq!(read_sigaction(t.base, oldact_addr2).handler, 0xABCD);
+
+    let invalid_addr = u64::MAX - 3;
+    assert_eq!(
+        signal::sys_rt_sigprocmask(&mut t.vm, t.base, 0, invalid_addr, 0, 8),
+        abi::EFAULT
+    );
+    assert_eq!(
+        signal::sys_rt_sigprocmask(&mut t.vm, t.base, 0, 0, invalid_addr, 8),
+        abi::EFAULT
+    );
 }
