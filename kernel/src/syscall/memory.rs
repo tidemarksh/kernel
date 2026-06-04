@@ -1180,7 +1180,7 @@ pub fn sys_mmap(
         if let Some(st) = memfs::stat(backing_ino) {
             let file_size = st.size;
             let copy_start = offset.min(file_size);
-            let copy_end = (offset + len).min(file_size);
+            let copy_end = offset.saturating_add(len).min(file_size);
             if copy_end > copy_start {
                 let copy_len = (copy_end - copy_start) as usize;
                 let mut tmp = vec![0u8; FILE_MMAP_POPULATE_CHUNK_BYTES];
@@ -1189,8 +1189,11 @@ pub fn sys_mmap(
                     let chunk = (copy_len - off).min(tmp.len());
                     let n =
                         memfs::read_file(backing_ino, copy_start + off as u64, &mut tmp[..chunk]);
-                    if n <= 0 {
-                        break;
+                    if n < 0 {
+                        return n;
+                    }
+                    if n == 0 {
+                        return EIO;
                     }
                     unsafe {
                         guest_mem::write_bytes(base, start + off as u64, &tmp[..n as usize]);

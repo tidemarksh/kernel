@@ -659,6 +659,25 @@ fn file_backed_mmap_preserves_bytes_for_offset_executable_mapping() {
 }
 
 #[test]
+fn file_backed_mmap_fails_when_external_backing_read_fails_before_eof() {
+    let mut t = TestVm::new();
+    let ino = memfs::create_file(1, b"mapped-missing-backing.bin", 0o755);
+    assert!(ino > 0);
+    assert_eq!(memfs::set_file_external(ino, 0x3000), 0);
+
+    let fd = t.sys_openat(b"/mapped-missing-backing.bin", O_RDONLY);
+    assert!(fd >= 3);
+
+    let mapped = t.sys_mmap(0, 0x1000, PROT_READ | PROT_EXEC, MAP_PRIVATE, fd, 0);
+    assert_eq!(mapped, EIO as i64);
+    assert!(
+        (0..tidemark_kernel::harness::memory::debug_vma_len())
+            .all(|index| tidemark_kernel::harness::memory::debug_vma_fd(index) != ino as i32),
+        "failed external-backed mmap must not register a file-backed VMA",
+    );
+}
+
+#[test]
 fn syscall_dispatch_routes_file_backed_mmap_through_fs_ring() {
     let mut t = TestVm::new();
     let data: Vec<u8> = (0..0x3000).map(|idx| ((idx * 17) % 251) as u8).collect();
