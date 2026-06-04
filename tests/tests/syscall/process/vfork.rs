@@ -205,8 +205,9 @@ fn contract_vfork_execve_failure_does_not_publish_spawn_handoff() {
 }
 
 #[test]
-fn contract_vfork_rebases_brk_after_child_process_state() {
+fn contract_vfork_preserves_parent_brk_base_while_staging_child_process_state() {
     let mut t = TestVm::new();
+    let parent_brk_base = tidemark_kernel::harness::memory::debug_brk_base();
 
     let status = process_impl::sys_vfork(&mut t.vm, t.base);
     let child_process_ptr = t.vm.process_ptr as u64;
@@ -215,13 +216,14 @@ fn contract_vfork_rebases_brk_after_child_process_state() {
 
     assert_eq!(status, STATUS_VFORK_WAIT);
     assert!(process_impl::vfork_child_pid() > 0);
-    assert!(
-        tidemark_kernel::harness::memory::debug_brk_base() >= public_brk,
-        "vfork child ProcessState must not remain inside the user brk floor"
+    assert_eq!(
+        tidemark_kernel::harness::memory::debug_brk_base(),
+        parent_brk_base,
+        "vfork child must keep the inherited parent heap readable before execve"
     );
     assert!(
         tidemark_kernel::harness::memory::current_brk() >= public_brk,
-        "vfork child ProcessState must not remain inside the user brk interval"
+        "vfork child ProcessState staging must reserve backing memory"
     );
 }
 
@@ -236,9 +238,10 @@ fn contract_vfork_parent_resume_restores_parent_address_space() {
 
     assert_eq!(status, STATUS_VFORK_WAIT);
     assert!(child_pid > 0);
-    assert!(
-        tidemark_kernel::harness::memory::debug_brk_base() > parent_brk_base,
-        "vfork child must be allowed to hide its ProcessState above parent brk"
+    assert_eq!(
+        tidemark_kernel::harness::memory::debug_brk_base(),
+        parent_brk_base,
+        "vfork child must not hide the inherited parent heap"
     );
 
     process_impl::vfork_parent_resume(&mut t.vm, child_pid);

@@ -123,7 +123,6 @@ fn clone_process_state_for_vfork(
     if crate::syscall::memory::grow_brk(base, public_brk) < public_brk as i64 {
         return None;
     }
-    crate::syscall::memory::rebase_brk_after_hidden_prefix(hidden_end);
 
     unsafe {
         core::ptr::copy_nonoverlapping(
