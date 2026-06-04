@@ -78,9 +78,8 @@ fn syscall_dispatch_preserves_vfork_execve_fault_after_fs_ring() {
     let child_pid = process_impl::vfork_child_pid();
     let child_process_ptr = t.vm.process_ptr;
     let fs_ring_off = core::mem::offset_of!(ProcessState, fs_ring_base) as u64;
-    let child_fs_ring_base = unsafe {
-        guest_mem::read_u32(t.base, child_process_ptr as u64 + fs_ring_off)
-    };
+    let child_fs_ring_base =
+        unsafe { guest_mem::read_u32(t.base, child_process_ptr as u64 + fs_ring_off) };
     let child_ps = unsafe { &*((t.base as u64 + child_process_ptr as u64) as *const ProcessState) };
     let child_fd0 = child_ps.fd_table[0].ofd_id;
     let child_fd1 = child_ps.fd_table[1].ofd_id;
@@ -118,6 +117,68 @@ fn syscall_dispatch_preserves_vfork_execve_fault_after_fs_ring() {
     assert_eq!(child_ps.fd_table[0].ofd_id, child_fd0);
     assert_eq!(child_ps.fd_table[1].ofd_id, child_fd1);
     assert_eq!(child_ps.fd_table[2].ofd_id, child_fd2);
+}
+
+#[test]
+fn syscall_dispatch_preserves_vfork_execve_state_after_valid_large_image_fs_ring() {
+    let mut t = TestVm::new();
+    let mut code = vec![0x13, 0x05, 0x70, 0x00];
+    code.resize(3_600_000, 0);
+    let elf = build_test_elf(&code);
+    let path_addr = install_exec_file(&t, b"test_large", &elf);
+    let argv_addr = write_strvec(&t, 0x400, &[b"/bin/test_large", b"arg1"]);
+    let envp_addr = write_strvec(&t, 0x800, &[b"KEY=VALUE"]);
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    let vfork_status = process_impl::sys_vfork(&mut t.vm, t.base);
+    let child_pid = process_impl::vfork_child_pid();
+    let child_process_ptr = t.vm.process_ptr;
+    let fs_ring_off = core::mem::offset_of!(ProcessState, fs_ring_base) as u64;
+    let child_fs_ring_base =
+        unsafe { guest_mem::read_u32(t.base, child_process_ptr as u64 + fs_ring_off) };
+    let child_ps = unsafe { &*((t.base as u64 + child_process_ptr as u64) as *const ProcessState) };
+    let child_fd0_ofd = child_ps.fd_table[0].ofd_id;
+    let child_fd0_flags = child_ps.fd_table[0].fd_flags;
+    let child_fd1_ofd = child_ps.fd_table[1].ofd_id;
+    let child_fd1_flags = child_ps.fd_table[1].fd_flags;
+    let child_fd2_ofd = child_ps.fd_table[2].ofd_id;
+    let child_fd2_flags = child_ps.fd_table[2].fd_flags;
+
+    assert_eq!(vfork_status, STATUS_VFORK_WAIT);
+    assert!(child_pid > 0);
+    assert_ne!(child_fs_ring_base, 0);
+
+    t.vm.x[17] = SYS_EXECVE;
+    t.vm.x[10] = path_addr;
+    t.vm.x[11] = argv_addr;
+    t.vm.x[12] = envp_addr;
+
+    let status = tidemark_kernel::syscall::dispatch(&mut t.vm, t.base);
+    assert_eq!(status, STATUS_FS);
+    assert_eq!(t.vm.status, STATUS_FS);
+
+    tidemark_kernel::syscall::fs::process_pending_requests(vm_ptr, t.base);
+
+    assert_eq!(t.vm.status, STATUS_EXECVE_SPAWN);
+    assert_eq!(t.vm.process_ptr, child_process_ptr);
+    assert_eq!(signal::pid_from_vm(&t.vm, t.base), child_pid);
+    assert_eq!(
+        unsafe { guest_mem::read_u32(t.base, child_process_ptr as u64 + fs_ring_off) },
+        child_fs_ring_base
+    );
+    let child_ps = unsafe { &*((t.base as u64 + child_process_ptr as u64) as *const ProcessState) };
+    assert_eq!(child_ps.fd_table[0].ofd_id, child_fd0_ofd);
+    assert_eq!(child_ps.fd_table[0].fd_flags, child_fd0_flags);
+    assert_eq!(child_ps.fd_table[1].ofd_id, child_fd1_ofd);
+    assert_eq!(child_ps.fd_table[1].fd_flags, child_fd1_flags);
+    assert_eq!(child_ps.fd_table[2].ofd_id, child_fd2_ofd);
+    assert_eq!(child_ps.fd_table[2].fd_flags, child_fd2_flags);
+
+    let ret = tidemark_kernel::syscall::fs::resume_from_fs(vm_ptr, t.base);
+
+    assert_eq!(ret, child_pid as i64);
+    assert_eq!(t.vm.status, STATUS_EXECVE_SPAWN);
+    assert_eq!(t.vm.spawn_kind, SPAWN_KIND_EXECVE);
+    assert_eq!(t.vm.spawn_child_pid, child_pid);
 }
 
 #[test]
