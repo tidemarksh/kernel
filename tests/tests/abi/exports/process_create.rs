@@ -114,16 +114,29 @@ fn resume_vfork_parent_export_restores_parent_view() {
     let mut t = TestVm::new();
     t.vm.x[1] = 0x1234;
     t.vm.pc = 0x4000;
+    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
+    let parent_pid = process_current_pid(vm_ptr);
+    process_set_fd_entry(vm_ptr, 5, 11, 0x100);
+
     tidemark_kernel::syscall::process::sys_vfork(&mut t.vm, t.base);
+    let child_process_ptr = t.vm.process_ptr;
     t.vm.x[1] = 0xFFFF;
     t.vm.pc = 0x9000;
+    unsafe {
+        let child_ps = &mut *((t.base as u64 + child_process_ptr as u64)
+            as *mut tidemark_kernel::types::ProcessState);
+        child_ps.pid = 0x21222324;
+    }
+    process_set_fd_entry(vm_ptr, 5, 99, 0x200);
 
-    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
     thread_resume_vfork_parent(vm_ptr, 55);
     assert_eq!(t.vm.x[1], 0x1234);
     assert_eq!(t.vm.pc, 0x4000);
     assert_eq!(t.vm.x[10], 55);
     assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(process_current_pid(vm_ptr), parent_pid);
+    assert_eq!(process_fd_ofd_id(vm_ptr, 5), 11);
+    assert_eq!(process_fd_flags(vm_ptr, 5), 0x100);
 }
 
 #[test]
