@@ -293,6 +293,49 @@ fn fixed_high_commit_within_sparse_prot_none_reservation_can_skip_linear_materia
 }
 
 #[test]
+fn sparse_fixed_commit_without_linear_backing_is_not_cpu_permitted() {
+    let mut t = TestVm::new();
+    t.vm.guest_memory_policy_limit = tidemark_kernel::abi::max_guest_window_for_base(t.base);
+
+    let reserve_addr = 0xf820_0000u64;
+    let reserve_len = 0x07e0_0000u64;
+    let reserve = t.sys_mmap(
+        reserve_addr,
+        reserve_len,
+        PROT_NONE,
+        MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED_NOREPLACE | MAP_NORESERVE,
+        -1,
+        0,
+    );
+    assert_eq!(reserve as u64, reserve_addr);
+
+    let before_pages = core::arch::wasm32::memory_size(0);
+    let commit_len = 0x002a_0000u64;
+    let commit = t.sys_mmap(
+        reserve_addr,
+        commit_len,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED,
+        -1,
+        0,
+    );
+    let after_pages = core::arch::wasm32::memory_size(0);
+
+    assert_eq!(commit as u64, reserve_addr);
+    assert_eq!(before_pages, after_pages);
+    assert!(
+        reserve_addr >= tidemark_kernel::wasm::memory_size_bytes().saturating_sub(t.base as u64)
+    );
+    assert!(!memory::guest_range_permitted(
+        &t.vm,
+        t.base,
+        reserve_addr,
+        4,
+        PROT_WRITE,
+    ));
+}
+
+#[test]
 fn map_fixed_noreplace_above_guest_limit_fails_instead_of_falling_back() {
     let mut t = TestVm::new();
     t.vm.guest_memory_policy_limit = 0x7fff_ffff;

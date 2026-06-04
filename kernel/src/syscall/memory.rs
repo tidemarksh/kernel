@@ -617,7 +617,7 @@ pub fn guest_range_permitted(vm: &ThreadState, base: u32, start: u64, len: u64, 
         crate::tracepoints::record_guest_range_permit_check(prot as u32, PERMIT_OUTCOME_DENIED);
         return false;
     };
-    let guest_limit = effective_guest_limit(vm, base);
+    let guest_limit = effective_guest_limit(vm, base).min(current_linear_guest_limit(base));
     if end > guest_limit {
         crate::tracepoints::record_guest_range_permit_check(prot as u32, PERMIT_OUTCOME_DENIED);
         return false;
