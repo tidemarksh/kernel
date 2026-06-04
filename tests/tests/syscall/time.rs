@@ -130,6 +130,15 @@ fn clock_gettime_null_tp_returns_efault() {
 }
 
 #[test]
+fn clock_gettime_faults_bad_output_pointer() {
+    let t = TestVm::new();
+    assert_eq!(
+        tidemark_kernel::syscall::time::sys_clock_gettime(&t.vm, t.base, CLOCK_REALTIME, u64::MAX),
+        abi::EFAULT,
+    );
+}
+
+#[test]
 fn clock_getres_validates_clk_id() {
     let t = TestVm::new();
     let res = t.scratch;
@@ -140,6 +149,19 @@ fn clock_getres_validates_clk_id() {
     assert_eq!(
         tidemark_kernel::syscall::time::sys_clock_getres(&t.vm, t.base, 999, res),
         abi::EINVAL
+    );
+}
+
+#[test]
+fn clock_getres_allows_null_res_and_faults_bad_output_pointer() {
+    let t = TestVm::new();
+    assert_eq!(
+        tidemark_kernel::syscall::time::sys_clock_getres(&t.vm, t.base, CLOCK_REALTIME, 0),
+        0,
+    );
+    assert_eq!(
+        tidemark_kernel::syscall::time::sys_clock_getres(&t.vm, t.base, CLOCK_REALTIME, u64::MAX,),
+        abi::EFAULT,
     );
 }
 

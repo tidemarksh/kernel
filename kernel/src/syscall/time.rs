@@ -411,6 +411,10 @@ pub fn sys_clock_gettime(_vm: &ThreadState, base: u32, clk_id: u64, tp: u64) -> 
         return abi::EFAULT;
     }
 
+    if !crate::syscall::memory::guest_range_accessible(base, tp, 16) {
+        return abi::EFAULT;
+    }
+
     let Some((sec, nsec)) = current_timespec(clk_id) else {
         return abi::EINVAL;
     };
@@ -437,6 +441,9 @@ pub fn sys_clock_getres(_vm: &ThreadState, base: u32, clk_id: u64, res: u64) -> 
         _ => return abi::EINVAL,
     }
     if res != 0 {
+        if !crate::syscall::memory::guest_range_accessible(base, res, 16) {
+            return abi::EFAULT;
+        }
         unsafe {
             guest_mem::write_u64(base, res, 0); // tv_sec = 0
             guest_mem::write_u64(base, res + 8, 1); // tv_nsec = 1 (1 ns resolution)
