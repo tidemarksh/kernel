@@ -193,11 +193,15 @@ fn contract_vfork_execve_failure_does_not_publish_spawn_handoff() {
     let path_addr = install_exec_file(&t, b"bad", b"not-an-elf");
 
     process_impl::sys_vfork(&mut t.vm, t.base);
+    let child_pid = process_impl::vfork_child_pid();
+    let child_process_ptr = t.vm.process_ptr;
     let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
     assert_eq!(ret, ENOEXEC);
     assert_eq!(t.vm.status, STATUS_VFORK_WAIT);
     assert_eq!(t.vm.spawn_kind, SPAWN_KIND_NONE);
     assert_eq!(t.vm.spawn_child_pid, 0);
+    assert_eq!(t.vm.process_ptr, child_process_ptr);
+    assert_eq!(signal::pid_from_vm(&t.vm, t.base), child_pid);
 }
 
 #[test]
