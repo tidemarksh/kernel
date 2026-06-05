@@ -413,7 +413,7 @@ mod tests {
     };
     use crate::abi::{
         AF_UNIX, CLONE_THREAD, CLONE_VM, EAGAIN, EINVAL, ENOENT, O_APPEND, O_CREAT, O_RDONLY,
-        O_WRONLY, SOCK_STREAM, STATUS_FS, STATUS_OK, SYS_WRITE, SYS_WRITEV,
+        O_TRUNC, O_WRONLY, SOCK_STREAM, STATUS_FS, STATUS_OK, SYS_WRITE, SYS_WRITEV,
     };
     use crate::fs::{memfs, ring_buffer};
     use crate::harness::TestVm;
@@ -759,6 +759,35 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_write_routes_regular_stdout_to_fs_ring() {
+        let mut vm = TestVm::new();
+        vm.memfs.create_file(b"stdout.txt", b"seed");
+        let fd = vm.sys_openat(b"/stdout.txt", O_WRONLY | O_TRUNC);
+        assert!(fd >= 3);
+        assert_eq!(vm.sys_dup3(fd as u64, 1, 0), 1);
+
+        let data_addr = vm.scratch + 0x880;
+        vm.write_mem(data_addr, b"hello");
+        let written = dispatch_write(&mut vm.vm, vm.base, 1, data_addr, 5, SYS_WRITE);
+
+        assert_eq!(written, 0);
+        assert_eq!(vm.vm.status, STATUS_FS);
+
+        let vm_ptr = &mut vm.vm as *mut _ as u32;
+        process_pending_requests(vm_ptr, vm.base);
+        let written = resume_from_fs(vm_ptr, vm.base);
+
+        assert_eq!(written, 5);
+        assert_eq!(vm.vm.status, STATUS_OK);
+
+        let read_fd = vm.sys_openat(b"/stdout.txt", O_RDONLY);
+        assert!(read_fd >= 3);
+        let mut buf = [0u8; 5];
+        assert_eq!(vm.sys_read(read_fd, &mut buf), 5);
+        assert_eq!(&buf, b"hello");
+    }
+
+    #[test]
     fn dispatch_writev_routes_regular_files_to_fs_ring() {
         let mut vm = TestVm::new();
         vm.memfs.create_file(b"writev.txt", b"seed");
@@ -942,10 +971,6 @@ pub fn dispatch_write(
     count: u64,
     nr: u64,
 ) -> i64 {
-    if fd == 1 || fd == 2 {
-        return sys_write(vm, base, fd, buf, count, nr);
-    }
-
     let ofd = match fd_table::get_ofd(base, vm, fd) {
         Some(o) => o,
         None => return EBADF,
@@ -968,6 +993,9 @@ pub fn dispatch_write(
             flags,
             0,
         );
+    }
+    if fd == 1 || fd == 2 {
+        return sys_write(vm, base, fd, buf, count, nr);
     }
     if ofd.fd_type == FD_TYPE_PIPE
         || ofd.fd_type == FD_TYPE_SOCKET

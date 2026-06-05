@@ -1100,7 +1100,8 @@ pub fn write_file(ino: u32, offset: u64, data: &[u8]) -> i64 {
     if end_u64 > u32::MAX as u64 {
         return ENOSPC;
     }
-    if inodes()[idx].data_cap != 0 && inodes()[idx].size > 0 {
+    let discard_inline_data = inodes()[idx].data_cap != 0 && inodes()[idx].size > 0;
+    if discard_inline_data && offset != 0 {
         return EOPNOTSUPP;
     }
 
@@ -1111,7 +1112,11 @@ pub fn write_file(ino: u32, offset: u64, data: &[u8]) -> i64 {
         return if written < 0 { written } else { EIO };
     }
     let inode = &mut inodes()[idx];
-    inode.size = inode.size.max(end_u64);
+    inode.size = if discard_inline_data {
+        end_u64
+    } else {
+        inode.size.max(end_u64)
+    };
     inode.data_offset = 0;
     inode.data_cap = 0;
     written
@@ -1154,7 +1159,7 @@ pub fn truncate(ino: u32, size: u64) -> i64 {
     if inodes()[idx].mode & S_IFMT != S_IFREG {
         return EINVAL;
     }
-    if inodes()[idx].data_cap != 0 && inodes()[idx].size > 0 {
+    if inodes()[idx].data_cap != 0 && inodes()[idx].size > 0 && size != 0 {
         return EOPNOTSUPP;
     }
     let truncated = unsafe { tidemark_page_cache_truncate(ino, size) };
@@ -1376,8 +1381,34 @@ mod tests {
 
         let mut read_buf = [0u8; 4];
         assert_eq!(read_file(ino, 0, &mut read_buf), EOPNOTSUPP);
-        assert_eq!(write_file(ino, 0, b"new!"), EOPNOTSUPP);
-        assert_eq!(truncate(ino, 0), EOPNOTSUPP);
+        assert_eq!(write_file(ino, 1, b"x"), EOPNOTSUPP);
+        assert_eq!(truncate(ino, 2), EOPNOTSUPP);
+        assert_eq!(write_file(ino, 0, b"new"), 3);
         assert!(file_data_ptr(ino).is_none());
+        assert_eq!(debug_file_data_layout(ino) >> 32, 0);
+
+        let mut replaced = [0u8; 3];
+        assert_eq!(read_file(ino, 0, &mut replaced), 3);
+        assert_eq!(&replaced, b"new");
+
+        let truncate_ino = create_file(1, b"legacy-inline-zero.bin", 0o644);
+        assert!(truncate_ino > 0);
+        let truncate_off = alloc_data(inline.len() as u32);
+        assert_ne!(truncate_off, u32::MAX);
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                inline.as_ptr(),
+                fs().data.add(truncate_off as usize),
+                inline.len(),
+            );
+        }
+        {
+            let inode = &mut inodes()[truncate_ino as usize];
+            inode.size = inline.len() as u64;
+            inode.data_offset = truncate_off;
+            inode.data_cap = inline.len() as u32;
+        }
+        assert_eq!(truncate(truncate_ino, 0), 0);
+        assert_eq!(debug_file_data_layout(truncate_ino) >> 32, 0);
     }
 }
