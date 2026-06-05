@@ -441,6 +441,19 @@ pub fn sys_ftruncate(vm: &mut ThreadState, base: u32, fd: u64, length: u64) -> i
     memfs::truncate(ofd.ino, length)
 }
 
+/// fsync/fdatasync: flush dirty resident file data to the backing object.
+pub fn sys_fsync(vm: &mut ThreadState, base: u32, fd: u64) -> i64 {
+    let ofd = match fd_table::get_ofd(base, vm, fd) {
+        Some(o) => o,
+        None => return EBADF,
+    };
+    match ofd.fd_type {
+        FD_TYPE_FILE => memfs::fsync(ofd.ino),
+        FD_TYPE_DIR => 0,
+        _ => EINVAL,
+    }
+}
+
 /// truncate: truncate file at path to specified length.
 pub fn sys_truncate(vm: &mut ThreadState, base: u32, path_addr: u64, length: u64) -> i64 {
     let mut path_buf = [0u8; 513];

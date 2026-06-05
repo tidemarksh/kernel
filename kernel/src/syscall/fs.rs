@@ -59,8 +59,8 @@ const MAX_PATH_SYMLINK_FOLLOWS: u32 = 40;
 pub use getdents::sys_getdents64;
 pub use lseek::sys_lseek;
 pub use meta::{
-    sys_faccessat, sys_fchmod, sys_fchmodat, sys_fchown, sys_fchownat, sys_fstat, sys_ftruncate,
-    sys_newfstatat, sys_readlinkat, sys_statfs, sys_truncate, sys_utimensat,
+    sys_faccessat, sys_fchmod, sys_fchmodat, sys_fchown, sys_fchownat, sys_fstat, sys_fsync,
+    sys_ftruncate, sys_newfstatat, sys_readlinkat, sys_statfs, sys_truncate, sys_utimensat,
 };
 pub use mount::{sys_chroot, sys_mount, sys_umount2};
 pub use mutation::{sys_mkdirat, sys_renameat, sys_renameat2, sys_unlinkat};
@@ -69,10 +69,10 @@ use path::resolve_at;
 pub use path::{sys_chdir, sys_getcwd};
 pub use pending::{
     FS_EFFECT_MEMFS_FILE_DATA, FS_EFFECT_MEMFS_MUTATION, FS_EFFECT_SHARED_OFD_STATE,
-    dispatch_execve, dispatch_fstat, dispatch_ftruncate, dispatch_getdents64, dispatch_lseek,
-    dispatch_mkdirat, dispatch_mmap, dispatch_openat, dispatch_pread64, dispatch_pwrite64,
-    dispatch_read, dispatch_renameat2, dispatch_truncate, dispatch_unlinkat, dispatch_write,
-    pending_request_absolute_path, pending_request_effects, pending_request_opcode,
+    dispatch_execve, dispatch_fstat, dispatch_fsync, dispatch_ftruncate, dispatch_getdents64,
+    dispatch_lseek, dispatch_mkdirat, dispatch_mmap, dispatch_openat, dispatch_pread64,
+    dispatch_pwrite64, dispatch_read, dispatch_renameat2, dispatch_truncate, dispatch_unlinkat,
+    dispatch_write, pending_request_absolute_path, pending_request_effects, pending_request_opcode,
     pending_request_path_len, pending_request_path_ptr, pending_request_secondary_absolute_path,
     pending_request_target_ino, process_pending_requests, resume_from_fs,
 };

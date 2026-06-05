@@ -95,7 +95,7 @@ fn classify_pending_request_effects(request: &ring_buffer::FsRequestInfo) -> u32
         }
         ring_buffer::FS_OP_CLOSE => FS_EFFECT_SHARED_OFD_STATE,
         ring_buffer::FS_OP_GETDENTS | ring_buffer::FS_OP_LSEEK => FS_EFFECT_SHARED_OFD_STATE,
-        ring_buffer::FS_OP_TRUNCATE => FS_EFFECT_MEMFS_FILE_DATA,
+        ring_buffer::FS_OP_TRUNCATE | ring_buffer::FS_OP_FSYNC => FS_EFFECT_MEMFS_FILE_DATA,
         ring_buffer::FS_OP_MKDIR | ring_buffer::FS_OP_UNLINK | ring_buffer::FS_OP_RENAME => {
             FS_EFFECT_MEMFS_MUTATION
         }
@@ -133,7 +133,9 @@ fn pending_request_target_ino_inner(
             }
             fd_table::get_ofd(base, vm, request.fd as u64).map_or(0, |ofd| ofd.ino)
         }
-        ring_buffer::FS_OP_CLOSE | ring_buffer::FS_OP_GETDENTS | ring_buffer::FS_OP_LSEEK => 0,
+        ring_buffer::FS_OP_CLOSE
+        | ring_buffer::FS_OP_GETDENTS
+        | ring_buffer::FS_OP_LSEEK => 0,
         ring_buffer::FS_OP_TRUNCATE => {
             if request.fd > 0 {
                 return fd_table::get_ofd(base, vm, request.fd as u64).map_or(0, |ofd| ofd.ino);
@@ -142,6 +144,12 @@ fn pending_request_target_ino_inner(
                 return 0;
             }
             resolve_at(vm, AT_FDCWD as u64, request.path_ptr, base).unwrap_or(0)
+        }
+        ring_buffer::FS_OP_FSYNC => {
+            if request.fd <= 0 {
+                return 0;
+            }
+            fd_table::get_ofd(base, vm, request.fd as u64).map_or(0, |ofd| ofd.ino)
         }
         ring_buffer::FS_OP_OPENAT => {
             if request.flags & (O_TRUNC as u32) == 0 || request.flags & (O_CREAT as u32) != 0 {
@@ -1230,6 +1238,29 @@ pub fn dispatch_execve(
         0,
         0,
     )
+}
+
+pub fn dispatch_fsync(vm: &mut ThreadState, base: u32, fd: u64) -> i64 {
+    let ofd = match fd_table::get_ofd(base, vm, fd) {
+        Some(o) => o,
+        None => return EBADF,
+    };
+    match ofd.fd_type {
+        FD_TYPE_FILE => submit_fs_request(
+            vm,
+            base,
+            ring_buffer::FS_OP_FSYNC,
+            fd as i32,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        FD_TYPE_DIR => 0,
+        _ => EINVAL,
+    }
 }
 
 pub fn dispatch_ftruncate(vm: &mut ThreadState, base: u32, fd: u64, length: u64) -> i64 {

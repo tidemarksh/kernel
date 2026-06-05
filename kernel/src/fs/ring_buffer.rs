@@ -55,6 +55,7 @@ pub const FS_OP_TRUNCATE: u32 = 10;
 pub const FS_OP_LSEEK: u32 = 11;
 pub const FS_OP_MMAP: u32 = 12;
 pub const FS_OP_EXECVE: u32 = 13;
+pub const FS_OP_FSYNC: u32 = 14;
 pub const FS_REQ_FLAG_PWRITE: u32 = 1 << 0;
 pub const FS_REQ_FLAG_WRITEV: u32 = 1 << 1;
 
@@ -450,6 +451,7 @@ pub fn process_requests(ring_base: u32, vm_ptr: u32, base: u32) {
                         crate::syscall::process::sys_execve(vm, base, path_ptr, buf_ptr, offset)
                     }
                 }
+                FS_OP_FSYNC => crate::syscall::fs::sys_fsync(vm, base, fd as u64),
                 _ => ENOSYS,
             };
 

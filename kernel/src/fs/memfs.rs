@@ -53,6 +53,7 @@ struct PageCacheMeta {
 unsafe extern "C" {
     fn tidemark_page_cache_read(ino: u32, offset: u64, dst_ptr: usize, dst_len: u32) -> i64;
     fn tidemark_page_cache_stat(ino: u32, out_ptr: usize) -> i32;
+    fn tidemark_page_cache_flush(ino: u32) -> i32;
     fn tidemark_page_cache_truncate(ino: u32, size: u64) -> i32;
     fn tidemark_page_cache_write(ino: u32, offset: u64, src_ptr: usize, src_len: u32) -> i64;
 }
@@ -189,6 +190,14 @@ unsafe fn tidemark_page_cache_write(ino: u32, offset: u64, src_ptr: usize, src_l
         );
     }
     src_len as i64
+}
+
+#[cfg(not(all(
+    any(target_arch = "wasm32", target_arch = "wasm64"),
+    target_os = "unknown"
+)))]
+unsafe fn tidemark_page_cache_flush(_ino: u32) -> i32 {
+    0
 }
 
 #[cfg(not(all(
@@ -1199,6 +1208,18 @@ pub fn truncate(ino: u32, size: u64) -> i64 {
     inode.size = size;
     inode.data_offset = 0;
     inode.data_cap = 0;
+    0
+}
+
+pub fn fsync(ino: u32) -> i64 {
+    let idx = ino as usize;
+    if inodes()[idx].mode & S_IFMT != S_IFREG {
+        return EINVAL;
+    }
+    let flushed = unsafe { tidemark_page_cache_flush(ino) };
+    if flushed < 0 {
+        return flushed as i64;
+    }
     0
 }
 

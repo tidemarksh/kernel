@@ -346,6 +346,13 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             }
             r
         }
+        SYS_FSYNC | SYS_FDATASYNC => {
+            let r = fs::dispatch_fsync(vm, base, a0);
+            if vm.status == abi::STATUS_FS {
+                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, r, abi::STATUS_FS);
+            }
+            r
+        }
         SYS_IOCTL => pty::sys_ioctl(vm, base, a0, a1, a2),
         SYS_SIGNALFD4 => signal::sys_signalfd4(vm, base, a0 as i64, a1, a2, a3),
         SYS_GETCWD => fs::sys_getcwd(vm, base, a0, a1),
