@@ -47,6 +47,7 @@ struct PageCacheMeta {
 unsafe extern "C" {
     fn tidemark_page_cache_read(ino: u32, offset: u64, dst_ptr: u32, dst_len: u32) -> i64;
     fn tidemark_page_cache_stat(ino: u32, out_ptr: u32) -> i32;
+    fn tidemark_page_cache_truncate(ino: u32, size: u64) -> i32;
     fn tidemark_page_cache_write(ino: u32, offset: u64, src_ptr: u32, src_len: u32) -> i64;
 }
 
@@ -158,6 +159,37 @@ unsafe fn tidemark_page_cache_write(ino: u32, offset: u64, src_ptr: u32, src_len
         );
     }
     src_len as i64
+}
+
+#[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
+unsafe fn tidemark_page_cache_truncate(ino: u32, size: u64) -> i32 {
+    if size > u32::MAX as u64 {
+        return ENOSPC as i32;
+    }
+    let entries = fallback_page_cache_entries();
+    let index = match entries.iter().position(|entry| entry.ino == ino) {
+        Some(index) => index,
+        None => {
+            entries.push(FallbackPageCacheEntry {
+                ino,
+                mode: S_IFREG | 0o644,
+                data: Vec::new(),
+            });
+            entries.len() - 1
+        }
+    };
+    let entry = &mut entries[index];
+    let next_len = size as usize;
+    if entry.data.len() < next_len
+        && entry
+            .data
+            .try_reserve_exact(next_len - entry.data.len())
+            .is_err()
+    {
+        return ENOSPC as i32;
+    }
+    entry.data.resize(next_len, 0);
+    0
 }
 
 pub const S_IFMT: u32 = 0o170000;
@@ -478,44 +510,6 @@ fn referenced_data_high_watermark() -> u32 {
         high = high.max(end);
     }
     high
-}
-
-fn has_external_file_data(ino: u32) -> bool {
-    let inode = inodes()[ino as usize];
-    inode.mode & S_IFMT == S_IFREG && inode.size > 0 && inode.data_cap == 0
-}
-
-fn materialize_external_file_data(ino: u32) -> i64 {
-    if !has_external_file_data(ino) {
-        return 0;
-    }
-
-    let idx = ino as usize;
-    let size = inodes()[idx].size as usize;
-    let cap = (size as u32).max(4096);
-    let off = alloc_data(cap);
-    if off == u32::MAX {
-        return ENOSPC;
-    }
-
-    let mut copied = 0usize;
-    while copied < size {
-        let chunk = (size - copied).min(4096);
-        let dst_ptr = unsafe { fs().data.add(off as usize + copied) as u32 };
-        let n = unsafe { tidemark_page_cache_read(ino, copied as u64, dst_ptr, chunk as u32) };
-        if n < 0 {
-            return n;
-        }
-        if n == 0 {
-            return EIO;
-        }
-        copied += n as usize;
-    }
-
-    let inode = &mut inodes()[idx];
-    inode.data_offset = off;
-    inode.data_cap = cap;
-    0
 }
 
 fn grow_data_pool(needed: u32) -> bool {
@@ -1095,12 +1089,12 @@ pub fn write_file(ino: u32, offset: u64, data: &[u8]) -> i64 {
                 inode.data_cap = 0;
                 return written;
             }
+            if external_required {
+                return if written < 0 { written } else { EIO };
+            }
         }
         if old_data_cap == 0 {
-            let materialized = materialize_external_file_data(ino);
-            if materialized < 0 {
-                return materialized;
-            }
+            return EIO;
         }
     }
 
@@ -1196,15 +1190,16 @@ pub fn truncate(ino: u32, size: u64) -> i64 {
     if inodes()[idx].mode & S_IFMT != S_IFREG {
         return EINVAL;
     }
-    if size == 0 && inodes()[idx].data_cap == 0 {
+    if inodes()[idx].data_cap == 0 {
+        let truncated = unsafe { tidemark_page_cache_truncate(ino, size) };
+        if truncated < 0 {
+            return truncated as i64;
+        }
         let inode = &mut inodes()[idx];
-        inode.size = 0;
+        inode.size = size;
         inode.data_offset = 0;
+        inode.data_cap = 0;
         return 0;
-    }
-    let materialized = materialize_external_file_data(ino);
-    if materialized < 0 {
-        return materialized;
     }
     let old_size = inodes()[idx].size;
     let data_cap = inodes()[idx].data_cap as u64;
