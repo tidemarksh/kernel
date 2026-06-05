@@ -206,8 +206,6 @@ const MAX_INODES: usize = 65536;
 const MAX_NAME_LEN: usize = 255;
 const MAX_SYMLINK_FOLLOWS: u32 = 40;
 const INITIAL_DATA_SIZE: u32 = 256 * 1024;
-const EXTERNAL_FILE_WRITE_THRESHOLD: u64 = 32 * 1024 * 1024;
-
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct Inode {
@@ -1059,85 +1057,47 @@ pub fn write_file(ino: u32, offset: u64, data: &[u8]) -> i64 {
     }
     let old_size = inodes()[idx].size;
     let old_data_cap = inodes()[idx].data_cap;
-    let inline_growth_needed = end_u64 > old_data_cap as u64;
-    let external_required =
-        (old_data_cap == 0 && old_size > 0) || end_u64 >= EXTERNAL_FILE_WRITE_THRESHOLD;
-    if external_required || inline_growth_needed {
-        // Avoid growing the kernel-owned inline data pool once a file write can
-        // be published to the shared page cache.
-        let mut old_published = true;
-        if old_data_cap != 0 && old_size > 0 {
-            let old_data_offset = inodes()[idx].data_offset as usize;
-            let old_data_ptr = unsafe { fs().data.add(old_data_offset) as u32 };
-            let published =
-                unsafe { tidemark_page_cache_write(ino, 0, old_data_ptr, old_size as u32) };
-            if published != old_size as i64 {
-                old_published = false;
-                if external_required {
-                    return ENOSPC;
-                }
-            }
-        }
-        if old_published {
-            let written = unsafe {
-                tidemark_page_cache_write(ino, offset, data.as_ptr() as u32, data.len() as u32)
-            };
-            if written == data.len() as i64 {
-                let inode = &mut inodes()[idx];
-                inode.size = inode.size.max(end_u64);
-                inode.data_offset = 0;
-                inode.data_cap = 0;
-                return written;
-            }
-            if external_required {
-                return if written < 0 { written } else { EIO };
-            }
-        }
-        if old_data_cap == 0 {
-            return EIO;
+
+    if old_data_cap != 0 && old_size > 0 {
+        let old_data_offset = inodes()[idx].data_offset as usize;
+        let old_data_ptr = unsafe { fs().data.add(old_data_offset) as u32 };
+        let published = unsafe { tidemark_page_cache_write(ino, 0, old_data_ptr, old_size as u32) };
+        if published != old_size as i64 {
+            return if published < 0 { published } else { EIO };
         }
     }
 
-    let end = end_u64 as u32;
-    let data_cap = inodes()[idx].data_cap;
+    let written =
+        unsafe { tidemark_page_cache_write(ino, offset, data.as_ptr() as u32, data.len() as u32) };
+    if written != data.len() as i64 {
+        return if written < 0 { written } else { EIO };
+    }
+    let inode = &mut inodes()[idx];
+    inode.size = inode.size.max(end_u64);
+    inode.data_offset = 0;
+    inode.data_cap = 0;
+    written
+}
 
-    if data_cap == 0 {
-        let cap = end.max(4096);
-        let off = alloc_data(cap);
-        if off == u32::MAX {
-            return ENOSPC;
-        }
+fn publish_inline_file_to_page_cache(ino: u32) -> i64 {
+    let idx = ino as usize;
+    let old_size = inodes()[idx].size;
+    let old_data_cap = inodes()[idx].data_cap;
+    if old_data_cap == 0 || old_size == 0 {
+        return 0;
+    }
+    let old_data_offset = inodes()[idx].data_offset as usize;
+    let old_data_ptr = unsafe { fs().data.add(old_data_offset) as u32 };
+    let published = unsafe { tidemark_page_cache_write(ino, 0, old_data_ptr, old_size as u32) };
+    if published != old_size as i64 {
+        return if published < 0 { published } else { EIO };
+    }
+    {
         let inode = &mut inodes()[idx];
-        inode.data_offset = off;
-        inode.data_cap = cap;
-    } else if end > data_cap {
-        let old_off = inodes()[idx].data_offset as usize;
-        let old_size = inodes()[idx].size as usize;
-        let new_cap = (end * 2).max(data_cap * 2);
-        let new_off = alloc_data(new_cap);
-        if new_off == u32::MAX {
-            return ENOSPC;
-        }
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                fs().data.add(old_off),
-                fs().data.add(new_off as usize),
-                old_size,
-            );
-        }
-        let inode = &mut inodes()[idx];
-        inode.data_offset = new_off;
-        inode.data_cap = new_cap;
+        inode.data_offset = 0;
+        inode.data_cap = 0;
     }
-
-    let base = inodes()[idx].data_offset as usize + offset as usize;
-    unsafe {
-        core::ptr::copy_nonoverlapping(data.as_ptr(), fs().data.add(base), data.len());
-    }
-    if end as u64 > inodes()[idx].size {
-        inodes()[idx].size = end as u64;
-    }
-    data.len() as i64
+    0
 }
 
 pub fn read_file(ino: u32, offset: u64, buf: &mut [u8]) -> i64 {
@@ -1190,63 +1150,18 @@ pub fn truncate(ino: u32, size: u64) -> i64 {
     if inodes()[idx].mode & S_IFMT != S_IFREG {
         return EINVAL;
     }
-    if inodes()[idx].data_cap == 0 {
-        let truncated = unsafe { tidemark_page_cache_truncate(ino, size) };
-        if truncated < 0 {
-            return truncated as i64;
-        }
-        let inode = &mut inodes()[idx];
-        inode.size = size;
-        inode.data_offset = 0;
-        inode.data_cap = 0;
-        return 0;
+    let published = publish_inline_file_to_page_cache(ino);
+    if published < 0 {
+        return published;
     }
-    let old_size = inodes()[idx].size;
-    let data_cap = inodes()[idx].data_cap as u64;
-
-    if size > 0 && data_cap == 0 {
-        let cap = (size as u32).max(4096);
-        let off = alloc_data(cap);
-        if off == u32::MAX {
-            return ENOSPC;
-        }
-        let inode = &mut inodes()[idx];
-        inode.data_offset = off;
-        inode.data_cap = cap;
-    } else if size > data_cap {
-        let old_off = inodes()[idx].data_offset as usize;
-        let new_cap = ((size as u32) * 2).max((data_cap as u32) * 2);
-        let new_off = alloc_data(new_cap);
-        if new_off == u32::MAX {
-            return ENOSPC;
-        }
-        unsafe {
-            core::ptr::copy_nonoverlapping(
-                fs().data.add(old_off),
-                fs().data.add(new_off as usize),
-                old_size as usize,
-            );
-        }
-        let inode = &mut inodes()[idx];
-        inode.data_offset = new_off;
-        inode.data_cap = new_cap;
+    let truncated = unsafe { tidemark_page_cache_truncate(ino, size) };
+    if truncated < 0 {
+        return truncated as i64;
     }
-
-    let data_offset = inodes()[idx].data_offset as usize;
-    if size < old_size {
-        let base = data_offset + size as usize;
-        let len = old_size as usize - size as usize;
-        unsafe {
-            core::ptr::write_bytes(fs().data.add(base), 0, len);
-        }
-    } else if size > old_size {
-        let base = data_offset + old_size as usize;
-        let len = size as usize - old_size as usize;
-        unsafe {
-            core::ptr::write_bytes(fs().data.add(base), 0, len);
-        }
-    }
-    inodes()[idx].size = size;
+    let inode = &mut inodes()[idx];
+    inode.size = size;
+    inode.data_offset = 0;
+    inode.data_cap = 0;
     0
 }
 
