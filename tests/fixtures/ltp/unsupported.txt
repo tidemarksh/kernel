@@ -238,9 +238,9 @@ testcases/kernel/syscalls/fcntl/fcntl37.c requires pipe capacity commands F_GETP
 testcases/kernel/syscalls/fcntl/fcntl38.c requires dnotify F_NOTIFY/F_SETSIG behavior, which is not implemented
 testcases/kernel/syscalls/fcntl/fcntl39.c requires dnotify F_NOTIFY/F_SETSIG behavior, which is not implemented
 testcases/kernel/syscalls/fcntl/fcntl40.c requires F_CREATED_QUERY, which is not implemented
-testcases/kernel/syscalls/fdatasync/fdatasync01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fdatasync/fdatasync02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fdatasync/fdatasync03.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/fdatasync/fdatasync01.c targeted validation timed out after fdatasync dispatch was enabled through the runtime-owned FS_OP_FSYNC path; Rust FS ring coverage records the implemented syscall path, but this LTP row stays unsupported until the kernel-only LTP runner has bounded fsync/fdatasync completion evidence
+testcases/kernel/syscalls/fdatasync/fdatasync02.c targeted validation timed out after fdatasync dispatch was enabled through the runtime-owned FS_OP_FSYNC path; Rust FS ring coverage records the implemented syscall path, but this LTP row stays unsupported until the kernel-only LTP runner has bounded fsync/fdatasync completion evidence
+testcases/kernel/syscalls/fdatasync/fdatasync03.c requires block-device bytes-written accounting plus all-filesystems mount-device coverage outside the current fsync/fdatasync LTP runner profile
 testcases/kernel/syscalls/fgetxattr/fgetxattr01.c requires fsetxattr-backed attribute persistence and ERANGE behavior outside the current no-persistence fgetxattr profile
 testcases/kernel/syscalls/fgetxattr/fgetxattr02.c requires persisted xattrs across regular files, directories, symlinks, special files, and sockets outside the current no-persistence fgetxattr profile
 testcases/kernel/syscalls/fgetxattr/fgetxattr03.c requires fsetxattr-backed successful value retrieval outside the current no-persistence fgetxattr profile
@@ -286,10 +286,10 @@ testcases/kernel/syscalls/fspick/fspick02.c fspick(2) is not production-dispatch
 testcases/kernel/syscalls/fstat/fstat02.c requires hard-link setup and exact st_nlink behavior, which is outside the current fstat metadata profile
 testcases/kernel/syscalls/fstatfs/fstatfs01.c fstatfs(2) is not production-dispatched and is excluded from the implemented-surface inventory
 testcases/kernel/syscalls/fstatfs/fstatfs02.c fstatfs(2) is not production-dispatched and is excluded from the implemented-surface inventory
-testcases/kernel/syscalls/fsync/fsync01.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fsync/fsync02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fsync/fsync03.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/fsync/fsync04.c not yet enabled in current syscall-conformance profile
+testcases/kernel/syscalls/fsync/fsync01.c requires mounted all-filesystems LTP fixture coverage; fsync dispatch is implemented through FS_OP_FSYNC, but this row is not conform until the kernel-only LTP runner has bounded mounted-filesystem fsync evidence
+testcases/kernel/syscalls/fsync/fsync02.c requires large sparse-write timing coverage under the LTP runner; fsync dispatch is implemented through FS_OP_FSYNC, but this row is not conform until bounded runtime evidence exists
+testcases/kernel/syscalls/fsync/fsync03.c requires pipe/socket/FIFO error-matrix coverage under the LTP runner; fsync dispatch is implemented through FS_OP_FSYNC, but this row is not conform until bounded descriptor-matrix evidence exists
+testcases/kernel/syscalls/fsync/fsync04.c requires block-device bytes-written accounting plus all-filesystems mount-device coverage outside the current fsync/fdatasync LTP runner profile
 testcases/kernel/syscalls/ftruncate/ftruncate04.c requires mandatory locking and mount-device remount behavior outside the current ftruncate profile
 testcases/kernel/syscalls/futex/futex_waitv01.c futex_waitv syscall dispatch is not yet implemented
 testcases/kernel/syscalls/futex/futex_waitv02.c futex_waitv syscall dispatch is not yet implemented

@@ -1,7 +1,7 @@
 use tidemark_kernel::abi::{O_CREAT, O_RDONLY, O_RDWR};
 use tidemark_kernel::fs::ring_buffer::{
-    FS_OP_MKDIR, FS_OP_RENAME, FS_OP_WRITE, HEADER_SIZE, REQ_SIZE, RESP_SIZE, RING_BUFFER_SIZE,
-    process_requests, read_completion, submit_request,
+    FS_OP_FSYNC, FS_OP_MKDIR, FS_OP_RENAME, FS_OP_WRITE, HEADER_SIZE, REQ_SIZE, RESP_SIZE,
+    RING_BUFFER_SIZE, process_requests, read_completion, submit_request,
 };
 use tidemark_kernel::harness::TestVm;
 
@@ -54,6 +54,38 @@ fn ring_buffer_dispatch_write() {
     let nread = tidemark_kernel::fs::memfs::read_file(ino, 0, &mut read_buf);
     assert_eq!(nread, data.len() as i64);
     assert_eq!(&read_buf[..data.len()], data);
+}
+
+#[test]
+fn ring_buffer_dispatch_fsync() {
+    let mut t = TestVm::new();
+
+    let fd = t.sys_openat(b"/ring_fsync.txt", O_CREAT | O_RDWR);
+    assert!(fd >= 3);
+    assert_eq!(t.sys_write_data(fd, b"dirty"), 5);
+
+    let ring_base = unsafe { tidemark_kernel::alloc::alloc_zeroed(RING_BUFFER_SIZE as u32, 16) };
+    assert!(ring_base != 0);
+
+    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
+    let idx = submit_request(
+        ring_base,
+        FS_OP_FSYNC,
+        fd as i32,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        vm_ptr,
+    );
+    assert!(idx >= 0);
+
+    process_requests(ring_base, vm_ptr, t.base);
+
+    let result = read_completion(ring_base);
+    assert_eq!(result, 0);
 }
 
 #[test]
