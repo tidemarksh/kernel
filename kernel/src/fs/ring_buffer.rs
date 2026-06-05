@@ -453,6 +453,17 @@ pub fn process_requests(ring_base: u32, vm_ptr: u32, base: u32) {
                 _ => ENOSYS,
             };
 
+            if opcode == FS_OP_EXECVE
+                && result == EAGAIN
+                && crate::syscall::process::execve_backing_miss_len(target_vm_ptr) != 0
+            {
+                vm.status = STATUS_FS;
+                break;
+            }
+            if opcode == FS_OP_EXECVE {
+                crate::syscall::process::clear_execve_backing_state(target_vm_ptr);
+            }
+
             // Write completion
             let cq_head = (*cq_head_ptr).load(Ordering::Relaxed);
             let cq_idx = (cq_head as usize) % CQ_SIZE;

@@ -12,7 +12,17 @@ pub const EXECVE_GUEST_MEMORY_LIMIT: u64 = 0x8000_0000;
 const EXECVE_PATH_MAX: usize = 4096;
 const EXECVE_NAME_MAX: usize = 255;
 const EXECVE_PREFLIGHT_ELF_PREFIX_MAX: usize = 64 * 1024;
+const EXECVE_BACKING_FILL_CHUNK: usize = 64 * 1024;
 pub(super) const PROC_SELF_EXE_SNAPSHOT_MAX: usize = 512;
+
+struct ExecveFileReadCache {
+    vm_ptr: u32,
+    ino: u32,
+    read_len: u32,
+    expected_size: u32,
+    filled: u32,
+    bytes: Vec<u8>,
+}
 
 struct ExecveImage {
     path_bytes: Vec<u8>,
@@ -30,6 +40,9 @@ struct ExecveFileBytes {
     owned: Vec<u8>,
 }
 
+static mut EXECVE_PREFIX_READ_CACHE: Option<ExecveFileReadCache> = None;
+static mut EXECVE_FILE_READ_CACHE: Option<ExecveFileReadCache> = None;
+
 impl ExecveFileBytes {
     fn from_owned(bytes: Vec<u8>) -> Self {
         Self { owned: bytes }
@@ -37,6 +50,103 @@ impl ExecveFileBytes {
 
     fn as_slice(&self) -> &[u8] {
         self.owned.as_slice()
+    }
+}
+
+fn set_execve_backing_miss(vm_ptr: u32, ino: u32, offset: u64, len: u32, expected_size: u32) {
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut ThreadState);
+        vm.execve_backing_miss_ino = ino;
+        vm.execve_backing_miss_offset = offset;
+        vm.execve_backing_miss_len = len;
+        vm.execve_backing_miss_expected_size = expected_size;
+    }
+}
+
+pub fn clear_execve_backing_miss(vm_ptr: u32) {
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut ThreadState);
+        vm.execve_backing_miss_ino = 0;
+        vm.execve_backing_miss_offset = 0;
+        vm.execve_backing_miss_len = 0;
+        vm.execve_backing_miss_expected_size = 0;
+    }
+}
+
+fn clear_execve_file_cache(cache_slot: *mut Option<ExecveFileReadCache>, vm_ptr: u32) {
+    unsafe {
+        if (*cache_slot)
+            .as_ref()
+            .is_some_and(|cache| cache.vm_ptr == vm_ptr)
+        {
+            *cache_slot = None;
+        }
+    }
+}
+
+pub fn clear_execve_backing_state(vm_ptr: u32) {
+    clear_execve_backing_miss(vm_ptr);
+    clear_execve_file_cache(core::ptr::addr_of_mut!(EXECVE_PREFIX_READ_CACHE), vm_ptr);
+    clear_execve_file_cache(core::ptr::addr_of_mut!(EXECVE_FILE_READ_CACHE), vm_ptr);
+}
+
+pub fn execve_backing_miss_ino(vm_ptr: u32) -> u32 {
+    unsafe { (*(vm_ptr as *const ThreadState)).execve_backing_miss_ino }
+}
+
+pub fn execve_backing_miss_offset(vm_ptr: u32) -> u64 {
+    unsafe { (*(vm_ptr as *const ThreadState)).execve_backing_miss_offset }
+}
+
+pub fn execve_backing_miss_len(vm_ptr: u32) -> u32 {
+    unsafe { (*(vm_ptr as *const ThreadState)).execve_backing_miss_len }
+}
+
+pub fn execve_backing_miss_expected_size(vm_ptr: u32) -> u32 {
+    unsafe { (*(vm_ptr as *const ThreadState)).execve_backing_miss_expected_size }
+}
+
+fn read_execve_file_bytes_cached(
+    cache_slot: *mut Option<ExecveFileReadCache>,
+    vm_ptr: u32,
+    ino: u32,
+    read_len: u32,
+    expected_size: u32,
+) -> Result<Vec<u8>, i64> {
+    unsafe {
+        let reset_cache = !(*cache_slot).as_ref().is_some_and(|cache| {
+            cache.vm_ptr == vm_ptr
+                && cache.ino == ino
+                && cache.read_len == read_len
+                && cache.expected_size == expected_size
+        });
+        if reset_cache {
+            *cache_slot = Some(ExecveFileReadCache {
+                vm_ptr,
+                ino,
+                read_len,
+                expected_size,
+                filled: 0,
+                bytes: vec![0u8; read_len as usize],
+            });
+        }
+
+        let cache = (*cache_slot).as_mut().ok_or(ENOMEM)?;
+        while cache.filled < cache.read_len {
+            let offset = cache.filled;
+            let chunk_len = (cache.read_len - offset).min(EXECVE_BACKING_FILL_CHUNK as u32);
+            let start = offset as usize;
+            let end = start + chunk_len as usize;
+            let read = memfs::read_file(ino, offset as u64, &mut cache.bytes[start..end]);
+            if read == chunk_len as i64 {
+                cache.filled += chunk_len;
+                continue;
+            }
+            set_execve_backing_miss(vm_ptr, ino, offset as u64, chunk_len, expected_size);
+            return Err(EAGAIN);
+        }
+
+        Ok(cache.bytes.clone())
     }
 }
 
@@ -185,7 +295,13 @@ fn read_execve_elf_bytes(vm_ptr: u32, ino: u32, elf_len: u32) -> Result<ExecveFi
         crate::alloc::heap_ptr() as u64,
     );
     crate::tracepoints::record_execve_dispatch(vm_ptr, 1244);
-    let mut elf_bytes = vec![0u8; elf_len as usize];
+    let elf_bytes = read_execve_file_bytes_cached(
+        core::ptr::addr_of_mut!(EXECVE_FILE_READ_CACHE),
+        vm_ptr,
+        ino,
+        elf_len,
+        elf_len,
+    )?;
     crate::tracepoints::record_execve_stage(
         106,
         elf_bytes.as_ptr() as u64,
@@ -193,22 +309,19 @@ fn read_execve_elf_bytes(vm_ptr: u32, ino: u32, elf_len: u32) -> Result<ExecveFi
     );
     crate::tracepoints::record_execve_dispatch(vm_ptr, 1245);
     crate::tracepoints::record_execve_stage(109, ino as u64, memfs::debug_file_data_layout(ino));
-    let read = memfs::read_file(ino, 0, &mut elf_bytes);
     crate::tracepoints::record_execve_dispatch(vm_ptr, 1246);
-    if read != elf_len as i64 {
-        return Err(EIO);
-    }
     Ok(ExecveFileBytes::from_owned(elf_bytes))
 }
 
-fn read_execve_elf_prefix(ino: u32, elf_len: u32) -> Result<Vec<u8>, i64> {
-    let prefix_len = (elf_len as usize).min(EXECVE_PREFLIGHT_ELF_PREFIX_MAX);
-    let mut prefix = vec![0u8; prefix_len];
-    let read = memfs::read_file(ino, 0, &mut prefix);
-    if read != prefix_len as i64 {
-        return Err(EIO);
-    }
-    Ok(prefix)
+fn read_execve_elf_prefix(vm_ptr: u32, ino: u32, elf_len: u32) -> Result<Vec<u8>, i64> {
+    let prefix_len = (elf_len as usize).min(EXECVE_PREFLIGHT_ELF_PREFIX_MAX) as u32;
+    read_execve_file_bytes_cached(
+        core::ptr::addr_of_mut!(EXECVE_PREFIX_READ_CACHE),
+        vm_ptr,
+        ino,
+        prefix_len,
+        elf_len,
+    )
 }
 
 fn parse_interpreter_script_header(
@@ -279,7 +392,8 @@ fn validate_execve_file_for_preflight(
         Ok(len) if len > 0 => len,
         _ => return Err(ENOEXEC),
     };
-    let prefix = read_execve_elf_prefix(ino, elf_len)?;
+    let vm_ptr = vm as *const ThreadState as u32;
+    let prefix = read_execve_elf_prefix(vm_ptr, ino, elf_len)?;
     if let Some((interp_path, _optional_arg)) = parse_interpreter_script_header(&prefix)? {
         let interp_ino = memfs::resolve_path_following_symlinks_with_errno(&interp_path)?;
         validate_execve_file_for_preflight(vm, base, interp_ino, guest_limit)
@@ -1234,6 +1348,10 @@ fn complete_execve_in_place_inner(
     vm.completed_pipe_read_guest_ptr = 0;
     vm.completed_pipe_read_len = 0;
     vm.block_cache_ptr = 0;
+    vm.execve_backing_miss_ino = 0;
+    vm.execve_backing_miss_len = 0;
+    vm.execve_backing_miss_offset = 0;
+    vm.execve_backing_miss_expected_size = 0;
     clear_wait4_state(vm);
     clear_spawn_handoff(vm);
     crate::tracepoints::record_execve_stage(69, vm.pc, vm.x[2]);

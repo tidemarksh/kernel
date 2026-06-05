@@ -59,7 +59,11 @@ fn process_idx(pid: i32) -> Option<usize> {
 pub(super) fn process_entry(pid: i32) -> Option<&'static mut super::runtime::ProcessEntry> {
     let idx = process_idx(pid)?;
     let slot = &mut processes()[idx];
-    if slot.pid == pid { Some(slot) } else { None }
+    if slot.pid == pid {
+        Some(slot)
+    } else {
+        None
+    }
 }
 
 #[cfg(any(test, feature = "harness"))]
@@ -456,6 +460,10 @@ pub fn prepare_fork_child_after_handoff(vm: &mut ThreadState, base: u32, pid: i3
     vm.completed_pipe_read_guest_ptr = 0;
     vm.completed_pipe_read_len = 0;
     vm.block_cache_ptr = 0;
+    vm.execve_backing_miss_ino = 0;
+    vm.execve_backing_miss_len = 0;
+    vm.execve_backing_miss_offset = 0;
+    vm.execve_backing_miss_expected_size = 0;
     vm.sig_pending = 0;
     vm.sig_info_code = 0;
     vm.status = STATUS_OK;
@@ -519,6 +527,10 @@ pub fn restore_fork_parent_after_handoff(
     vm.completed_pipe_read_guest_ptr = 0;
     vm.completed_pipe_read_len = 0;
     vm.block_cache_ptr = 0;
+    vm.execve_backing_miss_ino = 0;
+    vm.execve_backing_miss_len = 0;
+    vm.execve_backing_miss_offset = 0;
+    vm.execve_backing_miss_expected_size = 0;
     vm.sig_pending = 0;
     vm.sig_info_code = 0;
     vm.status = STATUS_OK;

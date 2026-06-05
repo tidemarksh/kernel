@@ -182,6 +182,15 @@ pub struct ThreadState {
     _pad_completed_pipe_read: u32,
     /// Thread-local decoded block cache pointer. 0 = inactive/unallocated.
     pub block_cache_ptr: u32,
+    /// Pending execve backing miss inode for runtime resident publication. 0 = inactive.
+    pub execve_backing_miss_ino: u32,
+    /// Pending execve backing miss byte length.
+    pub execve_backing_miss_len: u32,
+    /// Pending execve backing miss byte offset.
+    pub execve_backing_miss_offset: u64,
+    /// Expected full file size for the pending execve backing miss.
+    pub execve_backing_miss_expected_size: u32,
+    _pad_execve_backing_miss: u32,
 }
 
 // =============================================================================

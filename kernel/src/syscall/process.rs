@@ -22,8 +22,11 @@ mod vfork;
 mod wait;
 
 pub use execve::{
-    complete_execve_in_place, complete_execve_in_place_from_handoff, install_procfs_snapshot,
-    max_execve_guest_memory_limit, sys_execve, sys_execveat, EXECVE_GUEST_MEMORY_LIMIT,
+    clear_execve_backing_miss, clear_execve_backing_state, complete_execve_in_place,
+    complete_execve_in_place_from_handoff, execve_backing_miss_expected_size,
+    execve_backing_miss_ino, execve_backing_miss_len, execve_backing_miss_offset,
+    install_procfs_snapshot, max_execve_guest_memory_limit, sys_execve, sys_execveat,
+    EXECVE_GUEST_MEMORY_LIMIT,
 };
 pub use fork::sys_fork;
 #[cfg(any(test, feature = "harness"))]

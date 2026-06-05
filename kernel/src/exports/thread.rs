@@ -482,6 +482,31 @@ pub extern "C" fn thread_fs_ring_completion_result_at(vm_ptr: u32, pos: u32) -> 
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn thread_execve_backing_miss_ino(vm_ptr: u32) -> u32 {
+    crate::syscall::process::execve_backing_miss_ino(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_execve_backing_miss_offset(vm_ptr: u32) -> u64 {
+    crate::syscall::process::execve_backing_miss_offset(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_execve_backing_miss_len(vm_ptr: u32) -> u32 {
+    crate::syscall::process::execve_backing_miss_len(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_execve_backing_miss_expected_size(vm_ptr: u32) -> u32 {
+    crate::syscall::process::execve_backing_miss_expected_size(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_clear_execve_backing_miss(vm_ptr: u32) {
+    crate::syscall::process::clear_execve_backing_miss(vm_ptr);
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn thread_process_fs(vm_ptr: u32) {
     unsafe {
         let vm = &*(vm_ptr as *const ThreadState);

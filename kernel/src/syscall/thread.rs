@@ -13,31 +13,55 @@
 use crate::abi::*;
 use crate::guest_mem;
 use crate::types::{
-    ProcessState, THREAD_BLOCKED_FUTEX, THREAD_DEAD, THREAD_EXITING, THREAD_NONE, THREAD_RUNNING,
-    ThreadRecord, ThreadState,
+    ProcessState, ThreadRecord, ThreadState, THREAD_BLOCKED_FUTEX, THREAD_DEAD, THREAD_EXITING,
+    THREAD_NONE, THREAD_RUNNING,
 };
 use core::sync::atomic::Ordering;
 
-#[cfg(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness")))]
+#[cfg(any(
+    test,
+    all(
+        any(target_arch = "wasm32", target_arch = "wasm64"),
+        feature = "harness"
+    )
+))]
 #[inline(always)]
 fn wake_external_waiters(caller_pid: i32, addr: u64, max_wake: u32) -> u32 {
     crate::harness::support::wake_external_futex_waits_from_pid(caller_pid, addr, max_wake)
 }
 
-#[cfg(not(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness"))))]
+#[cfg(not(any(
+    test,
+    all(
+        any(target_arch = "wasm32", target_arch = "wasm64"),
+        feature = "harness"
+    )
+)))]
 #[inline(always)]
 fn wake_external_waiters(caller_pid: i32, addr: u64, max_wake: u32) -> u32 {
     let _ = (caller_pid, addr, max_wake);
     0
 }
 
-#[cfg(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness")))]
+#[cfg(any(
+    test,
+    all(
+        any(target_arch = "wasm32", target_arch = "wasm64"),
+        feature = "harness"
+    )
+))]
 #[inline(always)]
 fn requeue_external_waiters(addr: u64, new_addr: u64, max_requeue: u32) -> u32 {
     crate::harness::support::requeue_external_futex_waits(addr, new_addr, max_requeue)
 }
 
-#[cfg(not(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness"))))]
+#[cfg(not(any(
+    test,
+    all(
+        any(target_arch = "wasm32", target_arch = "wasm64"),
+        feature = "harness"
+    )
+)))]
 #[inline(always)]
 fn requeue_external_waiters(addr: u64, new_addr: u64, max_requeue: u32) -> u32 {
     let _ = (addr, new_addr, max_requeue);
@@ -220,13 +244,7 @@ fn clear_tid_and_wake(process_ptr: u32, base: u32, addr: u64) -> u32 {
     unsafe {
         guest_mem::write_u32(base, addr, 0);
     }
-    wake_futex_waiters_by_process_ptr(
-        process_ptr,
-        base,
-        addr,
-        u32::MAX,
-        FUTEX_BITSET_MATCH_ANY,
-    )
+    wake_futex_waiters_by_process_ptr(process_ptr, base, addr, u32::MAX, FUTEX_BITSET_MATCH_ANY)
 }
 
 fn wake_futex_waiters_by_process_ptr(
@@ -268,13 +286,19 @@ fn wake_futex_waiters_by_process_ptr(
     woken
 }
 
-#[cfg(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown"))]
+#[cfg(all(
+    any(target_arch = "wasm32", target_arch = "wasm64"),
+    target_os = "unknown"
+))]
 #[link(wasm_import_module = "env")]
 unsafe extern "C" {
     fn tidemark_memory_atomic_notify(ptr: *mut i32, max_wake: u32) -> u32;
 }
 
-#[cfg(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown"))]
+#[cfg(all(
+    any(target_arch = "wasm32", target_arch = "wasm64"),
+    target_os = "unknown"
+))]
 pub(crate) fn notify_futex_addr(base: u32, addr: u64, max_wake: u32) {
     unsafe {
         let ptr = (base as u64 + addr as u64) as usize as *mut i32;
@@ -282,7 +306,10 @@ pub(crate) fn notify_futex_addr(base: u32, addr: u64, max_wake: u32) {
     }
 }
 
-#[cfg(not(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown")))]
+#[cfg(not(all(
+    any(target_arch = "wasm32", target_arch = "wasm64"),
+    target_os = "unknown"
+)))]
 pub(crate) fn notify_futex_addr(_base: u32, _addr: u64, _max_wake: u32) {}
 
 fn requeue_futex_waiters_by_process_ptr(
@@ -488,13 +515,8 @@ pub fn discard_other_threads_for_exec(vm: &ThreadState, base: u32) -> u32 {
 
         if let Some(idx) = current_idx {
             let before = ps.thread_count.load(Ordering::Acquire);
-            ps.threads[idx] = ThreadRecord::new(
-                vm.tid,
-                THREAD_RUNNING,
-                current_ptr,
-                vm.clear_child_tid,
-                0,
-            );
+            ps.threads[idx] =
+                ThreadRecord::new(vm.tid, THREAD_RUNNING, current_ptr, vm.clear_child_tid, 0);
             ps.thread_count.store(1, Ordering::Release);
             crate::tracepoints::record_thread_count(
                 THREAD_COUNT_TRACE_EXEC_RESET,
@@ -910,6 +932,10 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
         child.completed_pipe_read_guest_ptr = 0;
         child.completed_pipe_read_len = 0;
         child.block_cache_ptr = 0;
+        child.execve_backing_miss_ino = 0;
+        child.execve_backing_miss_len = 0;
+        child.execve_backing_miss_offset = 0;
+        child.execve_backing_miss_expected_size = 0;
         child.status = STATUS_OK;
         child.exit_code = 0;
         child.term_signal = 0;
@@ -1107,8 +1133,7 @@ pub fn sys_futex(
             // ThreadRecord slots while the harness runner keeps the parent
             // executing, so external waiters must be counted separately.
             let caller_pid = crate::syscall::process::current_process_pid(vm, base);
-            let external =
-                wake_external_waiters(caller_pid, addr, val.min(u32::MAX as u64) as u32);
+            let external = wake_external_waiters(caller_pid, addr, val.min(u32::MAX as u64) as u32);
             (local + external) as i64
         }
         FUTEX_CMP_REQUEUE => {
