@@ -1100,16 +1100,8 @@ pub fn write_file(ino: u32, offset: u64, data: &[u8]) -> i64 {
     if end_u64 > u32::MAX as u64 {
         return ENOSPC;
     }
-    let old_size = inodes()[idx].size;
-    let old_data_cap = inodes()[idx].data_cap;
-
-    if old_data_cap != 0 && old_size > 0 {
-        let old_data_offset = inodes()[idx].data_offset as usize;
-        let old_data_ptr = unsafe { fs().data.add(old_data_offset) as usize };
-        let published = unsafe { tidemark_page_cache_write(ino, 0, old_data_ptr, old_size as u32) };
-        if published != old_size as i64 {
-            return if published < 0 { published } else { EIO };
-        }
+    if inodes()[idx].data_cap != 0 && inodes()[idx].size > 0 {
+        return EOPNOTSUPP;
     }
 
     let written = unsafe {
@@ -1123,27 +1115,6 @@ pub fn write_file(ino: u32, offset: u64, data: &[u8]) -> i64 {
     inode.data_offset = 0;
     inode.data_cap = 0;
     written
-}
-
-fn publish_inline_file_to_page_cache(ino: u32) -> i64 {
-    let idx = ino as usize;
-    let old_size = inodes()[idx].size;
-    let old_data_cap = inodes()[idx].data_cap;
-    if old_data_cap == 0 || old_size == 0 {
-        return 0;
-    }
-    let old_data_offset = inodes()[idx].data_offset as usize;
-    let old_data_ptr = unsafe { fs().data.add(old_data_offset) as usize };
-    let published = unsafe { tidemark_page_cache_write(ino, 0, old_data_ptr, old_size as u32) };
-    if published != old_size as i64 {
-        return if published < 0 { published } else { EIO };
-    }
-    {
-        let inode = &mut inodes()[idx];
-        inode.data_offset = 0;
-        inode.data_cap = 0;
-    }
-    0
 }
 
 pub fn read_file(ino: u32, offset: u64, buf: &mut [u8]) -> i64 {
@@ -1161,25 +1132,12 @@ pub fn read_file(ino: u32, offset: u64, buf: &mut [u8]) -> i64 {
             tidemark_page_cache_read(ino, offset, buf.as_mut_ptr() as usize, n as u32)
         };
     }
-    let n = buf.len().min(avail);
-    let base = inode.data_offset as usize + offset as usize;
-    unsafe {
-        core::ptr::copy_nonoverlapping(fs().data.add(base), buf.as_mut_ptr(), n);
-    }
-    n as i64
+    EOPNOTSUPP
 }
 
 pub fn file_data_ptr(ino: u32) -> Option<u32> {
-    let idx = ino as usize;
-    let ins = inodes();
-    if idx >= ins.len()
-        || ins[idx].mode & S_IFMT != S_IFREG
-        || ins[idx].size == 0
-        || ins[idx].data_cap == 0
-    {
-        return None;
-    }
-    Some(fs().data as u32 + ins[idx].data_offset)
+    let _ = ino;
+    None
 }
 
 pub fn debug_file_data_layout(ino: u32) -> u64 {
@@ -1196,9 +1154,8 @@ pub fn truncate(ino: u32, size: u64) -> i64 {
     if inodes()[idx].mode & S_IFMT != S_IFREG {
         return EINVAL;
     }
-    let published = publish_inline_file_to_page_cache(ino);
-    if published < 0 {
-        return published;
+    if inodes()[idx].data_cap != 0 && inodes()[idx].size > 0 {
+        return EOPNOTSUPP;
     }
     let truncated = unsafe { tidemark_page_cache_truncate(ino, size) };
     if truncated < 0 {
@@ -1392,5 +1349,35 @@ mod tests {
             second_read.len() as i64
         );
         assert_eq!(second_read, second_data);
+    }
+
+    #[test]
+    fn regular_inline_file_data_is_not_page_cache_fallback() {
+        let _t = TestVm::new();
+
+        let ino = create_file(1, b"legacy-inline.bin", 0o644);
+        assert!(ino > 0);
+        let inline = *b"old!";
+        let off = alloc_data(inline.len() as u32);
+        assert_ne!(off, u32::MAX);
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                inline.as_ptr(),
+                fs().data.add(off as usize),
+                inline.len(),
+            );
+        }
+        {
+            let inode = &mut inodes()[ino as usize];
+            inode.size = inline.len() as u64;
+            inode.data_offset = off;
+            inode.data_cap = inline.len() as u32;
+        }
+
+        let mut read_buf = [0u8; 4];
+        assert_eq!(read_file(ino, 0, &mut read_buf), EOPNOTSUPP);
+        assert_eq!(write_file(ino, 0, b"new!"), EOPNOTSUPP);
+        assert_eq!(truncate(ino, 0), EOPNOTSUPP);
+        assert!(file_data_ptr(ino).is_none());
     }
 }
