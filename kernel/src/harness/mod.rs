@@ -75,6 +75,11 @@ pub unsafe fn reset_state(heap_base: u32, brk_start: u64) {
     net::ring_buffer::init();
     fs::fd_table::init();
     fs::memfs::init();
+    #[cfg(not(all(
+        any(target_arch = "wasm32", target_arch = "wasm64"),
+        target_os = "unknown"
+    )))]
+    fs::memfs::enable_harness_page_cache();
 }
 
 /// Reset kernel-owned state using the default harness memory layout.

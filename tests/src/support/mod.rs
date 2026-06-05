@@ -3328,6 +3328,7 @@ pub(crate) fn prepare_elf_vm(elf_bytes: &[u8], use_cache: bool) -> Result<Prepar
         tidemark_kernel::net::ring_buffer::init();
         tidemark_kernel::fs::fd_table::init();
         tidemark_kernel::fs::memfs::init();
+        tidemark_kernel::fs::memfs::enable_harness_page_cache();
         ensure_shared_heap_sane("after subsystem init")?;
         let tmp_ino = ensure_dir(1, b"tmp", 0o1777)?;
         let bin_ino = ensure_dir(1, b"bin", 0o755)?;

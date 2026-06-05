@@ -1,3 +1,4 @@
+use tidemark_kernel::abi::EOPNOTSUPP;
 use tidemark_kernel::fs::memfs;
 use tidemark_kernel::harness::TestVm;
 
@@ -206,6 +207,24 @@ fn set_file_external_keeps_external_marker_and_size() {
     let mut after = [0; 7];
     assert_eq!(memfs::read_file(ino, 0, &mut after), 3);
     assert_eq!(&after[..3], b"pay");
+}
+
+#[test]
+fn page_cache_shim_requires_harness_opt_in() {
+    let _t = TestVm::new();
+    memfs::init();
+
+    let ino = memfs::create_file(1, b"external.bin", 0o644);
+    assert!(ino > 0);
+    assert_eq!(memfs::write_file(ino, 0, b"payload"), EOPNOTSUPP);
+    assert_eq!(memfs::truncate(ino, 7), EOPNOTSUPP);
+    assert_eq!(memfs::fsync(ino), EOPNOTSUPP);
+
+    assert_eq!(memfs::set_file_external(ino, 7), 0);
+    let mut buf = [0u8; 7];
+    assert_eq!(memfs::read_file(ino, 0, &mut buf), 0);
+    assert_eq!(memfs::set_file_size_shallow(ino, 3), 0);
+    assert_eq!(memfs::stat(ino).unwrap().size, 3);
 }
 
 #[test]

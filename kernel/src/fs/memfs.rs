@@ -32,10 +32,13 @@
 
 use crate::abi::*;
 use crate::alloc;
-#[cfg(not(all(
-    any(target_arch = "wasm32", target_arch = "wasm64"),
-    target_os = "unknown"
-)))]
+#[cfg(all(
+    not(all(
+        any(target_arch = "wasm32", target_arch = "wasm64"),
+        target_os = "unknown"
+    )),
+    any(test, feature = "harness")
+))]
 use alloc_crate::vec::Vec;
 
 #[repr(C)]
@@ -58,43 +61,88 @@ unsafe extern "C" {
     fn tidemark_page_cache_write(ino: u32, offset: u64, src_ptr: usize, src_len: u32) -> i64;
 }
 
-#[cfg(not(all(
-    any(target_arch = "wasm32", target_arch = "wasm64"),
-    target_os = "unknown"
-)))]
-struct FallbackPageCacheEntry {
+#[cfg(all(
+    not(all(
+        any(target_arch = "wasm32", target_arch = "wasm64"),
+        target_os = "unknown"
+    )),
+    any(test, feature = "harness")
+))]
+struct HarnessPageCacheEntry {
     ino: u32,
     mode: u32,
     data: Vec<u8>,
 }
 
-#[cfg(not(all(
-    any(target_arch = "wasm32", target_arch = "wasm64"),
-    target_os = "unknown"
-)))]
-static mut FALLBACK_PAGE_CACHE: Option<Vec<FallbackPageCacheEntry>> = None;
+#[cfg(all(
+    not(all(
+        any(target_arch = "wasm32", target_arch = "wasm64"),
+        target_os = "unknown"
+    )),
+    any(test, feature = "harness")
+))]
+static mut HARNESS_PAGE_CACHE: Option<Vec<HarnessPageCacheEntry>> = None;
 
-#[cfg(not(all(
-    any(target_arch = "wasm32", target_arch = "wasm64"),
-    target_os = "unknown"
-)))]
-fn fallback_page_cache_entries() -> &'static mut Vec<FallbackPageCacheEntry> {
+#[cfg(all(
+    not(all(
+        any(target_arch = "wasm32", target_arch = "wasm64"),
+        target_os = "unknown"
+    )),
+    any(test, feature = "harness")
+))]
+static mut HARNESS_PAGE_CACHE_ENABLED: bool = false;
+
+#[cfg(all(
+    not(all(
+        any(target_arch = "wasm32", target_arch = "wasm64"),
+        target_os = "unknown"
+    )),
+    any(test, feature = "harness")
+))]
+pub fn enable_harness_page_cache() {
     unsafe {
-        let entries = core::ptr::addr_of_mut!(FALLBACK_PAGE_CACHE);
+        core::ptr::write(core::ptr::addr_of_mut!(HARNESS_PAGE_CACHE_ENABLED), true);
+        let entries = core::ptr::addr_of_mut!(HARNESS_PAGE_CACHE);
         if (*entries).is_none() {
             *entries = Some(Vec::new());
         }
-        (*entries).as_mut().unwrap()
+        if let Some(entries) = (*entries).as_mut() {
+            entries.clear();
+        }
     }
 }
 
-#[cfg(not(all(
-    any(target_arch = "wasm32", target_arch = "wasm64"),
-    target_os = "unknown"
-)))]
-fn reset_fallback_page_cache() {
+#[cfg(all(
+    not(all(
+        any(target_arch = "wasm32", target_arch = "wasm64"),
+        target_os = "unknown"
+    )),
+    any(test, feature = "harness")
+))]
+fn harness_page_cache_entries() -> Option<&'static mut Vec<HarnessPageCacheEntry>> {
     unsafe {
-        let entries = core::ptr::addr_of_mut!(FALLBACK_PAGE_CACHE);
+        if !core::ptr::read(core::ptr::addr_of!(HARNESS_PAGE_CACHE_ENABLED)) {
+            return None;
+        }
+        let entries = core::ptr::addr_of_mut!(HARNESS_PAGE_CACHE);
+        if (*entries).is_none() {
+            *entries = Some(Vec::new());
+        }
+        (*entries).as_mut()
+    }
+}
+
+#[cfg(all(
+    not(all(
+        any(target_arch = "wasm32", target_arch = "wasm64"),
+        target_os = "unknown"
+    )),
+    any(test, feature = "harness")
+))]
+fn reset_harness_page_cache() {
+    unsafe {
+        core::ptr::write(core::ptr::addr_of_mut!(HARNESS_PAGE_CACHE_ENABLED), false);
+        let entries = core::ptr::addr_of_mut!(HARNESS_PAGE_CACHE);
         if let Some(entries) = (*entries).as_mut() {
             entries.clear();
         }
@@ -105,29 +153,35 @@ fn reset_fallback_page_cache() {
     any(target_arch = "wasm32", target_arch = "wasm64"),
     target_os = "unknown"
 )))]
-fn fallback_page_cache_entry(ino: u32) -> Option<&'static mut FallbackPageCacheEntry> {
-    fallback_page_cache_entries()
-        .iter_mut()
-        .find(|entry| entry.ino == ino)
-}
-
-#[cfg(not(all(
-    any(target_arch = "wasm32", target_arch = "wasm64"),
-    target_os = "unknown"
-)))]
 unsafe fn tidemark_page_cache_read(ino: u32, offset: u64, dst_ptr: usize, dst_len: u32) -> i64 {
-    let Some(entry) = fallback_page_cache_entry(ino) else {
+    #[cfg(any(test, feature = "harness"))]
+    let Some(entries) = harness_page_cache_entries() else {
         return 0;
     };
-    let offset = offset as usize;
-    if offset >= entry.data.len() {
-        return 0;
+    #[cfg(any(test, feature = "harness"))]
+    {
+        let Some(entry) = entries.iter_mut().find(|entry| entry.ino == ino) else {
+            return 0;
+        };
+        let offset = offset as usize;
+        if offset >= entry.data.len() {
+            return 0;
+        }
+        let len = (dst_len as usize).min(entry.data.len() - offset);
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                entry.data.as_ptr().add(offset),
+                dst_ptr as *mut u8,
+                len,
+            );
+        }
+        len as i64
     }
-    let len = (dst_len as usize).min(entry.data.len() - offset);
-    unsafe {
-        core::ptr::copy_nonoverlapping(entry.data.as_ptr().add(offset), dst_ptr as *mut u8, len);
+    #[cfg(not(any(test, feature = "harness")))]
+    {
+        let _ = (ino, offset, dst_ptr, dst_len);
+        0
     }
-    len as i64
 }
 
 #[cfg(not(all(
@@ -135,16 +189,28 @@ unsafe fn tidemark_page_cache_read(ino: u32, offset: u64, dst_ptr: usize, dst_le
     target_os = "unknown"
 )))]
 unsafe fn tidemark_page_cache_stat(ino: u32, out_ptr: usize) -> i32 {
-    let Some(entry) = fallback_page_cache_entry(ino) else {
+    #[cfg(any(test, feature = "harness"))]
+    let Some(entries) = harness_page_cache_entries() else {
         return 0;
     };
-    unsafe {
-        let meta = &mut *(out_ptr as *mut PageCacheMeta);
-        meta.mode = entry.mode;
-        meta._pad = 0;
-        meta.size = entry.data.len() as u64;
+    #[cfg(any(test, feature = "harness"))]
+    {
+        let Some(entry) = entries.iter_mut().find(|entry| entry.ino == ino) else {
+            return 0;
+        };
+        unsafe {
+            let meta = &mut *(out_ptr as *mut PageCacheMeta);
+            meta.mode = entry.mode;
+            meta._pad = 0;
+            meta.size = entry.data.len() as u64;
+        }
+        1
     }
-    1
+    #[cfg(not(any(test, feature = "harness")))]
+    {
+        let _ = (ino, out_ptr);
+        0
+    }
 }
 
 #[cfg(not(all(
@@ -152,6 +218,15 @@ unsafe fn tidemark_page_cache_stat(ino: u32, out_ptr: usize) -> i32 {
     target_os = "unknown"
 )))]
 unsafe fn tidemark_page_cache_write(ino: u32, offset: u64, src_ptr: usize, src_len: u32) -> i64 {
+    #[cfg(not(any(test, feature = "harness")))]
+    {
+        let _ = (ino, offset, src_ptr, src_len);
+        return EOPNOTSUPP;
+    }
+    #[cfg(any(test, feature = "harness"))]
+    let Some(entries) = harness_page_cache_entries() else {
+        return EOPNOTSUPP;
+    };
     let Some(end) = (offset as usize).checked_add(src_len as usize) else {
         return ENOSPC;
     };
@@ -159,11 +234,10 @@ unsafe fn tidemark_page_cache_write(ino: u32, offset: u64, src_ptr: usize, src_l
         return ENOSPC;
     }
 
-    let entries = fallback_page_cache_entries();
     let index = match entries.iter().position(|entry| entry.ino == ino) {
         Some(index) => index,
         None => {
-            entries.push(FallbackPageCacheEntry {
+            entries.push(HarnessPageCacheEntry {
                 ino,
                 mode: S_IFREG | 0o644,
                 data: Vec::new(),
@@ -196,7 +270,21 @@ unsafe fn tidemark_page_cache_write(ino: u32, offset: u64, src_ptr: usize, src_l
     any(target_arch = "wasm32", target_arch = "wasm64"),
     target_os = "unknown"
 )))]
-unsafe fn tidemark_page_cache_flush(_ino: u32) -> i32 {
+unsafe fn tidemark_page_cache_flush(ino: u32) -> i32 {
+    #[cfg(not(any(test, feature = "harness")))]
+    {
+        let _ = ino;
+        return EOPNOTSUPP as i32;
+    }
+    #[cfg(any(test, feature = "harness"))]
+    let Some(entries) = harness_page_cache_entries() else {
+        let _ = ino;
+        return EOPNOTSUPP as i32;
+    };
+    #[cfg(any(test, feature = "harness"))]
+    {
+        let _ = entries.iter().find(|entry| entry.ino == ino);
+    }
     0
 }
 
@@ -205,14 +293,22 @@ unsafe fn tidemark_page_cache_flush(_ino: u32) -> i32 {
     target_os = "unknown"
 )))]
 unsafe fn tidemark_page_cache_truncate(ino: u32, size: u64) -> i32 {
+    #[cfg(not(any(test, feature = "harness")))]
+    {
+        let _ = (ino, size);
+        return EOPNOTSUPP as i32;
+    }
+    #[cfg(any(test, feature = "harness"))]
+    let Some(entries) = harness_page_cache_entries() else {
+        return EOPNOTSUPP as i32;
+    };
     if size > u32::MAX as u64 {
         return ENOSPC as i32;
     }
-    let entries = fallback_page_cache_entries();
     let index = match entries.iter().position(|entry| entry.ino == ino) {
         Some(index) => index,
         None => {
-            entries.push(FallbackPageCacheEntry {
+            entries.push(HarnessPageCacheEntry {
                 ino,
                 mode: S_IFREG | 0o644,
                 data: Vec::new(),
@@ -396,11 +492,14 @@ fn dir_entries() -> &'static mut [DirEntry] {
 
 /// Initialize MemFS. Allocates all data structures via alloc.rs.
 pub fn init() {
-    #[cfg(not(all(
-        any(target_arch = "wasm32", target_arch = "wasm64"),
-        target_os = "unknown"
-    )))]
-    reset_fallback_page_cache();
+    #[cfg(all(
+        not(all(
+            any(target_arch = "wasm32", target_arch = "wasm64"),
+            target_os = "unknown"
+        )),
+        any(test, feature = "harness")
+    ))]
+    reset_harness_page_cache();
 
     unsafe {
         core::ptr::write(core::ptr::addr_of_mut!(MEMFS_PTR), core::ptr::null_mut());
