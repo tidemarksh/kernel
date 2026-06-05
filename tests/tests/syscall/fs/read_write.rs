@@ -138,7 +138,7 @@ fn syscall_dispatch_routes_readv() {
 }
 
 #[test]
-fn syscall_dispatch_routes_regular_file_read_through_fs_ring() {
+fn syscall_dispatch_reads_regular_file_local_hit_without_fs_ring() {
     let mut t = TestVm::new();
     let fd = t.sys_openat(b"/dispatch-read.txt", O_CREAT | O_RDWR);
     assert!(fd >= 3);
@@ -153,21 +153,16 @@ fn syscall_dispatch_routes_regular_file_read_through_fs_ring() {
 
     assert_eq!(
         tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
-        STATUS_FS
+        STATUS_OK
     );
-
-    let vm_ptr = &mut t.vm as *mut _ as u32;
-    fs::process_pending_requests(vm_ptr, t.base);
-    let read = fs::resume_from_fs(vm_ptr, t.base);
-
-    assert_eq!(read, 3);
+    assert_eq!(t.vm.x[10] as i64, 3);
     assert_eq!(t.vm.status, STATUS_OK);
     assert_eq!(t.guest_mem(buf_addr, 3), b"abc".to_vec());
     assert_eq!(t.sys_lseek(fd, 0, 1), 3);
 }
 
 #[test]
-fn syscall_dispatch_routes_regular_file_pread64_through_fs_ring() {
+fn syscall_dispatch_pread64_regular_file_local_hit_without_fs_ring() {
     let mut t = TestVm::new();
     let fd = t.sys_openat(b"/dispatch-pread.txt", O_CREAT | O_RDWR);
     assert!(fd >= 3);
@@ -183,14 +178,9 @@ fn syscall_dispatch_routes_regular_file_pread64_through_fs_ring() {
 
     assert_eq!(
         tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
-        STATUS_FS
+        STATUS_OK
     );
-
-    let vm_ptr = &mut t.vm as *mut _ as u32;
-    fs::process_pending_requests(vm_ptr, t.base);
-    let read = fs::resume_from_fs(vm_ptr, t.base);
-
-    assert_eq!(read, 3);
+    assert_eq!(t.vm.x[10] as i64, 3);
     assert_eq!(t.vm.status, STATUS_OK);
     assert_eq!(t.guest_mem(buf_addr, 3), b"cde".to_vec());
     assert_eq!(t.sys_lseek(fd, 0, 1), 0);

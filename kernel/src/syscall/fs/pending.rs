@@ -400,14 +400,14 @@ pub fn dispatch_openat(
 #[cfg(test)]
 mod tests {
     use super::{
-        dispatch_lseek, dispatch_openat, dispatch_write, process_fs_ring_base,
-        process_pending_requests, resume_from_fs,
+        dispatch_lseek, dispatch_openat, dispatch_pread64, dispatch_read, dispatch_write,
+        process_fs_ring_base, process_pending_requests, resume_from_fs,
     };
     use crate::abi::{
         AF_UNIX, CLONE_THREAD, CLONE_VM, EAGAIN, EINVAL, ENOENT, O_APPEND, O_CREAT, O_RDONLY,
         O_WRONLY, SOCK_STREAM, STATUS_FS, STATUS_OK, SYS_WRITE, SYS_WRITEV,
     };
-    use crate::fs::ring_buffer;
+    use crate::fs::{memfs, ring_buffer};
     use crate::harness::TestVm;
     use crate::syscall::fd_table;
     use crate::syscall::socket::sys_socketpair;
@@ -434,6 +434,57 @@ mod tests {
         let mut buf = [0u8; 5];
         assert_eq!(vm.sys_read(fd, &mut buf), 5);
         assert_eq!(&buf, b"hello");
+    }
+
+    #[test]
+    fn dispatch_read_uses_local_resident_file_hit() {
+        let mut vm = TestVm::new();
+        vm.memfs.create_file(b"resident.txt", b"abcdef");
+        let fd = vm.sys_openat(b"/resident.txt", O_RDONLY);
+        assert!(fd >= 3);
+        let buf_addr = vm.scratch + 0x5000;
+
+        let result = dispatch_read(&mut vm.vm, vm.base, fd as u64, buf_addr, 3);
+
+        assert_eq!(result, 3);
+        assert_eq!(vm.vm.status, STATUS_OK);
+        assert_eq!(vm.guest_mem(buf_addr, 3), b"abc".to_vec());
+        assert_eq!(vm.sys_lseek(fd, 0, 1), 3);
+    }
+
+    #[test]
+    fn dispatch_read_falls_back_to_fs_ring_on_external_file_miss() {
+        let mut vm = TestVm::new();
+        let ino = memfs::create_file(1, b"external.txt", 0o644);
+        assert!(ino > 0);
+        assert_eq!(memfs::set_file_external(ino, 6), 0);
+        assert_eq!(memfs::stat(ino).map(|st| st.size), Some(6));
+        let fd = vm.sys_openat(b"/external.txt", O_RDONLY);
+        assert!(fd >= 3);
+        let buf_addr = vm.scratch + 0x5100;
+
+        let result = dispatch_read(&mut vm.vm, vm.base, fd as u64, buf_addr, 3);
+
+        assert_eq!(result, 0);
+        assert_eq!(vm.vm.status, STATUS_FS);
+    }
+
+    #[test]
+    fn dispatch_pread64_falls_back_to_fs_ring_on_external_file_miss() {
+        let mut vm = TestVm::new();
+        let ino = memfs::create_file(1, b"external-pread.txt", 0o644);
+        assert!(ino > 0);
+        assert_eq!(memfs::set_file_external(ino, 6), 0);
+        assert_eq!(memfs::stat(ino).map(|st| st.size), Some(6));
+        let fd = vm.sys_openat(b"/external-pread.txt", O_RDONLY);
+        assert!(fd >= 3);
+        let buf_addr = vm.scratch + 0x5200;
+
+        let result = dispatch_pread64(&mut vm.vm, vm.base, fd as u64, buf_addr, 3, 2);
+
+        assert_eq!(result, 0);
+        assert_eq!(vm.vm.status, STATUS_FS);
+        assert_eq!(vm.sys_lseek(fd, 0, 1), 0);
     }
 
     #[test]
@@ -1056,6 +1107,16 @@ pub fn dispatch_lseek(vm: &mut ThreadState, base: u32, fd: u64, offset: i64, whe
     crate::syscall::fs::sys_lseek(vm, base, fd, offset, whence)
 }
 
+fn regular_file_read_needs_fs_request(ino: u32, offset: u64, count: u64, local: i64) -> bool {
+    if local == ENOENT {
+        return true;
+    }
+    local == 0
+        && count > 0
+        && memfs::stat(ino)
+            .is_some_and(|st| st.mode & memfs::S_IFMT == memfs::S_IFREG && offset < st.size)
+}
+
 pub fn dispatch_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) -> i64 {
     let ofd = match fd_table::get_ofd(base, vm, fd) {
         Some(o) => o,
@@ -1063,6 +1124,11 @@ pub fn dispatch_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: 
     };
     if ofd.fd_type != FD_TYPE_FILE {
         return crate::syscall::fs::sys_read(vm, base, fd, buf, count);
+    }
+    let offset = fd_table::get_offset(base, vm, fd);
+    let local = crate::syscall::fs::sys_read(vm, base, fd, buf, count);
+    if !regular_file_read_needs_fs_request(ofd.ino, offset, count, local) {
+        return local;
     }
     submit_fs_request(
         vm,
@@ -1092,6 +1158,10 @@ pub fn dispatch_pread64(
     };
     if ofd.fd_type != FD_TYPE_FILE {
         return crate::syscall::fs::sys_pread64(vm, base, fd, buf, count, offset);
+    }
+    let local = crate::syscall::fs::sys_pread64(vm, base, fd, buf, count, offset);
+    if !regular_file_read_needs_fs_request(ofd.ino, offset, count, local) {
+        return local;
     }
     submit_fs_request(
         vm,
