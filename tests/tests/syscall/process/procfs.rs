@@ -38,6 +38,9 @@ fn install_procfs_snapshot_writes_linux_like_maps() {
 
     let ngroups_max = String::from_utf8(read_file_bytes(b"/proc/sys/kernel/ngroups_max")).unwrap();
     assert_eq!(ngroups_max, "65536\n");
+
+    let cpuinfo = String::from_utf8(read_file_bytes(b"/proc/cpuinfo")).unwrap();
+    assert!(cpuinfo.contains("mmu\t\t: sv48\n"));
 }
 
 #[test]

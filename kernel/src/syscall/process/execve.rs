@@ -700,7 +700,8 @@ pub(super) fn restore_proc_self_exe_target(target: Option<&[u8]>) {
 }
 
 const PROC_STAT_BYTES: &[u8] = b"cpu  1 1 1 1 0 0 0 0 0 0\ncpu0 1 1 1 1 0 0 0 0 0 0\n";
-const PROC_CPUINFO_BYTES: &[u8] = b"processor\t: 0\nmodel name\t: tidemark-riscv64\n\n";
+const PROC_CPUINFO_BYTES: &[u8] =
+    b"processor\t: 0\nmodel name\t: tidemark-riscv64\nmmu\t\t: sv48\n\n";
 const PROC_SYS_KERNEL_NGROUPS_MAX_BYTES: &[u8] = b"65536\n";
 
 fn ensure_proc_child_dir(parent_ino: u32, name: &[u8], mode: u32) -> u32 {
