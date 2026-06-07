@@ -78,6 +78,54 @@ fn memory_syscalls() {
 }
 
 #[test]
+fn seqlock_read_recovers_stale_odd_generation() {
+    let mut t = TestVm::new();
+    let addr = t.sys_mmap(
+        0,
+        4096,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    );
+    assert!(addr > 0);
+
+    let read_addr = addr as u64 + 4;
+    let expected = 0x1122_3344_5566_7788;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, read_addr, expected);
+    }
+
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    ps.thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
+    let first_slot = ((read_addr >> 3) & 63) as usize;
+    let last_slot = (((read_addr + 7) >> 3) & 63) as usize;
+    assert_ne!(first_slot, last_slot);
+    ps.reservation_gen[first_slot].store(1, core::sync::atomic::Ordering::Release);
+    ps.reservation_gen[last_slot].store(1, core::sync::atomic::Ordering::Release);
+
+    let actual = unsafe { tidemark_kernel::guest_mem::read_u64_seqlock(t.base, read_addr) };
+    assert_eq!(actual, expected);
+    assert_eq!(
+        ps.reservation_gen[first_slot].load(core::sync::atomic::Ordering::Acquire) & 1,
+        0
+    );
+    assert_eq!(
+        ps.reservation_gen[last_slot].load(core::sync::atomic::Ordering::Acquire) & 1,
+        0
+    );
+    assert_eq!(
+        ps.reservation_lock[first_slot].load(core::sync::atomic::Ordering::Acquire),
+        0
+    );
+    assert_eq!(
+        ps.reservation_lock[last_slot].load(core::sync::atomic::Ordering::Acquire),
+        0
+    );
+}
+
+#[test]
 fn mremap_in_place_growth_respects_guest_memory_policy_limit() {
     let mut t = TestVm::new();
     let addr = 0x40_0000u64;

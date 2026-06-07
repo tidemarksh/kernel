@@ -35,6 +35,10 @@ static mut RESERVATION_LOCK: *const AtomicU32 = core::ptr::null();
 /// Pointer to thread_count in ProcessState. null = single-thread (skip seqlock).
 static mut THREAD_COUNT: *const AtomicU32 = core::ptr::null();
 const RESERVATION_LOCK_SPIN_LIMIT: u32 = 1 << 20;
+#[cfg(not(test))]
+const SEQLOCK_READ_SPIN_LIMIT: u32 = RESERVATION_LOCK_SPIN_LIMIT;
+#[cfg(test)]
+const SEQLOCK_READ_SPIN_LIMIT: u32 = 16;
 const ACCESS_READ: u32 = 1;
 const ACCESS_WRITE: u32 = 2;
 const ACCESS_ZERO: u32 = 3;
@@ -152,6 +156,7 @@ pub unsafe fn read_u32_seqlock(base: u32, addr: u64) -> u32 {
     if !unsafe { is_multi_threaded() } {
         return unsafe { read_u32(base, addr) };
     }
+    let mut spins = 0u32;
     let (first_slot, last_slot) = seqlock_slots(addr, 4);
     loop {
         let gen_before_first = unsafe { read_gen(first_slot) };
@@ -161,6 +166,9 @@ pub unsafe fn read_u32_seqlock(base: u32, addr: u64) -> u32 {
             unsafe { read_gen(last_slot) }
         };
         if (gen_before_first | gen_before_last) & 1 != 0 {
+            if seqlock_read_should_fallback(&mut spins) {
+                return unsafe { read_u32_seqlock_locked(base, addr) };
+            }
             core::hint::spin_loop();
             continue;
         }
@@ -174,6 +182,10 @@ pub unsafe fn read_u32_seqlock(base: u32, addr: u64) -> u32 {
         if gen_before_first == gen_after_first && gen_before_last == gen_after_last {
             return val;
         }
+        if seqlock_read_should_fallback(&mut spins) {
+            return unsafe { read_u32_seqlock_locked(base, addr) };
+        }
+        core::hint::spin_loop();
     }
 }
 
@@ -187,6 +199,7 @@ pub unsafe fn read_u16_seqlock(base: u32, addr: u64) -> u16 {
     if !unsafe { is_multi_threaded() } {
         return unsafe { read_u16(base, addr) };
     }
+    let mut spins = 0u32;
     let (first_slot, last_slot) = seqlock_slots(addr, 2);
     loop {
         let gen_before_first = unsafe { read_gen(first_slot) };
@@ -196,6 +209,9 @@ pub unsafe fn read_u16_seqlock(base: u32, addr: u64) -> u16 {
             unsafe { read_gen(last_slot) }
         };
         if (gen_before_first | gen_before_last) & 1 != 0 {
+            if seqlock_read_should_fallback(&mut spins) {
+                return unsafe { read_u16_seqlock_locked(base, addr) };
+            }
             core::hint::spin_loop();
             continue;
         }
@@ -209,6 +225,10 @@ pub unsafe fn read_u16_seqlock(base: u32, addr: u64) -> u16 {
         if gen_before_first == gen_after_first && gen_before_last == gen_after_last {
             return val;
         }
+        if seqlock_read_should_fallback(&mut spins) {
+            return unsafe { read_u16_seqlock_locked(base, addr) };
+        }
+        core::hint::spin_loop();
     }
 }
 
@@ -222,6 +242,7 @@ pub unsafe fn read_u64_seqlock(base: u32, addr: u64) -> u64 {
     if !unsafe { is_multi_threaded() } {
         return unsafe { read_u64(base, addr) };
     }
+    let mut spins = 0u32;
     let (first_slot, last_slot) = seqlock_slots(addr, 8);
     loop {
         let gen_before_first = unsafe { read_gen(first_slot) };
@@ -231,6 +252,9 @@ pub unsafe fn read_u64_seqlock(base: u32, addr: u64) -> u64 {
             unsafe { read_gen(last_slot) }
         };
         if (gen_before_first | gen_before_last) & 1 != 0 {
+            if seqlock_read_should_fallback(&mut spins) {
+                return unsafe { read_u64_seqlock_locked(base, addr) };
+            }
             core::hint::spin_loop();
             continue;
         }
@@ -244,6 +268,10 @@ pub unsafe fn read_u64_seqlock(base: u32, addr: u64) -> u64 {
         if gen_before_first == gen_after_first && gen_before_last == gen_after_last {
             return val;
         }
+        if seqlock_read_should_fallback(&mut spins) {
+            return unsafe { read_u64_seqlock_locked(base, addr) };
+        }
+        core::hint::spin_loop();
     }
 }
 
@@ -261,6 +289,59 @@ unsafe fn read_gen(slot: usize) -> u32 {
         return 0;
     }
     unsafe { (*p.add(slot)).load(Ordering::Acquire) }
+}
+
+#[inline(always)]
+fn seqlock_read_should_fallback(spins: &mut u32) -> bool {
+    *spins = spins.wrapping_add(1);
+    *spins >= SEQLOCK_READ_SPIN_LIMIT
+}
+
+#[inline(always)]
+unsafe fn repair_odd_generations_for_locked_mask(mask: u64) {
+    let p = unsafe { RESERVATION_GEN };
+    if p.is_null() {
+        return;
+    }
+    for slot in 0..64 {
+        if mask & (1u64 << slot) == 0 {
+            continue;
+        }
+        let generation = unsafe { (*p.add(slot)).load(Ordering::Acquire) };
+        if generation & 1 != 0 {
+            unsafe { (*p.add(slot)).fetch_add(1, Ordering::SeqCst) };
+        }
+    }
+}
+
+#[inline(always)]
+unsafe fn read_u16_seqlock_locked(base: u32, addr: u64) -> u16 {
+    let mask = stripe_mask(addr, 2);
+    unsafe { lock_mask(mask) };
+    unsafe { repair_odd_generations_for_locked_mask(mask) };
+    let val = unsafe { read_u16(base, addr) };
+    unsafe { unlock_mask(mask) };
+    val
+}
+
+#[inline(always)]
+unsafe fn read_u32_seqlock_locked(base: u32, addr: u64) -> u32 {
+    let mask = stripe_mask(addr, 4);
+    unsafe { lock_mask(mask) };
+    unsafe { repair_odd_generations_for_locked_mask(mask) };
+    let val = unsafe { read_u32(base, addr) };
+    unsafe { unlock_mask(mask) };
+    val
+}
+
+#[inline(always)]
+unsafe fn read_u64_seqlock_locked(base: u32, addr: u64) -> u64 {
+    let mask = stripe_mask(addr, 8);
+    unsafe { lock_mask(mask) };
+    unsafe { repair_odd_generations_for_locked_mask(mask) };
+    let val = unsafe { read_u64(base, addr) };
+    unsafe { unlock_mask(mask) };
+    val
 }
 
 /// Read one byte from guest memory.
@@ -1020,6 +1101,39 @@ mod tests {
             assert_eq!(gen_table[first_slot].load(Ordering::SeqCst), 2);
             assert_eq!(gen_table[last_slot].load(Ordering::SeqCst), 2);
             assert_eq!(super::read_u64_seqlock(base, addr), 0x1122_3344_5566_7788);
+
+            super::init(core::ptr::null(), core::ptr::null(), core::ptr::null());
+        }
+    }
+
+    #[test]
+    fn seqlock_read_fallback_repairs_stale_odd_generation() {
+        unsafe {
+            super::init(core::ptr::null(), core::ptr::null(), core::ptr::null());
+
+            let base: u32 = 0;
+            let addr: u64 = 0x1004;
+            let expected = 0x1122_3344_5566_7788;
+            super::write_u64(base, addr, expected);
+
+            let gen_table: [AtomicU32; 64] = core::array::from_fn(|_| AtomicU32::new(0));
+            let lock_table: [AtomicU32; 64] = core::array::from_fn(|_| AtomicU32::new(0));
+            let thread_count = AtomicU32::new(2);
+            super::init(
+                gen_table.as_ptr(),
+                lock_table.as_ptr(),
+                &thread_count as *const AtomicU32,
+            );
+
+            let (first_slot, last_slot) = super::seqlock_slots(addr, 8);
+            gen_table[first_slot].store(1, Ordering::Release);
+            gen_table[last_slot].store(1, Ordering::Release);
+
+            assert_eq!(super::read_u64_seqlock(base, addr), expected);
+            assert_eq!(gen_table[first_slot].load(Ordering::Acquire) & 1, 0);
+            assert_eq!(gen_table[last_slot].load(Ordering::Acquire) & 1, 0);
+            assert_eq!(lock_table[first_slot].load(Ordering::Acquire), 0);
+            assert_eq!(lock_table[last_slot].load(Ordering::Acquire), 0);
 
             super::init(core::ptr::null(), core::ptr::null(), core::ptr::null());
         }
