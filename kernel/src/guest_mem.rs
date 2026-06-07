@@ -34,6 +34,7 @@ static mut RESERVATION_GEN: *const AtomicU32 = core::ptr::null();
 static mut RESERVATION_LOCK: *const AtomicU32 = core::ptr::null();
 /// Pointer to thread_count in ProcessState. null = single-thread (skip seqlock).
 static mut THREAD_COUNT: *const AtomicU32 = core::ptr::null();
+const RESERVATION_LOCK_SPIN_LIMIT: u32 = 1 << 20;
 const ACCESS_READ: u32 = 1;
 const ACCESS_WRITE: u32 = 2;
 const ACCESS_ZERO: u32 = 3;
@@ -79,9 +80,9 @@ fn checked_addr(base: u32, addr: u64, len: usize, op: &str) -> usize {
 
 #[inline(always)]
 fn unchecked_addr(base: u32, addr: u64, op: &str) -> usize {
-    let absolute = (base as u64).checked_add(addr).unwrap_or_else(|| {
-        panic!("{op}: address overflow base=0x{base:x} addr=0x{addr:x}")
-    });
+    let absolute = (base as u64)
+        .checked_add(addr)
+        .unwrap_or_else(|| panic!("{op}: address overflow base=0x{base:x} addr=0x{addr:x}"));
     if absolute > usize::MAX as u64 {
         panic!("{op}: address exceeds pointer width absolute=0x{absolute:x}");
     }
@@ -417,10 +418,24 @@ unsafe fn lock_slot_with(reservation_lock: *const AtomicU32, slot: usize) {
         return;
     }
     let lock = unsafe { &*p.add(slot) };
-    while lock
-        .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-        .is_err()
-    {
+    acquire_reservation_lock(lock);
+}
+
+#[inline(always)]
+pub(crate) fn acquire_reservation_lock(lock: &AtomicU32) {
+    let mut spins = 0u32;
+    loop {
+        if lock
+            .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
+            return;
+        }
+        spins = spins.wrapping_add(1);
+        if spins >= RESERVATION_LOCK_SPIN_LIMIT {
+            let _ = lock.compare_exchange(1, 0, Ordering::AcqRel, Ordering::Relaxed);
+            spins = 0;
+        }
         core::hint::spin_loop();
     }
 }

@@ -8,6 +8,7 @@
 //! operate on both thread-local registers and process-shared reservation slots.
 
 use super::decode;
+use crate::guest_mem::acquire_reservation_lock;
 use crate::types::{ProcessState, ThreadState};
 use core::sync::atomic::{AtomicI32, AtomicI64, Ordering};
 
@@ -102,12 +103,7 @@ unsafe fn exec_amo32_atomic(
         0x02 => {
             let gen_idx = ((addr >> 3) % 64) as usize;
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-            while ps.reservation_lock[gen_idx]
-                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                core::hint::spin_loop();
-            }
+            acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             loop {
                 let g = ps.reservation_gen[gen_idx].load(Ordering::SeqCst);
                 if g & 1 == 0 {
@@ -129,12 +125,7 @@ unsafe fn exec_amo32_atomic(
             if vm.lr_addr == addr {
                 let gen_idx = ((addr >> 3) % 64) as usize;
                 let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-                while ps.reservation_lock[gen_idx]
-                    .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                    .is_err()
-                {
-                    core::hint::spin_loop();
-                }
+                acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
                 let generation = ps.reservation_gen[gen_idx].load(Ordering::SeqCst);
                 if generation != vm.lr_gen {
                     vm.lr_addr = u64::MAX;
@@ -160,12 +151,7 @@ unsafe fn exec_amo32_atomic(
         0x01 => {
             let gen_idx = ((addr >> 3) % 64) as usize;
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-            while ps.reservation_lock[gen_idx]
-                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                core::hint::spin_loop();
-            }
+            acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.swap(x[rs2] as i32, Ordering::SeqCst);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
@@ -176,12 +162,7 @@ unsafe fn exec_amo32_atomic(
         0x00 => {
             let gen_idx = ((addr >> 3) % 64) as usize;
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-            while ps.reservation_lock[gen_idx]
-                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                core::hint::spin_loop();
-            }
+            acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.fetch_add(x[rs2] as i32, Ordering::SeqCst);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
@@ -192,12 +173,7 @@ unsafe fn exec_amo32_atomic(
         0x04 => {
             let gen_idx = ((addr >> 3) % 64) as usize;
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-            while ps.reservation_lock[gen_idx]
-                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                core::hint::spin_loop();
-            }
+            acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.fetch_xor(x[rs2] as i32, Ordering::SeqCst);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
@@ -208,12 +184,7 @@ unsafe fn exec_amo32_atomic(
         0x0C => {
             let gen_idx = ((addr >> 3) % 64) as usize;
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-            while ps.reservation_lock[gen_idx]
-                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                core::hint::spin_loop();
-            }
+            acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.fetch_and(x[rs2] as i32, Ordering::SeqCst);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
@@ -224,12 +195,7 @@ unsafe fn exec_amo32_atomic(
         0x08 => {
             let gen_idx = ((addr >> 3) % 64) as usize;
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-            while ps.reservation_lock[gen_idx]
-                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                core::hint::spin_loop();
-            }
+            acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.fetch_or(x[rs2] as i32, Ordering::SeqCst);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
@@ -240,12 +206,7 @@ unsafe fn exec_amo32_atomic(
         0x10 => {
             let gen_idx = ((addr >> 3) % 64) as usize;
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-            while ps.reservation_lock[gen_idx]
-                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                core::hint::spin_loop();
-            }
+            acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.fetch_min(x[rs2] as i32, Ordering::SeqCst);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
@@ -256,12 +217,7 @@ unsafe fn exec_amo32_atomic(
         0x14 => {
             let gen_idx = ((addr >> 3) % 64) as usize;
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-            while ps.reservation_lock[gen_idx]
-                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                core::hint::spin_loop();
-            }
+            acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.fetch_max(x[rs2] as i32, Ordering::SeqCst);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
@@ -272,12 +228,7 @@ unsafe fn exec_amo32_atomic(
         0x18 => {
             let gen_idx = ((addr >> 3) % 64) as usize;
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-            while ps.reservation_lock[gen_idx]
-                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                core::hint::spin_loop();
-            }
+            acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let au = unsafe { &*(host_ptr as *const core::sync::atomic::AtomicU32) };
             let old = au.fetch_min(x[rs2] as u32, Ordering::SeqCst);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
@@ -289,12 +240,7 @@ unsafe fn exec_amo32_atomic(
         0x1C => {
             let gen_idx = ((addr >> 3) % 64) as usize;
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-            while ps.reservation_lock[gen_idx]
-                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                core::hint::spin_loop();
-            }
+            acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let au = unsafe { &*(host_ptr as *const core::sync::atomic::AtomicU32) };
             let old = au.fetch_max(x[rs2] as u32, Ordering::SeqCst);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
@@ -328,19 +274,9 @@ unsafe fn exec_amo32_nonatomic(
                 (end_idx, gen_idx)
             };
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-            while ps.reservation_lock[first]
-                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                core::hint::spin_loop();
-            }
+            acquire_reservation_lock(&ps.reservation_lock[first]);
             if first != second {
-                while ps.reservation_lock[second]
-                    .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                    .is_err()
-                {
-                    core::hint::spin_loop();
-                }
+                acquire_reservation_lock(&ps.reservation_lock[second]);
             }
             let ptr = guest_atomic_addr(base, addr, 4, "cpu::atomic::amo32_lr") as *const u32;
             let val = unsafe { ptr.read_unaligned() as i32 };
@@ -370,19 +306,9 @@ unsafe fn exec_amo32_nonatomic(
                     (end_idx, gen_idx)
                 };
                 let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-                while ps.reservation_lock[first]
-                    .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                    .is_err()
-                {
-                    core::hint::spin_loop();
-                }
+                acquire_reservation_lock(&ps.reservation_lock[first]);
                 if first != second {
-                    while ps.reservation_lock[second]
-                        .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                        .is_err()
-                    {
-                        core::hint::spin_loop();
-                    }
+                    acquire_reservation_lock(&ps.reservation_lock[second]);
                 }
                 let generation = ps.reservation_gen[gen_idx].load(Ordering::SeqCst);
                 let end_gen = if end_idx != gen_idx {
@@ -427,19 +353,9 @@ unsafe fn exec_amo32_nonatomic(
                 (end_idx, gen_idx)
             };
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-            while ps.reservation_lock[first]
-                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                core::hint::spin_loop();
-            }
+            acquire_reservation_lock(&ps.reservation_lock[first]);
             if first != second {
-                while ps.reservation_lock[second]
-                    .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                    .is_err()
-                {
-                    core::hint::spin_loop();
-                }
+                acquire_reservation_lock(&ps.reservation_lock[second]);
             }
             let rptr = guest_atomic_addr(base, addr, 4, "cpu::atomic::amo32_read") as *const u32;
             let old = unsafe { rptr.read_unaligned() as i32 };
@@ -519,12 +435,7 @@ unsafe fn exec_amo64_atomic(
         0x02 => {
             let gen_idx = ((addr >> 3) % 64) as usize;
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-            while ps.reservation_lock[gen_idx]
-                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                core::hint::spin_loop();
-            }
+            acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             loop {
                 let g = ps.reservation_gen[gen_idx].load(Ordering::SeqCst);
                 if g & 1 == 0 {
@@ -546,12 +457,7 @@ unsafe fn exec_amo64_atomic(
             if vm.lr_addr == addr {
                 let gen_idx = ((addr >> 3) % 64) as usize;
                 let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-                while ps.reservation_lock[gen_idx]
-                    .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                    .is_err()
-                {
-                    core::hint::spin_loop();
-                }
+                acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
                 let generation = ps.reservation_gen[gen_idx].load(Ordering::SeqCst);
                 if generation != vm.lr_gen {
                     vm.lr_addr = u64::MAX;
@@ -577,12 +483,7 @@ unsafe fn exec_amo64_atomic(
         0x01 => {
             let gen_idx = ((addr >> 3) % 64) as usize;
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-            while ps.reservation_lock[gen_idx]
-                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                core::hint::spin_loop();
-            }
+            acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.swap(x[rs2] as i64, Ordering::SeqCst);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
@@ -593,12 +494,7 @@ unsafe fn exec_amo64_atomic(
         0x00 => {
             let gen_idx = ((addr >> 3) % 64) as usize;
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-            while ps.reservation_lock[gen_idx]
-                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                core::hint::spin_loop();
-            }
+            acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.fetch_add(x[rs2] as i64, Ordering::SeqCst);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
@@ -609,12 +505,7 @@ unsafe fn exec_amo64_atomic(
         0x04 => {
             let gen_idx = ((addr >> 3) % 64) as usize;
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-            while ps.reservation_lock[gen_idx]
-                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                core::hint::spin_loop();
-            }
+            acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.fetch_xor(x[rs2] as i64, Ordering::SeqCst);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
@@ -625,12 +516,7 @@ unsafe fn exec_amo64_atomic(
         0x0C => {
             let gen_idx = ((addr >> 3) % 64) as usize;
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-            while ps.reservation_lock[gen_idx]
-                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                core::hint::spin_loop();
-            }
+            acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.fetch_and(x[rs2] as i64, Ordering::SeqCst);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
@@ -641,12 +527,7 @@ unsafe fn exec_amo64_atomic(
         0x08 => {
             let gen_idx = ((addr >> 3) % 64) as usize;
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-            while ps.reservation_lock[gen_idx]
-                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                core::hint::spin_loop();
-            }
+            acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.fetch_or(x[rs2] as i64, Ordering::SeqCst);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
@@ -657,12 +538,7 @@ unsafe fn exec_amo64_atomic(
         0x10 => {
             let gen_idx = ((addr >> 3) % 64) as usize;
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-            while ps.reservation_lock[gen_idx]
-                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                core::hint::spin_loop();
-            }
+            acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.fetch_min(x[rs2] as i64, Ordering::SeqCst);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
@@ -673,12 +549,7 @@ unsafe fn exec_amo64_atomic(
         0x14 => {
             let gen_idx = ((addr >> 3) % 64) as usize;
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-            while ps.reservation_lock[gen_idx]
-                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                core::hint::spin_loop();
-            }
+            acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.fetch_max(x[rs2] as i64, Ordering::SeqCst);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
@@ -689,12 +560,7 @@ unsafe fn exec_amo64_atomic(
         0x18 => {
             let gen_idx = ((addr >> 3) % 64) as usize;
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-            while ps.reservation_lock[gen_idx]
-                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                core::hint::spin_loop();
-            }
+            acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let au = unsafe { &*(host_ptr as *const core::sync::atomic::AtomicU64) };
             let old = au.fetch_min(x[rs2], Ordering::SeqCst);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
@@ -706,12 +572,7 @@ unsafe fn exec_amo64_atomic(
         0x1C => {
             let gen_idx = ((addr >> 3) % 64) as usize;
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-            while ps.reservation_lock[gen_idx]
-                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                core::hint::spin_loop();
-            }
+            acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let au = unsafe { &*(host_ptr as *const core::sync::atomic::AtomicU64) };
             let old = au.fetch_max(x[rs2], Ordering::SeqCst);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
@@ -745,19 +606,9 @@ unsafe fn exec_amo64_nonatomic(
                 (end_idx, gen_idx)
             };
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-            while ps.reservation_lock[first]
-                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                core::hint::spin_loop();
-            }
+            acquire_reservation_lock(&ps.reservation_lock[first]);
             if first != second {
-                while ps.reservation_lock[second]
-                    .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                    .is_err()
-                {
-                    core::hint::spin_loop();
-                }
+                acquire_reservation_lock(&ps.reservation_lock[second]);
             }
             let ptr = guest_atomic_addr(base, addr, 8, "cpu::atomic::amo64_lr") as *const u64;
             let val = unsafe { ptr.read_unaligned() };
@@ -787,19 +638,9 @@ unsafe fn exec_amo64_nonatomic(
                     (end_idx, gen_idx)
                 };
                 let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-                while ps.reservation_lock[first]
-                    .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                    .is_err()
-                {
-                    core::hint::spin_loop();
-                }
+                acquire_reservation_lock(&ps.reservation_lock[first]);
                 if first != second {
-                    while ps.reservation_lock[second]
-                        .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                        .is_err()
-                    {
-                        core::hint::spin_loop();
-                    }
+                    acquire_reservation_lock(&ps.reservation_lock[second]);
                 }
                 let generation = ps.reservation_gen[gen_idx].load(Ordering::SeqCst);
                 let end_gen = if end_idx != gen_idx {
@@ -844,19 +685,9 @@ unsafe fn exec_amo64_nonatomic(
                 (end_idx, gen_idx)
             };
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
-            while ps.reservation_lock[first]
-                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_err()
-            {
-                core::hint::spin_loop();
-            }
+            acquire_reservation_lock(&ps.reservation_lock[first]);
             if first != second {
-                while ps.reservation_lock[second]
-                    .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-                    .is_err()
-                {
-                    core::hint::spin_loop();
-                }
+                acquire_reservation_lock(&ps.reservation_lock[second]);
             }
             let rptr = guest_atomic_addr(base, addr, 8, "cpu::atomic::amo64_read") as *const u64;
             let old = unsafe { rptr.read_unaligned() };

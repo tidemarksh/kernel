@@ -110,6 +110,57 @@ fn lr_sc_reservation_is_invalidated_by_intervening_store() {
 }
 
 #[test]
+fn amo_recovers_stale_reservation_lock() {
+    let mut t = TestVm::new();
+    let ps = unsafe {
+        &*((t.base as u64 + t.vm.process_ptr as u64) as *const crate::types::ProcessState)
+    };
+    ps.thread_count.store(2, Ordering::Release);
+    unsafe {
+        crate::guest_mem::init(
+            core::ptr::addr_of!(ps.reservation_gen) as *const core::sync::atomic::AtomicU32,
+            core::ptr::addr_of!(ps.reservation_lock) as *const core::sync::atomic::AtomicU32,
+            core::ptr::addr_of!(ps.thread_count),
+        );
+    }
+
+    let addr = t.scratch + 0x200;
+    let slot = ((addr >> 3) % 64) as usize;
+    unsafe { crate::guest_mem::write_u32(t.base, addr, 7) };
+    ps.reservation_lock[slot].store(1, Ordering::Release);
+
+    let mut x = [0u64; 32];
+    x[10] = addr;
+    x[11] = 5;
+    let mut pc = 0u64;
+
+    unsafe {
+        exec_amo(
+            &mut t.vm,
+            &mut x,
+            encode_amo(0x00, 5, 10, 11, 2),
+            t.base,
+            &mut pc,
+            4,
+        );
+    }
+
+    assert_eq!(pc, 4, "amo should complete the guest instruction");
+    assert_eq!(x[5], 7, "amoadd.w should return the old word");
+    assert_eq!(unsafe { crate::guest_mem::read_u32(t.base, addr) }, 12);
+    assert_eq!(
+        ps.reservation_lock[slot].load(Ordering::Acquire),
+        0,
+        "stale reservation lock should be released after AMO recovery"
+    );
+    assert_eq!(
+        ps.reservation_gen[slot].load(Ordering::SeqCst),
+        2,
+        "successful AMO should invalidate the reservation generation"
+    );
+}
+
+#[test]
 fn c_addi16sp_does_not_clobber_tp() {
     let mut t = TestVm::new();
     let code_addr = t.sys_mmap(
