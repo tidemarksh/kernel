@@ -35,7 +35,32 @@ fn identity_syscalls() {
         0
     );
     let totalram = unsafe { tidemark_kernel::guest_mem::read_u64(t.base, buf2 + 32) };
-    assert!(totalram > 0);
+    assert_eq!(
+        totalram,
+        tidemark_kernel::syscall::identity::SYSINFO_TOTALRAM_BYTES
+    );
+    let freeram = unsafe { tidemark_kernel::guest_mem::read_u64(t.base, buf2 + 40) };
+    assert_eq!(
+        freeram,
+        tidemark_kernel::syscall::identity::SYSINFO_FREERAM_BYTES
+    );
+    let mem_unit = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, buf2 + 104) };
+    assert_eq!(
+        mem_unit,
+        tidemark_kernel::syscall::identity::SYSINFO_MEM_UNIT
+    );
+
+    t.vm.guest_memory_policy_limit = 2 * 1024 * 1024 * 1024;
+    assert_eq!(
+        tidemark_kernel::syscall::identity::sys_sysinfo(&t.vm, t.base, buf2),
+        0
+    );
+    let policy_totalram = unsafe { tidemark_kernel::guest_mem::read_u64(t.base, buf2 + 32) };
+    assert_eq!(policy_totalram, 2 * 1024 * 1024 * 1024);
+    let policy_freeram = unsafe { tidemark_kernel::guest_mem::read_u64(t.base, buf2 + 40) };
+    assert_eq!(policy_freeram, 1024 * 1024 * 1024);
+
+    t.vm.guest_memory_policy_limit = 0;
     assert_eq!(
         tidemark_kernel::syscall::identity::sys_sysinfo(&t.vm, t.base, u64::MAX),
         tidemark_kernel::abi::EFAULT

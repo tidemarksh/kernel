@@ -109,6 +109,22 @@ fn can_change_gid(vm: &ThreadState, gid: Option<u32>, egid: Option<u32>) -> bool
         && egid.is_none_or(|id| id == vm.gid || id == vm.egid)
 }
 
+fn sysinfo_totalram_bytes(vm: &ThreadState) -> u64 {
+    if vm.guest_memory_policy_limit != 0 {
+        vm.guest_memory_policy_limit
+    } else {
+        SYSINFO_TOTALRAM_BYTES
+    }
+}
+
+fn sysinfo_freeram_bytes(totalram: u64) -> u64 {
+    if totalram == SYSINFO_TOTALRAM_BYTES {
+        SYSINFO_FREERAM_BYTES
+    } else {
+        totalram / 2
+    }
+}
+
 /// getpid: return process ID from ProcessState in guest Memory.
 pub fn sys_getpid(vm: &ThreadState, base: u32) -> i64 {
     // Read pid from ProcessState in guest memory
@@ -166,19 +182,21 @@ pub fn sys_uname(vm: &ThreadState, base: u32, buf_addr: u64) -> i64 {
 
 /// sysinfo: write basic system info.
 /// struct sysinfo { uptime, loads[3], totalram, freeram, ... }
-pub fn sys_sysinfo(_vm: &ThreadState, base: u32, buf_addr: u64) -> i64 {
+pub fn sys_sysinfo(vm: &ThreadState, base: u32, buf_addr: u64) -> i64 {
     if !guest_range_valid(base, buf_addr, 112) {
         return crate::abi::EFAULT;
     }
+    let totalram = sysinfo_totalram_bytes(vm);
+    let freeram = sysinfo_freeram_bytes(totalram);
     // Zero the entire struct (112 bytes on 64-bit)
     unsafe {
         guest_mem::zero_mem(base, buf_addr, 112);
         // uptime (offset 0): 60 seconds
         guest_mem::write_u64(base, buf_addr, 60);
         // totalram (offset 32)
-        guest_mem::write_u64(base, buf_addr + 32, SYSINFO_TOTALRAM_BYTES);
+        guest_mem::write_u64(base, buf_addr + 32, totalram);
         // freeram (offset 40)
-        guest_mem::write_u64(base, buf_addr + 40, SYSINFO_FREERAM_BYTES);
+        guest_mem::write_u64(base, buf_addr + 40, freeram);
         // mem_unit (offset 104): 1
         guest_mem::write_u32(base, buf_addr + 104, SYSINFO_MEM_UNIT);
     }
