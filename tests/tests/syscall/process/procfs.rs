@@ -27,7 +27,7 @@ fn install_procfs_snapshot_writes_linux_like_maps() {
     let stack_top = tidemark_kernel::syscall::memory::map_initial_stack(t.base, 0x80_0000, 0x20000);
     assert!(stack_top > 0);
 
-    process_impl::install_procfs_snapshot(b"/bin/maps-target");
+    process_impl::install_procfs_snapshot(b"/bin/maps-target", 2 * 1024 * 1024 * 1024);
 
     let maps = String::from_utf8(read_file_bytes(b"/proc/self/maps")).unwrap();
     assert!(maps.contains("/bin/maps-target"));
@@ -41,6 +41,12 @@ fn install_procfs_snapshot_writes_linux_like_maps() {
 
     let cpuinfo = String::from_utf8(read_file_bytes(b"/proc/cpuinfo")).unwrap();
     assert!(cpuinfo.contains("mmu\t\t: sv48\n"));
+
+    let meminfo = String::from_utf8(read_file_bytes(b"/proc/meminfo")).unwrap();
+    assert!(meminfo.contains("MemTotal: 2097152 kB\n"));
+    assert!(meminfo.contains("MemFree: 1048576 kB\n"));
+    assert!(meminfo.contains("MemAvailable: 1048576 kB\n"));
+    assert!(meminfo.contains("SwapTotal: 0 kB\n"));
 }
 
 #[test]

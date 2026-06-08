@@ -6,7 +6,7 @@ use crate::abi::*;
 use crate::fs::{fd_table, memfs};
 use crate::guest_mem;
 use crate::types::{FdEntry, ProcessState, ThreadRecord, ThreadState, THREAD_RUNNING};
-use alloc_crate::{vec, vec::Vec};
+use alloc_crate::{format, vec, vec::Vec};
 
 pub const EXECVE_GUEST_MEMORY_LIMIT: u64 = 0x8000_0000;
 const EXECVE_PATH_MAX: usize = 4096;
@@ -704,6 +704,18 @@ const PROC_CPUINFO_BYTES: &[u8] =
     b"processor\t: 0\nmodel name\t: tidemark-riscv64\nmmu\t\t: sv48\n\n";
 const PROC_SYS_KERNEL_NGROUPS_MAX_BYTES: &[u8] = b"65536\n";
 
+fn proc_meminfo_snapshot(guest_memory_policy_limit: u64) -> Vec<u8> {
+    let total_bytes =
+        crate::syscall::identity::sysinfo_totalram_bytes_for_policy(guest_memory_policy_limit);
+    let free_bytes = crate::syscall::identity::sysinfo_freeram_bytes(total_bytes);
+    let total_kib = total_bytes / 1024;
+    let free_kib = free_bytes / 1024;
+    format!(
+        "MemTotal: {total_kib} kB\nMemFree: {free_kib} kB\nMemAvailable: {free_kib} kB\nCached: 0 kB\nSwapTotal: 0 kB\nSwapFree: 0 kB\n"
+    )
+    .into_bytes()
+}
+
 fn ensure_proc_child_dir(parent_ino: u32, name: &[u8], mode: u32) -> u32 {
     if parent_ino == 0 {
         return 0;
@@ -723,7 +735,7 @@ fn replace_proc_file(proc_ino: u32, name: &[u8], data: &[u8]) {
     let _ = memfs::create_file_with_data(proc_ino, name, data);
 }
 
-pub fn install_procfs_snapshot(exe_target: &[u8]) {
+pub fn install_procfs_snapshot(exe_target: &[u8], guest_memory_policy_limit: u64) {
     install_proc_self_exe(exe_target);
 
     let proc_ino = memfs::resolve_path(b"/proc");
@@ -737,6 +749,11 @@ pub fn install_procfs_snapshot(exe_target: &[u8]) {
     ensure_proc_self_fd_dir(self_ino);
     replace_proc_file(proc_ino, b"stat", PROC_STAT_BYTES);
     replace_proc_file(proc_ino, b"cpuinfo", PROC_CPUINFO_BYTES);
+    replace_proc_file(
+        proc_ino,
+        b"meminfo",
+        &proc_meminfo_snapshot(guest_memory_policy_limit),
+    );
     let sys_ino = ensure_proc_child_dir(proc_ino, b"sys", 0o555);
     let kernel_ino = ensure_proc_child_dir(sys_ino, b"kernel", 0o555);
     replace_proc_file(
@@ -1364,7 +1381,7 @@ fn complete_execve_in_place_inner(
     crate::tracepoints::record_execve_dispatch(vm_ptr, 135);
     crate::tracepoints::record_execve_stage(71, target_pid as u64, 0);
     if flush_shared_mappings {
-        install_procfs_snapshot(&path_bytes);
+        install_procfs_snapshot(&path_bytes, vm.guest_memory_policy_limit);
         crate::tracepoints::record_execve_stage(72, path_bytes.len() as u64, 0);
     }
     if let Some(slot) = ensure_process(target_pid, target_ppid) {
@@ -1468,7 +1485,7 @@ pub fn sys_execve(
             );
             return ECHILD;
         }
-        install_procfs_snapshot(trace_path);
+        install_procfs_snapshot(trace_path, vm.guest_memory_policy_limit);
         crate::syscall::signal::reset_on_execve(child_pid);
         set_spawn_handoff(
             vm,

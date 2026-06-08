@@ -109,20 +109,24 @@ fn can_change_gid(vm: &ThreadState, gid: Option<u32>, egid: Option<u32>) -> bool
         && egid.is_none_or(|id| id == vm.gid || id == vm.egid)
 }
 
-fn sysinfo_totalram_bytes(vm: &ThreadState) -> u64 {
-    if vm.guest_memory_policy_limit != 0 {
-        vm.guest_memory_policy_limit
+pub(crate) fn sysinfo_totalram_bytes_for_policy(guest_memory_policy_limit: u64) -> u64 {
+    if guest_memory_policy_limit != 0 {
+        guest_memory_policy_limit
     } else {
         SYSINFO_TOTALRAM_BYTES
     }
 }
 
-fn sysinfo_freeram_bytes(totalram: u64) -> u64 {
+pub(crate) fn sysinfo_freeram_bytes(totalram: u64) -> u64 {
     if totalram == SYSINFO_TOTALRAM_BYTES {
         SYSINFO_FREERAM_BYTES
     } else {
         totalram / 2
     }
+}
+
+fn sysinfo_totalram_bytes(vm: &ThreadState) -> u64 {
+    sysinfo_totalram_bytes_for_policy(vm.guest_memory_policy_limit)
 }
 
 /// getpid: return process ID from ProcessState in guest Memory.

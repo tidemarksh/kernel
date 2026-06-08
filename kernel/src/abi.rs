@@ -1269,7 +1269,7 @@ pub extern "C" fn process_create_with_memory_policy(
         } else {
             b"/init" as &[u8]
         };
-        crate::syscall::process::install_procfs_snapshot(target);
+        crate::syscall::process::install_procfs_snapshot(target, guest_memory_policy_limit);
 
         ts.pc = elf_result.entry;
         ts.x[2] = sp;
@@ -1534,10 +1534,14 @@ pub extern "C" fn process_set_cwd_ino(vm_ptr: u32, ino: u32) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn process_install_procfs_snapshot(target_ptr: u32, target_len: u32) {
+pub extern "C" fn process_install_procfs_snapshot(
+    target_ptr: u32,
+    target_len: u32,
+    guest_memory_policy_limit: u64,
+) {
     let target =
         unsafe { core::slice::from_raw_parts(target_ptr as *const u8, target_len as usize) };
-    crate::syscall::process::install_procfs_snapshot(target);
+    crate::syscall::process::install_procfs_snapshot(target, guest_memory_policy_limit);
 }
 
 #[unsafe(no_mangle)]

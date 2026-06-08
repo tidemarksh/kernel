@@ -80,7 +80,7 @@ fn getdents64_zero_fills_record_padding_after_names() {
 #[test]
 fn proc_self_fd_getdents_lists_open_descriptors() {
     let mut t = TestVm::new();
-    process_impl::install_procfs_snapshot(b"/bin/test");
+    process_impl::install_procfs_snapshot(b"/bin/test", 0);
 
     let file_fd = t.sys_openat(b"/visible-fd", O_CREAT | O_RDWR);
     assert!(file_fd >= 3);
