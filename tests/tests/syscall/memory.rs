@@ -789,7 +789,10 @@ fn syscall_dispatch_routes_file_backed_mmap_through_fs_ring() {
     t.vm.x[15] = offset;
     t.vm.x[17] = SYS_MMAP;
 
-    assert_eq!(tidemark_kernel::syscall::dispatch(&mut t.vm, t.base), STATUS_FS);
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        STATUS_FS
+    );
 
     let vm_ptr = &mut t.vm as *mut _ as u32;
     fs::process_pending_requests(vm_ptr, t.base);
@@ -889,11 +892,11 @@ fn prot_none_reservation_does_not_grow_linear_memory() {
 }
 
 #[test]
-fn guest_memory_policy_limit_caps_high_prot_none_reservations() {
+fn guest_memory_policy_limit_caps_small_prot_none_reservations() {
     let mut t = TestVm::new();
     let guest_limit = 0x6000_0000u64;
     t.vm.guest_memory_policy_limit = guest_limit;
-    let len = 128 * 1024 * 1024;
+    let len = PAGE_SIZE;
 
     let addr = t.sys_mmap(0, len, PROT_NONE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
 
@@ -960,6 +963,81 @@ fn prot_none_reservation_keeps_rw_mmaps_low() {
     );
     assert!(mapped > 0);
     assert!((mapped as u64) < reserve as u64);
+}
+
+#[test]
+fn fixed_anon_mapping_inside_sparse_reservation_cannot_cross_guest_memory_policy() {
+    let mut t = TestVm::new();
+    let guest_policy_limit = 64 * 1024 * 1024;
+    t.vm.guest_memory_policy_limit = guest_policy_limit;
+
+    let reserve_len = 128 * 1024 * 1024;
+    let reserve = t.sys_mmap(
+        0,
+        reserve_len,
+        PROT_NONE,
+        MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE,
+        -1,
+        0,
+    );
+    assert!(reserve > 0, "reserve={reserve}");
+    assert!((reserve as u64) < guest_policy_limit);
+    assert!((reserve as u64) + reserve_len > guest_policy_limit);
+
+    let commit_start = guest_policy_limit - PAGE_SIZE;
+    let commit_len = PAGE_SIZE * 2;
+    let commit = t.sys_mmap(
+        commit_start,
+        commit_len,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED,
+        -1,
+        0,
+    );
+
+    assert_eq!(commit, ENOMEM);
+    assert!(!memory::guest_range_permitted(
+        &t.vm,
+        t.base,
+        commit_start,
+        commit_len,
+        PROT_READ | PROT_WRITE,
+    ));
+}
+
+#[test]
+fn mprotect_inside_sparse_reservation_cannot_cross_guest_memory_policy() {
+    let mut t = TestVm::new();
+    let guest_policy_limit = 64 * 1024 * 1024;
+    t.vm.guest_memory_policy_limit = guest_policy_limit;
+
+    let reserve_len = 128 * 1024 * 1024;
+    let reserve = t.sys_mmap(
+        0,
+        reserve_len,
+        PROT_NONE,
+        MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE,
+        -1,
+        0,
+    );
+    assert!(reserve > 0, "reserve={reserve}");
+    assert!((reserve as u64) < guest_policy_limit);
+    assert!((reserve as u64) + reserve_len > guest_policy_limit);
+
+    let commit_start = guest_policy_limit - PAGE_SIZE;
+    let commit_len = PAGE_SIZE * 2;
+
+    assert_eq!(
+        t.sys_mprotect(commit_start, commit_len, PROT_READ | PROT_WRITE),
+        ENOMEM,
+    );
+    assert!(!memory::guest_range_permitted(
+        &t.vm,
+        t.base,
+        commit_start,
+        commit_len,
+        PROT_READ | PROT_WRITE,
+    ));
 }
 
 #[test]

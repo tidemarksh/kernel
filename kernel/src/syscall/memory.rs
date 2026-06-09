@@ -27,6 +27,7 @@ const MIN_MMAP_BASE: u64 = 0x20_0000;
 const MMAP_BASE_ALIGN: u64 = 0x10_0000;
 const BRK_MMAP_GAP: u64 = 8 * 1024 * 1024;
 const PROT_NONE_TOPDOWN_LIMIT: u64 = 0x8000_0000;
+const PROT_NONE_BACKING_HEADROOM: u64 = 2 * 1024 * 1024;
 const PERMIT_CACHE_PROT_SLOTS: usize = 4;
 const PERMIT_CACHE_WAYS: usize = 2;
 const PERMIT_CACHE_SLOTS: usize = PERMIT_CACHE_PROT_SLOTS * PERMIT_CACHE_WAYS;
@@ -545,6 +546,21 @@ fn prot_none_reservation_limit() -> u64 {
 
 fn nonfixed_prot_none_reservation_limit(guest_limit: u64) -> u64 {
     guest_limit.min(PROT_NONE_TOPDOWN_LIMIT)
+}
+
+fn nonfixed_sparse_anon_reservation_limit(vm: &ThreadState, base: u32, len: u64) -> u64 {
+    let address_limit = nonfixed_prot_none_reservation_limit(max_guest_addr_limit(base));
+    if vm.guest_memory_policy_limit == 0 {
+        return address_limit;
+    }
+    if len <= PROT_NONE_BACKING_HEADROOM {
+        return vm.guest_memory_policy_limit.min(address_limit).max(len);
+    }
+    vm.guest_memory_policy_limit
+        .saturating_add(len)
+        .saturating_sub(PROT_NONE_BACKING_HEADROOM)
+        .min(address_limit)
+        .max(len)
 }
 
 fn needs_sparse_linear_backing(base: u32, guest_end: u64) -> bool {
@@ -1091,7 +1107,7 @@ pub fn sys_mmap(
     let mut sparse_fixed_upgrade = false;
     let mut remove_fixed_overlap_after_validation = false;
     let nonfixed_limit = if is_sparse_anon_reservation {
-        nonfixed_prot_none_reservation_limit(guest_limit)
+        nonfixed_sparse_anon_reservation_limit(vm, base, len)
     } else {
         guest_limit
     };
@@ -1410,7 +1426,7 @@ pub fn sys_mremap(
 
 /// mprotect: change VMA protection flags. Splits VMAs at boundaries if needed.
 /// Sets has_prot_none flag for SIGSEGV detection.
-pub fn sys_mprotect(_vm: &mut ThreadState, base: u32, addr: u64, length: u64, prot: u64) -> i64 {
+pub fn sys_mprotect(vm: &mut ThreadState, base: u32, addr: u64, length: u64, prot: u64) -> i64 {
     if addr & (PAGE_SIZE - 1) != 0 {
         return EINVAL;
     }
@@ -1427,6 +1443,7 @@ pub fn sys_mprotect(_vm: &mut ThreadState, base: u32, addr: u64, length: u64, pr
         return ENOMEM;
     };
     let s = ms();
+    let guest_limit = effective_guest_limit(vm, base);
     if !range_fully_mapped(s, addr, end) {
         return ENOMEM;
     }
@@ -1461,6 +1478,9 @@ pub fn sys_mprotect(_vm: &mut ThreadState, base: u32, addr: u64, length: u64, pr
                 && was_prot_none
                 && (segment.flags as u64 & MAP_ANONYMOUS) != 0
             {
+                if segment.end > guest_limit {
+                    return ENOMEM;
+                }
                 unsafe {
                     if !ensure_memory_capacity_for_guest_range(base, segment.end) {
                         return ENOMEM;
