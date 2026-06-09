@@ -86,6 +86,43 @@ static mut RISCV_SYSCALL_TRACE: [RiscvSyscallTraceEntry; RISCV_SYSCALL_TRACE_CAP
 static mut RISCV_SYSCALL_TRACE_LEN: u32 = 0;
 static mut RISCV_SYSCALL_TRACE_NEXT: u32 = 0;
 
+const FUTEX_TRACE_CAP: usize = 128;
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FutexTraceEntry {
+    pub vm_ptr: u32,
+    pub tid: i32,
+    pub op: u32,
+    pub addr: u64,
+    pub addr2: u64,
+    pub val: u64,
+    pub val3: u64,
+    pub current: u32,
+    pub local: u32,
+    pub external: u32,
+    pub requeued: u32,
+    pub result: i64,
+    pub status: i32,
+}
+
+static mut FUTEX_TRACE: [FutexTraceEntry; FUTEX_TRACE_CAP] = [FutexTraceEntry {
+    vm_ptr: 0,
+    tid: 0,
+    op: 0,
+    addr: 0,
+    addr2: 0,
+    val: 0,
+    val3: 0,
+    current: 0,
+    local: 0,
+    external: 0,
+    requeued: 0,
+    result: 0,
+    status: 0,
+}; FUTEX_TRACE_CAP];
+static mut FUTEX_TRACE_LEN: u32 = 0;
+static mut FUTEX_TRACE_NEXT: u32 = 0;
+
 const SYNC_EFFECT_PIPE_STATE: u32 = 1 << 0;
 const SYNC_EFFECT_SOCKET_STATE: u32 = 1 << 1;
 const SYNC_EFFECT_EPOLL_STATE: u32 = 1 << 2;
@@ -139,6 +176,143 @@ pub(crate) fn clear_syscall_trace() {
         core::ptr::write(core::ptr::addr_of_mut!(SYSCALL_TRACE_RING_LEN), 0);
         core::ptr::write(core::ptr::addr_of_mut!(SYSCALL_TRACE_RING_NEXT), 0);
         core::ptr::write(core::ptr::addr_of_mut!(COMPLETED_SYNC_EFFECTS), 0);
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn clear_futex_trace() {
+    if !RUNTIME_DEBUG_ENABLED {
+        return;
+    }
+    unsafe {
+        core::ptr::write(
+            core::ptr::addr_of_mut!(FUTEX_TRACE),
+            [FutexTraceEntry {
+                vm_ptr: 0,
+                tid: 0,
+                op: 0,
+                addr: 0,
+                addr2: 0,
+                val: 0,
+                val3: 0,
+                current: 0,
+                local: 0,
+                external: 0,
+                requeued: 0,
+                result: 0,
+                status: 0,
+            }; FUTEX_TRACE_CAP],
+        );
+        core::ptr::write(core::ptr::addr_of_mut!(FUTEX_TRACE_LEN), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(FUTEX_TRACE_NEXT), 0);
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn record_futex_trace(
+    vm_ptr: u32,
+    tid: i32,
+    op: u32,
+    addr: u64,
+    addr2: u64,
+    val: u64,
+    val3: u64,
+    current: u32,
+    local: u32,
+    external: u32,
+    requeued: u32,
+    result: i64,
+    status: i32,
+) {
+    if !RUNTIME_DEBUG_ENABLED {
+        return;
+    }
+    unsafe {
+        let next = core::ptr::read(core::ptr::addr_of!(FUTEX_TRACE_NEXT)) as usize;
+        core::ptr::write(
+            core::ptr::addr_of_mut!(FUTEX_TRACE[next]),
+            FutexTraceEntry {
+                vm_ptr,
+                tid,
+                op,
+                addr,
+                addr2,
+                val,
+                val3,
+                current,
+                local,
+                external,
+                requeued,
+                result,
+                status,
+            },
+        );
+        core::ptr::write(
+            core::ptr::addr_of_mut!(FUTEX_TRACE_NEXT),
+            ((next + 1) % FUTEX_TRACE_CAP) as u32,
+        );
+        let len = core::ptr::read(core::ptr::addr_of!(FUTEX_TRACE_LEN));
+        if len < FUTEX_TRACE_CAP as u32 {
+            core::ptr::write(core::ptr::addr_of_mut!(FUTEX_TRACE_LEN), len + 1);
+        }
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn futex_trace_len() -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(FUTEX_TRACE_LEN)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn futex_trace_entry(index: u32) -> FutexTraceEntry {
+    if !RUNTIME_DEBUG_ENABLED {
+        return FutexTraceEntry {
+            vm_ptr: 0,
+            tid: 0,
+            op: 0,
+            addr: 0,
+            addr2: 0,
+            val: 0,
+            val3: 0,
+            current: 0,
+            local: 0,
+            external: 0,
+            requeued: 0,
+            result: 0,
+            status: 0,
+        };
+    }
+    unsafe {
+        let len = core::ptr::read(core::ptr::addr_of!(FUTEX_TRACE_LEN));
+        if index >= len {
+            return FutexTraceEntry {
+                vm_ptr: 0,
+                tid: 0,
+                op: 0,
+                addr: 0,
+                addr2: 0,
+                val: 0,
+                val3: 0,
+                current: 0,
+                local: 0,
+                external: 0,
+                requeued: 0,
+                result: 0,
+                status: 0,
+            };
+        }
+        let next = core::ptr::read(core::ptr::addr_of!(FUTEX_TRACE_NEXT)) as usize;
+        let len_usize = len as usize;
+        let slot = if len_usize < FUTEX_TRACE_CAP {
+            index as usize
+        } else {
+            (next + index as usize) % FUTEX_TRACE_CAP
+        };
+        core::ptr::read(core::ptr::addr_of!(FUTEX_TRACE[slot]))
     }
 }
 

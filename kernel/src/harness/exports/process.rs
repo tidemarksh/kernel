@@ -120,6 +120,90 @@ pub extern "C" fn debug_syscall_profile_error_count(nr: u32) -> u64 {
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
+pub extern "C" fn debug_futex_trace_len() -> u32 {
+    crate::harness::debug::futex_trace_len()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_futex_trace_entry_vm_ptr(index: u32) -> u32 {
+    crate::harness::debug::futex_trace_entry(index).vm_ptr
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_futex_trace_entry_tid(index: u32) -> i32 {
+    crate::harness::debug::futex_trace_entry(index).tid
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_futex_trace_entry_op(index: u32) -> u32 {
+    crate::harness::debug::futex_trace_entry(index).op
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_futex_trace_entry_addr(index: u32) -> u64 {
+    crate::harness::debug::futex_trace_entry(index).addr
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_futex_trace_entry_addr2(index: u32) -> u64 {
+    crate::harness::debug::futex_trace_entry(index).addr2
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_futex_trace_entry_val(index: u32) -> u64 {
+    crate::harness::debug::futex_trace_entry(index).val
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_futex_trace_entry_val3(index: u32) -> u64 {
+    crate::harness::debug::futex_trace_entry(index).val3
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_futex_trace_entry_current(index: u32) -> u32 {
+    crate::harness::debug::futex_trace_entry(index).current
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_futex_trace_entry_local(index: u32) -> u32 {
+    crate::harness::debug::futex_trace_entry(index).local
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_futex_trace_entry_external(index: u32) -> u32 {
+    crate::harness::debug::futex_trace_entry(index).external
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_futex_trace_entry_requeued(index: u32) -> u32 {
+    crate::harness::debug::futex_trace_entry(index).requeued
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_futex_trace_entry_result(index: u32) -> i64 {
+    crate::harness::debug::futex_trace_entry(index).result
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_futex_trace_entry_status(index: u32) -> i32 {
+    crate::harness::debug::futex_trace_entry(index).status
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
 pub extern "C" fn debug_riscv_syscall_trace_len() -> u32 {
     crate::harness::debug::riscv_syscall_trace_len()
 }

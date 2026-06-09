@@ -13,8 +13,8 @@
 use crate::abi::*;
 use crate::guest_mem;
 use crate::types::{
-    ProcessState, ThreadRecord, ThreadState, THREAD_BLOCKED_FUTEX, THREAD_DEAD, THREAD_EXITING,
-    THREAD_NONE, THREAD_RUNNING,
+    ProcessState, THREAD_BLOCKED_FUTEX, THREAD_DEAD, THREAD_EXITING, THREAD_NONE, THREAD_RUNNING,
+    ThreadRecord, ThreadState,
 };
 use core::sync::atomic::Ordering;
 
@@ -66,6 +66,74 @@ fn requeue_external_waiters(addr: u64, new_addr: u64, max_requeue: u32) -> u32 {
 fn requeue_external_waiters(addr: u64, new_addr: u64, max_requeue: u32) -> u32 {
     let _ = (addr, new_addr, max_requeue);
     0
+}
+
+#[cfg(any(
+    test,
+    all(
+        any(target_arch = "wasm32", target_arch = "wasm64"),
+        feature = "harness"
+    )
+))]
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn record_futex_trace(
+    vm: &ThreadState,
+    op: u32,
+    addr: u64,
+    addr2: u64,
+    val: u64,
+    val3: u64,
+    current: u32,
+    local: u32,
+    external: u32,
+    requeued: u32,
+    result: i64,
+    status: i32,
+) {
+    crate::harness::trace::record_futex_trace(
+        vm as *const ThreadState as u32,
+        vm.tid,
+        op,
+        addr,
+        addr2,
+        val,
+        val3,
+        current,
+        local,
+        external,
+        requeued,
+        result,
+        status,
+    );
+}
+
+#[cfg(not(any(
+    test,
+    all(
+        any(target_arch = "wasm32", target_arch = "wasm64"),
+        feature = "harness"
+    )
+)))]
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn record_futex_trace(
+    vm: &ThreadState,
+    op: u32,
+    addr: u64,
+    addr2: u64,
+    val: u64,
+    val3: u64,
+    current: u32,
+    local: u32,
+    external: u32,
+    requeued: u32,
+    result: i64,
+    status: i32,
+) {
+    let _ = (
+        vm, op, addr, addr2, val, val3, current, local, external, requeued, result, status,
+    );
 }
 
 const ROBUST_LIST_HEAD_LEN: u64 = 24;
@@ -148,6 +216,14 @@ pub fn init() {
     unsafe {
         core::ptr::write(core::ptr::addr_of_mut!(NEXT_TID_HINTS), [0; MAX_PROCESSES]);
     }
+    #[cfg(any(
+        test,
+        all(
+            any(target_arch = "wasm32", target_arch = "wasm64"),
+            feature = "harness"
+        )
+    ))]
+    crate::harness::trace::clear_futex_trace();
 }
 
 fn process_slot_from_ptr(base: u32, process_ptr: u32) -> Option<usize> {
@@ -1090,6 +1166,9 @@ pub fn sys_futex(
             };
             let current = unsafe { guest_mem::read_u32(base, addr) };
             if current != val as u32 {
+                record_futex_trace(
+                    vm, futex_op, addr, 0, val, val3, current, 0, 0, 0, EAGAIN, STATUS_OK,
+                );
                 return EAGAIN;
             }
             unsafe {
@@ -1110,6 +1189,20 @@ pub fn sys_futex(
             // Value matches — block. Return STATUS_FUTEX_WAIT for TS to Atomics.wait.
             vm.x[10] = addr; // stash addr for TS
             vm.status = STATUS_FUTEX_WAIT;
+            record_futex_trace(
+                vm,
+                futex_op,
+                addr,
+                0,
+                val,
+                val3,
+                current,
+                0,
+                0,
+                0,
+                0,
+                STATUS_FUTEX_WAIT,
+            );
             0
         }
         FUTEX_WAKE | FUTEX_WAKE_BITSET => {
@@ -1134,7 +1227,11 @@ pub fn sys_futex(
             // executing, so external waiters must be counted separately.
             let caller_pid = crate::syscall::process::current_process_pid(vm, base);
             let external = wake_external_waiters(caller_pid, addr, val.min(u32::MAX as u64) as u32);
-            (local + external) as i64
+            let result = (local + external) as i64;
+            record_futex_trace(
+                vm, futex_op, addr, 0, val, val3, 0, local, external, 0, result, STATUS_OK,
+            );
+            result
         }
         FUTEX_CMP_REQUEUE => {
             if (val as i64) < 0 || (timeout_or_requeue as i64) < 0 {
@@ -1143,6 +1240,9 @@ pub fn sys_futex(
 
             let current = unsafe { guest_mem::read_u32(base, addr) };
             if current != val3 as u32 {
+                record_futex_trace(
+                    vm, futex_op, addr, addr2, val, val3, current, 0, 0, 0, EAGAIN, STATUS_OK,
+                );
                 return EAGAIN;
             }
 
@@ -1168,7 +1268,22 @@ pub fn sys_futex(
             );
             let external_requeue = requeue_external_waiters(addr, addr2, requeue_count);
 
-            (local_wake + external_wake + local_requeue + external_requeue) as i64
+            let result = (local_wake + external_wake + local_requeue + external_requeue) as i64;
+            record_futex_trace(
+                vm,
+                futex_op,
+                addr,
+                addr2,
+                val,
+                val3,
+                current,
+                local_wake,
+                external_wake,
+                local_requeue + external_requeue,
+                result,
+                STATUS_OK,
+            );
+            result
         }
         _ => ENOSYS,
     }
