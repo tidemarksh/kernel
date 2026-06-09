@@ -10,6 +10,7 @@ const EPOLL_CTL_DEL: u64 = 2;
 const EPOLL_CTL_MOD: u64 = 3;
 const EPOLLIN: u32 = 0x001;
 const EPOLLOUT: u32 = 0x004;
+const EPOLLHUP: u32 = 0x010;
 const EPOLLRDHUP: u32 = 0x2000;
 const EPOLLONESHOT: u32 = 1 << 30;
 const EPOLLET: u32 = 1 << 31;
@@ -810,6 +811,57 @@ fn epoll_pwait_edge_trigger_reports_only_new_edges() {
         unsafe { tidemark_kernel::guest_mem::read_u64(t.base, out_addr + 8) },
         0x7070
     );
+}
+
+#[test]
+fn epoll_pwait_edge_trigger_always_reports_pipe_hup() {
+    let mut t = TestVm::new();
+    let pipefd_addr = t.scratch + 0x1000;
+    assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) } as u64;
+    let write_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr + 4) } as i64;
+
+    let epfd = epoll::sys_epoll_create1(&mut t.vm, t.base, 0);
+    assert!(epfd >= 3);
+
+    let event_addr = t.scratch + 0x2000;
+    let out_addr = t.scratch + 0x3000;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, event_addr, EPOLLIN | EPOLLET);
+        tidemark_kernel::guest_mem::write_u64(t.base, event_addr + 8, 0x8080);
+    }
+
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            read_fd,
+            event_addr,
+        ),
+        0
+    );
+    assert_eq!(
+        epoll::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 1, 0, 0),
+        0
+    );
+
+    assert_eq!(t.sys_close(write_fd), 0);
+    for _ in 0..2 {
+        assert_eq!(
+            epoll::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 1, 0, 0),
+            1
+        );
+        assert_eq!(
+            unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
+            EPOLLHUP
+        );
+        assert_eq!(
+            unsafe { tidemark_kernel::guest_mem::read_u64(t.base, out_addr + 8) },
+            0x8080
+        );
+    }
 }
 
 #[test]

@@ -378,7 +378,8 @@ pub fn sys_epoll_pwait(
         };
         let polled_revents = poll_ofd(vm, base, &ofd, entry.events);
         let revents = if entry.events & EPOLLET != 0 {
-            polled_revents & !entry.last_revents
+            (polled_revents & (EPOLLERR | EPOLLHUP))
+                | ((polled_revents & !(EPOLLERR | EPOLLHUP)) & !entry.last_revents)
         } else {
             polled_revents
         };
