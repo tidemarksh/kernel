@@ -2,6 +2,7 @@ use super::{
     SOCK_STATE_CONNECTED, SOCK_STATE_LISTENING, SOCK_STATE_SHUTDOWN,
     connect::accept_queue_len,
     get_socket_idx,
+    is_slot_used,
     send_recv::{slot_peer_is_closed, socket_recv_available, socket_send_space},
     socket_table,
 };
@@ -61,8 +62,8 @@ pub fn poll_revents_ofd(ofd: &OpenFileDesc, interest: u32) -> u32 {
         return EPOLLERR;
     }
     let idx = ofd.ino as usize;
-    if idx >= MAX_SOCKETS {
-        return EPOLLERR;
+    if idx >= MAX_SOCKETS || !is_slot_used(idx as u32) {
+        return EPOLLERR | EPOLLHUP;
     }
     let slot = &socket_table()[idx];
     let mut revents = 0u32;

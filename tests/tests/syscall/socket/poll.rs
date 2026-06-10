@@ -161,3 +161,48 @@ fn socket_connect_timeout_returns_etimedout() {
         -ETIMEDOUT
     );
 }
+
+#[test]
+fn pselect_readfds_reports_stale_socket_slot_as_ready() {
+    const EPOLLIN: u32 = 0x001;
+    const EPOLLERR: u32 = 0x008;
+    const EPOLLHUP: u32 = 0x010;
+
+    let mut t = TestVm::new();
+    let fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
+    assert!(fd >= 0);
+
+    let ofd = fd_table::get_ofd(t.base, &t.vm, fd as u64).expect("socket OFD should exist");
+    let socket_idx = ofd.ino;
+    assert!(socket::is_slot_used(socket_idx));
+
+    socket::socket_close(socket_idx);
+    assert_eq!(socket::debug_socket_state(socket_idx), ENOTSOCK as i32);
+
+    let revents = socket::poll_revents_ofd(&ofd, EPOLLIN);
+    assert_ne!(revents & EPOLLERR, 0);
+    assert_ne!(revents & EPOLLHUP, 0);
+
+    let readfds = t.scratch + 0x980;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, readfds, 1u64 << fd);
+    }
+
+    let result = tidemark_kernel::syscall::poll::sys_pselect6(
+        &mut t.vm,
+        t.base,
+        fd as u64 + 1,
+        readfds,
+        0,
+        0,
+        0,
+        0,
+    );
+
+    assert_eq!(result, 1);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, readfds) } & (1u64 << fd),
+        1u64 << fd
+    );
+}
