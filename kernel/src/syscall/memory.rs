@@ -1148,7 +1148,14 @@ pub fn sys_mmap(
     {
         addr
     } else if is_sparse_anon_reservation {
-        let hole = find_high_hole(s, len, mmap_min_floor(s), nonfixed_limit);
+        let floor = mmap_min_floor(s);
+        let mut hole = find_high_hole(s, len, floor, nonfixed_limit);
+        if hole == 0 {
+            let fallback_limit = nonfixed_prot_none_reservation_limit(max_guest_addr_limit(base));
+            if fallback_limit > nonfixed_limit {
+                hole = find_high_hole(s, len, floor, fallback_limit);
+            }
+        }
         if hole == 0 {
             return ENOMEM;
         }

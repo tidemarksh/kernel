@@ -928,6 +928,50 @@ fn prot_none_reservations_stay_within_linux_shaped_topdown_window() {
 }
 
 #[test]
+fn sparse_prot_none_reservation_falls_back_above_crowded_policy_window() {
+    let mut t = TestVm::new();
+    let guest_limit = 512 * 1024 * 1024u64;
+    let len = 128 * 1024 * 1024u64;
+    t.vm.guest_memory_policy_limit = guest_limit;
+
+    for start in [128, 256, 384, 512].map(|mib| mib * 1024 * 1024u64) {
+        let reserved = t.sys_mmap(
+            start,
+            len,
+            PROT_NONE,
+            MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED_NOREPLACE | MAP_NORESERVE,
+            -1,
+            0,
+        );
+        assert_eq!(reserved, start as i64, "fixed reservation at 0x{start:x}");
+    }
+
+    let fallback = t.sys_mmap(
+        0,
+        len,
+        PROT_NONE,
+        MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE,
+        -1,
+        0,
+    );
+
+    assert!(fallback > 0, "fallback={fallback}");
+    assert!(
+        fallback as u64 >= guest_limit + len,
+        "fallback=0x{:x} guest_limit=0x{:x} len=0x{:x}",
+        fallback,
+        guest_limit,
+        len,
+    );
+    assert!(
+        fallback as u64 + len <= 0x8000_0000,
+        "fallback=0x{:x} len=0x{:x}",
+        fallback,
+        len,
+    );
+}
+
+#[test]
 fn guest_memory_policy_limit_caps_brk_growth() {
     let mut t = TestVm::new();
     let cur = t.sys_brk(0) as u64;
