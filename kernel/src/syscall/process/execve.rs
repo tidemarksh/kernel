@@ -13,6 +13,7 @@ const EXECVE_PATH_MAX: usize = 4096;
 const EXECVE_NAME_MAX: usize = 255;
 const EXECVE_PREFLIGHT_ELF_PREFIX_MAX: usize = 64 * 1024;
 const EXECVE_BACKING_FILL_CHUNK: usize = 64 * 1024;
+const EXECVE_SCRIPT_RECURSION_LIMIT: usize = 4;
 pub(super) const PROC_SELF_EXE_SNAPSHOT_MAX: usize = 512;
 
 struct ExecveFileReadCache {
@@ -166,6 +167,32 @@ fn current_effective_uid(vm: &ThreadState) -> u32 {
 
 fn current_effective_gid(vm: &ThreadState) -> u32 {
     vm.egid
+}
+
+fn stat_execve_regular_executable(vm: &ThreadState, ino: u32) -> Result<memfs::InodeStat, i64> {
+    let st = match memfs::stat(ino) {
+        Some(st) => st,
+        None => return Err(ENOENT),
+    };
+    if st.mode & memfs::S_IFMT != memfs::S_IFREG {
+        return Err(EACCES);
+    }
+    let exec_mask = if current_effective_uid(vm) == 0 {
+        st.mode & 0o111
+    } else if current_effective_uid(vm) == st.uid {
+        st.mode & 0o100
+    } else if current_effective_gid(vm) == st.gid {
+        st.mode & 0o010
+    } else {
+        st.mode & 0o001
+    };
+    if exec_mask == 0 {
+        return Err(EACCES);
+    }
+    if fd_table::inode_has_write_open(ino) {
+        return Err(ETXTBSY);
+    }
+    Ok(st)
 }
 
 fn read_guest_cstr_bytes(base: u32, addr: u64) -> Result<Vec<u8>, i64> {
@@ -366,28 +393,17 @@ fn validate_execve_file_for_preflight(
     ino: u32,
     guest_limit: u64,
 ) -> Result<(), i64> {
-    let st = match memfs::stat(ino) {
-        Some(st) => st,
-        None => return Err(ENOENT),
-    };
-    if st.mode & memfs::S_IFMT != memfs::S_IFREG {
-        return Err(EACCES);
-    }
-    let exec_mask = if current_effective_uid(vm) == 0 {
-        st.mode & 0o111
-    } else if current_effective_uid(vm) == st.uid {
-        st.mode & 0o100
-    } else if current_effective_gid(vm) == st.gid {
-        st.mode & 0o010
-    } else {
-        st.mode & 0o001
-    };
-    if exec_mask == 0 {
-        return Err(EACCES);
-    }
-    if fd_table::inode_has_write_open(ino) {
-        return Err(ETXTBSY);
-    }
+    validate_execve_file_for_preflight_inner(vm, base, ino, guest_limit, 0)
+}
+
+fn validate_execve_file_for_preflight_inner(
+    vm: &ThreadState,
+    base: u32,
+    ino: u32,
+    guest_limit: u64,
+    script_depth: usize,
+) -> Result<(), i64> {
+    let st = stat_execve_regular_executable(vm, ino)?;
     let elf_len = match u32::try_from(st.size) {
         Ok(len) if len > 0 => len,
         _ => return Err(ENOEXEC),
@@ -395,8 +411,17 @@ fn validate_execve_file_for_preflight(
     let vm_ptr = vm as *const ThreadState as u32;
     let prefix = read_execve_elf_prefix(vm_ptr, ino, elf_len)?;
     if let Some((interp_path, _optional_arg)) = parse_interpreter_script_header(&prefix)? {
+        if script_depth >= EXECVE_SCRIPT_RECURSION_LIMIT {
+            return Err(ELOOP);
+        }
         let interp_ino = memfs::resolve_path_following_symlinks_with_errno(&interp_path)?;
-        validate_execve_file_for_preflight(vm, base, interp_ino, guest_limit)
+        validate_execve_file_for_preflight_inner(
+            vm,
+            base,
+            interp_ino,
+            guest_limit,
+            script_depth + 1,
+        )
     } else {
         crate::elf::inspect_elf_metadata_bytes(&prefix, st.size, guest_limit)
             .map(|_| ())
@@ -475,28 +500,7 @@ fn load_execve_image(
     crate::tracepoints::record_execve_dispatch(vm_ptr, 123);
     let (ino, path_bytes) = resolve_execve_inode(vm, base, path_addr)?;
     crate::tracepoints::record_execve_dispatch(vm_ptr, 124);
-    let st = match memfs::stat(ino) {
-        Some(st) => st,
-        None => return Err(ENOENT),
-    };
-    if st.mode & memfs::S_IFMT != memfs::S_IFREG {
-        return Err(EACCES);
-    }
-    let exec_mask = if current_effective_uid(vm) == 0 {
-        st.mode & 0o111
-    } else if current_effective_uid(vm) == st.uid {
-        st.mode & 0o100
-    } else if current_effective_gid(vm) == st.gid {
-        st.mode & 0o010
-    } else {
-        st.mode & 0o001
-    };
-    if exec_mask == 0 {
-        return Err(EACCES);
-    }
-    if fd_table::inode_has_write_open(ino) {
-        return Err(ETXTBSY);
-    }
+    let st = stat_execve_regular_executable(vm, ino)?;
     let elf_len = match u32::try_from(st.size) {
         Ok(len) if len > 0 => len,
         _ => return Err(ENOEXEC),
@@ -530,52 +534,43 @@ fn load_execve_image(
         .enumerate()
         .fold(0u64, |acc, (idx, byte)| acc | ((*byte as u64) << (idx * 8)));
     crate::tracepoints::record_execve_stage(108, file_head0, file_head1);
-    let (path_bytes, main_bytes, mut argv) =
-        match parse_interpreter_script_header(file_bytes.as_slice())? {
-            Some((interp_path, optional_arg)) => {
-                let interp_ino = memfs::resolve_path_following_symlinks_with_errno(&interp_path)?;
-                let interp_st = memfs::stat(interp_ino).ok_or(ENOENT)?;
-                if interp_st.mode & memfs::S_IFMT != memfs::S_IFREG {
-                    return Err(EACCES);
-                }
-                let interp_exec_mask = if current_effective_uid(vm) == 0 {
-                    interp_st.mode & 0o111
-                } else if current_effective_uid(vm) == interp_st.uid {
-                    interp_st.mode & 0o100
-                } else if current_effective_gid(vm) == interp_st.gid {
-                    interp_st.mode & 0o010
-                } else {
-                    interp_st.mode & 0o001
-                };
-                if interp_exec_mask == 0 {
-                    return Err(EACCES);
-                }
-                if fd_table::inode_has_write_open(interp_ino) {
-                    return Err(ETXTBSY);
-                }
-                let interp_len = u32::try_from(interp_st.size).map_err(|_| ENOEXEC)?;
-                if interp_len == 0 {
-                    return Err(ENOEXEC);
-                }
-                let interp_bytes = read_execve_elf_bytes(vm_ptr, interp_ino, interp_len)?;
-                let mut rewritten_argv = Vec::new();
-                let mut interp_argv0 = interp_path.clone();
-                interp_argv0.push(0);
-                rewritten_argv.push(interp_argv0);
-                if let Some(mut arg) = optional_arg {
-                    arg.push(0);
-                    rewritten_argv.push(arg);
-                }
-                let mut script_argv = path_bytes.clone();
-                script_argv.push(0);
-                rewritten_argv.push(script_argv);
-                for arg in argv.into_iter().skip(1) {
-                    rewritten_argv.push(arg);
-                }
-                (interp_path, interp_bytes, rewritten_argv)
-            }
-            None => (path_bytes, file_bytes, argv),
+    let mut path_bytes = path_bytes;
+    let mut main_bytes = file_bytes;
+    let mut argv = argv;
+    for script_depth in 0..=EXECVE_SCRIPT_RECURSION_LIMIT {
+        let Some((interp_path, optional_arg)) =
+            parse_interpreter_script_header(main_bytes.as_slice())?
+        else {
+            break;
         };
+        if script_depth >= EXECVE_SCRIPT_RECURSION_LIMIT {
+            return Err(ELOOP);
+        }
+        let interp_ino = memfs::resolve_path_following_symlinks_with_errno(&interp_path)?;
+        let interp_st = stat_execve_regular_executable(vm, interp_ino)?;
+        let interp_len = u32::try_from(interp_st.size).map_err(|_| ENOEXEC)?;
+        if interp_len == 0 {
+            return Err(ENOEXEC);
+        }
+        let interp_bytes = read_execve_elf_bytes(vm_ptr, interp_ino, interp_len)?;
+        let mut rewritten_argv = Vec::new();
+        let mut interp_argv0 = interp_path.clone();
+        interp_argv0.push(0);
+        rewritten_argv.push(interp_argv0);
+        if let Some(mut arg) = optional_arg {
+            arg.push(0);
+            rewritten_argv.push(arg);
+        }
+        let mut script_argv = path_bytes.clone();
+        script_argv.push(0);
+        rewritten_argv.push(script_argv);
+        for arg in argv.into_iter().skip(1) {
+            rewritten_argv.push(arg);
+        }
+        path_bytes = interp_path;
+        main_bytes = interp_bytes;
+        argv = rewritten_argv;
+    }
     crate::tracepoints::record_execve_dispatch(vm_ptr, 128);
     let mut elf = inspect_execve_elf_bytes(main_bytes.as_slice(), guest_limit)?;
     let interp_path = match crate::elf::read_interp_path_bytes(main_bytes.as_slice()) {

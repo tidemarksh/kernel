@@ -576,6 +576,47 @@ fn contract_execve_interpreter_script_enters_interpreter_and_rewrites_argv() {
 }
 
 #[test]
+fn contract_execve_recursive_interpreter_script_rewrites_argv() {
+    let mut t = TestVm::new();
+    let interp_elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    install_exec_file_at(&t, b"/bin/sh", &interp_elf);
+    install_exec_file_at(&t, b"/bin/bash", b"#!/bin/sh\n");
+    let path_addr = install_exec_file_at(&t, b"/bin/script", b"#!/bin/bash -x\nexit 0\n");
+    let argv_addr = write_strvec(&t, 0x400, &[b"/bin/script", b"arg1"]);
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, argv_addr, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x1000);
+
+    let argc = unsafe { guest_mem::read_u64(t.base, t.vm.x[2]) };
+    assert_eq!(argc, 5);
+    let mut buf = [0u8; 32];
+    let expected: [&[u8]; 5] = [b"/bin/sh", b"/bin/bash", b"-x", b"/bin/script", b"arg1"];
+    for (idx, expected_arg) in expected.iter().enumerate() {
+        let ptr = unsafe { guest_mem::read_u64(t.base, t.vm.x[2] + 8 + (idx as u64 * 8)) };
+        let len = unsafe { guest_mem::read_cstr(t.base, ptr, &mut buf) };
+        assert_eq!(&buf[..len], *expected_arg);
+    }
+}
+
+#[test]
+fn contract_execve_recursive_interpreter_script_limit_returns_eloop() {
+    let mut t = TestVm::new();
+    let interp_elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    install_exec_file_at(&t, b"/bin/final", &interp_elf);
+    install_exec_file_at(&t, b"/bin/script4", b"#!/bin/final\n");
+    install_exec_file_at(&t, b"/bin/script3", b"#!/bin/script4\n");
+    install_exec_file_at(&t, b"/bin/script2", b"#!/bin/script3\n");
+    install_exec_file_at(&t, b"/bin/script1", b"#!/bin/script2\n");
+    let path_addr = install_exec_file_at(&t, b"/bin/script0", b"#!/bin/script1\n");
+
+    let ret = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert_eq!(ret, ELOOP);
+    assert_eq!(t.vm.status, STATUS_OK);
+}
+
+#[test]
 fn contract_execve_with_pt_interp_biases_et_dyn_main_executable() {
     let mut t = TestVm::new();
     let main_code = [0x13, 0x05, 0x70, 0x00];
