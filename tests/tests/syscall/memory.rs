@@ -873,6 +873,79 @@ fn file_backed_private_mmap_materializes_from_page_cache_into_process_backing() 
 }
 
 #[test]
+fn nonfixed_file_backed_mmap_prefers_high_candidate_under_policy_headroom() {
+    let mut t = TestVm::new();
+    t.vm.guest_memory_policy_limit = 0x1_0001_0000;
+    let data: Vec<u8> = (0..0x2000).map(|idx| ((idx * 19) % 251) as u8).collect();
+    let ino = memfs::create_file(1, b"mapped-high-file-backed.bin", 0o755);
+    assert!(ino > 0);
+    assert_eq!(memfs::write_file(ino, 0, &data), data.len() as i64);
+
+    let fd = t.sys_openat(b"/mapped-high-file-backed.bin", O_RDONLY);
+    assert!(fd >= 3);
+
+    let mapped = t.sys_mmap(
+        0,
+        data.len() as u64,
+        PROT_READ | PROT_EXEC,
+        MAP_PRIVATE,
+        fd,
+        0,
+    );
+    assert!(mapped > 0, "mapped={mapped}");
+    assert!(
+        (mapped as u64) >= 0x4000_0000,
+        "file-backed mmap should use a high candidate when policy headroom exists, got {mapped:#x}",
+    );
+    assert!(
+        (mapped as u64) < 0x8000_0000,
+        "file-backed high candidate should stay below the top-down mmap cap, got {mapped:#x}",
+    );
+    assert!((mapped as u64) + data.len() as u64 <= t.vm.guest_memory_policy_limit);
+    assert_eq!(&t.guest_mem(mapped as u64, data.len()), data.as_slice());
+}
+
+#[test]
+fn high_file_backed_mmap_does_not_advance_bottom_up_cursor() {
+    let mut t = TestVm::new();
+    t.vm.guest_memory_policy_limit = 0x5000_0000;
+    let data = b"cursor-independent-file-backed-mapping";
+    let ino = memfs::create_file(1, b"mapped-high-cursor.bin", 0o755);
+    assert!(ino > 0);
+    assert_eq!(memfs::write_file(ino, 0, data), data.len() as i64);
+
+    let fd = t.sys_openat(b"/mapped-high-cursor.bin", O_RDONLY);
+    assert!(fd >= 3);
+
+    let next_before = tidemark_kernel::harness::memory::debug_mmap_next();
+    let mapped = t.sys_mmap(0, 0x1000, PROT_READ, MAP_PRIVATE, fd, 0);
+    assert!(mapped > 0, "mapped={mapped}");
+    assert!(
+        (mapped as u64) >= 0x4000_0000,
+        "file-backed mmap should use a high candidate when policy headroom exists, got {mapped:#x}",
+    );
+    assert_eq!(
+        tidemark_kernel::harness::memory::debug_mmap_next(),
+        next_before,
+        "top-down file-backed placement must not move the bottom-up cursor",
+    );
+
+    let anon = t.sys_mmap(
+        0,
+        0x1000,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    );
+    assert!(anon > 0, "anon={anon}");
+    assert!(
+        (anon as u64) < 0x4000_0000,
+        "next anonymous bottom-up mmap should remain low, got {anon:#x}",
+    );
+}
+
+#[test]
 fn prot_none_reservation_does_not_grow_linear_memory() {
     let mut t = TestVm::new();
     let before = core::arch::wasm32::memory_size(0);

@@ -28,6 +28,7 @@ const MMAP_BASE_ALIGN: u64 = 0x10_0000;
 const BRK_MMAP_GAP: u64 = 8 * 1024 * 1024;
 const PROT_NONE_TOPDOWN_LIMIT: u64 = 0x8000_0000;
 const PROT_NONE_BACKING_HEADROOM: u64 = 2 * 1024 * 1024;
+const FILE_BACKED_HIGH_MMAP_FLOOR: u64 = 0x4000_0000;
 const PERMIT_CACHE_PROT_SLOTS: usize = 4;
 const PERMIT_CACHE_WAYS: usize = 2;
 const PERMIT_CACHE_SLOTS: usize = PERMIT_CACHE_PROT_SLOTS * PERMIT_CACHE_WAYS;
@@ -1160,6 +1161,19 @@ pub fn sys_mmap(
             return ENOMEM;
         }
         hole
+    } else if !is_anon {
+        let mut hole = if vm.guest_memory_policy_limit != 0 {
+            find_file_backed_high_hole(s, len, nonfixed_limit)
+        } else {
+            0
+        };
+        if hole == 0 {
+            hole = find_hole(s, len, nonfixed_limit);
+        }
+        if hole == 0 {
+            return ENOMEM;
+        }
+        hole
     } else if addr != 0 {
         let hole = find_hole(s, len, nonfixed_limit);
         if hole == 0 {
@@ -1558,6 +1572,12 @@ fn find_hole(s: &mut AddressSpaceState, len: u64, guest_limit: u64) -> u64 {
         s.mmap_next = hole + len;
     }
     hole
+}
+
+fn find_file_backed_high_hole(s: &AddressSpaceState, len: u64, guest_limit: u64) -> u64 {
+    let high_limit = guest_limit.min(PROT_NONE_TOPDOWN_LIMIT);
+    let floor = mmap_preferred_floor(s, len, high_limit).max(FILE_BACKED_HIGH_MMAP_FLOOR);
+    find_high_hole(s, len, floor, high_limit)
 }
 
 fn find_hole_from(s: &AddressSpaceState, start: u64, len: u64, guest_limit: u64) -> u64 {
