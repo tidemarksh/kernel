@@ -46,6 +46,23 @@ pub(super) fn init() {
     }
 }
 
+pub fn signalfd_state_ptr() -> u32 {
+    unsafe { core::ptr::read(core::ptr::addr_of!(SIGNALFD_PTR)) as u32 }
+}
+
+pub fn signalfd_state_bytes() -> u32 {
+    core::mem::size_of::<[SignalFdState; MAX_SIGNALFDS + 1]>() as u32
+}
+
+pub fn attach_signalfd_state(signalfd_state_ptr: u32) {
+    unsafe {
+        core::ptr::write(
+            core::ptr::addr_of_mut!(SIGNALFD_PTR),
+            signalfd_state_ptr as *mut [SignalFdState; MAX_SIGNALFDS + 1],
+        );
+    }
+}
+
 fn signalfd_slot(idx: u32) -> Option<&'static mut SignalFdState> {
     if idx == 0 || idx as usize > MAX_SIGNALFDS {
         return None;

@@ -124,3 +124,56 @@ fn epoll_pwait_reports_ready_signalfd() {
         0xbeef
     );
 }
+
+#[test]
+fn attached_signalfd_state_preserves_epoll_readiness() {
+    let mut t = TestVm::new();
+    let mask_addr = t.scratch + 0xc00;
+    let event_addr = t.scratch + 0xc20;
+    let out_addr = t.scratch + 0xc40;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, mask_addr, 1u64 << (SIGALRM - 1));
+        tidemark_kernel::guest_mem::write_u32(t.base, event_addr, EPOLLIN);
+        tidemark_kernel::guest_mem::write_u64(t.base, event_addr + 8, 0xcafe);
+    }
+
+    let sfd = signal::sys_signalfd4(&mut t.vm, t.base, -1, mask_addr, 8, O_NONBLOCK as u64);
+    assert!(sfd >= 3);
+    let epfd = epoll::sys_epoll_create1(&mut t.vm, t.base, 0);
+    assert!(epfd >= 3);
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            sfd as u64,
+            event_addr,
+        ),
+        0
+    );
+
+    let original_ptr = signal::signalfd_state_ptr();
+    let bytes = signal::signalfd_state_bytes();
+    let copied_ptr = unsafe { tidemark_kernel::alloc::alloc_zeroed(bytes, 8) };
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            original_ptr as *const u8,
+            copied_ptr as *mut u8,
+            bytes as usize,
+        );
+    }
+    signal::attach_signalfd_state(copied_ptr);
+
+    signal::send_signal(&mut t.vm, SIGALRM);
+    assert_eq!(
+        epoll::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 1, 0, 0),
+        1
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u64(t.base, out_addr + 8) },
+        0xcafe
+    );
+
+    signal::attach_signalfd_state(original_ptr);
+}

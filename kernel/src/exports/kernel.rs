@@ -210,6 +210,16 @@ pub extern "C" fn kernel_process_pending_bytes() -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn kernel_signalfd_state_ptr() -> u32 {
+    crate::syscall::signal::signalfd_state_ptr()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn kernel_signalfd_state_bytes() -> u32 {
+    crate::syscall::signal::signalfd_state_bytes()
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn kernel_process_runtime_state_ptr() -> u32 {
     crate::syscall::process::process_runtime_state_ptr()
 }
@@ -493,6 +503,7 @@ pub extern "C" fn kernel_attach_runtime_state(
     process_pending_ptr: u32,
     process_runtime_state_ptr: u32,
     time_state_ptr: u32,
+    signalfd_state_ptr: u32,
 ) {
     let attach_heap_ptr = crate::alloc::heap_ptr().max(heap_ptr);
     crate::alloc::attach_heap_state(heap_base, attach_heap_ptr);
@@ -505,6 +516,9 @@ pub extern "C" fn kernel_attach_runtime_state(
     crate::net::ring_buffer::attach_net_buffer_state(net_buf_base, net_buf_used);
     crate::syscall::signal::attach_signal_action_state(sig_slots_ptr);
     crate::syscall::signal::attach_process_pending_state(process_pending_ptr);
+    if signalfd_state_ptr != 0 {
+        crate::syscall::signal::attach_signalfd_state(signalfd_state_ptr);
+    }
     crate::syscall::process::attach_process_runtime_state_ptr(process_runtime_state_ptr);
     crate::syscall::process::advance_shared_heap_ptr(attach_heap_ptr);
     crate::syscall::time::attach_time_state_ptr(time_state_ptr);
