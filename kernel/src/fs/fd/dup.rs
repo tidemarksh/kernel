@@ -58,6 +58,7 @@ pub fn sys_dup3(vm: &mut ThreadState, base: u32, oldfd: u64, newfd: u64, flags: 
         if old_new.ofd_id != 0 {
             clear_process_fd_entry_ptr(ps, newfd as usize);
             super::close::release_process_fd_ref(base, vm, old_new.ofd_id);
+            super::close::clear_pipe_eof_marker_for_fd(vm, newfd);
         }
 
         let cloexec = if (flags as i32 & O_CLOEXEC) != 0 {

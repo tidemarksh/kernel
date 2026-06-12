@@ -290,6 +290,67 @@ pub fn wait_set_ready_count(vm: &ThreadState, base: u32) -> i32 {
     }
 }
 
+pub fn wait_set_pipe_read_ready(vm: &ThreadState, base: u32) -> bool {
+    match wait_syscall_nr(vm) {
+        SYS_PPOLL => {
+            let fds_addr = wait_syscall_arg(vm, 0);
+            let nfds = wait_syscall_arg(vm, 1).min(MAX_POLL_FDS);
+            for index in 0..nfds {
+                let Some(entry_addr) = pollfd_addr(fds_addr, index) else {
+                    return false;
+                };
+                if !crate::syscall::memory::guest_range_accessible(base, entry_addr, POLLFD_SIZE) {
+                    return false;
+                }
+                let fd = unsafe { guest_mem::read_i32(base, entry_addr + POLLFD_FD_OFF) };
+                let events = unsafe { guest_mem::read_u16(base, entry_addr + POLLFD_EVENTS_OFF) };
+                if fd < 0 {
+                    continue;
+                }
+                let Some(ofd) = fd_table::get_ofd(base, vm, fd as u64) else {
+                    continue;
+                };
+                if ofd.fd_type != FD_TYPE_PIPE || !fd_table::is_pipe_read(&ofd) {
+                    continue;
+                }
+                let revents = crate::syscall::epoll::poll_ofd(vm, base, &ofd, events as u32);
+                if (revents & (PSELECT_READ_INTEREST | POLLHUP as u32)) != 0 {
+                    return true;
+                }
+            }
+            false
+        }
+        SYS_PSELECT6 => {
+            let nfds = wait_syscall_arg(vm, 0).min(MAX_POLL_FDS);
+            let readfds = wait_syscall_arg(vm, 1);
+            let Some(set_bytes) = fd_set_bytes(nfds) else {
+                return false;
+            };
+            if !validate_fd_set(base, readfds, set_bytes) {
+                return false;
+            }
+            for fd in 0..nfds {
+                if !fd_set_has(base, readfds, fd) {
+                    continue;
+                }
+                let Some(ofd) = fd_table::get_ofd(base, vm, fd) else {
+                    continue;
+                };
+                if ofd.fd_type != FD_TYPE_PIPE || !fd_table::is_pipe_read(&ofd) {
+                    continue;
+                }
+                let revents =
+                    crate::syscall::epoll::poll_ofd(vm, base, &ofd, PSELECT_READ_INTEREST);
+                if (revents & (PSELECT_READ_INTEREST | POLLHUP as u32)) != 0 {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
 pub fn wait_set_first_socket_revents(vm: &ThreadState, base: u32) -> u32 {
     match wait_syscall_nr(vm) {
         SYS_PPOLL => {

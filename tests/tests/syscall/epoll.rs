@@ -309,6 +309,65 @@ fn epoll_pwait_resume_reports_ready_events_with_ok_status() {
 }
 
 #[test]
+fn epoll_pwait_timerfd_exposes_guest_deadline_for_runtime_retry() {
+    let mut t = TestVm::new();
+    let timer_fd = time::sys_timerfd_create(&mut t.vm, t.base, 1, 0);
+    assert!(timer_fd >= 3);
+
+    let spec_addr = t.scratch + 0x1800;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, spec_addr, 0);
+        tidemark_kernel::guest_mem::write_u64(t.base, spec_addr + 8, 0);
+        tidemark_kernel::guest_mem::write_u64(t.base, spec_addr + 16, 0);
+        tidemark_kernel::guest_mem::write_u64(t.base, spec_addr + 24, 1_000_000);
+    }
+    let now = time::monotonic_ticks_current();
+    assert_eq!(
+        time::sys_timerfd_settime(&t.vm, t.base, timer_fd as u64, 0, spec_addr, 0),
+        0
+    );
+
+    let epfd = epoll::sys_epoll_create1(&mut t.vm, t.base, 0);
+    assert!(epfd >= 3);
+    let event_addr = t.scratch + 0x2000;
+    let out_addr = t.scratch + 0x3000;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, event_addr, EPOLLIN);
+        tidemark_kernel::guest_mem::write_u64(t.base, event_addr + 8, 0x88);
+    }
+
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            timer_fd as u64,
+            event_addr,
+        ),
+        0
+    );
+    assert_eq!(
+        epoll::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 1, -1, 0),
+        0
+    );
+    assert_eq!(t.vm.status, STATUS_EPOLL_WAIT);
+
+    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
+    let deadline = thread_epoll_timerfd_deadline_ticks(vm_ptr);
+    assert!(deadline > now);
+
+    time::sync_monotonic_ticks_floor(deadline);
+    assert_eq!(thread_resume_blocked_syscall(vm_ptr), 1);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.x[10], 1);
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, out_addr) },
+        EPOLLIN
+    );
+}
+
+#[test]
 fn epoll_interest_follows_ofd_until_last_alias_and_not_reused_fd() {
     let mut t = TestVm::new();
     let pipefd_addr = t.scratch + 0x1000;

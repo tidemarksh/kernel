@@ -70,10 +70,16 @@ pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) 
         if !fd_table::is_pipe_read(&ofd) {
             return EBADF;
         }
+        let ofd_id = fd_table::get_ofd_id(base, vm, fd).unwrap_or(0);
         let mut tmp = [0u8; pipe::PIPE_BUF_SIZE];
         let to_read = (count as usize).min(tmp.len());
         let n = pipe::pipe_read(ofd.ino, &mut tmp[..to_read]);
         if n == 0 && count > 0 {
+            if fd_table::pipe_eof_synced(ofd_id) {
+                vm.fault_addr = 0;
+                vm.fault_pc = 0;
+                return 0;
+            }
             if vm.fault_addr != PIPE_READ_EOF_SYNC_RETRY_MARKER || vm.fault_pc != fd {
                 fd_table::pin_blocked_fd(base, vm, fd);
                 vm.fault_addr = PIPE_READ_EOF_SYNC_RETRY_MARKER;
@@ -81,8 +87,12 @@ pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) 
                 vm.status = STATUS_PIPE_WAIT;
                 return 0;
             }
+            fd_table::set_pipe_eof_synced(ofd_id, true);
             vm.fault_addr = 0;
             vm.fault_pc = 0;
+        }
+        if n == EAGAIN {
+            fd_table::set_pipe_eof_synced(ofd_id, false);
         }
         if n == EAGAIN && ofd.status_flags & O_NONBLOCK == 0 {
             fd_table::pin_blocked_fd(base, vm, fd);
@@ -90,6 +100,7 @@ pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) 
             return 0;
         }
         if n > 0 {
+            fd_table::set_pipe_eof_synced(ofd_id, false);
             mark_pipe_sync_effect(vm, ofd.ino, false);
             vm.fault_addr = 0;
             vm.fault_pc = 0;

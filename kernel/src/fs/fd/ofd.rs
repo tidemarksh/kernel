@@ -7,6 +7,7 @@ use crate::abi::*;
 use crate::types::{FdEntry, OpenFileDesc, ThreadState};
 
 const OFD_PIPE_EPIPE_SYNCED: u32 = 1 << 31;
+const OFD_PIPE_EOF_SYNCED: u32 = 1 << 30;
 const OFD_RESERVED_WORDS: usize = (MAX_FDS + 63) / 64;
 
 #[repr(C)]
@@ -274,6 +275,29 @@ pub fn set_pipe_epipe_synced(ofd_id: u32, synced: bool) {
         ofd.flock_state |= OFD_PIPE_EPIPE_SYNCED;
     } else {
         ofd.flock_state &= !OFD_PIPE_EPIPE_SYNCED;
+    }
+}
+
+pub fn pipe_eof_synced(ofd_id: u32) -> bool {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return false;
+    }
+    let ofd = &table()[ofd_id as usize];
+    ofd.fd_type == FD_TYPE_PIPE && ofd.host_fd >= 0 && (ofd.flock_state & OFD_PIPE_EOF_SYNCED) != 0
+}
+
+pub fn set_pipe_eof_synced(ofd_id: u32, synced: bool) {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return;
+    }
+    let ofd = &mut table()[ofd_id as usize];
+    if ofd.fd_type != FD_TYPE_PIPE || ofd.host_fd < 0 {
+        return;
+    }
+    if synced {
+        ofd.flock_state |= OFD_PIPE_EOF_SYNCED;
+    } else {
+        ofd.flock_state &= !OFD_PIPE_EOF_SYNCED;
     }
 }
 

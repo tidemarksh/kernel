@@ -65,8 +65,8 @@ pub use super::fd::ofd::{
     inode_has_write_open, is_ofd_reserved, is_pipe_read, is_pipe_write, ofd_offset_floor_bytes,
     ofd_offset_floor_ptr, ofd_reserved_bytes, ofd_reserved_ptr, ofd_state_bytes, ofd_state_ptr,
     ofd_table_bytes, ofd_table_ptr, patch_blocked_fd_entry_for_resume, pin_blocked_fd,
-    pipe_epipe_synced, reserve_ofd_id, restore_blocked_fd_entry, retain_fds_for_fork,
-    retain_ofd_id, set_fd_nonblock, set_offset, set_offset_by_id, set_offset_floor_by_id,
-    set_pipe_epipe_synced, unreserve_ofd_id,
+    pipe_eof_synced, pipe_epipe_synced, reserve_ofd_id, restore_blocked_fd_entry,
+    retain_fds_for_fork, retain_ofd_id, set_fd_nonblock, set_offset, set_offset_by_id,
+    set_offset_floor_by_id, set_pipe_eof_synced, set_pipe_epipe_synced, unreserve_ofd_id,
 };
 pub use super::fd::stdio::{init_stdio, use_pipe_stdio};

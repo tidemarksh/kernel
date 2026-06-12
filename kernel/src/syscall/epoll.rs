@@ -462,6 +462,41 @@ pub fn resume_wait(vm: &mut ThreadState, base: u32) -> i64 {
     result
 }
 
+pub fn timerfd_deadline_ticks(vm: &ThreadState, base: u32) -> u64 {
+    let epoll_ofd = if vm.blocked_ofd_id != 0 {
+        fd_table::get_ofd_by_id(vm.blocked_ofd_id)
+    } else {
+        fd_table::get_ofd(base, vm, vm.fault_addr)
+    };
+    let Some(epoll_ofd) = epoll_ofd else {
+        return 0;
+    };
+    if epoll_ofd.fd_type != FD_TYPE_EPOLL {
+        return 0;
+    }
+    let Some(inst) = validated_epoll_instance(epoll_ofd.ino as usize) else {
+        return 0;
+    };
+    let mut deadline = 0u64;
+    for i in 0..inst.count as usize {
+        let entry = inst.entries[i];
+        if entry.events & EPOLLIN == 0 {
+            continue;
+        }
+        let Some(ofd) = fd_table::get_ofd_by_id(entry.ofd_id) else {
+            continue;
+        };
+        if ofd.fd_type != FD_TYPE_TIMERFD {
+            continue;
+        }
+        let candidate = super::time::timerfd_monotonic_deadline_ticks(ofd.ino);
+        if candidate != 0 && (deadline == 0 || candidate < deadline) {
+            deadline = candidate;
+        }
+    }
+    deadline
+}
+
 /// Poll a single watched object for readiness using its OFD snapshot.
 pub(crate) fn poll_ofd(vm: &ThreadState, base: u32, ofd: &OpenFileDesc, interest: u32) -> u32 {
     let mut revents = 0u32;

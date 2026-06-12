@@ -9,6 +9,13 @@ use crate::types::{FdEntry, ThreadState};
 const CLOSE_RANGE_UNSHARE: u64 = 1 << 1;
 const CLOSE_RANGE_CLOEXEC: u64 = 1 << 2;
 
+pub(super) fn clear_pipe_eof_marker_for_fd(vm: &mut ThreadState, fd: u64) {
+    if vm.fault_addr == crate::syscall::fs::PIPE_READ_EOF_SYNC_RETRY_MARKER && vm.fault_pc == fd {
+        vm.fault_addr = 0;
+        vm.fault_pc = 0;
+    }
+}
+
 /// Drop one fd reference to an OFD and report the backend cleanup that must run
 /// when this was the final fd hold.
 ///
@@ -101,6 +108,7 @@ pub fn sys_close(vm: &mut ThreadState, base: u32, fd: u64) -> i64 {
         let ofd_id = entry.ofd_id;
         clear_process_fd_entry_ptr(ps, fd as usize);
         release_process_fd_ref(base, vm, ofd_id);
+        clear_pipe_eof_marker_for_fd(vm, fd);
 
         vm.socket_timeout_ms = -1;
         0
@@ -151,6 +159,7 @@ pub fn sys_close_range(vm: &mut ThreadState, base: u32, first: u64, last: u64, f
             }
             clear_process_fd_entry_ptr(ps, fd);
             release_process_fd_ref(base, vm, entry.ofd_id);
+            clear_pipe_eof_marker_for_fd(vm, fd as u64);
         }
     }
 

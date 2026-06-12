@@ -311,6 +311,27 @@ pub fn timerfd_is_readable(timerfd_idx: u32) -> bool {
     slot.expirations != 0
 }
 
+pub fn timerfd_monotonic_deadline_ticks(timerfd_idx: u32) -> u64 {
+    let Some(slot) = timerfd_slot(timerfd_idx) else {
+        return 0;
+    };
+    update_timerfd(slot);
+    if slot.used == 0 || slot.next_expiration_ticks == 0 {
+        return if slot.expirations != 0 {
+            monotonic_ticks()
+        } else {
+            0
+        };
+    }
+    if slot.expirations != 0 {
+        return monotonic_ticks();
+    }
+    let Some(now) = current_ticks_for_clock(slot.clock_id) else {
+        return 0;
+    };
+    monotonic_ticks().saturating_add(slot.next_expiration_ticks.saturating_sub(now))
+}
+
 fn timerfd_take_expirations(timerfd_idx: u32) -> u64 {
     let Some(slot) = timerfd_slot(timerfd_idx) else {
         return 0;

@@ -536,6 +536,14 @@ pub extern "C" fn thread_epoll_wait_timeout(vm_ptr: u32) -> i64 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn thread_epoll_timerfd_deadline_ticks(vm_ptr: u32) -> u64 {
+    unsafe {
+        let vm = &*(vm_ptr as *const ThreadState);
+        crate::syscall::epoll::timerfd_deadline_ticks(vm, vm.guest_base)
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn thread_poll_wait_timeout(vm_ptr: u32) -> i64 {
     unsafe { (*(vm_ptr as *const ThreadState)).epoll_timeout_ms }
 }
@@ -636,28 +644,18 @@ pub extern "C" fn thread_blocked_pipe_write_open(vm_ptr: u32) -> i32 {
 pub extern "C" fn thread_blocked_pipe_read_ready(vm_ptr: u32) -> i32 {
     unsafe {
         let vm = &*(vm_ptr as *const ThreadState);
+        if vm.blocked_syscall_nr == SYS_PPOLL || vm.blocked_syscall_nr == SYS_PSELECT6 {
+            return i32::from(crate::syscall::poll::wait_set_pipe_read_ready(
+                vm,
+                vm.guest_base,
+            ));
+        }
         let fd = if vm.blocked_ofd_id != 0 {
             vm.blocked_fd as u64
         } else {
             vm.x[10]
         };
         if let Some(ofd) = crate::fs::fd_table::get_ofd(vm.guest_base, vm, fd) {
-            if ofd.fd_type == crate::abi::FD_TYPE_PIPE
-                && crate::fs::fd_table::is_pipe_read(&ofd)
-                && crate::syscall::pipe::pipe_peek(ofd.ino) != crate::abi::EAGAIN
-            {
-                return 1;
-            }
-        }
-        if vm.blocked_ofd_id != 0
-            || (vm.blocked_syscall_nr != SYS_PPOLL && vm.blocked_syscall_nr != SYS_PSELECT6)
-        {
-            return 0;
-        }
-        for candidate_fd in 0..crate::abi::MAX_FDS as u64 {
-            let Some(ofd) = crate::fs::fd_table::get_ofd(vm.guest_base, vm, candidate_fd) else {
-                continue;
-            };
             if ofd.fd_type == crate::abi::FD_TYPE_PIPE
                 && crate::fs::fd_table::is_pipe_read(&ofd)
                 && crate::syscall::pipe::pipe_peek(ofd.ino) != crate::abi::EAGAIN
@@ -942,19 +940,55 @@ pub extern "C" fn thread_resume_poll_wait_timeout(vm_ptr: u32) {
 pub extern "C" fn thread_resume_blocked_syscall(vm_ptr: u32) -> i64 {
     unsafe {
         let vm = &mut *(vm_ptr as *mut ThreadState);
+        let resume_read_syscall = vm.blocked_syscall_nr == SYS_READ
+            || (vm.blocked_syscall_nr == 0 && vm.x[17] == SYS_READ);
+        if vm.status == STATUS_PIPE_WAIT && resume_read_syscall {
+            let fd = if vm.blocked_syscall_nr != 0 {
+                vm.blocked_syscall_args[0]
+            } else {
+                vm.blocked_fd as u64
+            };
+            let ofd_id = if vm.blocked_ofd_id != 0 {
+                vm.blocked_ofd_id
+            } else {
+                crate::fs::fd_table::get_ofd_id(vm.guest_base, vm, fd).unwrap_or(0)
+            };
+            let ofd = if vm.blocked_ofd_id != 0 {
+                crate::fs::fd_table::get_ofd_by_id(vm.blocked_ofd_id)
+            } else {
+                crate::fs::fd_table::get_ofd(vm.guest_base, vm, fd)
+            };
+            if let Some(ofd) = ofd {
+                if ofd.fd_type == crate::abi::FD_TYPE_PIPE
+                    && crate::fs::fd_table::is_pipe_read(&ofd)
+                    && crate::syscall::pipe::pipe_buffered_len(ofd.ino) == 0
+                    && crate::syscall::pipe::debug_write_open(ofd.ino) <= 0
+                {
+                    crate::fs::fd_table::set_pipe_eof_synced(ofd_id, true);
+                    crate::fs::fd_table::clear_blocked_ofd_pin(vm);
+                    vm.x[10] = 0;
+                    vm.status = STATUS_OK;
+                    return 0;
+                }
+            }
+        }
         if vm.status == STATUS_PIPE_WAIT
             && vm.fault_addr == crate::syscall::fs::PIPE_READ_EOF_SYNC_RETRY_MARKER
         {
             let fd = vm.fault_pc;
+            let ofd_id = if vm.blocked_ofd_id != 0 {
+                vm.blocked_ofd_id
+            } else {
+                crate::fs::fd_table::get_ofd_id(vm.guest_base, vm, fd).unwrap_or(0)
+            };
             if let Some(ofd) = crate::fs::fd_table::get_ofd(vm.guest_base, vm, fd) {
                 if ofd.fd_type == crate::abi::FD_TYPE_PIPE
                     && crate::fs::fd_table::is_pipe_read(&ofd)
                     && crate::syscall::pipe::pipe_buffered_len(ofd.ino) == 0
                     && crate::syscall::pipe::debug_write_open(ofd.ino) <= 0
                 {
+                    crate::fs::fd_table::set_pipe_eof_synced(ofd_id, true);
                     crate::fs::fd_table::clear_blocked_ofd_pin(vm);
-                    vm.fault_pc = 0;
-                    vm.fault_addr = 0;
                     vm.x[10] = 0;
                     vm.status = STATUS_OK;
                     return 0;
