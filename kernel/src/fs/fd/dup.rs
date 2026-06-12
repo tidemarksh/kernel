@@ -1,6 +1,6 @@
 use super::entry::{
-    clear_fd_entry_ptr, find_free_fd, get_fd_entry, get_process_state, load_fd_entry_ptr,
-    store_fd_entry_ptr,
+    clear_process_fd_entry_ptr, find_free_fd, get_fd_entry, get_process_state, load_fd_entry_ptr,
+    store_process_fd_entry_ptr,
 };
 use crate::abi::*;
 use crate::types::{FdEntry, ThreadState};
@@ -18,8 +18,9 @@ pub fn sys_dup(vm: &mut ThreadState, base: u32, oldfd: u64) -> i64 {
         };
         let ps = get_process_state(base, vm);
         crate::fs::fd_table::retain_ofd_id(entry.ofd_id);
-        store_fd_entry_ptr(
-            core::ptr::addr_of_mut!((*ps).fd_table[newfd]),
+        store_process_fd_entry_ptr(
+            ps,
+            newfd,
             FdEntry {
                 ofd_id: entry.ofd_id,
                 fd_flags: 0, // dup clears FD_CLOEXEC
@@ -55,7 +56,7 @@ pub fn sys_dup3(vm: &mut ThreadState, base: u32, oldfd: u64, newfd: u64, flags: 
         let old_new = load_fd_entry_ptr(old_new_ptr);
         crate::fs::fd_table::retain_ofd_id(entry.ofd_id);
         if old_new.ofd_id != 0 {
-            clear_fd_entry_ptr(old_new_ptr);
+            clear_process_fd_entry_ptr(ps, newfd as usize);
             super::close::release_process_fd_ref(base, vm, old_new.ofd_id);
         }
 
@@ -64,8 +65,9 @@ pub fn sys_dup3(vm: &mut ThreadState, base: u32, oldfd: u64, newfd: u64, flags: 
         } else {
             0
         };
-        store_fd_entry_ptr(
-            core::ptr::addr_of_mut!((*ps).fd_table[newfd as usize]),
+        store_process_fd_entry_ptr(
+            ps,
+            newfd as usize,
             FdEntry {
                 ofd_id: entry.ofd_id,
                 fd_flags: cloexec,

@@ -1,4 +1,4 @@
-use super::entry::{find_free_fd, get_fd_entry, get_process_state, store_fd_entry_ptr};
+use super::entry::{find_free_fd, get_fd_entry, get_process_state, store_process_fd_entry_ptr};
 use super::ofd::table as ofd_table;
 use crate::abi::*;
 use crate::guest_mem;
@@ -69,8 +69,9 @@ pub fn sys_fcntl(vm: &mut ThreadState, base: u32, fd: u64, cmd: u64, arg: u64) -
                 };
                 let ps = get_process_state(base, vm);
                 crate::fs::fd_table::retain_ofd_id(entry.ofd_id);
-                store_fd_entry_ptr(
-                    core::ptr::addr_of_mut!((*ps).fd_table[newfd]),
+                store_process_fd_entry_ptr(
+                    ps,
+                    newfd,
                     FdEntry {
                         ofd_id: entry.ofd_id,
                         fd_flags: 0,
@@ -89,8 +90,9 @@ pub fn sys_fcntl(vm: &mut ThreadState, base: u32, fd: u64, cmd: u64, arg: u64) -
                 };
                 let ps = get_process_state(base, vm);
                 crate::fs::fd_table::retain_ofd_id(entry.ofd_id);
-                store_fd_entry_ptr(
-                    core::ptr::addr_of_mut!((*ps).fd_table[newfd]),
+                store_process_fd_entry_ptr(
+                    ps,
+                    newfd,
                     FdEntry {
                         ofd_id: entry.ofd_id,
                         fd_flags: crate::fs::fd_table::FD_CLOEXEC,
@@ -105,8 +107,9 @@ pub fn sys_fcntl(vm: &mut ThreadState, base: u32, fd: u64, cmd: u64, arg: u64) -
             F_SETFD => match get_fd_entry(base, vm, fd) {
                 Some(entry) => {
                     let ps = get_process_state(base, vm);
-                    store_fd_entry_ptr(
-                        core::ptr::addr_of_mut!((*ps).fd_table[fd as usize]),
+                    store_process_fd_entry_ptr(
+                        ps,
+                        fd as usize,
                         FdEntry {
                             ofd_id: entry.ofd_id,
                             fd_flags: arg as u32 & crate::fs::fd_table::FD_CLOEXEC,

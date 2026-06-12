@@ -1,5 +1,7 @@
 use super::backend_cleanup::{self, BackendCleanup};
-use super::entry::{clear_fd_entry_ptr, get_process_state, load_fd_entry_ptr, store_fd_entry_ptr};
+use super::entry::{
+    clear_process_fd_entry_ptr, get_process_state, load_fd_entry_ptr, store_process_fd_entry_ptr,
+};
 use super::ofd::{clear as clear_ofd, is_ofd_reserved, set_offset_floor_by_id, table as ofd_table};
 use crate::abi::*;
 use crate::types::{FdEntry, ThreadState};
@@ -97,7 +99,7 @@ pub fn sys_close(vm: &mut ThreadState, base: u32, fd: u64) -> i64 {
         }
 
         let ofd_id = entry.ofd_id;
-        clear_fd_entry_ptr(entry_ptr);
+        clear_process_fd_entry_ptr(ps, fd as usize);
         release_process_fd_ref(base, vm, ofd_id);
 
         vm.socket_timeout_ms = -1;
@@ -137,8 +139,9 @@ pub fn sys_close_range(vm: &mut ThreadState, base: u32, first: u64, last: u64, f
                 continue;
             }
             if flags & CLOSE_RANGE_CLOEXEC != 0 {
-                store_fd_entry_ptr(
-                    entry_ptr,
+                store_process_fd_entry_ptr(
+                    ps,
+                    fd,
                     FdEntry {
                         ofd_id: entry.ofd_id,
                         fd_flags: entry.fd_flags | crate::fs::fd_table::FD_CLOEXEC,
@@ -146,7 +149,7 @@ pub fn sys_close_range(vm: &mut ThreadState, base: u32, first: u64, last: u64, f
                 );
                 continue;
             }
-            clear_fd_entry_ptr(entry_ptr);
+            clear_process_fd_entry_ptr(ps, fd);
             release_process_fd_ref(base, vm, entry.ofd_id);
         }
     }
@@ -167,7 +170,7 @@ pub fn close_all_for_process(base: u32, vm: &ThreadState) {
             let entry_ptr = core::ptr::addr_of_mut!((*ps).fd_table[index]);
             let entry = load_fd_entry_ptr(entry_ptr);
             let ofd_id = entry.ofd_id;
-            clear_fd_entry_ptr(entry_ptr);
+            clear_process_fd_entry_ptr(ps, index);
             let ofd_idx = ofd_id as usize;
             if ofd_id == 0 || ofd_idx >= MAX_FDS {
                 continue;
@@ -193,7 +196,7 @@ pub fn close_all_for_process_without_backend_cleanup(base: u32, vm: &ThreadState
             let entry_ptr = core::ptr::addr_of_mut!((*ps).fd_table[index]);
             let entry = load_fd_entry_ptr(entry_ptr);
             let ofd_id = entry.ofd_id;
-            clear_fd_entry_ptr(entry_ptr);
+            clear_process_fd_entry_ptr(ps, index);
             let ofd_idx = ofd_id as usize;
             if ofd_id == 0 || ofd_idx >= MAX_FDS {
                 continue;

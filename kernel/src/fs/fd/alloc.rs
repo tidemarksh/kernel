@@ -1,5 +1,5 @@
 use super::close::release_ofd_id;
-use super::entry::{find_free_fd, get_process_state, store_fd_entry_ptr};
+use super::entry::{find_free_fd, get_process_state, store_process_fd_entry_ptr};
 use super::ofd::{alloc as alloc_ofd, table as ofd_table};
 use crate::abi::*;
 use crate::fs::fd_table::FD_CLOEXEC;
@@ -21,8 +21,9 @@ unsafe fn install_fd(vm: &ThreadState, base: u32, ofd_id: u32, flags: i32) -> Op
     let newfd = find_free_fd(base, vm, 0)?;
     let ps = get_process_state(base, vm);
     unsafe {
-        store_fd_entry_ptr(
-            core::ptr::addr_of_mut!((*ps).fd_table[newfd]),
+        store_process_fd_entry_ptr(
+            ps,
+            newfd,
             FdEntry {
                 ofd_id,
                 fd_flags: cloexec_flag(flags),

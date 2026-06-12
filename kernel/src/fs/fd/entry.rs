@@ -17,13 +17,21 @@ pub fn load_process_fd_entry(base: u32, process_ptr: u32, fd: usize) -> FdEntry 
     unsafe { load_fd_entry_ptr(core::ptr::addr_of!((*ps).fd_table[fd])) }
 }
 
+pub fn load_process_fd_generation(base: u32, process_ptr: u32, fd: usize) -> u32 {
+    if process_ptr == 0 || fd >= MAX_FDS {
+        return 0;
+    }
+    let ps = (base as u64 + process_ptr as u64) as *const ProcessState;
+    unsafe { (*ps).fd_generation[fd].load(Ordering::Acquire) }
+}
+
 pub fn store_process_fd_entry(base: u32, process_ptr: u32, fd: usize, entry: FdEntry) {
     if process_ptr == 0 || fd >= MAX_FDS {
         return;
     }
     let ps = (base as u64 + process_ptr as u64) as *mut ProcessState;
     unsafe {
-        store_fd_entry_ptr(core::ptr::addr_of_mut!((*ps).fd_table[fd]), entry);
+        store_process_fd_entry_ptr(ps, fd, entry);
     }
 }
 
@@ -49,11 +57,39 @@ pub(in crate::fs) unsafe fn store_fd_entry_ptr(entry: *mut FdEntry, value: FdEnt
 }
 
 #[inline(always)]
+pub(in crate::fs) unsafe fn bump_fd_generation(ps: *mut ProcessState, fd: usize) {
+    unsafe {
+        (&*(core::ptr::addr_of!((*ps).fd_generation[fd]) as *const AtomicU32))
+            .fetch_add(1, Ordering::Release);
+    }
+}
+
+#[inline(always)]
+pub(in crate::fs) unsafe fn store_process_fd_entry_ptr(
+    ps: *mut ProcessState,
+    fd: usize,
+    value: FdEntry,
+) {
+    unsafe {
+        store_fd_entry_ptr(core::ptr::addr_of_mut!((*ps).fd_table[fd]), value);
+        bump_fd_generation(ps, fd);
+    }
+}
+
+#[inline(always)]
 pub(in crate::fs) unsafe fn clear_fd_entry_ptr(entry: *mut FdEntry) {
     unsafe {
         (&*(core::ptr::addr_of!((*entry).ofd_id) as *const AtomicU32)).store(0, Ordering::Release);
         (&*(core::ptr::addr_of!((*entry).fd_flags) as *const AtomicU32))
             .store(0, Ordering::Relaxed);
+    }
+}
+
+#[inline(always)]
+pub(in crate::fs) unsafe fn clear_process_fd_entry_ptr(ps: *mut ProcessState, fd: usize) {
+    unsafe {
+        clear_fd_entry_ptr(core::ptr::addr_of_mut!((*ps).fd_table[fd]));
+        bump_fd_generation(ps, fd);
     }
 }
 

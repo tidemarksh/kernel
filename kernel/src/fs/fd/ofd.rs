@@ -1,6 +1,8 @@
 use super::alloc::OPEN_ACCESS_MODE_MASK;
 use super::close::release_ofd_id;
-use super::entry::{get_fd_entry, get_process_state, load_fd_entry_ptr, store_fd_entry_ptr};
+use super::entry::{
+    get_fd_entry, get_process_state, load_fd_entry_ptr, store_process_fd_entry_ptr,
+};
 use crate::abi::*;
 use crate::types::{FdEntry, OpenFileDesc, ThreadState};
 
@@ -185,8 +187,9 @@ pub fn patch_blocked_fd_entry_for_resume(base: u32, vm: &ThreadState) -> Option<
         let entry = core::ptr::addr_of_mut!((*ps).fd_table[fd]);
         let saved = load_fd_entry_ptr(entry);
         if saved.ofd_id != ofd_id {
-            store_fd_entry_ptr(
-                entry,
+            store_process_fd_entry_ptr(
+                ps,
+                fd,
                 FdEntry {
                     ofd_id,
                     fd_flags: saved.fd_flags,
@@ -212,7 +215,7 @@ pub fn restore_blocked_fd_entry(base: u32, vm: &ThreadState, saved: Option<(u32,
             return;
         }
 
-        store_fd_entry_ptr(core::ptr::addr_of_mut!((*ps).fd_table[fd]), saved);
+        store_process_fd_entry_ptr(ps, fd, saved);
     }
 }
 

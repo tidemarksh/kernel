@@ -219,6 +219,9 @@ pub struct FdEntry {
 pub struct ProcessState {
     /// FD table (fd → ofd_id + fd_flags)
     pub fd_table: [FdEntry; MAX_FDS],
+    /// Monotonic per-FD generation for stale/ABA rejection across runtime
+    /// fd/OFD snapshot adoption.
+    pub fd_generation: [AtomicU32; MAX_FDS],
     /// Number of active threads (clone increments, exit decrements).
     /// Used for seqlock optimization: thread_count == 1 → skip seqlock on stores.
     pub thread_count: AtomicU32,

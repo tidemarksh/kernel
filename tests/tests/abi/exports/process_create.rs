@@ -140,6 +140,21 @@ fn resume_vfork_parent_export_restores_parent_view() {
 }
 
 #[test]
+fn process_fd_generation_advances_on_fd_entry_store() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
+
+    let initial = process_fd_generation(vm_ptr, 5);
+    process_set_fd_entry(vm_ptr, 5, 11, 0x100);
+    let after_first = process_fd_generation(vm_ptr, 5);
+    process_set_fd_entry(vm_ptr, 5, 0, 0);
+    let after_second = process_fd_generation(vm_ptr, 5);
+
+    assert!(after_first > initial);
+    assert!(after_second > after_first);
+}
+
+#[test]
 fn process_create_populates_initial_stack_contract() {
     let _t = TestVm::new();
     let guest_memory_policy_limit = 64 * 1024 * 1024;

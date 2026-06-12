@@ -1561,6 +1561,14 @@ pub extern "C" fn process_fd_flags(vm_ptr: u32, fd: u32) -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn process_fd_generation(vm_ptr: u32, fd: u32) -> u32 {
+    let Some(vm) = thread_state_from_ptr(vm_ptr) else {
+        return 0;
+    };
+    crate::fs::fd_table::load_process_fd_generation(vm.guest_base, vm.process_ptr, fd as usize)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn process_set_fd_entry(vm_ptr: u32, fd: u32, ofd_id: u32, fd_flags: u32) {
     let Some(vm) = thread_state_from_ptr(vm_ptr) else {
         return;
