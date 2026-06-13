@@ -1112,7 +1112,12 @@ pub fn thread_record_blocked_addr(vm: &ThreadState, base: u32) -> u64 {
         let Some(record) = thread_record_ptr(base, vm.process_ptr, vm.tid) else {
             return u64::MAX;
         };
-        core::ptr::read_unaligned(core::ptr::addr_of!((*record).blocked_addr))
+        let record = read_thread_record(record);
+        if record.state == THREAD_BLOCKED_FUTEX {
+            record.blocked_addr
+        } else {
+            0
+        }
     }
 }
 

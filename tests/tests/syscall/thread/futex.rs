@@ -434,6 +434,47 @@ fn contract_futex_wake_bitset_only_wakes_matching_waiters() {
 }
 
 #[test]
+fn contract_futex_wait_replaces_stale_running_record_address() {
+    let mut t = TestVm::new();
+    let stale_addr = t.scratch + 0x510;
+    let next_addr = t.scratch + 0x514;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, next_addr, 0);
+    }
+
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[(t.vm.tid - 1) as usize] = ThreadRecord::new(
+            t.vm.tid,
+            THREAD_RUNNING,
+            &mut t.vm as *mut ThreadState as u32,
+            0,
+            stale_addr,
+        );
+    }
+
+    assert_eq!(thread_impl::thread_record_blocked_addr(&t.vm, t.base), 0);
+
+    let wait_ret =
+        thread_impl::sys_futex(&mut t.vm, t.base, next_addr, FUTEX_WAIT as u64, 0, 0, 0, 0);
+
+    assert_eq!(wait_ret, 0);
+    assert_eq!(t.vm.status, STATUS_FUTEX_WAIT);
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        assert_eq!(
+            ps.threads[(t.vm.tid - 1) as usize].state,
+            THREAD_BLOCKED_FUTEX
+        );
+        assert_eq!(ps.threads[(t.vm.tid - 1) as usize].blocked_addr, next_addr);
+    }
+    assert_eq!(
+        thread_impl::thread_record_blocked_addr(&t.vm, t.base),
+        next_addr
+    );
+}
+
+#[test]
 fn contract_futex_bitset_rejects_zero_mask() {
     let mut t = TestVm::new();
     let addr = t.scratch + 0x514;
