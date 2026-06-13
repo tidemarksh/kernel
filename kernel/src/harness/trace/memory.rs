@@ -46,6 +46,8 @@ pub struct GuestWriteWatchRegion {
 pub struct GuestWriteOverlapTraceEntry {
     pub slot: u32,
     pub op: u32,
+    pub tid: i32,
+    pub pc: u64,
     pub addr: u64,
     pub len: u32,
     pub sample_len: u32,
@@ -59,6 +61,8 @@ static mut GUEST_WRITE_OVERLAP_TRACE: [GuestWriteOverlapTraceEntry; GUEST_WRITE_
     [GuestWriteOverlapTraceEntry {
         slot: 0,
         op: 0,
+        tid: 0,
+        pc: 0,
         addr: 0,
         len: 0,
         sample_len: 0,
@@ -67,6 +71,8 @@ static mut GUEST_WRITE_OVERLAP_TRACE: [GuestWriteOverlapTraceEntry; GUEST_WRITE_
     }; GUEST_WRITE_OVERLAP_TRACE_CAP];
 static mut GUEST_WRITE_OVERLAP_TRACE_LEN: u32 = 0;
 static mut GUEST_WRITE_OVERLAP_TRACE_NEXT: u32 = 0;
+static mut GUEST_WRITE_CONTEXT_PC: u64 = 0;
+static mut GUEST_WRITE_CONTEXT_TID: i32 = 0;
 
 const MEMORY_PERMIT_PROT_SLOTS: usize = 8;
 const MEMORY_PERMIT_OUTCOME_CACHE_HIT: u32 = 1;
@@ -171,6 +177,8 @@ pub(crate) fn clear_guest_write_watch_trace() {
             [GuestWriteOverlapTraceEntry {
                 slot: 0,
                 op: 0,
+                tid: 0,
+                pc: 0,
                 addr: 0,
                 len: 0,
                 sample_len: 0,
@@ -180,6 +188,8 @@ pub(crate) fn clear_guest_write_watch_trace() {
         );
         core::ptr::write(core::ptr::addr_of_mut!(GUEST_WRITE_OVERLAP_TRACE_LEN), 0);
         core::ptr::write(core::ptr::addr_of_mut!(GUEST_WRITE_OVERLAP_TRACE_NEXT), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(GUEST_WRITE_CONTEXT_PC), 0);
+        core::ptr::write(core::ptr::addr_of_mut!(GUEST_WRITE_CONTEXT_TID), 0);
     }
 }
 
@@ -194,6 +204,27 @@ pub(crate) fn configure_guest_write_watch(slot: u32, start: u64, end: u64) {
     }
     unsafe {
         GUEST_WRITE_WATCH[slot as usize] = GuestWriteWatchRegion { start, end };
+    }
+}
+
+pub(crate) fn set_guest_write_context(pc: u64, tid: i32) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (pc, tid);
+        return;
+    }
+    unsafe {
+        GUEST_WRITE_CONTEXT_PC = pc;
+        GUEST_WRITE_CONTEXT_TID = tid;
+    }
+}
+
+pub(crate) fn clear_guest_write_context() {
+    if !RUNTIME_DEBUG_ENABLED {
+        return;
+    }
+    unsafe {
+        GUEST_WRITE_CONTEXT_PC = 0;
+        GUEST_WRITE_CONTEXT_TID = 0;
     }
 }
 
@@ -222,6 +253,8 @@ pub(crate) fn record_guest_write_overlap(
             GUEST_WRITE_OVERLAP_TRACE[next] = GuestWriteOverlapTraceEntry {
                 slot: slot as u32,
                 op,
+                tid: GUEST_WRITE_CONTEXT_TID,
+                pc: GUEST_WRITE_CONTEXT_PC,
                 addr,
                 len,
                 sample_len,
@@ -362,6 +395,8 @@ pub(crate) fn guest_write_overlap_trace_entry(index: u32) -> GuestWriteOverlapTr
         return GuestWriteOverlapTraceEntry {
             slot: 0,
             op: 0,
+            tid: 0,
+            pc: 0,
             addr: 0,
             len: 0,
             sample_len: 0,
@@ -375,6 +410,8 @@ pub(crate) fn guest_write_overlap_trace_entry(index: u32) -> GuestWriteOverlapTr
             return GuestWriteOverlapTraceEntry {
                 slot: 0,
                 op: 0,
+                tid: 0,
+                pc: 0,
                 addr: 0,
                 len: 0,
                 sample_len: 0,

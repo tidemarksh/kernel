@@ -710,6 +710,9 @@ pub unsafe fn write_u8(base: u32, addr: u64, val: u8) {
 pub(crate) unsafe fn write_u8_unchecked(base: u32, addr: u64, val: u8) {
     record_access(addr, 1, ACCESS_WRITE);
     let ptr = unchecked_addr(base, addr, "guest_mem::write_u8_unchecked") as *mut u8;
+    if crate::tracepoints::guest_write_overlap_enabled() {
+        crate::tracepoints::record_guest_write_overlap(addr, 1, WRITE_OP_U8, val as u64, 1);
+    }
     if unsafe { is_multi_threaded() } {
         let slot = ((addr >> 3) & 63) as usize;
         unsafe { lock_slot(slot) };
@@ -740,6 +743,9 @@ pub unsafe fn write_u16(base: u32, addr: u64, val: u16) {
 pub(crate) unsafe fn write_u16_unchecked(base: u32, addr: u64, val: u16) {
     record_access(addr, 2, ACCESS_WRITE);
     let ptr = unchecked_addr(base, addr, "guest_mem::write_u16_unchecked") as *mut u16;
+    if crate::tracepoints::guest_write_overlap_enabled() {
+        crate::tracepoints::record_guest_write_overlap(addr, 2, WRITE_OP_U16, val as u64, 2);
+    }
     if unsafe { is_multi_threaded() } {
         let mask = stripe_mask(addr, 2);
         unsafe { lock_mask(mask) };
@@ -1147,18 +1153,53 @@ mod tests {
         crate::harness::trace::clear_guest_write_watch_trace();
         crate::harness::trace::record_execve_stage(716, 0, 0);
         crate::harness::trace::configure_guest_write_watch(0, 0x2000, 0x2010);
+        crate::harness::trace::set_guest_write_context(0x1234, 7);
         unsafe {
             super::write_u32(0, 0x2004, 0x1122_3344);
         }
+        crate::harness::trace::clear_guest_write_context();
         assert_eq!(crate::harness::debug::guest_write_overlap_trace_len(), 1);
         let entry = crate::harness::debug::guest_write_overlap_trace_entry(0);
         assert_eq!(entry.slot, 0);
         assert_eq!(entry.op, super::WRITE_OP_U32);
+        assert_eq!(entry.tid, 7);
+        assert_eq!(entry.pc, 0x1234);
         assert_eq!(entry.addr, 0x2004);
         assert_eq!(entry.len, 4);
         assert_eq!(entry.sample_len, 4);
         assert_eq!(entry.sample, 0x1122_3344);
         assert_eq!(entry.execve_stage, 716);
+        crate::harness::trace::clear_guest_write_watch_trace();
+    }
+
+    #[test]
+    fn watched_guest_write_overlap_records_byte_and_halfword_stores() {
+        unsafe {
+            super::init(core::ptr::null(), core::ptr::null(), core::ptr::null());
+        }
+        crate::harness::trace::clear_guest_write_watch_trace();
+        crate::harness::trace::configure_guest_write_watch(0, 0x3000, 0x3010);
+        unsafe {
+            super::write_u8(0, 0x3002, 0x7f);
+            super::write_u16(0, 0x3004, 0x6281);
+        }
+
+        assert_eq!(crate::harness::debug::guest_write_overlap_trace_len(), 2);
+        let byte_entry = crate::harness::debug::guest_write_overlap_trace_entry(0);
+        assert_eq!(byte_entry.slot, 0);
+        assert_eq!(byte_entry.op, super::WRITE_OP_U8);
+        assert_eq!(byte_entry.addr, 0x3002);
+        assert_eq!(byte_entry.len, 1);
+        assert_eq!(byte_entry.sample_len, 1);
+        assert_eq!(byte_entry.sample, 0x7f);
+
+        let halfword_entry = crate::harness::debug::guest_write_overlap_trace_entry(1);
+        assert_eq!(halfword_entry.slot, 0);
+        assert_eq!(halfword_entry.op, super::WRITE_OP_U16);
+        assert_eq!(halfword_entry.addr, 0x3004);
+        assert_eq!(halfword_entry.len, 2);
+        assert_eq!(halfword_entry.sample_len, 2);
+        assert_eq!(halfword_entry.sample, 0x6281);
         crate::harness::trace::clear_guest_write_watch_trace();
     }
 }
