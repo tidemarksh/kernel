@@ -711,6 +711,69 @@ fn anonymous_exec_mapping_supports_write_protect_execute_and_repatch() {
 }
 
 #[test]
+fn flush_icache_length_form_invalidates_cached_generated_code() {
+    let mut t = TestVm::new();
+    let code = t.sys_mmap(
+        0,
+        PAGE_SIZE,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    );
+    assert!(code > 0, "code={code}");
+    let code = code as u64;
+
+    unsafe {
+        // addi a0, zero, 1
+        tidemark_kernel::guest_mem::write_u32(t.base, code, 0x0010_0513);
+        // jalr zero, ra, 0
+        tidemark_kernel::guest_mem::write_u32(t.base, code + 4, 0x0000_8067);
+        // c.nop
+        tidemark_kernel::guest_mem::write_u16(t.base, code + 8, 0x0001);
+    }
+
+    assert_eq!(t.sys_mprotect(code, PAGE_SIZE, PROT_READ | PROT_EXEC), 0);
+
+    t.vm.pc = code;
+    t.vm.x[1] = code + 8;
+    t.vm.x[10] = 0;
+    t.vm.status = STATUS_OK;
+    t.vm.sig_mask = 0;
+    t.vm.sig_pending = 0;
+
+    let remaining = tidemark_kernel::abi::thread_step(&mut t.vm as *mut _ as u32, 2);
+    assert_eq!(remaining, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, code + 8);
+    assert_eq!(t.vm.x[10], 1);
+
+    assert_eq!(t.sys_mprotect(code, PAGE_SIZE, PROT_READ | PROT_WRITE), 0);
+    unsafe {
+        // addi a0, zero, 42
+        tidemark_kernel::guest_mem::write_u32(t.base, code, 0x02a0_0513);
+    }
+    assert_eq!(
+        tidemark_kernel::syscall::identity::sys_riscv_flush_icache(&mut t.vm, t.base, code, 8, 0),
+        0
+    );
+    assert_eq!(t.sys_mprotect(code, PAGE_SIZE, PROT_READ | PROT_EXEC), 0);
+
+    t.vm.pc = code;
+    t.vm.x[1] = code + 8;
+    t.vm.x[10] = 0;
+    t.vm.status = STATUS_OK;
+    t.vm.sig_mask = 0;
+    t.vm.sig_pending = 0;
+
+    let remaining = tidemark_kernel::abi::thread_step(&mut t.vm as *mut _ as u32, 2);
+    assert_eq!(remaining, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, code + 8);
+    assert_eq!(t.vm.x[10], 42);
+}
+
+#[test]
 fn mmap_rejects_invalid_fd_for_file_backed() {
     let mut t = TestVm::new();
     let ret = t.sys_mmap(0, 4096, PROT_READ, MAP_PRIVATE, -1, 0);

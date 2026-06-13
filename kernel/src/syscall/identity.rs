@@ -336,12 +336,20 @@ pub fn sys_riscv_flush_icache(
     _flags: u64,
 ) -> i64 {
     if vm.block_cache_ptr != 0 {
+        // Some guest runtimes issue the second argument as a byte count. Linux
+        // accepts the syscall as a synchronization hint, so invalidate broadly
+        // enough for both start/end and observed start/length forms.
+        let invalidate_end = if end < start {
+            start.saturating_add(end)
+        } else {
+            end
+        };
         let mut cache = unsafe {
             crate::cpu::block_cache::BlockCache::from_ptr(
                 vm.block_cache_ptr as *mut crate::cpu::block_cache::BlockEntry,
             )
         };
-        cache.invalidate_range(start, end);
+        cache.invalidate_range(start, invalidate_end);
     }
     0
 }
