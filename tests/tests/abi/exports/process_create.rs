@@ -432,6 +432,7 @@ fn runtime_state_attach_advances_shared_heap_without_rewind() {
         kernel_process_pending_ptr(),
         kernel_process_runtime_state_ptr(),
         kernel_time_state_ptr(),
+        kernel_signalfd_state_ptr(),
     );
     assert_eq!(kernel_heap_ptr(), advanced_heap_ptr);
 
@@ -452,6 +453,7 @@ fn runtime_state_attach_advances_shared_heap_without_rewind() {
         kernel_process_pending_ptr(),
         kernel_process_runtime_state_ptr(),
         kernel_time_state_ptr(),
+        kernel_signalfd_state_ptr(),
     );
     assert_eq!(kernel_heap_ptr(), advanced_heap_ptr);
 }
