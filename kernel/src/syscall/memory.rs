@@ -17,6 +17,8 @@
 //! https://github.com/torvalds/linux/blob/v6.12/include/linux/mm_types.h
 
 use alloc_crate::{format, vec, vec::Vec};
+use core::hint::spin_loop;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate::abi::*;
 use crate::fs::{fd_table, memfs};
@@ -144,10 +146,29 @@ impl AddressSpaceStateImage {
 
 /// Pointer to AddressSpaceState in kernel Worker linear memory (allocated via alloc.rs).
 static mut MEM_STATE: *mut AddressSpaceState = core::ptr::null_mut();
+static MEM_STATE_LOCK: AtomicU32 = AtomicU32::new(0);
 
 pub const DEFAULT_STACK_SIZE: u64 = 8 * 1024 * 1024;
 const MIN_STACK_SIZE: u64 = 64 * 1024;
 const INITIAL_STACK_HEADROOM: u64 = 64 * 1024 * 1024;
+
+struct AddressSpaceLockGuard;
+
+impl Drop for AddressSpaceLockGuard {
+    fn drop(&mut self) {
+        MEM_STATE_LOCK.store(0, Ordering::Release);
+    }
+}
+
+fn address_space_lock() -> AddressSpaceLockGuard {
+    while MEM_STATE_LOCK
+        .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        spin_loop();
+    }
+    AddressSpaceLockGuard
+}
 
 fn ms() -> &'static mut AddressSpaceState {
     unsafe {
@@ -328,6 +349,7 @@ pub fn init(brk_start: u64) {
 }
 
 pub fn has_prot_none() -> bool {
+    let _guard = address_space_lock();
     ms().has_prot_none != 0
 }
 
@@ -366,6 +388,7 @@ fn cache_permitted_range(
 
 #[allow(dead_code)]
 pub(crate) fn capture_state_image_into(image: &mut AddressSpaceStateImage) {
+    let _guard = address_space_lock();
     let s = ms();
     validate_vma_vec_for_image(&s.vmas);
     let vmas = clone_vmas_for_state_image(&s.vmas);
@@ -427,6 +450,7 @@ fn validate_state_image_for_restore(image: &AddressSpaceStateImage) {
 #[allow(dead_code)]
 pub(crate) fn restore_state_from_image(image: &AddressSpaceStateImage) {
     validate_state_image_for_restore(image);
+    let _guard = address_space_lock();
     let s = ms();
     s.vmas.clone_from(&image.vmas);
     s.brk_base = image.brk_base;
@@ -438,6 +462,7 @@ pub(crate) fn restore_state_from_image(image: &AddressSpaceStateImage) {
 
 pub fn reset_for_execve_with_flush(base: u32, brk_start: u64, flush_shared: bool) {
     let mmap_start = default_mmap_start(brk_start);
+    let _guard = address_space_lock();
     if flush_shared {
         flush_shared_mappings_in_range(base, 0, u64::MAX);
     }
@@ -456,6 +481,7 @@ pub fn reset_for_execve(base: u32, brk_start: u64) {
 }
 
 pub fn flush_shared_mappings(base: u32) {
+    let _guard = address_space_lock();
     flush_shared_mappings_in_range(base, 0, u64::MAX);
 }
 
@@ -485,6 +511,7 @@ fn discard_execve_guest_address_space(base: u32) {
 }
 
 pub fn refresh_shared_file_mappings(base: u32, guest_limit: u64) {
+    let _guard = address_space_lock();
     let s = ms();
     for vma in s.vmas.iter() {
         refresh_shared_file_vma(base, vma, guest_limit);
@@ -492,6 +519,7 @@ pub fn refresh_shared_file_mappings(base: u32, guest_limit: u64) {
 }
 
 pub fn is_prot_none(addr: u64) -> bool {
+    let _guard = address_space_lock();
     let s = ms();
     for v in s.vmas.iter() {
         if addr >= v.start && addr < v.end && v.prot == PROT_NONE {
@@ -640,6 +668,7 @@ pub fn guest_range_permitted(vm: &ThreadState, base: u32, start: u64, len: u64, 
         return false;
     }
 
+    let _guard = address_space_lock();
     let s = ms();
     let slot = permit_cache_slot(prot);
     for i in slot..slot + PERMIT_CACHE_WAYS {
@@ -684,6 +713,7 @@ pub fn register_elf_load_segment(start: u64, end: u64, prot: i32) {
     }
     let start = page_align_down(start);
     let end = page_align_up(end);
+    let _guard = address_space_lock();
     let s = ms();
     s.vmas.push(Vma {
         start,
@@ -705,6 +735,7 @@ pub fn register_elf_load_segment(start: u64, end: u64, prot: i32) {
 
 /// Return current brk address (for ProcessState allocation in guest Memory).
 pub fn current_brk() -> u64 {
+    let _guard = address_space_lock();
     ms().brk_current
 }
 
@@ -720,6 +751,7 @@ pub fn user_brk_start_after_hidden_prefix(hidden_end: u64) -> u64 {
 
 pub fn rebase_brk_after_hidden_prefix(hidden_end: u64) {
     let public_brk = user_brk_start_after_hidden_prefix(hidden_end);
+    let _guard = address_space_lock();
     let s = ms();
     if s.brk_base < public_brk {
         s.brk_base = public_brk;
@@ -731,38 +763,47 @@ pub fn rebase_brk_after_hidden_prefix(hidden_end: u64) {
 }
 
 pub(crate) fn address_space_brk_base() -> u64 {
+    let _guard = address_space_lock();
     ms().brk_base
 }
 
 pub(crate) fn address_space_mmap_next() -> u64 {
+    let _guard = address_space_lock();
     ms().mmap_next
 }
 
 pub(crate) fn address_space_vma_len() -> u32 {
+    let _guard = address_space_lock();
     ms().vmas.len() as u32
 }
 
 pub(crate) fn address_space_vma_start(index: u32) -> u64 {
+    let _guard = address_space_lock();
     ms().vmas.get(index as usize).map(|v| v.start).unwrap_or(0)
 }
 
 pub(crate) fn address_space_vma_end(index: u32) -> u64 {
+    let _guard = address_space_lock();
     ms().vmas.get(index as usize).map(|v| v.end).unwrap_or(0)
 }
 
 pub(crate) fn address_space_vma_prot(index: u32) -> i32 {
+    let _guard = address_space_lock();
     ms().vmas.get(index as usize).map(|v| v.prot).unwrap_or(0)
 }
 
 pub(crate) fn address_space_vma_flags(index: u32) -> i32 {
+    let _guard = address_space_lock();
     ms().vmas.get(index as usize).map(|v| v.flags).unwrap_or(0)
 }
 
 pub(crate) fn address_space_vma_fd(index: u32) -> i32 {
+    let _guard = address_space_lock();
     ms().vmas.get(index as usize).map(|v| v.fd).unwrap_or(-1)
 }
 
 pub(crate) fn address_space_vma_offset(index: u32) -> u64 {
+    let _guard = address_space_lock();
     ms().vmas.get(index as usize).map(|v| v.offset).unwrap_or(0)
 }
 
@@ -874,6 +915,7 @@ fn append_proc_maps_line(out: &mut Vec<u8>, entry: &ProcMapsEntry) {
 }
 
 pub fn proc_self_maps_snapshot() -> Vec<u8> {
+    let _guard = address_space_lock();
     let s = ms();
     let mut entries = Vec::with_capacity(s.vmas.len() + 1);
 
@@ -965,21 +1007,24 @@ pub fn map_initial_stack(base: u32, guest_limit: u64, stack_size: u64) -> i64 {
         return ENOMEM;
     }
 
-    let s = ms();
-    let mapped_high = s
-        .vmas
-        .iter()
-        .fold(s.brk_current.max(s.brk_base), |high, vma| high.max(vma.end));
-    let compact_top = page_align_up(
-        mapped_high
-            .saturating_add(INITIAL_STACK_HEADROOM)
-            .saturating_add(PAGE_SIZE)
-            .saturating_add(usable),
-    );
-    let stack_top = if compact_top <= guest_limit {
-        compact_top
-    } else {
-        guest_limit
+    let _guard = address_space_lock();
+    let stack_top = {
+        let s = ms();
+        let mapped_high = s
+            .vmas
+            .iter()
+            .fold(s.brk_current.max(s.brk_base), |high, vma| high.max(vma.end));
+        let compact_top = page_align_up(
+            mapped_high
+                .saturating_add(INITIAL_STACK_HEADROOM)
+                .saturating_add(PAGE_SIZE)
+                .saturating_add(usable),
+        );
+        if compact_top <= guest_limit {
+            compact_top
+        } else {
+            guest_limit
+        }
     };
 
     let stack_start = stack_top - usable;
@@ -1006,6 +1051,7 @@ pub fn map_initial_stack(base: u32, guest_limit: u64, stack_size: u64) -> i64 {
 /// Grow brk to `new_brk`, return new brk as i64. Used by process_create to
 /// allocate ProcessState in guest Memory address space.
 pub fn grow_brk(base: u32, new_brk: u64) -> i64 {
+    let _guard = address_space_lock();
     let s = ms();
     if new_brk <= s.brk_current {
         return s.brk_current as i64;
@@ -1030,6 +1076,7 @@ pub fn grow_brk(base: u32, new_brk: u64) -> i64 {
 /// brk: adjust program break. addr=0 returns current break.
 /// Grows WASM memory via memory.grow if needed, zero-fills new region.
 pub fn sys_brk(vm: &mut ThreadState, base: u32, addr: u64) -> i64 {
+    let _guard = address_space_lock();
     let s = ms();
     let guest_limit = effective_guest_limit(vm, base);
     if addr == 0 {
@@ -1080,6 +1127,7 @@ pub fn sys_mmap(
     fd: i64,
     offset: u64,
 ) -> i64 {
+    let _guard = address_space_lock();
     let s = ms();
     let guest_limit = effective_guest_limit(vm, base);
     if length == 0 {
@@ -1289,8 +1337,9 @@ pub fn sys_munmap(_vm: &mut ThreadState, base: u32, addr: u64, length: u64) -> i
         return EINVAL;
     }
     let len = (length + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
-    let s = ms();
+    let _guard = address_space_lock();
     flush_shared_mappings_in_range(base, addr, len);
+    let s = ms();
     remove_overlap(s, addr, addr + len);
     recompute_prot_none(s);
     invalidate_permit_cache(s);
@@ -1303,6 +1352,7 @@ pub fn sys_munmap(_vm: &mut ThreadState, base: u32, addr: u64, length: u64) -> i
 /// page cache to flush for the mappings we expose to guests, so success is
 /// equivalent for the cleanup paths that use msync() before munmap().
 pub fn sys_msync(_vm: &mut ThreadState, _base: u32, _addr: u64, _length: u64, _flags: u64) -> i64 {
+    let _guard = address_space_lock();
     flush_shared_mappings_in_range(_base, _addr, _length);
     0
 }
@@ -1339,6 +1389,7 @@ pub fn sys_madvise(_vm: &mut ThreadState, base: u32, addr: u64, length: u64, adv
         return ENOMEM;
     };
 
+    let _guard = address_space_lock();
     let s = ms();
     if !range_fully_mapped(s, addr, end) {
         return ENOMEM;
@@ -1386,6 +1437,7 @@ pub fn sys_mremap(
     _flags: u64,
     _new_addr: u64,
 ) -> i64 {
+    let _guard = address_space_lock();
     let s = ms();
     let guest_limit = effective_guest_limit(vm, base);
     let old_len = (old_size + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
@@ -1478,6 +1530,7 @@ pub fn sys_mprotect(vm: &mut ThreadState, base: u32, addr: u64, length: u64, pro
     let Some(end) = addr.checked_add(len) else {
         return ENOMEM;
     };
+    let _guard = address_space_lock();
     let s = ms();
     let guest_limit = effective_guest_limit(vm, base);
     if !range_fully_mapped(s, addr, end) {
@@ -1880,6 +1933,7 @@ fn flush_shared_mappings_in_range(base: u32, start: u64, length: u64) {
 
 pub(crate) fn flush_shared_mappings_for_guest_write(base: u32, start: u64, length: u64) -> bool {
     let end = start.saturating_add(length);
+    let _guard = address_space_lock();
     let s = ms();
     let mut flushed = false;
     for vma in s.vmas.iter() {
