@@ -490,6 +490,191 @@ fn cached_data_fault_reports_faulting_op_pc() {
 }
 
 #[test]
+fn cached_exec_matches_interpreter_for_nested_clone_return_epilogues() {
+    fn run(use_cache: bool) -> (i32, u64, u64, u64, u64, u64) {
+        let mut t = TestVm::new();
+        if use_cache {
+            t.vm.block_cache_ptr = alloc_block_cache_ptr();
+        }
+        let code = mmap_exec(&mut t, 4096);
+        let clone_ret = code + 0x100;
+        let inner_epilogue = code + 0x140;
+        let outer_after_call = code + 0x1a8;
+        let outer_epilogue = code + 0x1bc;
+        let caller_after_clone = code + 0x2f4;
+        let inner_sp = t.scratch + 0x4000;
+        let outer_sp = inner_sp + 16;
+        let final_sp = outer_sp + 48;
+
+        unsafe {
+            // Raw clone parent return: ret to the inner wrapper.
+            guest_mem::write_u32(t.base, clone_ret, 0x0000_8067); // ret
+
+            // Inner wrapper epilogue: restore ra/s0, pop 16, ret.
+            guest_mem::write_u32(t.base, inner_epilogue, 0x0081_3083); // ld ra,8(sp)
+            guest_mem::write_u32(t.base, inner_epilogue + 4, 0x0001_3403); // ld s0,0(sp)
+            guest_mem::write_u32(t.base, inner_epilogue + 8, 0x0101_0113); // addi sp,sp,16
+            guest_mem::write_u32(t.base, inner_epilogue + 12, 0x0000_8067); // ret
+
+            // Outer wrapper resumes after its inner call, then restores caller state.
+            guest_mem::write_u32(t.base, outer_after_call, 0xfff0_0793); // addi a5,zero,-1
+            guest_mem::write_u32(t.base, outer_after_call + 4, 0x00f5_1863); // bne a0,a5,+16
+            guest_mem::write_u32(t.base, outer_epilogue, 0x0281_3083); // ld ra,40(sp)
+            guest_mem::write_u32(t.base, outer_epilogue + 4, 0x0201_3403); // ld s0,32(sp)
+            guest_mem::write_u32(t.base, outer_epilogue + 8, 0x0181_3483); // ld s1,24(sp)
+            guest_mem::write_u32(t.base, outer_epilogue + 12, 0x0101_3903); // ld s2,16(sp)
+            guest_mem::write_u32(t.base, outer_epilogue + 16, 0x0081_3983); // ld s3,8(sp)
+            guest_mem::write_u32(t.base, outer_epilogue + 20, 0x0001_3a03); // ld s4,0(sp)
+            guest_mem::write_u32(t.base, outer_epilogue + 24, 0x0301_0113); // addi sp,sp,48
+            guest_mem::write_u32(t.base, outer_epilogue + 28, 0x0000_8067); // ret
+
+            // Caller continuation after the clone wrapper returns.
+            guest_mem::write_u32(t.base, caller_after_clone, 0x0550_0313); // addi t1,zero,85
+
+            guest_mem::write_u64(t.base, inner_sp, 0x1111);
+            guest_mem::write_u64(t.base, inner_sp + 8, outer_after_call);
+            guest_mem::write_u64(t.base, outer_sp, 0x2222);
+            guest_mem::write_u64(t.base, outer_sp + 8, 0x3333);
+            guest_mem::write_u64(t.base, outer_sp + 16, 0x4444);
+            guest_mem::write_u64(t.base, outer_sp + 24, 0x5555);
+            guest_mem::write_u64(t.base, outer_sp + 32, 0x6666);
+            guest_mem::write_u64(t.base, outer_sp + 40, caller_after_clone);
+        }
+
+        t.vm.pc = clone_ret;
+        t.vm.x[1] = inner_epilogue;
+        t.vm.x[2] = inner_sp;
+        t.vm.x[10] = 3;
+        t.vm.status = abi::STATUS_OK;
+
+        let remaining = if use_cache {
+            tidemark_kernel::abi::thread_step(&mut t.vm as *mut _ as u32, 16)
+        } else {
+            unsafe {
+                tidemark_kernel::cpu::exec_at_base(&mut t.vm, 16, t.base, None, None, None, None)
+            }
+        };
+        assert_eq!(
+            remaining, 0,
+            "use_cache={use_cache} status={} pc=0x{:x} ra=0x{:x} sp=0x{:x}",
+            t.vm.status, t.vm.pc, t.vm.x[1], t.vm.x[2]
+        );
+        (
+            t.vm.status,
+            t.vm.pc - code,
+            t.vm.x[1] - code,
+            t.vm.x[2] - final_sp,
+            t.vm.x[6],
+            t.vm.x[10],
+        )
+    }
+
+    let no_cache = run(false);
+    let with_cache = run(true);
+    assert_eq!(with_cache, no_cache);
+    assert_eq!(with_cache.0, abi::STATUS_OK);
+    assert_eq!(with_cache.1, 0x2f8);
+    assert_eq!(with_cache.2, 0x2f4);
+    assert_eq!(with_cache.3, 0);
+    assert_eq!(with_cache.4, 85);
+    assert_eq!(with_cache.5, 3);
+}
+
+#[test]
+fn cached_exec_matches_interpreter_for_compressed_clone_return_epilogues() {
+    fn run(use_cache: bool) -> (i32, u64, u64, u64, u64, u64) {
+        let mut t = TestVm::new();
+        if use_cache {
+            t.vm.block_cache_ptr = alloc_block_cache_ptr();
+        }
+        let code = mmap_exec(&mut t, 4096);
+        let clone_ret = code + 0x100;
+        let inner_after_call = code + 0x140;
+        let inner_epilogue = inner_after_call + 0x6;
+        let outer_after_call = code + 0x1a8;
+        let outer_epilogue = code + 0x1bc;
+        let caller_after_clone = code + 0x2f4;
+        let inner_sp = t.scratch + 0x4000;
+        let outer_sp = inner_sp + 16;
+        let final_sp = outer_sp + 48;
+
+        unsafe {
+            // Raw clone parent return: compressed ret to the inner helper.
+            guest_mem::write_u16(t.base, clone_ret, 0x8082); // ret
+
+            // Inner helper after-call and compressed epilogue.
+            guest_mem::write_u16(t.base, inner_after_call, 0x57fd); // li a5,-1
+            guest_mem::write_u32(t.base, inner_after_call + 2, 0x00f5_0663); // beq a0,a5,+12
+            guest_mem::write_u16(t.base, inner_epilogue, 0x60a2); // c.ldsp ra,8(sp)
+            guest_mem::write_u16(t.base, inner_epilogue + 2, 0x6402); // c.ldsp s0,0(sp)
+            guest_mem::write_u16(t.base, inner_epilogue + 4, 0x0141); // c.addi sp,16
+            guest_mem::write_u16(t.base, inner_epilogue + 6, 0x8082); // ret
+
+            // Outer wrapper after-call and compressed epilogue.
+            guest_mem::write_u16(t.base, outer_after_call, 0x57fd); // li a5,-1
+            guest_mem::write_u32(t.base, outer_after_call + 2, 0x00f5_1963); // bne a0,a5,+18
+            guest_mem::write_u16(t.base, outer_epilogue, 0x70a2); // c.ldsp ra,40(sp)
+            guest_mem::write_u16(t.base, outer_epilogue + 2, 0x7402); // c.ldsp s0,32(sp)
+            guest_mem::write_u16(t.base, outer_epilogue + 4, 0x64e2); // c.ldsp s1,24(sp)
+            guest_mem::write_u16(t.base, outer_epilogue + 6, 0x6942); // c.ldsp s2,16(sp)
+            guest_mem::write_u16(t.base, outer_epilogue + 8, 0x69a2); // c.ldsp s3,8(sp)
+            guest_mem::write_u16(t.base, outer_epilogue + 10, 0x6a02); // c.ldsp s4,0(sp)
+            guest_mem::write_u16(t.base, outer_epilogue + 12, 0x6145); // c.addi sp,48
+            guest_mem::write_u16(t.base, outer_epilogue + 14, 0x8082); // ret
+
+            // Caller continuation after the clone wrapper returns.
+            guest_mem::write_u32(t.base, caller_after_clone, 0x0550_0313); // addi t1,zero,85
+
+            guest_mem::write_u64(t.base, inner_sp, 0x1111);
+            guest_mem::write_u64(t.base, inner_sp + 8, outer_after_call);
+            guest_mem::write_u64(t.base, outer_sp, 0x2222);
+            guest_mem::write_u64(t.base, outer_sp + 8, 0x3333);
+            guest_mem::write_u64(t.base, outer_sp + 16, 0x4444);
+            guest_mem::write_u64(t.base, outer_sp + 24, 0x5555);
+            guest_mem::write_u64(t.base, outer_sp + 32, 0x6666);
+            guest_mem::write_u64(t.base, outer_sp + 40, caller_after_clone);
+        }
+
+        t.vm.pc = clone_ret;
+        t.vm.x[1] = inner_after_call;
+        t.vm.x[2] = inner_sp;
+        t.vm.x[10] = 3;
+        t.vm.status = abi::STATUS_OK;
+
+        let remaining = if use_cache {
+            tidemark_kernel::abi::thread_step(&mut t.vm as *mut _ as u32, 18)
+        } else {
+            unsafe {
+                tidemark_kernel::cpu::exec_at_base(&mut t.vm, 18, t.base, None, None, None, None)
+            }
+        };
+        assert_eq!(
+            remaining, 0,
+            "use_cache={use_cache} status={} pc=0x{:x} ra=0x{:x} sp=0x{:x}",
+            t.vm.status, t.vm.pc, t.vm.x[1], t.vm.x[2]
+        );
+        (
+            t.vm.status,
+            t.vm.pc - code,
+            t.vm.x[1] - code,
+            t.vm.x[2] - final_sp,
+            t.vm.x[6],
+            t.vm.x[10],
+        )
+    }
+
+    let no_cache = run(false);
+    let with_cache = run(true);
+    assert_eq!(with_cache, no_cache);
+    assert_eq!(with_cache.0, abi::STATUS_OK);
+    assert_eq!(with_cache.1, 0x2f8);
+    assert_eq!(with_cache.2, 0x2f4);
+    assert_eq!(with_cache.3, 0);
+    assert_eq!(with_cache.4, 85);
+    assert_eq!(with_cache.5, 3);
+}
+
+#[test]
 fn cached_exec_revalidates_pc_tags_after_index_collision() {
     let mut t = TestVm::new();
     let mut cache = alloc_block_cache();
