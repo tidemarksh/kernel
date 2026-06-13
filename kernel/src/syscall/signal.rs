@@ -52,7 +52,10 @@ pub use pending::{
     send_signal_to_pid, send_signal_to_tid, send_signal_with_code, sys_rt_sigpending,
     sys_rt_sigprocmask,
 };
-pub use signalfd::{close_signalfd, signalfd_is_readable, signalfd_read, sys_signalfd4};
+pub use signalfd::{
+    attach_signalfd_state, close_signalfd, signalfd_is_readable, signalfd_read,
+    signalfd_state_bytes, signalfd_state_ptr, sys_signalfd4,
+};
 pub use sigreturn::sys_rt_sigreturn;
 pub use trace::note_pc;
 
