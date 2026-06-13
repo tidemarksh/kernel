@@ -11,6 +11,7 @@ pub(crate) use fd::{
     path_syscall_trace_path_ptr,
 };
 pub(crate) use memory::{
+    guest_range_permit_denied_trace_entry, guest_range_permit_denied_trace_len,
     guest_write_overlap_trace_entry, guest_write_overlap_trace_len, memory_permit_cache_hits,
     memory_permit_cache_hits_by_prot, memory_permit_checks, memory_permit_checks_by_prot,
     memory_permit_cover_hits, memory_permit_cover_hits_by_prot, memory_permit_denied,

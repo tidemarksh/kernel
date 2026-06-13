@@ -120,6 +120,144 @@ pub extern "C" fn debug_guest_write_overlap_trace_entry_execve_stage(index: u32)
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_range_permit_denied_trace_len() -> u32 {
+    crate::harness::debug::guest_range_permit_denied_trace_len()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_range_permit_denied_trace_entry_vm_ptr(index: u32) -> u32 {
+    crate::harness::debug::guest_range_permit_denied_trace_entry(index).vm_ptr
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_range_permit_denied_trace_entry_tid(index: u32) -> i32 {
+    crate::harness::debug::guest_range_permit_denied_trace_entry(index).tid
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_range_permit_denied_trace_entry_pc(index: u32) -> u64 {
+    crate::harness::debug::guest_range_permit_denied_trace_entry(index).pc
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_range_permit_denied_trace_entry_a0(index: u32) -> u64 {
+    crate::harness::debug::guest_range_permit_denied_trace_entry(index).a0
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_range_permit_denied_trace_entry_a1(index: u32) -> u64 {
+    crate::harness::debug::guest_range_permit_denied_trace_entry(index).a1
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_range_permit_denied_trace_entry_a2(index: u32) -> u64 {
+    crate::harness::debug::guest_range_permit_denied_trace_entry(index).a2
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_range_permit_denied_trace_entry_a3(index: u32) -> u64 {
+    crate::harness::debug::guest_range_permit_denied_trace_entry(index).a3
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_range_permit_denied_trace_entry_a4(index: u32) -> u64 {
+    crate::harness::debug::guest_range_permit_denied_trace_entry(index).a4
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_range_permit_denied_trace_entry_a5(index: u32) -> u64 {
+    crate::harness::debug::guest_range_permit_denied_trace_entry(index).a5
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_range_permit_denied_trace_entry_s1(index: u32) -> u64 {
+    crate::harness::debug::guest_range_permit_denied_trace_entry(index).s1
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_range_permit_denied_trace_entry_s2(index: u32) -> u64 {
+    crate::harness::debug::guest_range_permit_denied_trace_entry(index).s2
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_range_permit_denied_trace_entry_s3(index: u32) -> u64 {
+    crate::harness::debug::guest_range_permit_denied_trace_entry(index).s3
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_range_permit_denied_trace_entry_s11(index: u32) -> u64 {
+    crate::harness::debug::guest_range_permit_denied_trace_entry(index).s11
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_range_permit_denied_trace_entry_start(index: u32) -> u64 {
+    crate::harness::debug::guest_range_permit_denied_trace_entry(index).start
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_range_permit_denied_trace_entry_len(index: u32) -> u64 {
+    crate::harness::debug::guest_range_permit_denied_trace_entry(index).len
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_range_permit_denied_trace_entry_end(index: u32) -> u64 {
+    crate::harness::debug::guest_range_permit_denied_trace_entry(index).end
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_range_permit_denied_trace_entry_guest_limit(index: u32) -> u64 {
+    crate::harness::debug::guest_range_permit_denied_trace_entry(index).guest_limit
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_range_permit_denied_trace_entry_prot(index: u32) -> i32 {
+    crate::harness::debug::guest_range_permit_denied_trace_entry(index).prot
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_range_permit_denied_trace_entry_cover_start(index: u32) -> u64 {
+    crate::harness::debug::guest_range_permit_denied_trace_entry(index).cover_start
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_range_permit_denied_trace_entry_cover_end(index: u32) -> u64 {
+    crate::harness::debug::guest_range_permit_denied_trace_entry(index).cover_end
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_range_permit_denied_trace_entry_cover_prot(index: u32) -> i32 {
+    crate::harness::debug::guest_range_permit_denied_trace_entry(index).cover_prot
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_range_permit_denied_trace_entry_reason(index: u32) -> u32 {
+    crate::harness::debug::guest_range_permit_denied_trace_entry(index).reason
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_trace_nr() -> u64 {
     crate::harness::debug::memory_trace_summary().nr
 }
