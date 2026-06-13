@@ -185,7 +185,7 @@ pub(super) fn push_signal_frame(
     }
 
     let trampoline_pc = frame_base + SIGFRAME_OFF_TRAMPOLINE;
-    record_signal_delivery_trace(vm, sig, frame_base, trampoline_pc);
+    record_signal_delivery_trace(vm, sig, frame_base, trampoline_pc, action.handler);
 
     vm.x[2] = frame_base;
     vm.x[1] = trampoline_pc;

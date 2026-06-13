@@ -2,8 +2,8 @@ use super::actions::sig_slots;
 use crate::abi::*;
 use crate::guest_mem;
 use crate::types::{
-    ProcessState, ThreadRecord, ThreadState, MAX_SIGNALS, THREAD_BLOCKED_FUTEX, THREAD_DEAD,
-    THREAD_NONE,
+    MAX_SIGNALS, ProcessState, THREAD_BLOCKED_FUTEX, THREAD_DEAD, THREAD_NONE, ThreadRecord,
+    ThreadState,
 };
 
 // sigprocmask how
@@ -295,6 +295,12 @@ fn signal_process_if_present(pid: i32, sig: i32) -> bool {
 /// Queue a process-directed signal. Delivery happens when the target process
 /// next reaches a signal check boundary.
 pub fn send_signal_to_pid(vm: &mut ThreadState, base: u32, pid: i32, sig: i32) -> i64 {
+    let result = send_signal_to_pid_inner(vm, base, pid, sig);
+    super::trace::record_signal_send(vm, 1, pid, 0, sig, result);
+    result
+}
+
+fn send_signal_to_pid_inner(vm: &mut ThreadState, base: u32, pid: i32, sig: i32) -> i64 {
     if sig < 0 || sig as usize >= MAX_SIGNALS {
         return EINVAL;
     }
@@ -349,6 +355,12 @@ pub fn send_signal_to_pid(vm: &mut ThreadState, base: u32, pid: i32, sig: i32) -
 
 /// Queue a thread-directed signal for a thread in the caller's current process.
 pub fn send_signal_to_tid(vm: &mut ThreadState, base: u32, tid: i32, sig: i32) -> i64 {
+    let result = send_signal_to_tid_inner(vm, base, tid, sig);
+    super::trace::record_signal_send(vm, 2, 0, tid, sig, result);
+    result
+}
+
+fn send_signal_to_tid_inner(vm: &mut ThreadState, base: u32, tid: i32, sig: i32) -> i64 {
     if tid <= 0 || sig <= 0 || sig as usize >= MAX_SIGNALS {
         return EINVAL;
     }
@@ -383,12 +395,13 @@ pub fn send_signal_to_tid(vm: &mut ThreadState, base: u32, tid: i32, sig: i32) -
     ESRCH
 }
 
-pub fn queue_sigill(vm: &mut ThreadState, pc: u64, _raw: u32) {
+pub fn queue_sigill(vm: &mut ThreadState, pc: u64, raw: u32) {
     vm.fault_pc = pc;
     vm.fault_addr = pc;
     vm.fault_kind = FAULT_KIND_ILLEGAL_INSTRUCTION;
     vm.fault_signal = SIGILL;
     vm.fault_code = ILL_ILLOPC;
+    super::trace::record_illegal_instruction(vm, pc, raw);
     send_signal_with_code(vm, SIGILL, ILL_ILLOPC);
 }
 
@@ -403,5 +416,6 @@ pub fn queue_sigsegv(vm: &mut ThreadState, pc: u64, addr: u64, accerr: bool) {
     };
     vm.fault_signal = SIGSEGV;
     vm.fault_code = code;
+    super::trace::record_sync_fault(vm, pc, addr, code);
     send_signal_with_code(vm, SIGSEGV, code);
 }

@@ -61,8 +61,17 @@ pub use trace::note_pc;
 
 #[cfg(any(test, feature = "harness"))]
 pub(crate) use trace::{
-    default_signal_arg_regs, default_signal_trace, default_signal_vm_ptr, reset_trace_state,
-    signal_delivery_trace, signal_delivery_trace_for_vm, sigreturn_trace, trampoline_trace_state,
+    default_signal_arg_regs, default_signal_trace, default_signal_vm_ptr,
+    illegal_instruction_context, illegal_instruction_jalr, illegal_instruction_signal_frame,
+    illegal_instruction_trace, reset_trace_state, signal_delivery_trace,
+    signal_delivery_trace_entry_code, signal_delivery_trace_entry_fault_addr,
+    signal_delivery_trace_entry_fault_pc, signal_delivery_trace_entry_frame_base,
+    signal_delivery_trace_entry_pc, signal_delivery_trace_entry_ra,
+    signal_delivery_trace_entry_s11, signal_delivery_trace_entry_sig,
+    signal_delivery_trace_entry_sp, signal_delivery_trace_entry_vm_ptr,
+    signal_delivery_trace_for_vm, signal_delivery_trace_len, signal_send_trace,
+    signal_send_trace_entry, signal_send_trace_len, sigreturn_trace, sync_fault_arg_reg,
+    sync_fault_saved_reg, sync_fault_trace, trampoline_trace_state,
 };
 
 /// Initialize signal subsystem. Must be called once at kernel init.
