@@ -237,6 +237,54 @@ fn cached_exec_matches_interpreter_for_ialign2_jalr_target() {
 }
 
 #[test]
+fn cached_exec_treats_x0_as_zero_for_ialign2_bnez_and_preserves_s11() {
+    fn run(use_cache: bool) -> (i32, u64, u64, u64) {
+        let mut t = TestVm::new();
+        if use_cache {
+            t.vm.block_cache_ptr = alloc_block_cache_ptr();
+        }
+        let code = mmap_exec(&mut t, 4096);
+        let start = code + 2;
+
+        unsafe {
+            guest_mem::write_u16(t.base, code, 0x0001);
+            // bnez a5,+0x4de at a halfword-aligned PC.
+            guest_mem::write_u32(t.base, start, 0x4c07_9f63);
+            guest_mem::write_u32(t.base, start + 4, 0x02a0_0313); // addi t1,zero,42
+            guest_mem::write_u32(t.base, start + 0x4de, 0x0630_0313); // addi t1,zero,99
+        }
+
+        t.vm.pc = start;
+        t.vm.x[0] = 0x1256;
+        t.vm.x[15] = 0;
+        t.vm.x[27] = 0x0a46_67e8;
+        t.vm.status = abi::STATUS_OK;
+
+        let remaining = if use_cache {
+            tidemark_kernel::abi::thread_step(&mut t.vm as *mut _ as u32, 1)
+        } else {
+            unsafe {
+                tidemark_kernel::cpu::exec_at_base(&mut t.vm, 1, t.base, None, None, None, None)
+            }
+        };
+        assert_eq!(
+            remaining, 0,
+            "use_cache={use_cache} status={} pc=0x{:x}",
+            t.vm.status, t.vm.pc
+        );
+        (t.vm.status, t.vm.pc - code, t.vm.x[0], t.vm.x[27])
+    }
+
+    let no_cache = run(false);
+    let with_cache = run(true);
+    assert_eq!(with_cache, no_cache);
+    assert_eq!(with_cache.0, abi::STATUS_OK);
+    assert_eq!(with_cache.1, 6);
+    assert_eq!(with_cache.2, 0);
+    assert_eq!(with_cache.3, 0x0a46_67e8);
+}
+
+#[test]
 fn cached_exec_revalidates_pc_tags_after_index_collision() {
     let mut t = TestVm::new();
     let mut cache = alloc_block_cache();

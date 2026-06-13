@@ -86,6 +86,7 @@ pub(super) unsafe fn exec_system(
                 vm.fcsr = *fcsr;
                 let status = crate::syscall::dispatch(vm, base);
                 *x = vm.x;
+                super::normalize_x0(x);
                 *f = vm.f;
                 *pc = vm.pc;
                 *fcsr = vm.fcsr;
@@ -172,6 +173,7 @@ pub(super) unsafe fn handle_illegal_instruction(
     crate::syscall::signal::queue_sigill(vm, *pc, raw);
     crate::syscall::signal::check_pending(vm, base);
     *x = vm.x;
+    super::normalize_x0(x);
     *f = vm.f;
     *pc = vm.pc;
     *fcsr = vm.fcsr;

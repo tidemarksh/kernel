@@ -95,6 +95,7 @@ pub(super) unsafe fn deliver_sync_sigsegv(
     crate::syscall::signal::check_pending(vm, base);
     crate::tracepoints::record_fault_dispatch_trace(vm, 2, vm.pc, vm.x[1], vm.x[2], vm.x[27], addr);
     *x = vm.x;
+    super::normalize_x0(x);
     *f = vm.f;
     *pc = vm.pc;
     *fcsr = vm.fcsr;

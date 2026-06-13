@@ -33,6 +33,11 @@ use crate::types::ThreadState;
 const REG_WRITE_SOURCE_STEP: u32 = 1;
 const REG_WRITE_SOURCE_VM_RESTORE: u32 = 2;
 
+#[inline(always)]
+pub(super) fn normalize_x0(x: &mut [u64; 32]) {
+    x[0] = 0;
+}
+
 struct ExecLoopCtx<'a> {
     vm: &'a mut ThreadState,
     base: u32,
@@ -112,6 +117,7 @@ unsafe fn exec_at_base_impl(
     unsafe {
         let mut pc = vm.pc;
         let mut x = vm.x;
+        normalize_x0(&mut x);
         let mut f = vm.f;
         let mut fcsr = vm.fcsr;
         let mut remaining = budget;
@@ -163,6 +169,7 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
             vm.fcsr = *fcsr;
             if crate::syscall::signal::check_pending(vm, base) {
                 *x = vm.x;
+                normalize_x0(x);
                 *f = vm.f;
                 *pc = vm.pc;
                 *fcsr = vm.fcsr;
@@ -197,6 +204,7 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
             vm.fcsr = *fcsr;
             crate::syscall::signal::sys_rt_sigreturn(vm, base);
             *x = vm.x;
+            normalize_x0(x);
             *f = vm.f;
             *pc = vm.pc;
             *fcsr = vm.fcsr;
@@ -269,6 +277,7 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
                 crate::syscall::signal::queue_sigill(vm, *pc, raw16 as u32);
                 crate::syscall::signal::check_pending(vm, base);
                 *x = vm.x;
+                normalize_x0(x);
                 *f = vm.f;
                 *pc = vm.pc;
                 *fcsr = vm.fcsr;
