@@ -358,6 +358,52 @@ fn cached_exec_matches_interpreter_for_ialign2_jalr_target() {
 }
 
 #[test]
+fn cached_exec_matches_interpreter_for_ialign2_32bit_branch_fallthrough() {
+    fn run(use_cache: bool) -> (i32, u64, u64) {
+        let mut t = TestVm::new();
+        if use_cache {
+            t.vm.block_cache_ptr = alloc_block_cache_ptr();
+        }
+        let code = mmap_exec(&mut t, 4096);
+        let start = code + 2;
+
+        unsafe {
+            guest_mem::write_u16(t.base, code, 0x0001);
+            // bge a3,a4,+152. At an IALIGN=2 PC, non-taken fallthrough must
+            // still advance by the 32-bit instruction length.
+            guest_mem::write_u32(t.base, start, 0x08e6_dc63);
+            guest_mem::write_u32(t.base, start + 4, 0x00b0_0313); // addi t1,zero,11
+        }
+
+        t.vm.pc = start;
+        t.vm.x[13] = 1;
+        t.vm.x[14] = 2;
+        t.vm.status = abi::STATUS_OK;
+
+        let remaining = if use_cache {
+            tidemark_kernel::abi::thread_step(&mut t.vm as *mut _ as u32, 2)
+        } else {
+            unsafe {
+                tidemark_kernel::cpu::exec_at_base(&mut t.vm, 2, t.base, None, None, None, None)
+            }
+        };
+        assert_eq!(
+            remaining, 0,
+            "use_cache={use_cache} status={} pc=0x{:x} fault_pc=0x{:x}",
+            t.vm.status, t.vm.pc, t.vm.fault_pc
+        );
+        (t.vm.status, t.vm.pc - code, t.vm.x[6])
+    }
+
+    let no_cache = run(false);
+    let with_cache = run(true);
+    assert_eq!(with_cache, no_cache);
+    assert_eq!(with_cache.0, abi::STATUS_OK);
+    assert_eq!(with_cache.1, 10);
+    assert_eq!(with_cache.2, 11);
+}
+
+#[test]
 fn cached_exec_treats_x0_as_zero_for_ialign2_bnez_and_preserves_s11() {
     fn run(use_cache: bool) -> (i32, u64, u64, u64) {
         let mut t = TestVm::new();
