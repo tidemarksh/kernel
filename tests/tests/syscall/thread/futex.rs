@@ -367,18 +367,22 @@ fn contract_futex_wake_unblocks_waiting_thread_record() {
 }
 
 #[test]
-fn contract_futex_wake_matches_memory64_blocked_thread_record_address() {
+fn contract_futex_wake_does_not_truncate_memory64_blocked_thread_record_address() {
     let mut t = TestVm::new();
-    let addr = u32::MAX as u64 + 0x400;
+    let low_addr = t.scratch + 0x400;
+    let high_addr = low_addr + (1u64 << 32);
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, low_addr, 0);
+    }
     let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
-    ps.threads[1] = ThreadRecord::new(2, THREAD_BLOCKED_FUTEX, 0xDEAD_BEEFu32, 0, addr);
+    ps.threads[1] = ThreadRecord::new(2, THREAD_BLOCKED_FUTEX, 0xDEAD_BEEFu32, 0, high_addr);
     ps.thread_count
         .store(2, core::sync::atomic::Ordering::Release);
 
-    let ret = thread_impl::sys_futex(&mut t.vm, t.base, addr, FUTEX_WAKE as u64, 1, 0, 0, 0);
-    assert_eq!(ret, 1);
-    assert_eq!(ps.threads[1].state, THREAD_RUNNING);
-    assert_eq!(ps.threads[1].blocked_addr, 0);
+    let ret = thread_impl::sys_futex(&mut t.vm, t.base, low_addr, FUTEX_WAKE as u64, 1, 0, 0, 0);
+    assert_eq!(ret, 0);
+    assert_eq!(ps.threads[1].state, THREAD_BLOCKED_FUTEX);
+    assert_eq!(ps.threads[1].blocked_addr, high_addr);
 }
 
 #[test]
