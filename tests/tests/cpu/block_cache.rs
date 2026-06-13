@@ -285,6 +285,44 @@ fn cached_exec_treats_x0_as_zero_for_ialign2_bnez_and_preserves_s11() {
 }
 
 #[test]
+fn cached_data_fault_reports_faulting_op_pc() {
+    let mut t = TestVm::new();
+    let code_addr = mmap_exec(&mut t, 4096);
+    let mut cache = alloc_block_cache();
+    let bad_addr = code_addr + 0x2000;
+
+    unsafe {
+        guest_mem::write_u32(t.base, code_addr, 0x0010_0313); // addi x6, x0, 1
+        guest_mem::write_u32(t.base, code_addr + 4, 0x0002_b383); // ld x7, 0(x5)
+    }
+
+    t.vm.pc = code_addr;
+    t.vm.x[5] = bad_addr;
+    t.vm.status = abi::STATUS_OK;
+    t.vm.sig_mask = 0;
+    t.vm.sig_pending = 0;
+
+    unsafe {
+        tidemark_kernel::cpu::exec_at_base(
+            &mut t.vm,
+            10,
+            t.base,
+            Some(&mut cache),
+            None,
+            None,
+            None,
+        );
+    }
+
+    assert_eq!(t.vm.status, abi::STATUS_FAULT);
+    assert_eq!(t.vm.exit_code, 128 + abi::SIGSEGV);
+    assert_eq!(t.vm.term_signal, abi::SIGSEGV);
+    assert_eq!(t.vm.fault_pc, code_addr + 4);
+    assert_eq!(t.vm.fault_addr, bad_addr);
+    assert_eq!(t.vm.fault_kind, abi::FAULT_KIND_GUEST_MAPERR);
+}
+
+#[test]
 fn cached_exec_revalidates_pc_tags_after_index_collision() {
     let mut t = TestVm::new();
     let mut cache = alloc_block_cache();

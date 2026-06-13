@@ -140,6 +140,7 @@ pub(super) unsafe fn exec_simple_load_scan_loop<const FIRST_CONSUMED: bool>(
                         3 => 8,
                         _ => 0,
                     };
+                    *pc = cur_pc;
                     match unsafe {
                         ensure_guest_access(vm, x, f, fcsr, pc, base, addr, width, abi::PROT_READ)
                     } {
@@ -418,6 +419,7 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                     3 => 8,
                     _ => 0,
                 };
+                *pc = cur_pc;
                 match unsafe {
                     ensure_guest_access(vm, x, f, fcsr, pc, base, addr, width, abi::PROT_READ)
                 } {
@@ -454,6 +456,7 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                     3 => 8,
                     _ => 0,
                 };
+                *pc = cur_pc;
                 match unsafe {
                     ensure_guest_access(vm, x, f, fcsr, pc, base, addr, width, abi::PROT_WRITE)
                 } {
