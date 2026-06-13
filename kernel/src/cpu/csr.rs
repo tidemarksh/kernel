@@ -12,8 +12,6 @@ use super::decode;
 // CSR execution
 // =============================================================================
 
-/// Execute CSR instructions for fcsr (0x003), fflags (0x001), and frm (0x002).
-/// Other CSRs currently read as zero and ignore writes.
 pub(super) enum CsrOutcome {
     Advance,
     Illegal,
@@ -33,6 +31,8 @@ fn is_read_only_csr(csr: u32) -> bool {
     (csr & 0xC00) == 0xC00
 }
 
+/// Execute CSR instructions for fcsr (0x003), fflags (0x001), and frm (0x002).
+/// Other CSRs currently read as zero and ignore writes.
 #[inline(always)]
 pub(super) fn exec_csr(
     x: &mut [u64; 32],
