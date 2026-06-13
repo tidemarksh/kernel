@@ -29,6 +29,16 @@ unsafe fn thread_block_cache(vm: &mut ThreadState, base: u32) -> Option<BlockCac
 
 #[unsafe(no_mangle)]
 pub extern "C" fn thread_step(vm_ptr: u32, budget: i32) -> i32 {
+    unsafe { thread_step_with_cache_mode(vm_ptr, budget, true) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_thread_step_no_block_cache(vm_ptr: u32, budget: i32) -> i32 {
+    unsafe { thread_step_with_cache_mode(vm_ptr, budget, false) }
+}
+
+unsafe fn thread_step_with_cache_mode(vm_ptr: u32, budget: i32, use_block_cache: bool) -> i32 {
     unsafe {
         let vm = &mut *(vm_ptr as *mut ThreadState);
         let base = vm.guest_base;
@@ -58,7 +68,11 @@ pub extern "C" fn thread_step(vm_ptr: u32, budget: i32) -> i32 {
         }
         vm.status = STATUS_OK;
         crate::tracepoints::record_thread_step_phase(vm, 3, budget, 0);
-        let mut cache = thread_block_cache(vm, base);
+        let mut cache = if use_block_cache {
+            thread_block_cache(vm, base)
+        } else {
+            None
+        };
         let remaining = crate::cpu::exec(vm, budget, cache.as_mut(), None, None, None);
         crate::tracepoints::record_thread_step_phase(vm, 4, budget, remaining);
         crate::tracepoints::record_thread_step_trace(vm, budget, remaining);
