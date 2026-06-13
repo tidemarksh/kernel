@@ -222,11 +222,19 @@ pub(super) unsafe fn exec_load(x: &mut [u64; 32], raw: u32, base: u32, pc: &mut 
 
 /// Execute STORE instructions (SB/SH/SW/SD).
 #[inline(always)]
-pub(super) unsafe fn exec_store(x: &[u64; 32], raw: u32, base: u32, pc: &mut u64, step: u64) {
+pub(super) unsafe fn exec_store(
+    x: &[u64; 32],
+    raw: u32,
+    base: u32,
+    pc: &mut u64,
+    step: u64,
+    tid: i32,
+) {
     let rs1 = decode::rs1(raw);
     let rs2 = decode::rs2(raw);
     let addr = (x[rs1] as i64 + decode::imm_s(raw)) as u64;
     let val = x[rs2];
+    crate::tracepoints::set_guest_write_context(*pc, tid);
     unsafe {
         match decode::funct3(raw) {
             0 => guest_mem::write_u8(base, addr, val as u8),
@@ -236,6 +244,7 @@ pub(super) unsafe fn exec_store(x: &[u64; 32], raw: u32, base: u32, pc: &mut u64
             _ => {}
         }
     }
+    crate::tracepoints::clear_guest_write_context();
     *pc += step;
 }
 

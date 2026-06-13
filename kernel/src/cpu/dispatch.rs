@@ -98,7 +98,7 @@ pub(super) unsafe fn exec_decoded(
                     AccessOutcome::Restart => return StepOutcome::Restart,
                     AccessOutcome::Return => return StepOutcome::Return(*remaining),
                 }
-                exec_store(x, raw, base, pc, step);
+                exec_store(x, raw, base, pc, step, vm.tid);
             }
             decode::OP_LUI => {
                 let rd = decode::rd(raw);
@@ -242,7 +242,7 @@ pub(super) unsafe fn exec_decoded(
                     AccessOutcome::Restart => return StepOutcome::Restart,
                     AccessOutcome::Return => return StepOutcome::Return(*remaining),
                 }
-                exec_store_fp(f, x, raw, base, pc, step);
+                exec_store_fp(f, x, raw, base, pc, step, vm.tid);
             }
             decode::OP_OP_FP => exec_op_fp(x, f, raw, pc, step, fcsr),
             decode::OP_FMADD | decode::OP_FMSUB | decode::OP_FNMSUB | decode::OP_FNMADD => {

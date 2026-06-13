@@ -482,10 +482,12 @@ pub(super) unsafe fn exec_store_fp(
     base: u32,
     pc: &mut u64,
     step: u64,
+    tid: i32,
 ) {
     let rs1 = decode::rs1(raw);
     let rs2 = decode::rs2(raw);
     let addr = (x[rs1] as i64 + decode::imm_s(raw)) as u64;
+    crate::tracepoints::set_guest_write_context(*pc, tid);
     unsafe {
         match decode::funct3(raw) {
             2 => guest_mem::write_u32(base, addr, f[rs2] as u32),
@@ -493,6 +495,7 @@ pub(super) unsafe fn exec_store_fp(
             _ => {}
         }
     }
+    crate::tracepoints::clear_guest_write_context();
     *pc += step;
 }
 

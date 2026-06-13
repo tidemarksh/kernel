@@ -12,6 +12,8 @@ use crate::guest_mem::acquire_reservation_lock;
 use crate::types::{ProcessState, ThreadState};
 use core::sync::atomic::{AtomicI32, AtomicI64, Ordering};
 
+const WRITE_OP_AMO_BASE: u32 = 0x100;
+
 // =============================================================================
 // Reservation state access
 // =============================================================================
@@ -38,6 +40,75 @@ fn guest_atomic_addr(base: u32, addr: u64, len: usize, op: &str) -> usize {
     absolute as usize
 }
 
+#[inline(always)]
+fn record_amo_write_overlap(addr: u64, len: u32, amo_op: u32, sample: u64) {
+    if crate::tracepoints::guest_write_overlap_enabled() {
+        crate::tracepoints::record_guest_write_overlap(
+            addr,
+            len,
+            WRITE_OP_AMO_BASE | amo_op,
+            sample,
+            len,
+        );
+    }
+}
+
+#[inline(always)]
+fn amo32_result(old: i32, src: i32, amo_op: u32) -> i32 {
+    match amo_op {
+        0x01 => src,
+        0x00 => old.wrapping_add(src),
+        0x04 => old ^ src,
+        0x0C => old & src,
+        0x08 => old | src,
+        0x10 => old.min(src),
+        0x14 => old.max(src),
+        0x18 => {
+            if (old as u32) < (src as u32) {
+                old
+            } else {
+                src
+            }
+        }
+        0x1C => {
+            if (old as u32) > (src as u32) {
+                old
+            } else {
+                src
+            }
+        }
+        _ => old,
+    }
+}
+
+#[inline(always)]
+fn amo64_result(old: u64, src: u64, amo_op: u32) -> u64 {
+    match amo_op {
+        0x01 => src,
+        0x00 => old.wrapping_add(src),
+        0x04 => old ^ src,
+        0x0C => old & src,
+        0x08 => old | src,
+        0x10 => {
+            if (old as i64) < (src as i64) {
+                old
+            } else {
+                src
+            }
+        }
+        0x14 => {
+            if (old as i64) > (src as i64) {
+                old
+            } else {
+                src
+            }
+        }
+        0x18 => old.min(src),
+        0x1C => old.max(src),
+        _ => old,
+    }
+}
+
 // =============================================================================
 // AMO dispatch
 // =============================================================================
@@ -59,6 +130,7 @@ pub(super) unsafe fn exec_amo(
     let funct3 = decode::funct3(raw);
     let addr = x[rs1];
 
+    crate::tracepoints::set_guest_write_context(*pc, vm.tid);
     match funct3 {
         2 => {
             let host_ptr = guest_atomic_addr(base, addr, 4, "cpu::atomic::exec_amo32");
@@ -78,6 +150,7 @@ pub(super) unsafe fn exec_amo(
         }
         _ => {}
     }
+    crate::tracepoints::clear_guest_write_context();
     *pc += step;
 }
 
@@ -133,7 +206,9 @@ unsafe fn exec_amo32_atomic(
                         x[rd] = 1;
                     }
                 } else {
-                    a.store(x[rs2] as i32, Ordering::SeqCst);
+                    let new_val = x[rs2] as u32;
+                    a.store(new_val as i32, Ordering::SeqCst);
+                    record_amo_write_overlap(addr, 4, amo_op, new_val as u64);
                     ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
                     vm.lr_addr = u64::MAX;
                     if rd != 0 {
@@ -153,6 +228,7 @@ unsafe fn exec_amo32_atomic(
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
             acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.swap(x[rs2] as i32, Ordering::SeqCst);
+            record_amo_write_overlap(addr, 4, amo_op, x[rs2] as u32 as u64);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
             if rd != 0 {
@@ -164,6 +240,8 @@ unsafe fn exec_amo32_atomic(
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
             acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.fetch_add(x[rs2] as i32, Ordering::SeqCst);
+            let new_val = amo32_result(old, x[rs2] as i32, amo_op);
+            record_amo_write_overlap(addr, 4, amo_op, new_val as u32 as u64);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
             if rd != 0 {
@@ -175,6 +253,8 @@ unsafe fn exec_amo32_atomic(
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
             acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.fetch_xor(x[rs2] as i32, Ordering::SeqCst);
+            let new_val = amo32_result(old, x[rs2] as i32, amo_op);
+            record_amo_write_overlap(addr, 4, amo_op, new_val as u32 as u64);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
             if rd != 0 {
@@ -186,6 +266,8 @@ unsafe fn exec_amo32_atomic(
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
             acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.fetch_and(x[rs2] as i32, Ordering::SeqCst);
+            let new_val = amo32_result(old, x[rs2] as i32, amo_op);
+            record_amo_write_overlap(addr, 4, amo_op, new_val as u32 as u64);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
             if rd != 0 {
@@ -197,6 +279,8 @@ unsafe fn exec_amo32_atomic(
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
             acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.fetch_or(x[rs2] as i32, Ordering::SeqCst);
+            let new_val = amo32_result(old, x[rs2] as i32, amo_op);
+            record_amo_write_overlap(addr, 4, amo_op, new_val as u32 as u64);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
             if rd != 0 {
@@ -208,6 +292,8 @@ unsafe fn exec_amo32_atomic(
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
             acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.fetch_min(x[rs2] as i32, Ordering::SeqCst);
+            let new_val = amo32_result(old, x[rs2] as i32, amo_op);
+            record_amo_write_overlap(addr, 4, amo_op, new_val as u32 as u64);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
             if rd != 0 {
@@ -219,6 +305,8 @@ unsafe fn exec_amo32_atomic(
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
             acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.fetch_max(x[rs2] as i32, Ordering::SeqCst);
+            let new_val = amo32_result(old, x[rs2] as i32, amo_op);
+            record_amo_write_overlap(addr, 4, amo_op, new_val as u32 as u64);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
             if rd != 0 {
@@ -231,6 +319,8 @@ unsafe fn exec_amo32_atomic(
             acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let au = unsafe { &*(host_ptr as *const core::sync::atomic::AtomicU32) };
             let old = au.fetch_min(x[rs2] as u32, Ordering::SeqCst);
+            let new_val = amo32_result(old as i32, x[rs2] as i32, amo_op);
+            record_amo_write_overlap(addr, 4, amo_op, new_val as u32 as u64);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
             if rd != 0 {
@@ -243,6 +333,8 @@ unsafe fn exec_amo32_atomic(
             acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let au = unsafe { &*(host_ptr as *const core::sync::atomic::AtomicU32) };
             let old = au.fetch_max(x[rs2] as u32, Ordering::SeqCst);
+            let new_val = amo32_result(old as i32, x[rs2] as i32, amo_op);
+            record_amo_write_overlap(addr, 4, amo_op, new_val as u32 as u64);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
             if rd != 0 {
@@ -322,8 +414,10 @@ unsafe fn exec_amo32_nonatomic(
                         x[rd] = 1;
                     }
                 } else {
+                    let new_val = x[rs2] as u32;
                     let ptr = guest_atomic_addr(base, addr, 4, "cpu::atomic::amo32_sc") as *mut u32;
-                    unsafe { ptr.write_unaligned(x[rs2] as u32) };
+                    unsafe { ptr.write_unaligned(new_val) };
+                    record_amo_write_overlap(addr, 4, amo_op, new_val as u64);
                     ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
                     if end_idx != gen_idx {
                         ps.reservation_gen[end_idx].fetch_add(2, Ordering::SeqCst);
@@ -398,6 +492,7 @@ unsafe fn exec_amo32_nonatomic(
             };
             let wptr = guest_atomic_addr(base, addr, 4, "cpu::atomic::amo32_write") as *mut u32;
             unsafe { wptr.write_unaligned(new_val as u32) };
+            record_amo_write_overlap(addr, 4, amo_op, new_val as u32 as u64);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             if end_idx != gen_idx {
                 ps.reservation_gen[end_idx].fetch_add(2, Ordering::SeqCst);
@@ -465,7 +560,9 @@ unsafe fn exec_amo64_atomic(
                         x[rd] = 1;
                     }
                 } else {
-                    a.store(x[rs2] as i64, Ordering::SeqCst);
+                    let new_val = x[rs2];
+                    a.store(new_val as i64, Ordering::SeqCst);
+                    record_amo_write_overlap(addr, 8, amo_op, new_val);
                     ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
                     vm.lr_addr = u64::MAX;
                     if rd != 0 {
@@ -485,6 +582,7 @@ unsafe fn exec_amo64_atomic(
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
             acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.swap(x[rs2] as i64, Ordering::SeqCst);
+            record_amo_write_overlap(addr, 8, amo_op, x[rs2]);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
             if rd != 0 {
@@ -496,6 +594,8 @@ unsafe fn exec_amo64_atomic(
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
             acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.fetch_add(x[rs2] as i64, Ordering::SeqCst);
+            let new_val = amo64_result(old as u64, x[rs2], amo_op);
+            record_amo_write_overlap(addr, 8, amo_op, new_val);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
             if rd != 0 {
@@ -507,6 +607,8 @@ unsafe fn exec_amo64_atomic(
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
             acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.fetch_xor(x[rs2] as i64, Ordering::SeqCst);
+            let new_val = amo64_result(old as u64, x[rs2], amo_op);
+            record_amo_write_overlap(addr, 8, amo_op, new_val);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
             if rd != 0 {
@@ -518,6 +620,8 @@ unsafe fn exec_amo64_atomic(
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
             acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.fetch_and(x[rs2] as i64, Ordering::SeqCst);
+            let new_val = amo64_result(old as u64, x[rs2], amo_op);
+            record_amo_write_overlap(addr, 8, amo_op, new_val);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
             if rd != 0 {
@@ -529,6 +633,8 @@ unsafe fn exec_amo64_atomic(
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
             acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.fetch_or(x[rs2] as i64, Ordering::SeqCst);
+            let new_val = amo64_result(old as u64, x[rs2], amo_op);
+            record_amo_write_overlap(addr, 8, amo_op, new_val);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
             if rd != 0 {
@@ -540,6 +646,8 @@ unsafe fn exec_amo64_atomic(
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
             acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.fetch_min(x[rs2] as i64, Ordering::SeqCst);
+            let new_val = amo64_result(old as u64, x[rs2], amo_op);
+            record_amo_write_overlap(addr, 8, amo_op, new_val);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
             if rd != 0 {
@@ -551,6 +659,8 @@ unsafe fn exec_amo64_atomic(
             let ps = unsafe { process_reservation_state(vm.process_ptr, base) };
             acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let old = a.fetch_max(x[rs2] as i64, Ordering::SeqCst);
+            let new_val = amo64_result(old as u64, x[rs2], amo_op);
+            record_amo_write_overlap(addr, 8, amo_op, new_val);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
             if rd != 0 {
@@ -563,6 +673,8 @@ unsafe fn exec_amo64_atomic(
             acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let au = unsafe { &*(host_ptr as *const core::sync::atomic::AtomicU64) };
             let old = au.fetch_min(x[rs2], Ordering::SeqCst);
+            let new_val = amo64_result(old, x[rs2], amo_op);
+            record_amo_write_overlap(addr, 8, amo_op, new_val);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
             if rd != 0 {
@@ -575,6 +687,8 @@ unsafe fn exec_amo64_atomic(
             acquire_reservation_lock(&ps.reservation_lock[gen_idx]);
             let au = unsafe { &*(host_ptr as *const core::sync::atomic::AtomicU64) };
             let old = au.fetch_max(x[rs2], Ordering::SeqCst);
+            let new_val = amo64_result(old, x[rs2], amo_op);
+            record_amo_write_overlap(addr, 8, amo_op, new_val);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             ps.reservation_lock[gen_idx].store(0, Ordering::Release);
             if rd != 0 {
@@ -654,8 +768,10 @@ unsafe fn exec_amo64_nonatomic(
                         x[rd] = 1;
                     }
                 } else {
+                    let new_val = x[rs2];
                     let ptr = guest_atomic_addr(base, addr, 8, "cpu::atomic::amo64_sc") as *mut u64;
-                    unsafe { ptr.write_unaligned(x[rs2]) };
+                    unsafe { ptr.write_unaligned(new_val) };
+                    record_amo_write_overlap(addr, 8, amo_op, new_val);
                     ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
                     if end_idx != gen_idx {
                         ps.reservation_gen[end_idx].fetch_add(2, Ordering::SeqCst);
@@ -730,6 +846,7 @@ unsafe fn exec_amo64_nonatomic(
             };
             let wptr = guest_atomic_addr(base, addr, 8, "cpu::atomic::amo64_write") as *mut u64;
             unsafe { wptr.write_unaligned(new_val) };
+            record_amo_write_overlap(addr, 8, amo_op, new_val);
             ps.reservation_gen[gen_idx].fetch_add(2, Ordering::SeqCst);
             if end_idx != gen_idx {
                 ps.reservation_gen[end_idx].fetch_add(2, Ordering::SeqCst);
