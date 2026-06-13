@@ -59,11 +59,7 @@ fn process_idx(pid: i32) -> Option<usize> {
 pub(super) fn process_entry(pid: i32) -> Option<&'static mut super::runtime::ProcessEntry> {
     let idx = process_idx(pid)?;
     let slot = &mut processes()[idx];
-    if slot.pid == pid {
-        Some(slot)
-    } else {
-        None
-    }
+    if slot.pid == pid { Some(slot) } else { None }
 }
 
 #[cfg(any(test, feature = "harness"))]

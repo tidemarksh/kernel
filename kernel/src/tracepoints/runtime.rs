@@ -1,4 +1,10 @@
-#[cfg(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness")))]
+#[cfg(any(
+    test,
+    all(
+        any(target_arch = "wasm32", target_arch = "wasm64"),
+        feature = "harness"
+    )
+))]
 pub(crate) use crate::harness::trace::{
     record_fault_dispatch_trace, record_futex_resume_trace, record_sync_signal_trace,
     record_syscall, record_thread_count, record_thread_step_entry_trace, record_thread_step_phase,

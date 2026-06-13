@@ -277,14 +277,10 @@ pub fn sys_riscv_hwprobe(
         Some(len) => len,
         None => return EFAULT,
     };
-    if pair_count != 0
-        && !guest_range_valid(base, pairs_addr, pairs_len)
-    {
+    if pair_count != 0 && !guest_range_valid(base, pairs_addr, pairs_len) {
         return EFAULT;
     }
-    if cpus_addr != 0
-        && cpusetsize != 0
-        && !guest_range_valid(base, cpus_addr, cpusetsize as usize)
+    if cpus_addr != 0 && cpusetsize != 0 && !guest_range_valid(base, cpus_addr, cpusetsize as usize)
     {
         return EFAULT;
     }

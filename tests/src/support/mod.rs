@@ -2068,8 +2068,7 @@ fn repair_current_main_thread_record(vm: &ThreadState, base: u32) {
                 *record = ThreadRecord::empty();
             }
         }
-        ps.threads[idx] =
-            ThreadRecord::new(vm.tid, THREAD_RUNNING, vm_ptr, vm.clear_child_tid, 0);
+        ps.threads[idx] = ThreadRecord::new(vm.tid, THREAD_RUNNING, vm_ptr, vm.clear_child_tid, 0);
         ps.thread_count
             .store(1, std::sync::atomic::Ordering::Release);
     }

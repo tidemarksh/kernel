@@ -11,7 +11,7 @@ use crate::abi::*;
 use crate::fs::fd_table;
 use crate::guest_mem;
 use crate::syscall::memory::AddressSpaceStateImage;
-use crate::types::{ProcessState, ThreadRecord, ThreadState, THREAD_NONE, THREAD_RUNNING};
+use crate::types::{ProcessState, THREAD_NONE, THREAD_RUNNING, ThreadRecord, ThreadState};
 use core::sync::atomic::Ordering;
 
 static mut VFORK_ADDRESS_SPACE_SNAPSHOT: Option<AddressSpaceStateImage> = None;

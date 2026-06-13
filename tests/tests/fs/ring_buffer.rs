@@ -68,18 +68,7 @@ fn ring_buffer_dispatch_fsync() {
     assert!(ring_base != 0);
 
     let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
-    let idx = submit_request(
-        ring_base,
-        FS_OP_FSYNC,
-        fd as i32,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        vm_ptr,
-    );
+    let idx = submit_request(ring_base, FS_OP_FSYNC, fd as i32, 0, 0, 0, 0, 0, 0, vm_ptr);
     assert!(idx >= 0);
 
     process_requests(ring_base, vm_ptr, t.base);

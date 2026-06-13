@@ -1,6 +1,9 @@
 #![cfg_attr(target_arch = "wasm64", feature(simd_wasm64))]
 #![cfg_attr(
-    all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown"),
+    all(
+        any(target_arch = "wasm32", target_arch = "wasm64"),
+        target_os = "unknown"
+    ),
     no_std
 )]
 
@@ -22,7 +25,10 @@ pub fn last_panic_location() -> (u32, u32, u32, u32) {
     }
 }
 
-#[cfg(all(any(target_arch = "wasm32", target_arch = "wasm64"), target_os = "unknown"))]
+#[cfg(all(
+    any(target_arch = "wasm32", target_arch = "wasm64"),
+    target_os = "unknown"
+))]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     unsafe {

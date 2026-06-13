@@ -428,7 +428,10 @@ export_const!(abi_status_jit_ready, STATUS_JIT_READY);
 export_const!(abi_fault_kind_none, FAULT_KIND_NONE as i32);
 export_const!(abi_fault_kind_guest_maperr, FAULT_KIND_GUEST_MAPERR as i32);
 export_const!(abi_fault_kind_guest_accerr, FAULT_KIND_GUEST_ACCERR as i32);
-export_const!(abi_fault_kind_illegal_instruction, FAULT_KIND_ILLEGAL_INSTRUCTION as i32);
+export_const!(
+    abi_fault_kind_illegal_instruction,
+    FAULT_KIND_ILLEGAL_INSTRUCTION as i32
+);
 export_const!(abi_fault_kind_guest_bus, FAULT_KIND_GUEST_BUS as i32);
 export_const!(abi_spawn_kind_none, SPAWN_KIND_NONE as i32);
 export_const!(abi_spawn_kind_execve, SPAWN_KIND_EXECVE as i32);
@@ -948,8 +951,7 @@ pub extern "C" fn process_inspect_elf_brk_with_memory_policy(
         if guest_base == 0 {
             return 0;
         }
-        let guest_address_limit =
-            guest_address_limit_for_profile(address_profile, guest_base);
+        let guest_address_limit = guest_address_limit_for_profile(address_profile, guest_base);
         if guest_address_limit == 0 {
             return 0;
         }
@@ -958,11 +960,7 @@ pub extern "C" fn process_inspect_elf_brk_with_memory_policy(
         } else {
             guest_address_limit
         };
-        match crate::elf::inspect_elf(
-            elf_ptr,
-            elf_len,
-            guest_limit,
-        ) {
+        match crate::elf::inspect_elf(elf_ptr, elf_len, guest_limit) {
             Ok(r) => r.brk_start,
             Err(_) => 0,
         }

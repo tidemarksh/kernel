@@ -133,9 +133,7 @@ fn pending_request_target_ino_inner(
             }
             fd_table::get_ofd(base, vm, request.fd as u64).map_or(0, |ofd| ofd.ino)
         }
-        ring_buffer::FS_OP_CLOSE
-        | ring_buffer::FS_OP_GETDENTS
-        | ring_buffer::FS_OP_LSEEK => 0,
+        ring_buffer::FS_OP_CLOSE | ring_buffer::FS_OP_GETDENTS | ring_buffer::FS_OP_LSEEK => 0,
         ring_buffer::FS_OP_TRUNCATE => {
             if request.fd > 0 {
                 return fd_table::get_ofd(base, vm, request.fd as u64).map_or(0, |ofd| ofd.ino);
@@ -575,10 +573,7 @@ mod tests {
 
         assert!(fd >= 3);
         assert_eq!(child.status, STATUS_OK);
-        assert_eq!(
-            fd_table::sys_fcntl(child, vm.base, fd as u64, 2, 1),
-            0,
-        );
+        assert_eq!(fd_table::sys_fcntl(child, vm.base, fd as u64, 2, 1), 0,);
         assert_ne!(
             fd_table::load_process_fd_entry(vm.base, vm.vm.process_ptr, fd as usize).ofd_id,
             0,

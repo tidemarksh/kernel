@@ -5,7 +5,7 @@ use super::runtime::prs;
 use crate::abi::*;
 use crate::fs::{fd_table, memfs};
 use crate::guest_mem;
-use crate::types::{FdEntry, ProcessState, ThreadRecord, ThreadState, THREAD_RUNNING};
+use crate::types::{FdEntry, ProcessState, THREAD_RUNNING, ThreadRecord, ThreadState};
 use alloc_crate::{format, vec, vec::Vec};
 
 pub const EXECVE_GUEST_MEMORY_LIMIT: u64 = 0x8000_0000;
@@ -154,11 +154,7 @@ fn read_execve_file_bytes_cached(
 fn current_cwd_ino(vm: &ThreadState, base: u32) -> u32 {
     let cwd_off = core::mem::offset_of!(ProcessState, cwd_ino) as u64;
     let cwd = unsafe { guest_mem::read_u32(base, vm.process_ptr as u64 + cwd_off) };
-    if cwd == 0 {
-        1
-    } else {
-        cwd
-    }
+    if cwd == 0 { 1 } else { cwd }
 }
 
 fn current_effective_uid(vm: &ThreadState) -> u32 {

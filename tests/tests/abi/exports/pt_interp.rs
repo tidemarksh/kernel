@@ -19,7 +19,12 @@ fn process_create_with_pt_interp_preserves_executable_entry_in_auxv() {
     process_clear_args();
     process_push_arg(elf_ptr + 0x400);
 
-    let vm_ptr = test_process_create(elf_ptr, elf.len() as u32, guest_memory_policy_limit as u64, 1024 * 1024);
+    let vm_ptr = test_process_create(
+        elf_ptr,
+        elf.len() as u32,
+        guest_memory_policy_limit as u64,
+        1024 * 1024,
+    );
     assert_ne!(vm_ptr, 0);
 
     let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
@@ -62,7 +67,12 @@ fn process_create_with_pt_interp_follows_symlink_path() {
     process_clear_args();
     process_push_arg(elf_ptr + 0x400);
 
-    let vm_ptr = test_process_create(elf_ptr, elf.len() as u32, guest_memory_policy_limit as u64, 1024 * 1024);
+    let vm_ptr = test_process_create(
+        elf_ptr,
+        elf.len() as u32,
+        guest_memory_policy_limit as u64,
+        1024 * 1024,
+    );
     assert_ne!(vm_ptr, 0);
     let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
     assert_eq!(vm.pc, 0x3000);
@@ -96,7 +106,12 @@ fn process_create_with_pt_interp_preserves_executable_tls_base() {
     process_clear_args();
     process_push_arg(elf_ptr + 0x800);
 
-    let vm_ptr = test_process_create(elf_ptr, elf.len() as u32, guest_memory_policy_limit as u64, 1024 * 1024);
+    let vm_ptr = test_process_create(
+        elf_ptr,
+        elf.len() as u32,
+        guest_memory_policy_limit as u64,
+        1024 * 1024,
+    );
     assert_ne!(vm_ptr, 0);
 
     let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
@@ -137,7 +152,12 @@ fn process_create_with_pt_interp_preserves_biased_dynamic_tls_base() {
     process_clear_args();
     process_push_arg(elf_ptr + 0x800);
 
-    let vm_ptr = test_process_create(elf_ptr, elf.len() as u32, guest_memory_policy_limit as u64, 1024 * 1024);
+    let vm_ptr = test_process_create(
+        elf_ptr,
+        elf.len() as u32,
+        guest_memory_policy_limit as u64,
+        1024 * 1024,
+    );
     assert_ne!(vm_ptr, 0);
 
     let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
@@ -177,7 +197,12 @@ fn process_create_with_pt_interp_accepts_et_dyn_interpreter() {
     process_clear_args();
     process_push_arg(elf_ptr + 0x400);
 
-    let vm_ptr = test_process_create(elf_ptr, elf.len() as u32, guest_memory_policy_limit as u64, 1024 * 1024);
+    let vm_ptr = test_process_create(
+        elf_ptr,
+        elf.len() as u32,
+        guest_memory_policy_limit as u64,
+        1024 * 1024,
+    );
     assert_ne!(vm_ptr, 0);
 
     let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
@@ -220,7 +245,12 @@ fn process_create_with_pt_interp_accepts_et_dyn_two_load_interpreter() {
     process_clear_args();
     process_push_arg(elf_ptr + 0x400);
 
-    let vm_ptr = test_process_create(elf_ptr, elf.len() as u32, guest_memory_policy_limit as u64, 1024 * 1024);
+    let vm_ptr = test_process_create(
+        elf_ptr,
+        elf.len() as u32,
+        guest_memory_policy_limit as u64,
+        1024 * 1024,
+    );
     assert_ne!(vm_ptr, 0);
 
     let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
@@ -255,7 +285,12 @@ fn process_create_with_pt_interp_biases_et_dyn_main_executable() {
     process_clear_args();
     process_push_arg(elf_ptr + 0x400);
 
-    let vm_ptr = test_process_create(elf_ptr, elf.len() as u32, guest_memory_policy_limit as u64, 1024 * 1024);
+    let vm_ptr = test_process_create(
+        elf_ptr,
+        elf.len() as u32,
+        guest_memory_policy_limit as u64,
+        1024 * 1024,
+    );
     assert_ne!(vm_ptr, 0);
 
     let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
@@ -310,7 +345,12 @@ fn process_create_with_pt_interp_biases_et_dyn_two_load_main_executable() {
     process_clear_args();
     process_push_arg(elf_ptr + 0x400);
 
-    let vm_ptr = test_process_create(elf_ptr, elf.len() as u32, guest_memory_policy_limit as u64, 1024 * 1024);
+    let vm_ptr = test_process_create(
+        elf_ptr,
+        elf.len() as u32,
+        guest_memory_policy_limit as u64,
+        1024 * 1024,
+    );
     assert_ne!(vm_ptr, 0);
 
     let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
@@ -362,7 +402,12 @@ fn process_create_with_pt_interp_preserves_biased_main_dynamic_section() {
     process_clear_args();
     process_push_arg(elf_ptr + 0x400);
 
-    let vm_ptr = test_process_create(elf_ptr, elf.len() as u32, guest_memory_policy_limit as u64, 1024 * 1024);
+    let vm_ptr = test_process_create(
+        elf_ptr,
+        elf.len() as u32,
+        guest_memory_policy_limit as u64,
+        1024 * 1024,
+    );
     assert_ne!(vm_ptr, 0);
 
     let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
@@ -435,7 +480,12 @@ fn process_create_with_pt_interp_zero_fills_interpreter_brk_padding() {
     process_clear_args();
     process_push_arg(elf_ptr + 0x400);
 
-    let vm_ptr = test_process_create(elf_ptr, main_elf.len() as u32, guest_memory_policy_limit as u64, 1024 * 1024);
+    let vm_ptr = test_process_create(
+        elf_ptr,
+        main_elf.len() as u32,
+        guest_memory_policy_limit as u64,
+        1024 * 1024,
+    );
     assert_ne!(vm_ptr, 0);
 
     let mut padding = [0u8; 16];
@@ -469,7 +519,12 @@ fn process_create_with_pt_interp_maps_main_executable_image() {
     process_clear_args();
     process_push_arg(elf_ptr + 0x400);
 
-    let vm_ptr = test_process_create(elf_ptr, main_elf.len() as u32, guest_memory_policy_limit as u64, 1024 * 1024);
+    let vm_ptr = test_process_create(
+        elf_ptr,
+        main_elf.len() as u32,
+        guest_memory_policy_limit as u64,
+        1024 * 1024,
+    );
     assert_ne!(vm_ptr, 0);
 
     let vm = unsafe { &*(vm_ptr as *const tidemark_kernel::types::ThreadState) };
