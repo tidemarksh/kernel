@@ -326,9 +326,19 @@ fn read_regular_file_to_guest(
         let to_read = ((count - total) as usize).min(tmp.len());
         let n = memfs::read_file(ofd.ino, start_offset + total, &mut tmp[..to_read]);
         if n < 0 {
+            if n == ENOENT && total > 0 {
+                return n;
+            }
             return if total > 0 { total as i64 } else { n };
         }
         if n == 0 {
+            if total > 0 {
+                if let Some(st) = memfs::stat(ofd.ino) {
+                    if start_offset + total < st.size {
+                        return ENOENT;
+                    }
+                }
+            }
             break;
         }
         if !crate::syscall::memory::guest_range_accessible(base, guest_buf + total, n as u64) {

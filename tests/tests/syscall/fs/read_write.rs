@@ -162,6 +162,33 @@ fn syscall_dispatch_reads_regular_file_local_hit_without_fs_ring() {
 }
 
 #[test]
+fn syscall_dispatch_reads_external_partial_page_hit_via_fs_ring() {
+    let mut t = TestVm::new();
+    memfs::enable_harness_page_cache();
+    let ino = memfs::create_file(1, b"external-partial-read.bin", 0o644);
+    assert!(ino > 0);
+    assert_eq!(memfs::set_file_external(ino, 8192), 0);
+    let resident = vec![b'a'; 4096];
+    assert_eq!(memfs::write_file(ino, 0, &resident), 4096);
+
+    let fd = t.sys_openat(b"/external-partial-read.bin", O_RDONLY);
+    assert!(fd >= 3);
+
+    let buf_addr = t.scratch + 0x7b00;
+    t.vm.x[10] = fd as u64;
+    t.vm.x[11] = buf_addr;
+    t.vm.x[12] = 8192;
+    t.vm.x[17] = SYS_READ;
+
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        STATUS_FS
+    );
+    assert_eq!(t.vm.status, STATUS_FS);
+    assert_eq!(fd_table::get_offset(t.base, &t.vm, fd as u64), 0);
+}
+
+#[test]
 fn syscall_dispatch_pread64_regular_file_local_hit_without_fs_ring() {
     let mut t = TestVm::new();
     let fd = t.sys_openat(b"/dispatch-pread.txt", O_CREAT | O_RDWR);
