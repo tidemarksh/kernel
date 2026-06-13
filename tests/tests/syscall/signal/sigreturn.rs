@@ -91,6 +91,41 @@ fn signal_trampoline_step_restores_context_without_executable_stack() {
 }
 
 #[test]
+fn rt_sigreturn_restores_handler_modified_ucontext_pc() {
+    let mut t = TestVm::new();
+
+    let original_pc = 0x1234_5000;
+    let modified_pc = 0x5678_9000;
+    let original_sp = 0x9fff0;
+
+    t.vm.pc = original_pc;
+    t.vm.x[1] = 0xdead_beef;
+    t.vm.x[2] = original_sp;
+
+    let act_addr = t.scratch;
+    write_sigaction(t.base, act_addr, 0x88_000, SA_SIGINFO, 0);
+    assert_eq!(
+        signal::sys_rt_sigaction(&mut t.vm, t.base, SIGURG as u64, act_addr, 0, 8),
+        0
+    );
+
+    signal::send_signal(&mut t.vm, SIGURG);
+    assert!(signal::check_pending(&mut t.vm, t.base));
+
+    let frame_base = t.vm.x[2];
+    let regs_base = frame_base + SIGFRAME_OFF_UCONTEXT + UCONTEXT_OFF_MCONTEXT + MCONTEXT_OFF_REGS;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, regs_base, modified_pc);
+    }
+
+    t.vm.x[17] = SYS_RT_SIGRETURN;
+    let status = tidemark_kernel::syscall::dispatch(&mut t.vm, t.base);
+    assert_eq!(status, STATUS_OK);
+    assert_eq!(t.vm.pc, modified_pc);
+    assert_eq!(t.vm.x[2], original_sp);
+}
+
+#[test]
 fn patch_current_signal_frame_a0_updates_rt_sigreturn_result() {
     let mut t = TestVm::new();
 
