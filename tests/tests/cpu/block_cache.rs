@@ -87,6 +87,86 @@ fn block_cache_populate_and_get() {
 }
 
 #[test]
+fn reserved_c_lui_zero_immediate_queues_sigill_trace() {
+    let mut t = TestVm::new();
+    let code_addr = mmap_exec(&mut t, 4096);
+
+    // C.LUI with nzimm=0 is reserved.
+    unsafe {
+        guest_mem::write_u16(t.base, code_addr, 0x6281);
+    }
+    tidemark_kernel::harness::signal::clear_debug_trace();
+
+    t.vm.pc = code_addr;
+    t.vm.status = abi::STATUS_OK;
+    t.vm.sig_mask = 0;
+    t.vm.sig_pending = 0;
+
+    unsafe {
+        tidemark_kernel::cpu::exec_at_base(&mut t.vm, 10, t.base, None, None, None, None);
+    }
+
+    assert_eq!(
+        t.vm.status,
+        abi::STATUS_FAULT,
+        "reserved C.LUI zero-immediate encoding should fault via SIGILL"
+    );
+    assert_eq!(
+        t.vm.exit_code,
+        128 + abi::SIGILL,
+        "exit_code should be 128 + SIGILL"
+    );
+    let (vm_ptr, pc, raw) = tidemark_kernel::harness::signal::last_illegal_instruction();
+    assert_ne!(vm_ptr, 0, "SIGILL trace should record the trapping VM");
+    assert_eq!(pc, code_addr);
+    assert_eq!(raw, 0x6281);
+}
+
+#[test]
+fn cached_exec_falls_back_to_sigill_for_reserved_c_lui_zero_immediate() {
+    let mut t = TestVm::new();
+    let code_addr = mmap_exec(&mut t, 4096);
+    let mut cache = alloc_block_cache();
+
+    unsafe {
+        guest_mem::write_u16(t.base, code_addr, 0x6281);
+    }
+    tidemark_kernel::harness::signal::clear_debug_trace();
+
+    t.vm.pc = code_addr;
+    t.vm.status = abi::STATUS_OK;
+    t.vm.sig_mask = 0;
+    t.vm.sig_pending = 0;
+
+    unsafe {
+        tidemark_kernel::cpu::exec_at_base(
+            &mut t.vm,
+            10,
+            t.base,
+            Some(&mut cache),
+            None,
+            None,
+            None,
+        );
+    }
+
+    assert_eq!(
+        t.vm.status,
+        abi::STATUS_FAULT,
+        "cached entry path should fall back and fault via SIGILL"
+    );
+    assert_eq!(
+        t.vm.exit_code,
+        128 + abi::SIGILL,
+        "exit_code should be 128 + SIGILL"
+    );
+    let (vm_ptr, pc, raw) = tidemark_kernel::harness::signal::last_illegal_instruction();
+    assert_ne!(vm_ptr, 0, "SIGILL trace should record the trapping VM");
+    assert_eq!(pc, code_addr);
+    assert_eq!(raw, 0x6281);
+}
+
+#[test]
 fn read_only_csr_write_queues_sigill_trace() {
     let mut t = TestVm::new();
     let code_addr = mmap_exec(&mut t, 4096);
