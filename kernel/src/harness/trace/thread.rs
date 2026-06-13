@@ -953,8 +953,9 @@ fn current_exec_trace_epoch_for_vm(vm_ptr: u32) -> u32 {
         return 0;
     }
     unsafe {
+        let next = (EXEC_TRACE_EPOCH_BY_VM_NEXT as usize) % THREAD_STEP_VM_TRACE_CAP;
         for offset in 0..THREAD_STEP_VM_TRACE_CAP {
-            let index = THREAD_STEP_VM_TRACE_CAP - 1 - offset;
+            let index = (next + THREAD_STEP_VM_TRACE_CAP - 1 - offset) % THREAD_STEP_VM_TRACE_CAP;
             let entry = EXEC_TRACE_EPOCH_BY_VM[index];
             if entry.0 == vm_ptr {
                 return entry.1;
@@ -976,6 +977,30 @@ fn bump_exec_trace_epoch_for_vm(vm_ptr: u32) -> u32 {
         EXEC_TRACE_EPOCH_BY_VM[slot] = (vm_ptr, next_epoch);
         EXEC_TRACE_EPOCH_BY_VM_NEXT = EXEC_TRACE_EPOCH_BY_VM_NEXT.wrapping_add(1);
         next_epoch
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn current_exec_trace_epoch_uses_ring_recency_after_wrap() {
+        unsafe {
+            core::ptr::write(
+                core::ptr::addr_of_mut!(EXEC_TRACE_EPOCH_BY_VM),
+                [(0, 0); THREAD_STEP_VM_TRACE_CAP],
+            );
+            core::ptr::write(core::ptr::addr_of_mut!(EXEC_TRACE_EPOCH_BY_VM_NEXT), 1);
+            let entries = core::ptr::addr_of_mut!(EXEC_TRACE_EPOCH_BY_VM);
+            core::ptr::write(core::ptr::addr_of_mut!((*entries)[0]), (42, 7));
+            core::ptr::write(
+                core::ptr::addr_of_mut!((*entries)[THREAD_STEP_VM_TRACE_CAP - 1]),
+                (42, 3),
+            );
+        }
+
+        assert_eq!(current_exec_trace_epoch_for_vm(42), 7);
     }
 }
 
