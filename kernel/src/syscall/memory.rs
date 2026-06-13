@@ -533,6 +533,7 @@ pub fn range_has_prot_none(start: u64, len: u64) -> bool {
     let Some(end) = start.checked_add(len) else {
         return true;
     };
+    let _guard = address_space_lock();
     let s = ms();
     for v in s.vmas.iter() {
         if v.prot != PROT_NONE {
