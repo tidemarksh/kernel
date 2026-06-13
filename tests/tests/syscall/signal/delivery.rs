@@ -70,6 +70,26 @@ fn tgkill_masked_signal_does_not_wake_blocked_futex_thread() {
 }
 
 #[test]
+fn tgkill_masked_sigsegv_respects_signal_mask() {
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    t.vm.sig_mask = 1u64 << (SIGSEGV - 1);
+    let tid = t.vm.tid;
+
+    assert_eq!(
+        signal::send_signal_to_tid(&mut t.vm, t.base, tid, SIGSEGV),
+        0
+    );
+
+    assert_eq!(t.vm.sig_info_code, SI_TKILL);
+    assert_ne!(t.vm.sig_pending & (1u64 << (SIGSEGV - 1)), 0);
+    assert!(!signal::check_pending(&mut t.vm, t.base));
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.term_signal, 0);
+    assert_ne!(t.vm.sig_pending & (1u64 << (SIGSEGV - 1)), 0);
+}
+
+#[test]
 fn tgkill_unmasked_signal_delivers_default_action_for_blocked_futex_thread() {
     let mut t = TestVm::new();
     t.vm.tid = 1;

@@ -71,7 +71,7 @@ pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
     // blocked process-pending signals into this thread.
     take_thread_pending_signals(vm, base);
 
-    let synchronous = if vm.sig_info_code != 0 {
+    let synchronous = if vm.sig_info_code > 0 {
         vm.sig_pending & SYNC_FAULT_SIGNAL_MASK
     } else {
         0

@@ -1,6 +1,6 @@
 pub(super) use tidemark_kernel::abi::{
     self, CLONE_FS, CLONE_SIGHAND, CLONE_THREAD, CLONE_VM, EINTR, O_NONBLOCK, SIGABRT, SIGALRM,
-    SIGCHLD, SIGURG, STATUS_FAULT, STATUS_OK, SYS_RT_SIGRETURN, SYS_SIGNALFD4, SYS_TGKILL,
+    SIGCHLD, SIGSEGV, SIGURG, STATUS_FAULT, STATUS_OK, SYS_RT_SIGRETURN, SYS_SIGNALFD4, SYS_TGKILL,
 };
 pub(super) use tidemark_kernel::harness::TestVm;
 pub(super) use tidemark_kernel::harness::signal as signal_harness;
