@@ -167,6 +167,47 @@ fn cached_exec_falls_back_to_sigill_for_reserved_c_lui_zero_immediate() {
 }
 
 #[test]
+fn cached_exec_preserves_same_block_compressed_sd_ld_dependency() {
+    let mut t = TestVm::new();
+    let code_addr = mmap_exec(&mut t, 4096);
+    let mut cache = alloc_block_cache();
+    let scope = code_addr + 0x100;
+    let list = code_addr + 0x200;
+    let sentinel = 0x1122_3344_5566_7788;
+
+    unsafe {
+        guest_mem::write_u16(t.base, code_addr, 0xf09c); // c.sd a5,32(s1)
+        guest_mem::write_u16(t.base, code_addr + 2, 0x709c); // c.ld a5,32(s1)
+        guest_mem::write_u32(t.base, code_addr + 4, 0x0187_8793); // addi a5,a5,24
+        guest_mem::write_u32(t.base, code_addr + 8, 0x0007_b023); // sd zero,0(a5)
+        guest_mem::write_u64(t.base, scope + 32, 0);
+        guest_mem::write_u64(t.base, list + 24, sentinel);
+    }
+
+    t.vm.pc = code_addr;
+    t.vm.x[9] = scope; // s1
+    t.vm.x[15] = list; // a5
+    t.vm.status = abi::STATUS_OK;
+
+    unsafe {
+        tidemark_kernel::cpu::exec_at_base(
+            &mut t.vm,
+            4,
+            t.base,
+            Some(&mut cache),
+            None,
+            None,
+            None,
+        );
+    }
+
+    assert_eq!(t.vm.status, abi::STATUS_OK);
+    assert_eq!(t.vm.pc, code_addr + 12);
+    assert_eq!(unsafe { guest_mem::read_u64(t.base, scope + 32) }, list);
+    assert_eq!(unsafe { guest_mem::read_u64(t.base, list + 24) }, 0);
+}
+
+#[test]
 fn read_only_csr_write_queues_sigill_trace() {
     let mut t = TestVm::new();
     let code_addr = mmap_exec(&mut t, 4096);
