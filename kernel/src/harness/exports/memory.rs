@@ -60,6 +60,66 @@ pub extern "C" fn debug_configure_guest_write_watch(slot: u32, start: u64, end: 
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_trace_len() -> u32 {
+    crate::harness::debug::guest_write_overlap_trace_len()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_trace_entry_slot(index: u32) -> u32 {
+    crate::harness::debug::guest_write_overlap_trace_entry(index).slot
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_trace_entry_op(index: u32) -> u32 {
+    crate::harness::debug::guest_write_overlap_trace_entry(index).op
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_trace_entry_tid(index: u32) -> i32 {
+    crate::harness::debug::guest_write_overlap_trace_entry(index).tid
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_trace_entry_pc(index: u32) -> u64 {
+    crate::harness::debug::guest_write_overlap_trace_entry(index).pc
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_trace_entry_addr(index: u32) -> u64 {
+    crate::harness::debug::guest_write_overlap_trace_entry(index).addr
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_trace_entry_len(index: u32) -> u32 {
+    crate::harness::debug::guest_write_overlap_trace_entry(index).len
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_trace_entry_sample_len(index: u32) -> u32 {
+    crate::harness::debug::guest_write_overlap_trace_entry(index).sample_len
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_trace_entry_sample(index: u32) -> u64 {
+    crate::harness::debug::guest_write_overlap_trace_entry(index).sample
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_guest_write_overlap_trace_entry_execve_stage(index: u32) -> u32 {
+    crate::harness::debug::guest_write_overlap_trace_entry(index).execve_stage
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
 pub extern "C" fn debug_memory_trace_nr() -> u64 {
     crate::harness::debug::memory_trace_summary().nr
 }
