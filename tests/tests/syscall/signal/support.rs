@@ -23,6 +23,12 @@ pub(super) const SIGFRAME_OFF_ABI_SIGINFO_PTR: u64 = 16;
 pub(super) const SIGFRAME_OFF_ABI_UCONTEXT_PTR: u64 = 24;
 pub(super) const SIGFRAME_OFF_SIGINFO: u64 = 32;
 pub(super) const SIGFRAME_OFF_UCONTEXT: u64 = 160;
+pub(super) const SIGINFO_OFF_SIGNO: u64 = 0;
+pub(super) const SIGINFO_OFF_ERRNO: u64 = 4;
+pub(super) const SIGINFO_OFF_CODE: u64 = 8;
+pub(super) const SIGINFO_OFF_ADDR: u64 = 16;
+pub(super) const UCONTEXT_OFF_MCONTEXT: u64 = 176;
+pub(super) const MCONTEXT_OFF_REGS: u64 = 0;
 pub(super) const EPOLL_CTL_ADD: u64 = 1;
 pub(super) const EPOLLIN: u32 = 0x001;
 
