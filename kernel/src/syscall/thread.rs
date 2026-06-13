@@ -1138,6 +1138,11 @@ fn allocate_tid(vm: &ThreadState, base: u32) -> i32 {
     -1 // no free slot
 }
 
+#[inline(always)]
+fn futex_uaddr_readable(vm: &ThreadState, base: u32, addr: u64) -> bool {
+    crate::syscall::memory::guest_range_permitted(vm, base, addr, 4, PROT_READ)
+}
+
 /// futex: fast userspace mutex.
 #[allow(clippy::too_many_arguments)]
 pub fn sys_futex(
@@ -1164,6 +1169,9 @@ pub fn sys_futex(
             } else {
                 FUTEX_BITSET_MATCH_ANY
             };
+            if !futex_uaddr_readable(vm, base, addr) {
+                return EFAULT;
+            }
             let current = unsafe { guest_mem::read_u32(base, addr) };
             if current != val as u32 {
                 record_futex_trace(
@@ -1215,6 +1223,9 @@ pub fn sys_futex(
             } else {
                 FUTEX_BITSET_MATCH_ANY
             };
+            if !futex_uaddr_readable(vm, base, addr) {
+                return EFAULT;
+            }
             let local = wake_futex_waiters_by_process_ptr(
                 vm.process_ptr,
                 base,
@@ -1236,6 +1247,9 @@ pub fn sys_futex(
         FUTEX_CMP_REQUEUE => {
             if (val as i64) < 0 || (timeout_or_requeue as i64) < 0 {
                 return EINVAL;
+            }
+            if !futex_uaddr_readable(vm, base, addr) || !futex_uaddr_readable(vm, base, addr2) {
+                return EFAULT;
             }
 
             let current = unsafe { guest_mem::read_u32(base, addr) };

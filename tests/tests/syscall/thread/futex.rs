@@ -463,6 +463,58 @@ fn contract_futex_bitset_rejects_zero_mask() {
 }
 
 #[test]
+fn contract_futex_wait_bad_uaddr_returns_efault() {
+    let mut t = TestVm::new();
+    let bad_addr = 0x9;
+
+    let wait_ret =
+        thread_impl::sys_futex(&mut t.vm, t.base, bad_addr, FUTEX_WAIT as u64, 0, 0, 0, 0);
+    assert_eq!(wait_ret, EFAULT);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.fault_addr, 0);
+
+    let bitset_ret = thread_impl::sys_futex(
+        &mut t.vm,
+        t.base,
+        bad_addr,
+        FUTEX_WAIT_BITSET as u64,
+        0,
+        0,
+        0,
+        FUTEX_BITSET_MATCH_ANY as u64,
+    );
+    assert_eq!(bitset_ret, EFAULT);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.fault_addr, 0);
+}
+
+#[test]
+fn contract_futex_wake_bad_uaddr_returns_efault() {
+    let mut t = TestVm::new();
+    let bad_addr = 0x9;
+
+    let wake_ret =
+        thread_impl::sys_futex(&mut t.vm, t.base, bad_addr, FUTEX_WAKE as u64, 1, 0, 0, 0);
+    assert_eq!(wake_ret, EFAULT);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.fault_addr, 0);
+
+    let bitset_ret = thread_impl::sys_futex(
+        &mut t.vm,
+        t.base,
+        bad_addr,
+        FUTEX_WAKE_BITSET as u64,
+        1,
+        0,
+        0,
+        FUTEX_BITSET_MATCH_ANY as u64,
+    );
+    assert_eq!(bitset_ret, EFAULT);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.fault_addr, 0);
+}
+
+#[test]
 fn contract_futex_wait_bitset_captures_realtime_flag_and_clears_on_resume() {
     let mut t = TestVm::new();
     let addr = t.scratch + 0x518;
@@ -640,6 +692,45 @@ fn contract_futex_cmp_requeue_moves_remaining_waiters() {
     assert_eq!(ps.threads[1].blocked_addr, 0);
     assert_eq!(ps.threads[2].state, THREAD_BLOCKED_FUTEX);
     assert_eq!(ps.threads[2].blocked_addr, to_addr);
+}
+
+#[test]
+fn contract_futex_cmp_requeue_bad_uaddr_returns_efault() {
+    let mut t = TestVm::new();
+    let bad_addr = 0x9;
+    let from_addr = t.scratch + 0x610;
+    let to_addr = t.scratch + 0x614;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, from_addr, 13);
+    }
+
+    let bad_from = thread_impl::sys_futex(
+        &mut t.vm,
+        t.base,
+        bad_addr,
+        FUTEX_CMP_REQUEUE as u64,
+        1,
+        1,
+        to_addr,
+        13,
+    );
+    assert_eq!(bad_from, EFAULT);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.fault_addr, 0);
+
+    let bad_to = thread_impl::sys_futex(
+        &mut t.vm,
+        t.base,
+        from_addr,
+        FUTEX_CMP_REQUEUE as u64,
+        1,
+        1,
+        bad_addr,
+        13,
+    );
+    assert_eq!(bad_to, EFAULT);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.fault_addr, 0);
 }
 
 #[test]
