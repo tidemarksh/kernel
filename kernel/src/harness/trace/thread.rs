@@ -1869,15 +1869,13 @@ pub(crate) fn record_jalr(
             core::ptr::write(core::ptr::addr_of_mut!(LAST_CLONE_JALR_TRACE), entry);
         }
     }
-    if rs1 == 1 || target < 0x1000 {
-        unsafe {
-            core::ptr::write(core::ptr::addr_of_mut!(LAST_JALR_TRACE), entry);
-            let idx = (JALR_TRACE_NEXT as usize) % CPU_REG_TRACE_CAP;
-            JALR_TRACE_RING[idx] = entry;
-            JALR_TRACE_NEXT = ((idx + 1) % CPU_REG_TRACE_CAP) as u32;
-            if JALR_TRACE_LEN < CPU_REG_TRACE_CAP as u32 {
-                JALR_TRACE_LEN += 1;
-            }
+    unsafe {
+        core::ptr::write(core::ptr::addr_of_mut!(LAST_JALR_TRACE), entry);
+        let idx = (JALR_TRACE_NEXT as usize) % CPU_REG_TRACE_CAP;
+        JALR_TRACE_RING[idx] = entry;
+        JALR_TRACE_NEXT = ((idx + 1) % CPU_REG_TRACE_CAP) as u32;
+        if JALR_TRACE_LEN < CPU_REG_TRACE_CAP as u32 {
+            JALR_TRACE_LEN += 1;
         }
     }
 }
