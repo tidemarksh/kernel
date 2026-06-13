@@ -33,6 +33,7 @@ static mut MEMORY_TRACE_NEXT: u32 = 0;
 
 const GUEST_WRITE_WATCH_CAP: usize = 2;
 const GUEST_WRITE_OVERLAP_TRACE_CAP: usize = 32;
+const GUEST_RANGE_PERMIT_DENIED_TRACE_CAP: usize = 16;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -55,6 +56,33 @@ pub struct GuestWriteOverlapTraceEntry {
     pub execve_stage: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct GuestRangePermitDeniedTraceEntry {
+    pub vm_ptr: u32,
+    pub tid: i32,
+    pub pc: u64,
+    pub a0: u64,
+    pub a1: u64,
+    pub a2: u64,
+    pub a3: u64,
+    pub a4: u64,
+    pub a5: u64,
+    pub s1: u64,
+    pub s2: u64,
+    pub s3: u64,
+    pub s11: u64,
+    pub start: u64,
+    pub len: u64,
+    pub end: u64,
+    pub guest_limit: u64,
+    pub prot: i32,
+    pub cover_start: u64,
+    pub cover_end: u64,
+    pub cover_prot: i32,
+    pub reason: u32,
+}
+
 static mut GUEST_WRITE_WATCH: [GuestWriteWatchRegion; GUEST_WRITE_WATCH_CAP] =
     [GuestWriteWatchRegion { start: 0, end: 0 }; GUEST_WRITE_WATCH_CAP];
 static mut GUEST_WRITE_OVERLAP_TRACE: [GuestWriteOverlapTraceEntry; GUEST_WRITE_OVERLAP_TRACE_CAP] =
@@ -73,6 +101,33 @@ static mut GUEST_WRITE_OVERLAP_TRACE_LEN: u32 = 0;
 static mut GUEST_WRITE_OVERLAP_TRACE_NEXT: u32 = 0;
 static mut GUEST_WRITE_CONTEXT_PC: u64 = 0;
 static mut GUEST_WRITE_CONTEXT_TID: i32 = 0;
+static mut GUEST_RANGE_PERMIT_DENIED_TRACE: [GuestRangePermitDeniedTraceEntry;
+    GUEST_RANGE_PERMIT_DENIED_TRACE_CAP] = [GuestRangePermitDeniedTraceEntry {
+    vm_ptr: 0,
+    tid: 0,
+    pc: 0,
+    a0: 0,
+    a1: 0,
+    a2: 0,
+    a3: 0,
+    a4: 0,
+    a5: 0,
+    s1: 0,
+    s2: 0,
+    s3: 0,
+    s11: 0,
+    start: 0,
+    len: 0,
+    end: 0,
+    guest_limit: 0,
+    prot: 0,
+    cover_start: 0,
+    cover_end: 0,
+    cover_prot: 0,
+    reason: 0,
+}; GUEST_RANGE_PERMIT_DENIED_TRACE_CAP];
+static mut GUEST_RANGE_PERMIT_DENIED_TRACE_LEN: u32 = 0;
+static mut GUEST_RANGE_PERMIT_DENIED_TRACE_NEXT: u32 = 0;
 
 const MEMORY_PERMIT_PROT_SLOTS: usize = 8;
 const MEMORY_PERMIT_OUTCOME_CACHE_HIT: u32 = 1;
@@ -307,6 +362,82 @@ pub(crate) fn record_guest_range_permit_check(prot: u32, outcome: u32) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn record_guest_range_permit_denied(
+    vm_ptr: u32,
+    tid: i32,
+    pc: u64,
+    x: &[u64; 32],
+    start: u64,
+    len: u64,
+    end: u64,
+    guest_limit: u64,
+    prot: i32,
+    cover_start: u64,
+    cover_end: u64,
+    cover_prot: i32,
+    reason: u32,
+) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (
+            vm_ptr,
+            tid,
+            pc,
+            x[10],
+            x[11],
+            x[12],
+            x[13],
+            x[14],
+            x[15],
+            x[9],
+            x[18],
+            x[19],
+            x[27],
+            start,
+            len,
+            end,
+            guest_limit,
+            prot,
+            cover_start,
+            cover_end,
+            cover_prot,
+            reason,
+        );
+        return;
+    }
+    unsafe {
+        let next =
+            GUEST_RANGE_PERMIT_DENIED_TRACE_NEXT as usize % GUEST_RANGE_PERMIT_DENIED_TRACE_CAP;
+        GUEST_RANGE_PERMIT_DENIED_TRACE[next] = GuestRangePermitDeniedTraceEntry {
+            vm_ptr,
+            tid,
+            pc,
+            a0: x[10],
+            a1: x[11],
+            a2: x[12],
+            a3: x[13],
+            a4: x[14],
+            a5: x[15],
+            s1: x[9],
+            s2: x[18],
+            s3: x[19],
+            s11: x[27],
+            start,
+            len,
+            end,
+            guest_limit,
+            prot,
+            cover_start,
+            cover_end,
+            cover_prot,
+            reason,
+        };
+        GUEST_RANGE_PERMIT_DENIED_TRACE_NEXT = GUEST_RANGE_PERMIT_DENIED_TRACE_NEXT.wrapping_add(1);
+        GUEST_RANGE_PERMIT_DENIED_TRACE_LEN = (GUEST_RANGE_PERMIT_DENIED_TRACE_LEN + 1)
+            .min(GUEST_RANGE_PERMIT_DENIED_TRACE_CAP as u32);
+    }
+}
+
 #[inline(always)]
 pub(crate) fn guest_write_overlap_enabled() -> bool {
     if !RUNTIME_DEBUG_ENABLED {
@@ -427,6 +558,84 @@ pub(crate) fn guest_write_overlap_trace_entry(index: u32) -> GuestWriteOverlapTr
             (next + index as usize) % GUEST_WRITE_OVERLAP_TRACE_CAP
         };
         core::ptr::read(core::ptr::addr_of!(GUEST_WRITE_OVERLAP_TRACE[slot]))
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn guest_range_permit_denied_trace_len() -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    unsafe { core::ptr::read(core::ptr::addr_of!(GUEST_RANGE_PERMIT_DENIED_TRACE_LEN)) }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn guest_range_permit_denied_trace_entry(
+    index: u32,
+) -> GuestRangePermitDeniedTraceEntry {
+    if !RUNTIME_DEBUG_ENABLED {
+        return GuestRangePermitDeniedTraceEntry {
+            vm_ptr: 0,
+            tid: 0,
+            pc: 0,
+            a0: 0,
+            a1: 0,
+            a2: 0,
+            a3: 0,
+            a4: 0,
+            a5: 0,
+            s1: 0,
+            s2: 0,
+            s3: 0,
+            s11: 0,
+            start: 0,
+            len: 0,
+            end: 0,
+            guest_limit: 0,
+            prot: 0,
+            cover_start: 0,
+            cover_end: 0,
+            cover_prot: 0,
+            reason: 0,
+        };
+    }
+    unsafe {
+        let len = core::ptr::read(core::ptr::addr_of!(GUEST_RANGE_PERMIT_DENIED_TRACE_LEN));
+        if index >= len {
+            return GuestRangePermitDeniedTraceEntry {
+                vm_ptr: 0,
+                tid: 0,
+                pc: 0,
+                a0: 0,
+                a1: 0,
+                a2: 0,
+                a3: 0,
+                a4: 0,
+                a5: 0,
+                s1: 0,
+                s2: 0,
+                s3: 0,
+                s11: 0,
+                start: 0,
+                len: 0,
+                end: 0,
+                guest_limit: 0,
+                prot: 0,
+                cover_start: 0,
+                cover_end: 0,
+                cover_prot: 0,
+                reason: 0,
+            };
+        }
+        let next =
+            core::ptr::read(core::ptr::addr_of!(GUEST_RANGE_PERMIT_DENIED_TRACE_NEXT)) as usize;
+        let len_usize = len as usize;
+        let slot = if len_usize < GUEST_RANGE_PERMIT_DENIED_TRACE_CAP {
+            index as usize
+        } else {
+            (next + index as usize) % GUEST_RANGE_PERMIT_DENIED_TRACE_CAP
+        };
+        core::ptr::read(core::ptr::addr_of!(GUEST_RANGE_PERMIT_DENIED_TRACE[slot]))
     }
 }
 

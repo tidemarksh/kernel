@@ -37,6 +37,10 @@ const PERMIT_CACHE_SLOTS: usize = PERMIT_CACHE_PROT_SLOTS * PERMIT_CACHE_WAYS;
 const PERMIT_OUTCOME_CACHE_HIT: u32 = 1;
 const PERMIT_OUTCOME_COVER_HIT: u32 = 2;
 const PERMIT_OUTCOME_DENIED: u32 = 3;
+const PERMIT_DENIED_OVERFLOW: u32 = 1;
+const PERMIT_DENIED_LIMIT: u32 = 2;
+const PERMIT_DENIED_NO_COVER: u32 = 3;
+const PERMIT_DENIED_STALLED_COVER: u32 = 4;
 const FILE_MMAP_POPULATE_CHUNK_BYTES: usize = 1024 * 1024;
 
 /// Address space state — shared by all threads of a process.
@@ -638,6 +642,41 @@ fn range_cover_end_with_sparse_anon_reservation(s: &AddressSpaceState, addr: u64
     0
 }
 
+fn containing_vma_debug_locked(s: &AddressSpaceState, addr: u64) -> (u64, u64, i32) {
+    if let Some(index) = find_vma_containing(s, addr) {
+        let v = s.vmas[index];
+        return (v.start, v.end, v.prot);
+    }
+    (0, 0, 0)
+}
+
+fn record_guest_range_permit_denied(
+    vm: &ThreadState,
+    start: u64,
+    len: u64,
+    end: u64,
+    guest_limit: u64,
+    prot: i32,
+    cover: (u64, u64, i32),
+    reason: u32,
+) {
+    crate::tracepoints::record_guest_range_permit_denied(
+        vm as *const ThreadState as u32,
+        vm.tid,
+        vm.pc,
+        &vm.x,
+        start,
+        len,
+        end,
+        guest_limit,
+        prot,
+        cover.0,
+        cover.1,
+        cover.2,
+        reason,
+    );
+}
+
 fn range_fully_covered_by_sparse_anon_reservation(
     s: &AddressSpaceState,
     start: u64,
@@ -661,11 +700,31 @@ pub fn guest_range_permitted(vm: &ThreadState, base: u32, start: u64, len: u64, 
     }
     let Some(end) = start.checked_add(len) else {
         crate::tracepoints::record_guest_range_permit_check(prot as u32, PERMIT_OUTCOME_DENIED);
+        record_guest_range_permit_denied(
+            vm,
+            start,
+            len,
+            0,
+            0,
+            prot,
+            (0, 0, 0),
+            PERMIT_DENIED_OVERFLOW,
+        );
         return false;
     };
     let guest_limit = effective_guest_limit(vm, base).min(current_linear_guest_limit(base));
     if end > guest_limit {
         crate::tracepoints::record_guest_range_permit_check(prot as u32, PERMIT_OUTCOME_DENIED);
+        record_guest_range_permit_denied(
+            vm,
+            start,
+            len,
+            end,
+            guest_limit,
+            prot,
+            (0, 0, 0),
+            PERMIT_DENIED_LIMIT,
+        );
         return false;
     }
 
@@ -688,10 +747,30 @@ pub fn guest_range_permitted(vm: &ThreadState, base: u32, start: u64, len: u64, 
     while cur < end {
         let Some((cover_start, cover_end, cover_prot)) = range_cover_with_prot(s, cur, prot) else {
             crate::tracepoints::record_guest_range_permit_check(prot as u32, PERMIT_OUTCOME_DENIED);
+            record_guest_range_permit_denied(
+                vm,
+                cur,
+                end - cur,
+                end,
+                guest_limit,
+                prot,
+                containing_vma_debug_locked(s, cur),
+                PERMIT_DENIED_NO_COVER,
+            );
             return false;
         };
         if cover_end <= cur {
             crate::tracepoints::record_guest_range_permit_check(prot as u32, PERMIT_OUTCOME_DENIED);
+            record_guest_range_permit_denied(
+                vm,
+                cur,
+                end - cur,
+                end,
+                guest_limit,
+                prot,
+                (cover_start, cover_end, cover_prot),
+                PERMIT_DENIED_STALLED_COVER,
+            );
             return false;
         }
         if cur == start && end <= cover_end {
