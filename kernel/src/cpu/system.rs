@@ -7,7 +7,7 @@
 //! These helpers keep ECALL/EBREAK/CSR handling and SIGILL recovery out of the
 //! main decoded-instruction dispatch table.
 
-use super::csr::exec_csr;
+use super::csr::{CsrOutcome, exec_csr};
 use super::decode;
 use super::dispatch::StepOutcome;
 use crate::abi;
@@ -132,8 +132,15 @@ pub(super) unsafe fn exec_system(
             }
         }
     } else {
-        exec_csr(x, raw, pc, step, fcsr);
-        StepOutcome::Advance
+        match exec_csr(x, raw, pc, step, fcsr) {
+            CsrOutcome::Advance => StepOutcome::Advance,
+            CsrOutcome::Illegal => unsafe {
+                handle_illegal_instruction(
+                    vm, raw, step, instr_pc, base, x, f, fcsr, pc, remaining, prev_sp, prev_tp,
+                    prev_s11,
+                )
+            },
+        }
     }
 }
 

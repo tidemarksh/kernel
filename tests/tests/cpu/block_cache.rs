@@ -87,6 +87,109 @@ fn block_cache_populate_and_get() {
 }
 
 #[test]
+fn read_only_csr_write_queues_sigill_trace() {
+    let mut t = TestVm::new();
+    let code_addr = mmap_exec(&mut t, 4096);
+
+    // HotSpot RISC-V stop instruction: csrrw x0, time, x0.
+    unsafe {
+        guest_mem::write_u32(t.base, code_addr, 0xc010_1073);
+    }
+    tidemark_kernel::harness::signal::clear_debug_trace();
+
+    t.vm.pc = code_addr;
+    t.vm.status = abi::STATUS_OK;
+    t.vm.sig_mask = 0;
+    t.vm.sig_pending = 0;
+
+    unsafe {
+        tidemark_kernel::cpu::exec_at_base(&mut t.vm, 10, t.base, None, None, None, None);
+    }
+
+    assert_eq!(
+        t.vm.status,
+        abi::STATUS_FAULT,
+        "read-only CSR write should fault via SIGILL"
+    );
+    assert_eq!(
+        t.vm.exit_code,
+        128 + abi::SIGILL,
+        "exit_code should be 128 + SIGILL"
+    );
+    let (vm_ptr, pc, raw) = tidemark_kernel::harness::signal::last_illegal_instruction();
+    assert_ne!(vm_ptr, 0, "SIGILL trace should record the trapping VM");
+    assert_eq!(pc, code_addr);
+    assert_eq!(raw, 0xc010_1073);
+}
+
+#[test]
+fn read_only_csr_read_advances_without_sigill() {
+    let mut t = TestVm::new();
+    let code_addr = mmap_exec(&mut t, 4096);
+
+    // csrrs t0, time, x0 reads the read-only CSR without requesting a write.
+    unsafe {
+        guest_mem::write_u32(t.base, code_addr, 0xc010_22f3);
+    }
+
+    t.vm.pc = code_addr;
+    t.vm.x[5] = 0xffff;
+    t.vm.status = abi::STATUS_OK;
+
+    unsafe {
+        tidemark_kernel::cpu::exec_at_base(&mut t.vm, 1, t.base, None, None, None, None);
+    }
+
+    assert_eq!(t.vm.status, abi::STATUS_OK);
+    assert_eq!(t.vm.pc, code_addr + 4);
+    assert_eq!(t.vm.x[5], 0);
+}
+
+#[test]
+fn cached_exec_falls_back_to_sigill_for_read_only_csr_write() {
+    let mut t = TestVm::new();
+    let code_addr = mmap_exec(&mut t, 4096);
+    let mut cache = alloc_block_cache();
+
+    unsafe {
+        guest_mem::write_u32(t.base, code_addr, 0xc010_1073);
+    }
+    tidemark_kernel::harness::signal::clear_debug_trace();
+
+    t.vm.pc = code_addr;
+    t.vm.status = abi::STATUS_OK;
+    t.vm.sig_mask = 0;
+    t.vm.sig_pending = 0;
+
+    unsafe {
+        tidemark_kernel::cpu::exec_at_base(
+            &mut t.vm,
+            10,
+            t.base,
+            Some(&mut cache),
+            None,
+            None,
+            None,
+        );
+    }
+
+    assert_eq!(
+        t.vm.status,
+        abi::STATUS_FAULT,
+        "cached entry path should fall back and fault via SIGILL"
+    );
+    assert_eq!(
+        t.vm.exit_code,
+        128 + abi::SIGILL,
+        "exit_code should be 128 + SIGILL"
+    );
+    let (vm_ptr, pc, raw) = tidemark_kernel::harness::signal::last_illegal_instruction();
+    assert_ne!(vm_ptr, 0, "SIGILL trace should record the trapping VM");
+    assert_eq!(pc, code_addr);
+    assert_eq!(raw, 0xc010_1073);
+}
+
+#[test]
 fn cached_exec_matches_interpreter_for_ialign2_jalr_target() {
     fn run(use_cache: bool) -> (i32, u64, u64, u64) {
         let mut t = TestVm::new();

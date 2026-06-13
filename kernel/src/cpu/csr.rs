@@ -14,12 +14,44 @@ use super::decode;
 
 /// Execute CSR instructions for fcsr (0x003), fflags (0x001), and frm (0x002).
 /// Other CSRs currently read as zero and ignore writes.
+pub(super) enum CsrOutcome {
+    Advance,
+    Illegal,
+}
+
 #[inline(always)]
-pub(super) fn exec_csr(x: &mut [u64; 32], raw: u32, pc: &mut u64, step: u64, fcsr: &mut u32) {
+fn csr_write_requested(f3: u32, rs1: usize) -> Option<bool> {
+    match f3 {
+        1 | 5 => Some(true),
+        2 | 3 | 6 | 7 => Some(rs1 != 0),
+        _ => None,
+    }
+}
+
+#[inline(always)]
+fn is_read_only_csr(csr: u32) -> bool {
+    (csr & 0xC00) == 0xC00
+}
+
+#[inline(always)]
+pub(super) fn exec_csr(
+    x: &mut [u64; 32],
+    raw: u32,
+    pc: &mut u64,
+    step: u64,
+    fcsr: &mut u32,
+) -> CsrOutcome {
     let rd = decode::rd(raw);
     let rs1 = decode::rs1(raw);
     let f3 = decode::funct3(raw);
     let csr = (raw >> 20) & 0xFFF;
+    let Some(do_write) = csr_write_requested(f3, rs1) else {
+        return CsrOutcome::Illegal;
+    };
+
+    if do_write && is_read_only_csr(csr) {
+        return CsrOutcome::Illegal;
+    }
 
     let old_val: u64 = match csr {
         0x001 => (*fcsr & 0x1F) as u64,
@@ -36,12 +68,6 @@ pub(super) fn exec_csr(x: &mut [u64; 32], raw: u32, pc: &mut u64, step: u64, fcs
         _ => old_val,
     };
 
-    let do_write = match f3 {
-        1 | 5 => true,
-        2 | 3 | 6 | 7 => rs1 != 0,
-        _ => false,
-    };
-
     if do_write {
         match csr {
             0x001 => *fcsr = (*fcsr & !0x1F) | (new_val as u32 & 0x1F),
@@ -55,4 +81,5 @@ pub(super) fn exec_csr(x: &mut [u64; 32], raw: u32, pc: &mut u64, step: u64, fcs
         x[rd] = old_val;
     }
     *pc += step;
+    CsrOutcome::Advance
 }
