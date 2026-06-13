@@ -275,6 +275,48 @@ unsafe fn write_thread_record(record: *mut ThreadRecord, value: ThreadRecord) {
     unsafe { core::ptr::write_unaligned(record, value) };
 }
 
+unsafe fn write_thread_record_state(record: *mut ThreadRecord, state: i32) {
+    unsafe { core::ptr::write_unaligned(core::ptr::addr_of_mut!((*record).state), state) };
+}
+
+unsafe fn write_thread_record_blocked_addr(record: *mut ThreadRecord, blocked_addr: u64) {
+    unsafe {
+        core::ptr::write_unaligned(
+            core::ptr::addr_of_mut!((*record).blocked_addr),
+            blocked_addr,
+        )
+    };
+}
+
+unsafe fn write_thread_record_clear_child_tid(record: *mut ThreadRecord, clear_child_tid: u64) {
+    unsafe {
+        core::ptr::write_unaligned(
+            core::ptr::addr_of_mut!((*record).clear_child_tid),
+            clear_child_tid,
+        )
+    };
+}
+
+unsafe fn mark_thread_record_blocked_futex(
+    record: *mut ThreadRecord,
+    clear_child_tid: u64,
+    blocked_addr: u64,
+) {
+    unsafe {
+        write_thread_record_clear_child_tid(record, clear_child_tid);
+        write_thread_record_blocked_addr(record, blocked_addr);
+        write_thread_record_state(record, THREAD_BLOCKED_FUTEX);
+    }
+}
+
+unsafe fn mark_thread_record_running_from_futex(record: *mut ThreadRecord, clear_child_tid: u64) {
+    unsafe {
+        write_thread_record_state(record, THREAD_RUNNING);
+        write_thread_record_blocked_addr(record, 0);
+        write_thread_record_clear_child_tid(record, clear_child_tid);
+    }
+}
+
 fn thread_state_from_record_ptr(thread_ptr: u32) -> Option<*mut ThreadState> {
     if thread_ptr == 0 {
         return None;
@@ -350,8 +392,8 @@ fn wake_futex_waiters_by_process_ptr(
             if (waiter_bitset & wake_bitset) == 0 {
                 continue;
             }
-            record.state = THREAD_RUNNING;
-            record.blocked_addr = 0;
+            write_thread_record_state(record, THREAD_RUNNING);
+            write_thread_record_blocked_addr(record, 0);
             woken += 1;
         }
         woken
@@ -1186,11 +1228,7 @@ pub fn sys_futex(
             }
             unsafe {
                 if let Some(record) = thread_record_ptr(base, vm.process_ptr, vm.tid) {
-                    let mut updated = read_thread_record(record);
-                    updated.state = THREAD_BLOCKED_FUTEX;
-                    updated.blocked_addr = addr;
-                    updated.clear_child_tid = vm.clear_child_tid;
-                    write_thread_record(record, updated);
+                    mark_thread_record_blocked_futex(record, vm.clear_child_tid, addr);
                 }
             }
             vm.futex_wait_addr = addr;
@@ -1315,12 +1353,9 @@ pub fn resume_futex_wait(vm: &mut ThreadState, base: u32) {
 pub fn resume_futex_wait_result(vm: &mut ThreadState, base: u32, result: i64) {
     unsafe {
         if let Some(record) = thread_record_ptr(base, vm.process_ptr, vm.tid) {
-            let mut updated = read_thread_record(record);
-            if updated.state == THREAD_BLOCKED_FUTEX {
-                updated.state = THREAD_RUNNING;
-                updated.blocked_addr = 0;
-                updated.clear_child_tid = vm.clear_child_tid;
-                write_thread_record(record, updated);
+            let record_state = read_thread_record(record).state;
+            if record_state == THREAD_BLOCKED_FUTEX {
+                mark_thread_record_running_from_futex(record, vm.clear_child_tid);
             }
         }
     }
