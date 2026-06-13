@@ -1434,6 +1434,75 @@ fn thread_step_mprotect_materialization_preserves_parent_context_in_multithreade
 }
 
 #[test]
+fn thread_step_store_after_mprotect_materialization_uses_updated_vma() {
+    let mut t = TestVm::new();
+    let code = t.sys_mmap(
+        0x10000,
+        0x1000,
+        PROT_READ | PROT_WRITE,
+        MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS,
+        -1,
+        0,
+    );
+    assert_eq!(code, 0x10000);
+
+    let reserve_addr = 0x3e7fe000u64;
+    let reserve_len = 0x800000u64;
+    let target = reserve_addr + reserve_len - 0x2cc;
+    t.vm.guest_memory_policy_limit = 0x4000_0000;
+    let reserved = t.sys_mmap(
+        reserve_addr,
+        reserve_len,
+        PROT_NONE,
+        MAP_ANONYMOUS | MAP_PRIVATE | MAP_FIXED | MAP_NORESERVE,
+        -1,
+        0,
+    );
+    assert_eq!(reserved as u64, reserve_addr);
+
+    unsafe {
+        // ecall: mprotect(reserve_addr, reserve_len, PROT_READ | PROT_WRITE)
+        tidemark_kernel::guest_mem::write_u32(t.base, 0x10000, 0x0000_0073);
+        // sw t0, 0(s11)
+        tidemark_kernel::guest_mem::write_u32(t.base, 0x10004, encode_s(0x23, 2, 27, 5, 0));
+        // jalr zero, ra, 0
+        tidemark_kernel::guest_mem::write_u32(t.base, 0x10008, 0x0000_8067);
+        // c.nop
+        tidemark_kernel::guest_mem::write_u16(t.base, 0x1000c, 0x0001);
+    }
+
+    assert_eq!(
+        t.sys_mprotect(code as u64, PAGE_SIZE, PROT_READ | PROT_EXEC),
+        0
+    );
+
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    ps.thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
+
+    t.vm.pc = 0x10000;
+    t.vm.x[1] = 0x1000c;
+    t.vm.x[5] = 0x1234_5678;
+    t.vm.x[10] = reserve_addr;
+    t.vm.x[11] = reserve_len;
+    t.vm.x[12] = (PROT_READ | PROT_WRITE) as u64;
+    t.vm.x[17] = SYS_MPROTECT;
+    t.vm.x[27] = target;
+    t.vm.status = STATUS_OK;
+    t.vm.sig_mask = 0;
+    t.vm.sig_pending = 0;
+
+    let remaining = tidemark_kernel::abi::thread_step(&mut t.vm as *mut _ as u32, 3);
+    assert_eq!(remaining, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, 0x1000c);
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, target) },
+        0x1234_5678
+    );
+}
+
+#[test]
 fn multithreaded_flush_icache_reexec_preserves_parent_context() {
     let mut t = TestVm::new();
     let code = t.sys_mmap(
