@@ -1150,7 +1150,22 @@ pub fn sys_mmap(
         addr
     } else if is_sparse_anon_reservation {
         let floor = mmap_min_floor(s);
-        let mut hole = find_high_hole(s, len, floor, nonfixed_limit);
+        let mut hole = if vm.guest_memory_policy_limit != 0 {
+            find_high_hole(
+                s,
+                len,
+                floor,
+                vm.guest_memory_policy_limit
+                    .min(nonfixed_prot_none_reservation_limit(max_guest_addr_limit(
+                        base,
+                    ))),
+            )
+        } else {
+            0
+        };
+        if hole == 0 {
+            hole = find_high_hole(s, len, floor, nonfixed_limit);
+        }
         if hole == 0 {
             let fallback_limit = nonfixed_prot_none_reservation_limit(max_guest_addr_limit(base));
             if fallback_limit > nonfixed_limit {

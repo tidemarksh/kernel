@@ -1064,6 +1064,123 @@ fn prot_none_reservations_stay_within_linux_shaped_topdown_window() {
 }
 
 #[test]
+fn sparse_prot_none_reservation_prefers_available_policy_window() {
+    let mut t = TestVm::new();
+    let guest_limit = 512 * 1024 * 1024u64;
+    let len = 128 * 1024 * 1024u64;
+    t.vm.guest_memory_policy_limit = guest_limit;
+
+    let addr = t.sys_mmap(
+        0,
+        len,
+        PROT_NONE,
+        MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE,
+        -1,
+        0,
+    );
+
+    assert!(addr > 0, "addr={addr}");
+    assert_eq!(
+        addr as u64 + len,
+        guest_limit,
+        "addr=0x{:x} len=0x{:x} guest_limit=0x{:x}",
+        addr,
+        len,
+        guest_limit,
+    );
+}
+
+#[test]
+fn sequential_sparse_stack_materialization_keeps_top_addresses_permitted() {
+    let mut t = TestVm::new();
+    t.vm.guest_memory_policy_limit = 256 * 1024 * 1024u64;
+    let reserve_len = 0x801000u64;
+    let stack_len = 0x800000u64;
+    let map_stack = 0x20000u64;
+
+    for index in 0..4 {
+        let reserve = t.sys_mmap(
+            0,
+            reserve_len,
+            PROT_NONE,
+            MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE | map_stack,
+            -1,
+            0,
+        );
+        assert!(reserve > 0, "reserve[{index}]={reserve}");
+
+        let stack_start = reserve as u64 + PAGE_SIZE;
+        let stack_end = stack_start + stack_len;
+        assert_eq!(
+            t.sys_mprotect(stack_start, stack_len, PROT_READ | PROT_WRITE),
+            0,
+            "mprotect stack[{index}] start=0x{stack_start:x} end=0x{stack_end:x}",
+        );
+
+        let probe = stack_end - 0xf18;
+        assert!(
+            memory::guest_range_permitted(&t.vm, t.base, probe, 8, PROT_READ | PROT_WRITE),
+            "probe stack[{index}] 0x{probe:x} in 0x{stack_start:x}-0x{stack_end:x}",
+        );
+    }
+}
+
+#[test]
+fn nonfixed_small_stack_reservation_does_not_overlap_existing_stack_vma() {
+    let mut t = TestVm::new();
+    t.vm.guest_memory_policy_limit = 1024 * 1024 * 1024u64;
+    let map_stack = 0x20000u64;
+
+    for index in 0..5 {
+        let reserve = t.sys_mmap(
+            0,
+            0x801000,
+            PROT_NONE,
+            MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE | map_stack,
+            -1,
+            0,
+        );
+        assert!(reserve > 0, "large reserve[{index}]={reserve}");
+        let stack_start = reserve as u64 + PAGE_SIZE;
+        assert_eq!(
+            t.sys_mprotect(stack_start, 0x800000, PROT_READ | PROT_WRITE),
+            0,
+            "large stack[{index}] start=0x{stack_start:x}",
+        );
+    }
+
+    let small_reserve = t.sys_mmap(
+        0,
+        0x9000,
+        PROT_NONE,
+        MAP_ANONYMOUS | MAP_PRIVATE | MAP_NORESERVE | map_stack,
+        -1,
+        0,
+    );
+    assert!(small_reserve > 0, "small reserve={small_reserve}");
+    let small_stack_start = small_reserve as u64 + PAGE_SIZE;
+    assert_eq!(
+        t.sys_mprotect(small_stack_start, 0x8000, PROT_READ | PROT_WRITE),
+        0,
+        "small stack start=0x{small_stack_start:x}",
+    );
+
+    let vma_len = tidemark_kernel::harness::memory::debug_vma_len();
+    for left in 0..vma_len {
+        let left_start = tidemark_kernel::harness::memory::debug_vma_start(left);
+        let left_end = tidemark_kernel::harness::memory::debug_vma_end(left);
+        for right in left + 1..vma_len {
+            let right_start = tidemark_kernel::harness::memory::debug_vma_start(right);
+            let right_end = tidemark_kernel::harness::memory::debug_vma_end(right);
+            assert!(
+                left_end <= right_start || right_end <= left_start,
+                "overlapping VMAs: {left}=0x{left_start:x}-0x{left_end:x}, {right}=0x{right_start:x}-0x{right_end:x}",
+            );
+        }
+    }
+}
+
+#[test]
 fn sparse_prot_none_reservation_falls_back_above_crowded_policy_window() {
     let mut t = TestVm::new();
     let guest_limit = 512 * 1024 * 1024u64;
