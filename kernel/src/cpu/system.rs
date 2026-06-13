@@ -146,7 +146,7 @@ pub(super) unsafe fn exec_system(
 pub(super) unsafe fn handle_illegal_instruction(
     vm: &mut ThreadState,
     raw: u32,
-    step: u64,
+    _step: u64,
     instr_pc: u64,
     base: u32,
     x: &mut [u64; 32],
@@ -162,7 +162,7 @@ pub(super) unsafe fn handle_illegal_instruction(
     vm.f = *f;
     vm.pc = *pc;
     vm.fcsr = *fcsr;
-    crate::syscall::signal::queue_sigill(vm, *pc);
+    crate::syscall::signal::queue_sigill(vm, *pc, raw);
     crate::syscall::signal::check_pending(vm, base);
     *x = vm.x;
     *f = vm.f;
@@ -182,6 +182,5 @@ pub(super) unsafe fn handle_illegal_instruction(
     if vm.status != abi::STATUS_OK {
         return StepOutcome::Return(remaining);
     }
-    *pc += step;
     StepOutcome::Restart
 }

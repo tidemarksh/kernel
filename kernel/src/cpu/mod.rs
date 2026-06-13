@@ -266,7 +266,7 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
                 vm.f = *f;
                 vm.pc = *pc;
                 vm.fcsr = *fcsr;
-                crate::syscall::signal::queue_sigill(vm, *pc);
+                crate::syscall::signal::queue_sigill(vm, *pc, raw16 as u32);
                 crate::syscall::signal::check_pending(vm, base);
                 *x = vm.x;
                 *f = vm.f;

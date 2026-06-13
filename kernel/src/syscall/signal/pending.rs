@@ -383,7 +383,7 @@ pub fn send_signal_to_tid(vm: &mut ThreadState, base: u32, tid: i32, sig: i32) -
     ESRCH
 }
 
-pub fn queue_sigill(vm: &mut ThreadState, pc: u64) {
+pub fn queue_sigill(vm: &mut ThreadState, pc: u64, _raw: u32) {
     vm.fault_pc = pc;
     vm.fault_addr = pc;
     vm.fault_kind = FAULT_KIND_ILLEGAL_INSTRUCTION;

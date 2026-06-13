@@ -158,3 +158,41 @@ fn thread_step_sync_fault_handler_entry_preserves_s11() {
     assert_eq!(signal_harness::last_signal_delivery().2, 0x2);
     assert_eq!(signal_harness::last_signal_delivery().7, orig_s11);
 }
+
+#[test]
+fn thread_step_caught_sigill_enters_handler_without_advancing_pc() {
+    let mut t = TestVm::new();
+    let code_addr = t.sys_mmap(
+        0,
+        4096,
+        abi::PROT_READ | abi::PROT_WRITE | abi::PROT_EXEC,
+        abi::MAP_ANONYMOUS | abi::MAP_PRIVATE,
+        -1,
+        0,
+    ) as u64;
+    assert!(code_addr > 0);
+
+    let handler = code_addr + 0x100;
+    let act_addr = t.scratch;
+    write_sigaction(t.base, act_addr, handler, SA_SIGINFO, 0);
+    assert_eq!(
+        signal::sys_rt_sigaction(&mut t.vm, t.base, abi::SIGILL as u64, act_addr, 0, 8),
+        0
+    );
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, code_addr, 0x0000_007f);
+    }
+    t.vm.pc = code_addr;
+    t.vm.x[2] = code_addr + 0x1000;
+    t.vm.status = STATUS_OK;
+    t.vm.sig_mask = 0;
+    t.vm.sig_pending = 0;
+
+    let remaining = tidemark_kernel::abi::thread_step(&mut t.vm as *mut ThreadState as u32, 1);
+
+    assert_eq!(remaining, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, handler);
+    assert_eq!(t.vm.x[10], abi::SIGILL as u64);
+}
