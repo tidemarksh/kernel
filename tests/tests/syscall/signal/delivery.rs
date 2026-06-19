@@ -1,5 +1,7 @@
 use super::support::*;
 
+const SIGUSR1: i32 = 10;
+
 #[test]
 fn send_signal_to_tid_targets_requested_thread() {
     let mut t = TestVm::new();
@@ -26,6 +28,78 @@ fn send_signal_to_tid_targets_requested_thread() {
     assert_eq!(child.sig_pending, 0);
     assert!(signal::check_pending(child, t.base));
     assert_eq!(child.sig_pending & (1u64 << (SIGURG - 1)), 0);
+    let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+    let record = &ps.threads[(child_tid - 1) as usize];
+    assert_eq!(record.pending_sigset, 0);
+    assert_eq!(record.pending_siginfo_code, 0);
+}
+
+#[test]
+fn tgkill_caught_handler_delivery_enters_target_thread() {
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+
+    let handler = 0x88_000;
+    let child_start_pc = 0x77_000;
+    let child_start_sp = 0x9fff0;
+    let act_addr = t.scratch;
+    write_sigaction(t.base, act_addr, handler, SA_SIGINFO, 0);
+    assert_eq!(
+        signal::sys_rt_sigaction(&mut t.vm, t.base, SIGUSR1 as u64, act_addr, 0, 8),
+        0
+    );
+
+    let flags = (CLONE_VM | CLONE_THREAD | CLONE_SIGHAND | CLONE_FS) as u64;
+    let child_tid =
+        thread_impl::sys_clone(&mut t.vm, t.base, flags, child_start_sp, 0, 0, 0) as i32;
+    assert!(child_tid > 0);
+
+    let child_ptr = thread_impl::spawn_from_clone(&t.vm as *const ThreadState as u32, t.base);
+    assert_ne!(child_ptr, 0);
+
+    let parent_pc = t.vm.pc;
+    let child = unsafe { &mut *(child_ptr as *mut ThreadState) };
+    child.pc = child_start_pc;
+    child.x[2] = child_start_sp;
+    child.sig_mask = 0;
+    child.sig_pending = 0;
+
+    assert_eq!(
+        signal::send_signal_to_tid(&mut t.vm, t.base, child_tid, SIGUSR1),
+        0
+    );
+    assert_eq!(t.vm.pc, parent_pc);
+    assert_eq!(t.vm.sig_pending, 0);
+    assert_eq!(child.pc, child_start_pc);
+    assert_eq!(child.sig_pending, 0);
+
+    assert!(signal::check_pending(child, t.base));
+    assert_eq!(child.pc, handler);
+    assert_eq!(child.x[10], SIGUSR1 as u64);
+
+    let frame_base = child.x[2];
+    let siginfo_base = frame_base + SIGFRAME_OFF_SIGINFO;
+    let ucontext_base = frame_base + SIGFRAME_OFF_UCONTEXT;
+    assert_eq!(child.x[11], siginfo_base);
+    assert_eq!(child.x[12], ucontext_base);
+    unsafe {
+        assert_eq!(
+            tidemark_kernel::guest_mem::read_u32(t.base, siginfo_base + SIGINFO_OFF_SIGNO),
+            SIGUSR1 as u32
+        );
+        assert_eq!(
+            tidemark_kernel::guest_mem::read_u32(t.base, siginfo_base + SIGINFO_OFF_CODE),
+            SI_TKILL as u32
+        );
+        assert_eq!(
+            tidemark_kernel::guest_mem::read_u64(
+                t.base,
+                ucontext_base + UCONTEXT_OFF_MCONTEXT + MCONTEXT_OFF_REGS
+            ),
+            child_start_pc
+        );
+    }
+
     let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
     let record = &ps.threads[(child_tid - 1) as usize];
     assert_eq!(record.pending_sigset, 0);
