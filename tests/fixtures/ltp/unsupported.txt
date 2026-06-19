@@ -996,7 +996,6 @@ testcases/kernel/syscalls/shutdown/shutdown01.c requires AF_UNIX stream server/c
 testcases/kernel/syscalls/shutdown/shutdown02.c requires shutdown(2) EBADF versus ENOTSOCK differentiation and ENOTCONN on unconnected sockets; current fd lookup returns ENOTSOCK for invalid fds before that matrix
 testcases/kernel/syscalls/sigaction/sigaction01.c libc sigaction wrapper row requires SA_RESETHAND/SA_SIGINFO mask introspection and pthread_kill handler delivery beyond the current rt_sigaction conform subset
 testcases/kernel/syscalls/sigaction/sigaction02.c libc sigaction wrapper row mixes EINVAL catchability checks with invalid act/oact EFAULT cases that current rt_sigaction does not pre-validate
-testcases/kernel/syscalls/sigaltstack/sigaltstack01.c passes targeted validation, but the expanded signal batch made the full LTP gate run out of memory before existing writev coverage completed
 testcases/kernel/syscalls/signalfd/signalfd01.c passes targeted validation, but the expanded signal batch made the full LTP gate run out of memory before existing writev coverage completed
 testcases/kernel/syscalls/signalfd/signalfd02.c passes targeted validation, but the expanded signal batch made the full LTP gate run out of memory before existing writev coverage completed
 testcases/kernel/syscalls/sighold/sighold02.c XSI sighold wrapper row requires holding and delivering nearly every catchable signal across fork/checkpoint synchronization outside the current rt_sigprocmask conform subset

@@ -145,6 +145,7 @@ testcases/kernel/syscalls/set_robust_list/set_robust_list01.c verified set_robus
 testcases/kernel/syscalls/set_tid_address/set_tid_address01.c verified set_tid_address(2) returns the thread-group leader tid for the main thread
 testcases/kernel/syscalls/setsid/setsid01.c verified setsid(2) rejects callers that are already process-group leaders after nested setpgid choreography
 testcases/kernel/syscalls/rt_sigaction/rt_sigaction03.c verified rt_sigaction(2) rejects invalid sigsetsize with EINVAL across realtime signals
+testcases/kernel/syscalls/sigaltstack/sigaltstack01.c verified SA_ONSTACK delivery records a handler stack address inside the registered alternate signal stack while the main-stack handler address remains outside it
 testcases/kernel/syscalls/sigaltstack/sigaltstack02.c verified sigaltstack(2) reports EINVAL for invalid flags and ENOMEM for undersized alternate stacks
 testcases/kernel/syscalls/signalfd4/signalfd4_01.c verified signalfd4(2) SFD_CLOEXEC flag handling through F_GETFD
 testcases/kernel/syscalls/signalfd4/signalfd4_02.c verified signalfd4(2) SFD_NONBLOCK flag handling through F_GETFL

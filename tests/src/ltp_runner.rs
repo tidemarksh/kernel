@@ -1602,6 +1602,7 @@ fn spawn_drive_mode_for_ltp(binary: &str) -> Result<SpawnDriveMode, String> {
         | "setreuid06"
         | "setsid01"
         | "rt_sigaction03"
+        | "sigaltstack01"
         | "sigaltstack02"
         | "signalfd4_01"
         | "signalfd4_02"

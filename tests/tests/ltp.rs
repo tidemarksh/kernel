@@ -220,6 +220,7 @@ ltp_case!(ltp_setreuid04);
 ltp_case!(ltp_setreuid06);
 ltp_case!(ltp_setsid01);
 ltp_case!(ltp_rt_sigaction03);
+ltp_case!(ltp_sigaltstack01);
 ltp_case!(ltp_sigaltstack02);
 ltp_case!(ltp_signalfd4_01);
 ltp_case!(ltp_signalfd4_02);
