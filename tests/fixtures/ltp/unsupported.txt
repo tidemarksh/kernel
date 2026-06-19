@@ -1091,7 +1091,7 @@ testcases/kernel/syscalls/syslog/syslog11.c not yet enabled in current syscall-c
 testcases/kernel/syscalls/syslog/syslog12.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/tee/tee01.c not yet enabled in current syscall-conformance profile
 testcases/kernel/syscalls/tee/tee02.c not yet enabled in current syscall-conformance profile
-testcases/kernel/syscalls/tgkill/tgkill01.c tgkill dispatch exists, but the specific-thread caught-handler delivery path exercised by this LTP case still hangs when targeting parallel guest pthreads
+testcases/kernel/syscalls/tgkill/tgkill01.c local kernel contract covers specific-thread caught-handler delivery, but the upstream LTP case still hangs in its pthread/checkpoint process-tree orchestration when targeting parallel guest pthreads
 testcases/kernel/syscalls/tgkill/tgkill02.c RLIMIT_SIGPENDING defaults and updates are covered, but this kernel tracks pending signals as bitsets rather than queued real-time signals, so the EAGAIN saturation path exercised by this LTP case is not implemented
 testcases/kernel/syscalls/time/time01.c uses the time(2) libc wrapper/non-dispatched raw time syscall and is excluded until a supported lowering to production clock_gettime is established
 testcases/kernel/syscalls/timer_create/timer_create01.c not yet enabled in current syscall-conformance profile
