@@ -13,6 +13,7 @@ pub(super) const AT_REMOVEDIR: u64 = 0x200;
 pub(super) const AT_EMPTY_PATH: u64 = 0x1000;
 pub(super) const S_IFIFO: u32 = 0o010000;
 pub(super) const TCGETS: u64 = 0x5401;
+pub(super) const TCGETS2: u64 = 0x802c542a;
 pub(super) const TIOCGWINSZ: u64 = 0x5413;
 pub(super) const SYNC_EFFECT_PIPE_STATE: u32 = 1 << 0;
 pub(super) const SYNC_EFFECT_FORK_SHARED_OFD_STATE: u32 = 1 << 6;

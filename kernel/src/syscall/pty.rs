@@ -20,6 +20,7 @@ const TCGETS: u64 = 0x5401;
 const TCSETS: u64 = 0x5402;
 const TCSETSW: u64 = 0x5403;
 const TCSETSF: u64 = 0x5404;
+const TCGETS2: u64 = 0x802c542a;
 const TIOCSCTTY: u64 = 0x540E;
 const TIOCGPGRP: u64 = 0x540F;
 const TIOCSPGRP: u64 = 0x5410;
@@ -36,6 +37,7 @@ const ICRNL: u32 = 0x100;
 const OPOST: u32 = 0x01;
 const ONLCR: u32 = 0x00004;
 const B38400: u32 = 0x0000000f;
+const DEFAULT_TERM_SPEED: u32 = 38_400;
 const CS8: u32 = 0x00000030;
 const CREAD: u32 = 0x00000080;
 const HUPCL: u32 = 0x00000400;
@@ -695,6 +697,14 @@ fn write_termios(base: u32, addr: u64, slot: &PtySlot) {
     }
 }
 
+fn write_termios2(base: u32, addr: u64, slot: &PtySlot) {
+    write_termios(base, addr, slot);
+    unsafe {
+        guest_mem::write_u32(base, addr + 36, DEFAULT_TERM_SPEED);
+        guest_mem::write_u32(base, addr + 40, DEFAULT_TERM_SPEED);
+    }
+}
+
 fn read_termios(base: u32, addr: u64, slot: &mut PtySlot) {
     unsafe {
         slot.c_iflag = guest_mem::read_u32(base, addr);
@@ -729,6 +739,10 @@ fn ioctl_pty_slave(vm: &mut ThreadState, base: u32, pty_idx: u32, request: u64, 
     match request {
         TCGETS => {
             write_termios(base, arg, slot);
+            0
+        }
+        TCGETS2 => {
+            write_termios2(base, arg, slot);
             0
         }
         TCSETS | TCSETSW | TCSETSF => {

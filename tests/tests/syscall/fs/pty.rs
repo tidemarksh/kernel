@@ -37,6 +37,31 @@ fn stdio_fds_report_tty_termios_and_winsize() {
 }
 
 #[test]
+fn stdio_fds_report_tty_termios2() {
+    let mut t = TestVm::new();
+    let termios_addr = t.scratch + 0x3a00;
+
+    assert_eq!(
+        tidemark_kernel::syscall::pty::sys_ioctl(&mut t.vm, t.base, 0, TCGETS2, termios_addr),
+        0
+    );
+
+    let iflag = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, termios_addr) };
+    let line = unsafe { tidemark_kernel::guest_mem::read_u8(t.base, termios_addr + 16) };
+    let vintr = unsafe { tidemark_kernel::guest_mem::read_u8(t.base, termios_addr + 17) };
+    let verase = unsafe { tidemark_kernel::guest_mem::read_u8(t.base, termios_addr + 19) };
+    let ispeed = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, termios_addr + 36) };
+    let ospeed = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, termios_addr + 40) };
+
+    assert_ne!(iflag, 0);
+    assert_eq!(line, 0);
+    assert_eq!(vintr, 3);
+    assert_eq!(verase, 127);
+    assert_eq!(ispeed, 38_400);
+    assert_eq!(ospeed, 38_400);
+}
+
+#[test]
 fn dev_tty_opens_controlling_pty_slave() {
     let mut t = TestVm::new();
     let fd = t.sys_openat(b"/dev/tty", O_RDWR);
