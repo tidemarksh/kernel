@@ -29,7 +29,7 @@ fn block_fetch_permitted(vm: Option<&ThreadState>, guest_base: u32, pc: u64, wid
 
 #[inline(always)]
 const fn block_exec_supports(op_id: u8) -> bool {
-    matches!(op_id, 1..=11 | 13 | 22 | 23)
+    matches!(op_id, 1..=11 | 13 | 15 | 16 | 22 | 23)
 }
 
 pub(crate) fn op_id_for_raw(raw: u32) -> u8 {
@@ -137,7 +137,11 @@ impl PackedOp {
     }
     #[inline(always)]
     pub fn step(self) -> u64 {
-        if (self.packed >> 36) & 1 != 0 { 4 } else { 2 }
+        if (self.packed >> 36) & 1 != 0 {
+            4
+        } else {
+            2
+        }
     }
     #[inline(always)]
     pub fn imm(self) -> i32 {

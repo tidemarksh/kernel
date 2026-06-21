@@ -8,7 +8,7 @@
 //! direct-mapped block cache.
 
 use super::block_cache::BlockEntry;
-use super::fault::{AccessOutcome, ensure_guest_access};
+use super::fault::{ensure_guest_access, AccessOutcome};
 use super::integer::{div_i64, divu_64, mulh, mulhsu, mulhu, rem_i64, remu_64};
 use crate::abi;
 use crate::guest_mem;
@@ -402,7 +402,11 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                     }
                     7 => {
                         let (u1, u2) = (v1 as u32, v2 as u32);
-                        if u2 == 0 { v1 } else { (u1 % u2) as i32 }
+                        if u2 == 0 {
+                            v1
+                        } else {
+                            (u1 % u2) as i32
+                        }
                     }
                     _ => 0,
                 };
@@ -476,6 +480,67 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                     1 => unsafe { guest_mem::write_u16_unchecked(base, addr, x[r2] as u16) },
                     2 => unsafe { guest_mem::write_u32_unchecked(base, addr, x[r2] as u32) },
                     3 => unsafe { guest_mem::write_u64_unchecked(base, addr, x[r2]) },
+                    _ => {}
+                }
+                crate::tracepoints::clear_guest_write_context();
+            }
+            15 => {
+                let addr = (x[r1] as i64 + imm) as u64;
+                let width = match f3 {
+                    2 => 4,
+                    3 => 8,
+                    _ => 0,
+                };
+                *pc = cur_pc;
+                match unsafe {
+                    ensure_guest_access(vm, x, f, fcsr, pc, base, addr, width, abi::PROT_READ)
+                } {
+                    AccessOutcome::Ok => {}
+                    AccessOutcome::Restart => {
+                        *remaining += block_budget_refund_after(len, index);
+                        return BlockOutcome::Restart;
+                    }
+                    AccessOutcome::Return => {
+                        *remaining += block_budget_refund_after(len, index);
+                        return BlockOutcome::Return;
+                    }
+                }
+                match f3 {
+                    2 => {
+                        f[rd] = 0xFFFF_FFFF_0000_0000
+                            | unsafe { guest_mem::read_u32_seqlock(base, addr) as u64 };
+                    }
+                    3 => {
+                        f[rd] = unsafe { guest_mem::read_u64_seqlock(base, addr) };
+                    }
+                    _ => {}
+                }
+            }
+            16 => {
+                let addr = (x[r1] as i64 + imm) as u64;
+                let width = match f3 {
+                    2 => 4,
+                    3 => 8,
+                    _ => 0,
+                };
+                *pc = cur_pc;
+                match unsafe {
+                    ensure_guest_access(vm, x, f, fcsr, pc, base, addr, width, abi::PROT_WRITE)
+                } {
+                    AccessOutcome::Ok => {}
+                    AccessOutcome::Restart => {
+                        *remaining += block_budget_refund_after(len, index);
+                        return BlockOutcome::Restart;
+                    }
+                    AccessOutcome::Return => {
+                        *remaining += block_budget_refund_after(len, index);
+                        return BlockOutcome::Return;
+                    }
+                }
+                crate::tracepoints::set_guest_write_context(cur_pc, vm.tid);
+                match f3 {
+                    2 => unsafe { guest_mem::write_u32(base, addr, f[r2] as u32) },
+                    3 => unsafe { guest_mem::write_u64(base, addr, f[r2]) },
                     _ => {}
                 }
                 crate::tracepoints::clear_guest_write_context();
