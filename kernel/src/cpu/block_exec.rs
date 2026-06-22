@@ -9,7 +9,9 @@
 
 use super::atomic::exec_amo;
 use super::block_cache::BlockEntry;
+use super::decode;
 use super::fault::{AccessOutcome, ensure_guest_access};
+use super::fp::{exec_fma, exec_op_fp};
 use super::integer::{div_i64, divu_64, mulh, mulhsu, mulhu, rem_i64, remu_64};
 use crate::abi;
 use crate::guest_mem;
@@ -574,6 +576,20 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                     _ => {}
                 }
                 crate::tracepoints::clear_guest_write_context();
+            }
+            17 => {
+                let mut op_pc = cur_pc;
+                unsafe { exec_op_fp(x, f, op.raw(), &mut op_pc, step, fcsr) };
+            }
+            18..=21 => {
+                let opcode = match op_id {
+                    18 => decode::OP_FMADD,
+                    19 => decode::OP_FMSUB,
+                    20 => decode::OP_FNMSUB,
+                    _ => decode::OP_FNMADD,
+                };
+                let mut op_pc = cur_pc;
+                unsafe { exec_fma(f, op.raw(), opcode, &mut op_pc, step, fcsr) };
             }
             7 => {
                 if rd != 0 {

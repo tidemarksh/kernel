@@ -39,6 +39,14 @@ fn encode_amo(funct5: u32, rd: u32, rs1: u32, rs2: u32, funct3: u32) -> u32 {
     (funct5 << 27) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | 0x2f
 }
 
+fn encode_op_fp(funct7: u32, rd: u32, rs1: u32, rs2: u32, funct3: u32) -> u32 {
+    (funct7 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | 0x53
+}
+
+fn encode_fma(opcode: u32, rd: u32, rs1: u32, rs2: u32, rs3: u32, fmt: u32, rm: u32) -> u32 {
+    (rs3 << 27) | (fmt << 25) | (rs2 << 20) | (rs1 << 15) | (rm << 12) | (rd << 7) | opcode
+}
+
 #[test]
 fn packed_op_round_trip() {
     let op = PackedOp::new(5, 10, 15, 20, 3, true, 4, -42);
@@ -225,6 +233,126 @@ fn checked_block_cache_executes_amo_block() {
     assert_eq!(with_cache.3, 0xffff_ffff_8000_0001);
     assert_eq!(with_cache.4, 15);
     assert_eq!(with_cache.5, 0x1234_5678);
+}
+
+#[test]
+fn checked_block_cache_executes_fp_arithmetic_block() {
+    fn run(use_cache: bool) -> (i32, u64, u64, u64, u64, u32) {
+        let mut t = TestVm::new();
+        let code_addr = mmap_exec(&mut t, 4096);
+
+        unsafe {
+            guest_mem::write_u32(t.base, code_addr, encode_op_fp(0x01, 12, 10, 11, 0)); // fadd.d fa2,fa0,fa1
+            guest_mem::write_u32(t.base, code_addr + 4, encode_op_fp(0x09, 13, 10, 11, 0)); // fmul.d fa3,fa0,fa1
+            guest_mem::write_u32(t.base, code_addr + 8, encode_op_fp(0x51, 6, 12, 13, 2)); // feq.d t1,fa2,fa3
+        }
+
+        t.vm.pc = code_addr;
+        t.vm.f[10] = 1.5f64.to_bits();
+        t.vm.f[11] = 2.5f64.to_bits();
+        t.vm.fcsr = 0;
+        t.vm.status = abi::STATUS_OK;
+
+        if use_cache {
+            let mut cache = alloc_block_cache();
+            {
+                let blk = unsafe { cache.get_or_build_checked(&t.vm, code_addr, t.base) }
+                    .expect("checked block cache should build an FP arithmetic block");
+                assert_eq!(blk.len, 3);
+                assert_eq!(blk.ops[0].op_id(), 17);
+                assert_eq!(blk.ops[1].op_id(), 17);
+                assert_eq!(blk.ops[2].op_id(), 17);
+            }
+            unsafe {
+                tidemark_kernel::cpu::exec_at_base(
+                    &mut t.vm,
+                    3,
+                    t.base,
+                    Some(&mut cache),
+                    None,
+                    None,
+                    None,
+                );
+            }
+        } else {
+            unsafe {
+                tidemark_kernel::cpu::exec_at_base(&mut t.vm, 3, t.base, None, None, None, None);
+            }
+        }
+
+        (
+            t.vm.status,
+            t.vm.pc - code_addr,
+            t.vm.f[12],
+            t.vm.f[13],
+            t.vm.x[6],
+            t.vm.fcsr,
+        )
+    }
+
+    let no_cache = run(false);
+    let with_cache = run(true);
+    assert_eq!(with_cache, no_cache);
+    assert_eq!(with_cache.0, abi::STATUS_OK);
+    assert_eq!(with_cache.1, 12);
+    assert_eq!(f64::from_bits(with_cache.2), 4.0);
+    assert_eq!(f64::from_bits(with_cache.3), 3.75);
+    assert_eq!(with_cache.4, 0);
+    assert_eq!(with_cache.5, 0);
+}
+
+#[test]
+fn checked_block_cache_executes_fma_block() {
+    fn run(use_cache: bool) -> (i32, u64, u64, u32) {
+        let mut t = TestVm::new();
+        let code_addr = mmap_exec(&mut t, 4096);
+
+        unsafe {
+            guest_mem::write_u32(t.base, code_addr, encode_fma(0x43, 13, 10, 11, 12, 1, 0)); // fmadd.d fa3,fa0,fa1,fa2
+        }
+
+        t.vm.pc = code_addr;
+        t.vm.f[10] = 2.0f64.to_bits();
+        t.vm.f[11] = 3.0f64.to_bits();
+        t.vm.f[12] = 4.0f64.to_bits();
+        t.vm.fcsr = 0;
+        t.vm.status = abi::STATUS_OK;
+
+        if use_cache {
+            let mut cache = alloc_block_cache();
+            {
+                let blk = unsafe { cache.get_or_build_checked(&t.vm, code_addr, t.base) }
+                    .expect("checked block cache should build an FMA block");
+                assert_eq!(blk.len, 1);
+                assert_eq!(blk.ops[0].op_id(), 18);
+            }
+            unsafe {
+                tidemark_kernel::cpu::exec_at_base(
+                    &mut t.vm,
+                    1,
+                    t.base,
+                    Some(&mut cache),
+                    None,
+                    None,
+                    None,
+                );
+            }
+        } else {
+            unsafe {
+                tidemark_kernel::cpu::exec_at_base(&mut t.vm, 1, t.base, None, None, None, None);
+            }
+        }
+
+        (t.vm.status, t.vm.pc - code_addr, t.vm.f[13], t.vm.fcsr)
+    }
+
+    let no_cache = run(false);
+    let with_cache = run(true);
+    assert_eq!(with_cache, no_cache);
+    assert_eq!(with_cache.0, abi::STATUS_OK);
+    assert_eq!(with_cache.1, 4);
+    assert_eq!(f64::from_bits(with_cache.2), 10.0);
+    assert_eq!(with_cache.3, 0);
 }
 
 #[test]
