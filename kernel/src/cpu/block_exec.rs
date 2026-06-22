@@ -7,8 +7,9 @@
 //! This module executes pre-decoded `BlockEntry` values produced by the
 //! direct-mapped block cache.
 
+use super::atomic::exec_amo;
 use super::block_cache::BlockEntry;
-use super::fault::{ensure_guest_access, AccessOutcome};
+use super::fault::{AccessOutcome, ensure_guest_access};
 use super::integer::{div_i64, divu_64, mulh, mulhsu, mulhu, rem_i64, remu_64};
 use crate::abi;
 use crate::guest_mem;
@@ -402,11 +403,7 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                     }
                     7 => {
                         let (u1, u2) = (v1 as u32, v2 as u32);
-                        if u2 == 0 {
-                            v1
-                        } else {
-                            (u1 % u2) as i32
-                        }
+                        if u2 == 0 { v1 } else { (u1 % u2) as i32 }
                     }
                     _ => 0,
                 };
@@ -483,6 +480,39 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                     _ => {}
                 }
                 crate::tracepoints::clear_guest_write_context();
+            }
+            14 => {
+                let addr = x[r1];
+                let width = match f3 {
+                    2 => 4,
+                    3 => 8,
+                    _ => 0,
+                };
+                *pc = cur_pc;
+                match unsafe {
+                    ensure_guest_access(
+                        vm,
+                        x,
+                        f,
+                        fcsr,
+                        pc,
+                        base,
+                        addr,
+                        width,
+                        abi::PROT_READ | abi::PROT_WRITE,
+                    )
+                } {
+                    AccessOutcome::Ok => {}
+                    AccessOutcome::Restart => {
+                        *remaining += block_budget_refund_after(len, index);
+                        return BlockOutcome::Restart;
+                    }
+                    AccessOutcome::Return => {
+                        *remaining += block_budget_refund_after(len, index);
+                        return BlockOutcome::Return;
+                    }
+                }
+                unsafe { exec_amo(vm, x, op.raw(), base, pc, step) };
             }
             15 => {
                 let addr = (x[r1] as i64 + imm) as u64;

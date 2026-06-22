@@ -29,7 +29,7 @@ fn block_fetch_permitted(vm: Option<&ThreadState>, guest_base: u32, pc: u64, wid
 
 #[inline(always)]
 const fn block_exec_supports(op_id: u8) -> bool {
-    matches!(op_id, 1..=11 | 13 | 15 | 16 | 22 | 23)
+    matches!(op_id, 1..=11 | 13..=16 | 22 | 23)
 }
 
 pub(crate) fn op_id_for_raw(raw: u32) -> u8 {
@@ -137,15 +137,15 @@ impl PackedOp {
     }
     #[inline(always)]
     pub fn step(self) -> u64 {
-        if (self.packed >> 36) & 1 != 0 {
-            4
-        } else {
-            2
-        }
+        if (self.packed >> 36) & 1 != 0 { 4 } else { 2 }
     }
     #[inline(always)]
     pub fn imm(self) -> i32 {
         self.packed as i32
+    }
+    #[inline(always)]
+    pub fn raw(self) -> u32 {
+        self.packed as u32
     }
 }
 
@@ -328,6 +328,7 @@ impl BlockCache {
                     decode::OP_BRANCH => decode::imm_b(raw) as i32,
                     decode::OP_LUI | decode::OP_AUIPC => decode::imm_u(raw) as i32,
                     decode::OP_JAL => decode::imm_j(raw) as i32,
+                    decode::OP_AMO => raw as i32,
                     _ => 0,
                 };
 
