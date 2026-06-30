@@ -17,6 +17,8 @@ pub const SUPERVISOR_THREAD_STATE_SNAPSHOT_MAGIC: u32 = 0x4854_5354; // "TSTH" l
 pub const SUPERVISOR_RESUME_RECORD_BYTES: u32 = 48;
 pub const SUPERVISOR_RESUME_RECORD_MAGIC: u32 = 0x5255_5354; // "TSUR" little-endian.
 pub const SUPERVISOR_RESUME_KIND_FUTEX_WAKE: u32 = 1;
+pub const SUPERVISOR_RUNNABLE_SELECTION_BYTES: u32 = 48;
+pub const SUPERVISOR_RUNNABLE_SELECTION_MAGIC: u32 = 0x4e52_5354; // "TSRN" little-endian.
 pub const SUPERVISOR_FUTEX_WAIT_COMPLETION_WOKEN: u32 = 1;
 pub const SUPERVISOR_FUTEX_WAIT_COMPLETION_NOT_EQUAL: u32 = 2;
 pub const SUPERVISOR_FUTEX_WAIT_COMPLETION_TIMED_OUT: u32 = 3;
@@ -43,6 +45,8 @@ static HOST_OP_POLL_COUNT: AtomicU64 = AtomicU64::new(0);
 static RESUME_POLL_COUNT: AtomicU64 = AtomicU64::new(0);
 static RESUME_ENQUEUE_COUNT: AtomicU64 = AtomicU64::new(0);
 static RESUME_OVERFLOW_COUNT: AtomicU64 = AtomicU64::new(0);
+static RUNNABLE_SELECTION_COUNT: AtomicU64 = AtomicU64::new(0);
+static RUNNABLE_SELECTION_CURSOR: AtomicU32 = AtomicU32::new(0);
 static THREAD_EVENT_LOG_HASH: AtomicU64 = AtomicU64::new(FNV_OFFSET);
 static HOST_COMPLETION_LOG_HASH: AtomicU64 = AtomicU64::new(FNV_OFFSET);
 static LAST_THREAD_EVENT_HASH: AtomicU64 = AtomicU64::new(0);
@@ -66,6 +70,17 @@ struct SupervisorResumeRecord {
     detail0: u64,
 }
 
+#[derive(Clone, Copy)]
+struct SupervisorRunnableSelection {
+    seq: u64,
+    vm_ptr: u32,
+    tid: u32,
+    process_ptr: u32,
+    state: u32,
+    status: u32,
+    slot: u32,
+}
+
 pub fn init() {
     THREAD_EVENT_COUNT.store(0, Ordering::Relaxed);
     HOST_COMPLETION_COUNT.store(0, Ordering::Relaxed);
@@ -73,6 +88,8 @@ pub fn init() {
     RESUME_POLL_COUNT.store(0, Ordering::Relaxed);
     RESUME_ENQUEUE_COUNT.store(0, Ordering::Relaxed);
     RESUME_OVERFLOW_COUNT.store(0, Ordering::Relaxed);
+    RUNNABLE_SELECTION_COUNT.store(0, Ordering::Relaxed);
+    RUNNABLE_SELECTION_CURSOR.store(0, Ordering::Relaxed);
     THREAD_EVENT_LOG_HASH.store(FNV_OFFSET, Ordering::Relaxed);
     HOST_COMPLETION_LOG_HASH.store(FNV_OFFSET, Ordering::Relaxed);
     LAST_THREAD_EVENT_HASH.store(0, Ordering::Relaxed);
@@ -262,6 +279,148 @@ fn write_resume_record(out_ptr: u32, out_len: u32) -> i32 {
     SUPERVISOR_RESUME_RECORD_BYTES as i32
 }
 
+fn candidate_list_contains(candidates: &[u8], vm_ptr: u32) -> bool {
+    for entry in candidates.chunks_exact(4) {
+        let candidate = u32::from_le_bytes([entry[0], entry[1], entry[2], entry[3]]);
+        if candidate == vm_ptr {
+            return true;
+        }
+    }
+    false
+}
+
+fn validated_thread_status_from_record(
+    record: &crate::types::ThreadRecord,
+    base: u32,
+    process_ptr: u32,
+) -> Option<u32> {
+    if record.thread_ptr == 0 {
+        return None;
+    }
+    let absolute = record.thread_ptr as usize;
+    let align = core::mem::align_of::<crate::types::ThreadState>();
+    if (absolute & (align - 1)) != 0 {
+        return None;
+    }
+    let end = absolute.checked_add(core::mem::size_of::<crate::types::ThreadState>())?;
+    let memory_size = crate::wasm::memory_size_bytes();
+    if memory_size == 0 || end as u64 > memory_size {
+        return None;
+    }
+    let thread = unsafe { &*(absolute as *const crate::types::ThreadState) };
+    if thread.guest_base != base || thread.process_ptr != process_ptr || thread.tid != record.tid {
+        return None;
+    }
+    Some(thread.status as u32)
+}
+
+fn select_runnable_from_candidates(
+    vm_ptr: u32,
+    candidates: &[u8],
+) -> Result<Option<SupervisorRunnableSelection>, i32> {
+    if vm_ptr == 0 {
+        return Err(crate::abi::EFAULT as i32);
+    }
+    let vm = unsafe { &*(vm_ptr as *const crate::types::ThreadState) };
+    if vm.process_ptr == 0 {
+        return Err(crate::abi::EINVAL as i32);
+    }
+    let ps = unsafe {
+        &*((vm.guest_base as u64 + vm.process_ptr as u64) as *const crate::types::ProcessState)
+    };
+    let cursor =
+        RUNNABLE_SELECTION_CURSOR.load(Ordering::Relaxed) as usize % crate::abi::MAX_THREADS;
+    for step in 0..crate::abi::MAX_THREADS {
+        let slot = (cursor + step) % crate::abi::MAX_THREADS;
+        let record = ps.threads[slot];
+        if record.state != crate::types::THREAD_RUNNING {
+            continue;
+        }
+        if !candidate_list_contains(candidates, record.thread_ptr) {
+            continue;
+        }
+        let Some(status) =
+            validated_thread_status_from_record(&record, vm.guest_base, vm.process_ptr)
+        else {
+            continue;
+        };
+        if status != crate::abi::STATUS_OK as u32 {
+            continue;
+        }
+        RUNNABLE_SELECTION_CURSOR.store(
+            ((slot + 1) % crate::abi::MAX_THREADS) as u32,
+            Ordering::Relaxed,
+        );
+        let seq = RUNNABLE_SELECTION_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        return Ok(Some(SupervisorRunnableSelection {
+            seq,
+            vm_ptr: record.thread_ptr,
+            tid: record.tid as u32,
+            process_ptr: vm.process_ptr,
+            state: record.state as u32,
+            status,
+            slot: slot as u32,
+        }));
+    }
+    Ok(None)
+}
+
+fn write_runnable_selection(
+    vm_ptr: u32,
+    candidates_ptr: u32,
+    candidate_count: u32,
+    out_ptr: u32,
+    out_len: u32,
+) -> i32 {
+    if out_len == 0 {
+        return SUPERVISOR_RUNNABLE_SELECTION_BYTES as i32;
+    }
+    if out_ptr == 0 {
+        return crate::abi::EFAULT as i32;
+    }
+    if out_len < SUPERVISOR_RUNNABLE_SELECTION_BYTES {
+        return crate::abi::ENOSPC as i32;
+    }
+    if candidate_count == 0 {
+        return 0;
+    }
+    if candidate_count as usize > crate::abi::MAX_THREADS {
+        return crate::abi::EINVAL as i32;
+    }
+    let Some(candidate_bytes_len) = candidate_count.checked_mul(4) else {
+        return crate::abi::EINVAL as i32;
+    };
+    let candidates = match read_shadow_bytes(candidates_ptr, candidate_bytes_len) {
+        Ok(candidates) => candidates,
+        Err(errno) => return errno,
+    };
+    let selected = match select_runnable_from_candidates(vm_ptr, candidates) {
+        Ok(Some(selected)) => selected,
+        Ok(None) => return 0,
+        Err(errno) => return errno,
+    };
+    let mut encoded = [0u8; SUPERVISOR_RUNNABLE_SELECTION_BYTES as usize];
+    write_u32(&mut encoded, 0, SUPERVISOR_RUNNABLE_SELECTION_MAGIC);
+    write_u32(&mut encoded, 4, SUPERVISOR_ABI_VERSION);
+    write_u32(&mut encoded, 8, SUPERVISOR_RUNNABLE_SELECTION_BYTES);
+    write_u32(&mut encoded, 12, 0);
+    write_u64(&mut encoded, 16, selected.seq);
+    write_u32(&mut encoded, 24, selected.vm_ptr);
+    write_u32(&mut encoded, 28, selected.tid);
+    write_u32(&mut encoded, 32, selected.process_ptr);
+    write_u32(&mut encoded, 36, selected.state);
+    write_u32(&mut encoded, 40, selected.status);
+    write_u32(&mut encoded, 44, selected.slot);
+    let out = unsafe {
+        core::slice::from_raw_parts_mut(
+            out_ptr as usize as *mut u8,
+            SUPERVISOR_RUNNABLE_SELECTION_BYTES as usize,
+        )
+    };
+    out.copy_from_slice(&encoded);
+    SUPERVISOR_RUNNABLE_SELECTION_BYTES as i32
+}
+
 fn write_snapshot(out_ptr: u32, out_len: u32) -> i32 {
     if out_len == 0 {
         return SUPERVISOR_DEBUG_SNAPSHOT_BYTES as i32;
@@ -320,26 +479,7 @@ fn thread_status_from_record(
     base: u32,
     process_ptr: u32,
 ) -> u32 {
-    if record.thread_ptr == 0 {
-        return 0;
-    }
-    let absolute = record.thread_ptr as usize;
-    let align = core::mem::align_of::<crate::types::ThreadState>();
-    if (absolute & (align - 1)) != 0 {
-        return 0;
-    }
-    let Some(end) = absolute.checked_add(core::mem::size_of::<crate::types::ThreadState>()) else {
-        return 0;
-    };
-    let memory_size = crate::wasm::memory_size_bytes();
-    if memory_size == 0 || end as u64 > memory_size {
-        return 0;
-    }
-    let thread = unsafe { &*(absolute as *const crate::types::ThreadState) };
-    if thread.guest_base != base || thread.process_ptr != process_ptr || thread.tid != record.tid {
-        return 0;
-    }
-    thread.status as u32
+    validated_thread_status_from_record(record, base, process_ptr).unwrap_or(0)
 }
 
 fn write_thread_state_snapshot(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i32 {
@@ -474,6 +614,11 @@ pub extern "C" fn supervisor_resume_record_bytes() -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_runnable_selection_bytes() -> u32 {
+    SUPERVISOR_RUNNABLE_SELECTION_BYTES
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_resume_kind_futex_wake() -> u32 {
     SUPERVISOR_RESUME_KIND_FUTEX_WAKE
 }
@@ -590,6 +735,17 @@ pub extern "C" fn supervisor_next_host_op(_out_ptr: u32, _out_len: u32) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_next_resume(_out_ptr: u32, _out_len: u32) -> i32 {
     write_resume_record(_out_ptr, _out_len)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_select_runnable(
+    vm_ptr: u32,
+    candidates_ptr: u32,
+    candidate_count: u32,
+    out_ptr: u32,
+    out_len: u32,
+) -> i32 {
+    write_runnable_selection(vm_ptr, candidates_ptr, candidate_count, out_ptr, out_len)
 }
 
 #[unsafe(no_mangle)]
