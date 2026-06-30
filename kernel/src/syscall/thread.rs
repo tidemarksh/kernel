@@ -1,7 +1,7 @@
 //! Thread syscalls: clone, futex, exit, exit_group, set_tid_address,
 //! set_robust_list, get_robust_list.
 //!
-//! clone(CLONE_VM | CLONE_THREAD) → STATUS_CLONE_SPAWN → TS spawns Worker.
+//! clone(CLONE_VM | CLONE_THREAD) → STATUS_CLONE_SPAWN → supervisor HostOp.
 //! futex(WAIT/WAKE) uses guest Memory Atomics directly.
 //! futex(CMP_REQUEUE) reuses the shared thread registry as the wait queue.
 //!
@@ -889,8 +889,8 @@ pub fn sys_exit_group(vm: &mut ThreadState, base: u32, exit_code: u64) -> i32 {
 }
 
 /// clone: create a new thread or process.
-/// For CLONE_VM | CLONE_THREAD: creates ThreadState, returns STATUS_CLONE_SPAWN.
-/// TS runtime will spawn a new Worker with the same shared Memory.
+/// For CLONE_VM | CLONE_THREAD: records pending thread state and returns
+/// STATUS_CLONE_SPAWN. The supervisor publishes the Worker spawn HostOp.
 /// https://man7.org/linux/man-pages/man2/clone.2.html
 pub fn sys_clone(
     vm: &mut ThreadState,
@@ -926,13 +926,8 @@ pub fn sys_clone(
             );
         }
 
-        // Write child TID to parent_tidptr if CLONE_PARENT_SETTID
-        if clone_flags & CLONE_PARENT_SETTID != 0 && parent_tidptr != 0 {
-            unsafe { guest_mem::write_u32(base, parent_tidptr, new_tid as u32) };
-        }
-
         // Store child_tidptr for CLONE_CHILD_SETTID / CLONE_CHILD_CLEARTID
-        // These will be set in the child's ThreadState by the TS runtime.
+        // These will be set in the child's ThreadState by the supervisor.
         vm.clone_flags = clone_flags;
         vm.clone_child_stack = child_stack;
         vm.clone_tls = tls;
@@ -940,20 +935,37 @@ pub fn sys_clone(
         vm.clone_child_tid = new_tid;
         vm.clone_pending = 1;
 
+        if !crate::supervisor::enqueue_clone_spawn(vm as *mut ThreadState as u32) {
+            unsafe {
+                if let Some(ps) = process_state_ptr(base, vm.process_ptr) {
+                    let before = (*ps).thread_count.fetch_sub(1, Ordering::AcqRel);
+                    crate::tracepoints::record_thread_count(
+                        THREAD_COUNT_TRACE_EXIT_DEC,
+                        vm as *const ThreadState as u32,
+                        vm.tid,
+                        vm.process_ptr,
+                        before,
+                        before.saturating_sub(1),
+                    );
+                }
+            }
+            vm.clone_flags = 0;
+            vm.clone_child_stack = 0;
+            vm.clone_tls = 0;
+            vm.clone_child_tidptr = 0;
+            vm.clone_child_tid = 0;
+            vm.clone_pending = 0;
+            return EAGAIN;
+        }
+
+        // Write child TID to parent_tidptr if CLONE_PARENT_SETTID
+        if clone_flags & CLONE_PARENT_SETTID != 0 && parent_tidptr != 0 {
+            unsafe { guest_mem::write_u32(base, parent_tidptr, new_tid as u32) };
+        }
+
         // Set up clone result in VM state for TS handoff
         vm.x[10] = new_tid as u64; // parent returns child TID
         vm.status = STATUS_CLONE_SPAWN;
-
-        // The TS runtime reads: child_stack, tls, new_tid, child_tidptr, flags
-        // from designated locations. Store them in registers for handoff.
-        // a0 = new_tid (already set), a1 = child_stack, a2 = tls, a3 = child_tidptr
-        // The TS runtime will create a new ThreadState with:
-        //   - pc = current pc (next instruction after ecall)
-        //   - sp (x2) = child_stack (if nonzero)
-        //   - tp (x4) = tls (if CLONE_SETTLS)
-        //   - a0 = 0 (child returns 0 from clone)
-        //   - process_ptr = same as parent
-        //   - tid = new_tid
 
         return new_tid as i64;
     }
@@ -1149,6 +1161,8 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
         parent.clone_child_tid = 0;
         parent.clone_pending = 0;
         parent.status = STATUS_OK;
+
+        crate::supervisor::discard_clone_spawn(parent_vm_ptr);
 
         child_ptr
     }

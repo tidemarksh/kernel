@@ -17,6 +17,9 @@ pub const SUPERVISOR_THREAD_STATE_SNAPSHOT_MAGIC: u32 = 0x4854_5354; // "TSTH" l
 pub const SUPERVISOR_RESUME_RECORD_BYTES: u32 = 48;
 pub const SUPERVISOR_RESUME_RECORD_MAGIC: u32 = 0x5255_5354; // "TSUR" little-endian.
 pub const SUPERVISOR_RESUME_KIND_FUTEX_WAKE: u32 = 1;
+pub const SUPERVISOR_HOST_OP_RECORD_BYTES: u32 = 64;
+pub const SUPERVISOR_HOST_OP_RECORD_MAGIC: u32 = 0x4f48_5354; // "TSHO" little-endian.
+pub const SUPERVISOR_HOST_OP_KIND_SPAWN_THREAD_WORKER: u32 = 1;
 pub const SUPERVISOR_RUNNABLE_SELECTION_BYTES: u32 = 48;
 pub const SUPERVISOR_RUNNABLE_SELECTION_MAGIC: u32 = 0x4e52_5354; // "TSRN" little-endian.
 pub const SUPERVISOR_FUTEX_WAIT_COMPLETION_WOKEN: u32 = 1;
@@ -29,6 +32,7 @@ const SNAPSHOT_MAGIC: u32 = 0x5055_5354; // "TSUP" little-endian.
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 const RESUME_QUEUE_CAP: usize = 256;
+const HOST_OP_QUEUE_CAP: usize = 256;
 const RESUME_QUEUE_EMPTY: SupervisorResumeRecord = SupervisorResumeRecord {
     kind: 0,
     seq: 0,
@@ -38,10 +42,16 @@ const RESUME_QUEUE_EMPTY: SupervisorResumeRecord = SupervisorResumeRecord {
     status: 0,
     detail0: 0,
 };
+const HOST_OP_QUEUE_EMPTY: SupervisorHostOpRequest = SupervisorHostOpRequest {
+    kind: 0,
+    parent_vm_ptr: 0,
+};
 
 static THREAD_EVENT_COUNT: AtomicU64 = AtomicU64::new(0);
 static HOST_COMPLETION_COUNT: AtomicU64 = AtomicU64::new(0);
 static HOST_OP_POLL_COUNT: AtomicU64 = AtomicU64::new(0);
+static HOST_OP_EMIT_COUNT: AtomicU64 = AtomicU64::new(0);
+static HOST_OP_OVERFLOW_COUNT: AtomicU64 = AtomicU64::new(0);
 static RESUME_POLL_COUNT: AtomicU64 = AtomicU64::new(0);
 static RESUME_ENQUEUE_COUNT: AtomicU64 = AtomicU64::new(0);
 static RESUME_OVERFLOW_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -58,6 +68,11 @@ static RESUME_QUEUE_HEAD: AtomicU32 = AtomicU32::new(0);
 static RESUME_QUEUE_TAIL: AtomicU32 = AtomicU32::new(0);
 static mut RESUME_QUEUE: [SupervisorResumeRecord; RESUME_QUEUE_CAP] =
     [RESUME_QUEUE_EMPTY; RESUME_QUEUE_CAP];
+static HOST_OP_QUEUE_LOCK: AtomicU32 = AtomicU32::new(0);
+static HOST_OP_QUEUE_HEAD: AtomicU32 = AtomicU32::new(0);
+static HOST_OP_QUEUE_TAIL: AtomicU32 = AtomicU32::new(0);
+static mut HOST_OP_QUEUE: [SupervisorHostOpRequest; HOST_OP_QUEUE_CAP] =
+    [HOST_OP_QUEUE_EMPTY; HOST_OP_QUEUE_CAP];
 
 #[derive(Clone, Copy)]
 struct SupervisorResumeRecord {
@@ -68,6 +83,25 @@ struct SupervisorResumeRecord {
     process_ptr: u32,
     status: u32,
     detail0: u64,
+}
+
+#[derive(Clone, Copy)]
+struct SupervisorHostOpRequest {
+    kind: u32,
+    parent_vm_ptr: u32,
+}
+
+#[derive(Clone, Copy)]
+struct SupervisorHostOpRecord {
+    kind: u32,
+    seq: u64,
+    parent_vm_ptr: u32,
+    child_vm_ptr: u32,
+    tid: u32,
+    process_ptr: u32,
+    status: u32,
+    flags: u64,
+    child_tidptr: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -85,6 +119,8 @@ pub fn init() {
     THREAD_EVENT_COUNT.store(0, Ordering::Relaxed);
     HOST_COMPLETION_COUNT.store(0, Ordering::Relaxed);
     HOST_OP_POLL_COUNT.store(0, Ordering::Relaxed);
+    HOST_OP_EMIT_COUNT.store(0, Ordering::Relaxed);
+    HOST_OP_OVERFLOW_COUNT.store(0, Ordering::Relaxed);
     RESUME_POLL_COUNT.store(0, Ordering::Relaxed);
     RESUME_ENQUEUE_COUNT.store(0, Ordering::Relaxed);
     RESUME_OVERFLOW_COUNT.store(0, Ordering::Relaxed);
@@ -104,6 +140,14 @@ pub fn init() {
             core::ptr::write(queue_ptr.add(idx), RESUME_QUEUE_EMPTY);
         }
     });
+    with_host_op_queue_lock(|| unsafe {
+        HOST_OP_QUEUE_HEAD.store(0, Ordering::Relaxed);
+        HOST_OP_QUEUE_TAIL.store(0, Ordering::Relaxed);
+        let queue_ptr = core::ptr::addr_of_mut!(HOST_OP_QUEUE) as *mut SupervisorHostOpRequest;
+        for idx in 0..HOST_OP_QUEUE_CAP {
+            core::ptr::write(queue_ptr.add(idx), HOST_OP_QUEUE_EMPTY);
+        }
+    });
 }
 
 pub fn thread_event_count() -> u64 {
@@ -116,6 +160,14 @@ pub fn host_completion_count() -> u64 {
 
 pub fn host_op_poll_count() -> u64 {
     HOST_OP_POLL_COUNT.load(Ordering::Relaxed)
+}
+
+pub fn host_op_emit_count() -> u64 {
+    HOST_OP_EMIT_COUNT.load(Ordering::Relaxed)
+}
+
+pub fn host_op_overflow_count() -> u64 {
+    HOST_OP_OVERFLOW_COUNT.load(Ordering::Relaxed)
 }
 
 pub fn resume_poll_count() -> u64 {
@@ -196,6 +248,21 @@ fn with_resume_queue_lock<T>(f: impl FnOnce() -> T) -> T {
     result
 }
 
+fn with_host_op_queue_lock<T>(f: impl FnOnce() -> T) -> T {
+    loop {
+        if HOST_OP_QUEUE_LOCK
+            .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    let result = f();
+    HOST_OP_QUEUE_LOCK.store(0, Ordering::Release);
+    result
+}
+
 fn push_resume_record(record: SupervisorResumeRecord) -> bool {
     with_resume_queue_lock(|| unsafe {
         let head = RESUME_QUEUE_HEAD.load(Ordering::Relaxed);
@@ -212,6 +279,22 @@ fn push_resume_record(record: SupervisorResumeRecord) -> bool {
     })
 }
 
+fn push_host_op_request(record: SupervisorHostOpRequest) -> bool {
+    with_host_op_queue_lock(|| unsafe {
+        let head = HOST_OP_QUEUE_HEAD.load(Ordering::Relaxed);
+        let tail = HOST_OP_QUEUE_TAIL.load(Ordering::Relaxed);
+        let next_tail = (tail + 1) % HOST_OP_QUEUE_CAP as u32;
+        if next_tail == head {
+            HOST_OP_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        let queue_ptr = core::ptr::addr_of_mut!(HOST_OP_QUEUE) as *mut SupervisorHostOpRequest;
+        core::ptr::write(queue_ptr.add(tail as usize), record);
+        HOST_OP_QUEUE_TAIL.store(next_tail, Ordering::Relaxed);
+        true
+    })
+}
+
 fn peek_resume_record() -> Option<SupervisorResumeRecord> {
     with_resume_queue_lock(|| unsafe {
         let head = RESUME_QUEUE_HEAD.load(Ordering::Relaxed);
@@ -220,6 +303,18 @@ fn peek_resume_record() -> Option<SupervisorResumeRecord> {
             return None;
         }
         let queue_ptr = core::ptr::addr_of!(RESUME_QUEUE) as *const SupervisorResumeRecord;
+        Some(core::ptr::read(queue_ptr.add(head as usize)))
+    })
+}
+
+fn peek_host_op_request() -> Option<SupervisorHostOpRequest> {
+    with_host_op_queue_lock(|| unsafe {
+        let head = HOST_OP_QUEUE_HEAD.load(Ordering::Relaxed);
+        let tail = HOST_OP_QUEUE_TAIL.load(Ordering::Relaxed);
+        if head == tail {
+            return None;
+        }
+        let queue_ptr = core::ptr::addr_of!(HOST_OP_QUEUE) as *const SupervisorHostOpRequest;
         Some(core::ptr::read(queue_ptr.add(head as usize)))
     })
 }
@@ -236,6 +331,52 @@ fn pop_resume_record() -> Option<SupervisorResumeRecord> {
         core::ptr::write(queue_ptr.add(head as usize), RESUME_QUEUE_EMPTY);
         RESUME_QUEUE_HEAD.store((head + 1) % RESUME_QUEUE_CAP as u32, Ordering::Relaxed);
         Some(record)
+    })
+}
+
+fn pop_host_op_request() -> Option<SupervisorHostOpRequest> {
+    with_host_op_queue_lock(|| unsafe {
+        let head = HOST_OP_QUEUE_HEAD.load(Ordering::Relaxed);
+        let tail = HOST_OP_QUEUE_TAIL.load(Ordering::Relaxed);
+        if head == tail {
+            return None;
+        }
+        let queue_ptr = core::ptr::addr_of_mut!(HOST_OP_QUEUE) as *mut SupervisorHostOpRequest;
+        let record = core::ptr::read(queue_ptr.add(head as usize));
+        core::ptr::write(queue_ptr.add(head as usize), HOST_OP_QUEUE_EMPTY);
+        HOST_OP_QUEUE_HEAD.store((head + 1) % HOST_OP_QUEUE_CAP as u32, Ordering::Relaxed);
+        Some(record)
+    })
+}
+
+fn remove_host_op_request(kind: u32, parent_vm_ptr: u32) -> bool {
+    with_host_op_queue_lock(|| unsafe {
+        let head = HOST_OP_QUEUE_HEAD.load(Ordering::Relaxed);
+        let tail = HOST_OP_QUEUE_TAIL.load(Ordering::Relaxed);
+        let queue_ptr = core::ptr::addr_of_mut!(HOST_OP_QUEUE) as *mut SupervisorHostOpRequest;
+        let mut read = head;
+        let mut write = head;
+        let mut removed = false;
+        while read != tail {
+            let current = read;
+            let record = core::ptr::read(queue_ptr.add(current as usize));
+            read = (read + 1) % HOST_OP_QUEUE_CAP as u32;
+            if !removed && record.kind == kind && record.parent_vm_ptr == parent_vm_ptr {
+                removed = true;
+                continue;
+            }
+            core::ptr::write(queue_ptr.add(write as usize), record);
+            write = (write + 1) % HOST_OP_QUEUE_CAP as u32;
+        }
+        if removed {
+            let mut clear = write;
+            while clear != tail {
+                core::ptr::write(queue_ptr.add(clear as usize), HOST_OP_QUEUE_EMPTY);
+                clear = (clear + 1) % HOST_OP_QUEUE_CAP as u32;
+            }
+            HOST_OP_QUEUE_TAIL.store(write, Ordering::Relaxed);
+        }
+        removed
     })
 }
 
@@ -277,6 +418,90 @@ fn write_resume_record(out_ptr: u32, out_len: u32) -> i32 {
     };
     out.copy_from_slice(&encoded);
     SUPERVISOR_RESUME_RECORD_BYTES as i32
+}
+
+fn write_host_op_record(out_ptr: u32, out_len: u32) -> i32 {
+    HOST_OP_POLL_COUNT.fetch_add(1, Ordering::Relaxed);
+    if out_len == 0 {
+        return if peek_host_op_request().is_some() {
+            SUPERVISOR_HOST_OP_RECORD_BYTES as i32
+        } else {
+            0
+        };
+    }
+    if out_ptr == 0 {
+        return crate::abi::EFAULT as i32;
+    }
+    if out_len < SUPERVISOR_HOST_OP_RECORD_BYTES {
+        return crate::abi::ENOSPC as i32;
+    }
+    let Some(request) = pop_host_op_request() else {
+        return 0;
+    };
+    if request.kind != SUPERVISOR_HOST_OP_KIND_SPAWN_THREAD_WORKER {
+        return crate::abi::EINVAL as i32;
+    }
+    let parent = unsafe { &*(request.parent_vm_ptr as *const crate::types::ThreadState) };
+    let flags = parent.clone_flags;
+    let child_tidptr = parent.clone_child_tidptr;
+    let process_ptr = parent.process_ptr;
+    let child_vm_ptr =
+        crate::syscall::thread::spawn_from_clone(request.parent_vm_ptr, parent.guest_base);
+    if child_vm_ptr == 0 {
+        return crate::abi::EINVAL as i32;
+    }
+    let child = unsafe { &*(child_vm_ptr as *const crate::types::ThreadState) };
+    let seq = HOST_OP_EMIT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    let record = SupervisorHostOpRecord {
+        kind: request.kind,
+        seq,
+        parent_vm_ptr: request.parent_vm_ptr,
+        child_vm_ptr,
+        tid: child.tid as u32,
+        process_ptr,
+        status: crate::abi::STATUS_OK as u32,
+        flags,
+        child_tidptr,
+    };
+    let mut encoded = [0u8; SUPERVISOR_HOST_OP_RECORD_BYTES as usize];
+    write_u32(&mut encoded, 0, SUPERVISOR_HOST_OP_RECORD_MAGIC);
+    write_u32(&mut encoded, 4, SUPERVISOR_ABI_VERSION);
+    write_u32(&mut encoded, 8, SUPERVISOR_HOST_OP_RECORD_BYTES);
+    write_u32(&mut encoded, 12, record.kind);
+    write_u64(&mut encoded, 16, record.seq);
+    write_u32(&mut encoded, 24, record.parent_vm_ptr);
+    write_u32(&mut encoded, 28, record.child_vm_ptr);
+    write_u32(&mut encoded, 32, record.tid);
+    write_u32(&mut encoded, 36, record.process_ptr);
+    write_u32(&mut encoded, 40, record.status);
+    write_u32(&mut encoded, 44, 0);
+    write_u64(&mut encoded, 48, record.flags);
+    write_u64(&mut encoded, 56, record.child_tidptr);
+    let out = unsafe {
+        core::slice::from_raw_parts_mut(
+            out_ptr as usize as *mut u8,
+            SUPERVISOR_HOST_OP_RECORD_BYTES as usize,
+        )
+    };
+    out.copy_from_slice(&encoded);
+    SUPERVISOR_HOST_OP_RECORD_BYTES as i32
+}
+
+pub fn enqueue_clone_spawn(parent_vm_ptr: u32) -> bool {
+    if parent_vm_ptr == 0 {
+        return false;
+    }
+    push_host_op_request(SupervisorHostOpRequest {
+        kind: SUPERVISOR_HOST_OP_KIND_SPAWN_THREAD_WORKER,
+        parent_vm_ptr,
+    })
+}
+
+pub fn discard_clone_spawn(parent_vm_ptr: u32) -> bool {
+    if parent_vm_ptr == 0 {
+        return false;
+    }
+    remove_host_op_request(SUPERVISOR_HOST_OP_KIND_SPAWN_THREAD_WORKER, parent_vm_ptr)
 }
 
 fn candidate_list_contains(candidates: &[u8], vm_ptr: u32) -> bool {
@@ -614,6 +839,16 @@ pub extern "C" fn supervisor_resume_record_bytes() -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_host_op_record_bytes() -> u32 {
+    SUPERVISOR_HOST_OP_RECORD_BYTES
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_host_op_kind_spawn_thread_worker() -> u32 {
+    SUPERVISOR_HOST_OP_KIND_SPAWN_THREAD_WORKER
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_runnable_selection_bytes() -> u32 {
     SUPERVISOR_RUNNABLE_SELECTION_BYTES
 }
@@ -666,6 +901,16 @@ pub extern "C" fn supervisor_shadow_host_completion_count() -> u64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_shadow_host_op_poll_count() -> u64 {
     host_op_poll_count()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_shadow_host_op_emit_count() -> u64 {
+    host_op_emit_count()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_shadow_host_op_overflow_count() -> u64 {
+    host_op_overflow_count()
 }
 
 #[unsafe(no_mangle)]
@@ -728,8 +973,7 @@ pub extern "C" fn supervisor_complete_futex_wait(vm_ptr: u32, completion: u32) -
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_next_host_op(_out_ptr: u32, _out_len: u32) -> i32 {
-    HOST_OP_POLL_COUNT.fetch_add(1, Ordering::Relaxed);
-    0
+    write_host_op_record(_out_ptr, _out_len)
 }
 
 #[unsafe(no_mangle)]

@@ -32,6 +32,8 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_select_runnable(0, 0, 0, 0, 0),
         supervisor_runnable_selection_bytes() as i32
     );
+    assert_eq!(supervisor_host_op_record_bytes(), 64);
+    assert_eq!(supervisor_host_op_kind_spawn_thread_worker(), 1);
 
     let empty_hash = supervisor_shadow_thread_event_log_hash();
     assert_eq!(supervisor_shadow_thread_event_count(), 0);
@@ -45,6 +47,8 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
 
     assert_eq!(supervisor_next_host_op(0, 0), 0);
     assert_eq!(supervisor_shadow_host_op_poll_count(), 1);
+    assert_eq!(supervisor_shadow_host_op_emit_count(), 0);
+    assert_eq!(supervisor_shadow_host_op_overflow_count(), 0);
     assert_eq!(supervisor_next_resume(0, 0), 0);
     assert_eq!(supervisor_shadow_resume_poll_count(), 1);
 

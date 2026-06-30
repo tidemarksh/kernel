@@ -1,5 +1,17 @@
 use super::support::*;
 
+fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
+    let mut value = [0u8; 4];
+    value.copy_from_slice(&bytes[offset..offset + 4]);
+    u32::from_le_bytes(value)
+}
+
+fn read_u64_le(bytes: &[u8], offset: usize) -> u64 {
+    let mut value = [0u8; 8];
+    value.copy_from_slice(&bytes[offset..offset + 8]);
+    u64::from_le_bytes(value)
+}
+
 #[test]
 fn contract_clone_thread_returns_status_clone_spawn() {
     let mut t = TestVm::new();
@@ -16,6 +28,101 @@ fn contract_clone_thread_returns_status_clone_spawn() {
 
     let tc = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, ps_ptr + tc_off) };
     assert_eq!(tc, 2);
+}
+
+#[test]
+fn contract_supervisor_host_op_spawns_clone_thread_state() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    t.vm.pc = 0x4567_89ab;
+    t.vm.x[1] = 0x1234_5678;
+    t.vm.x[3] = 0x2345_6789;
+    t.vm.x[27] = 0x3456_789a;
+
+    let parent_vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    let ps_ptr = t.vm.process_ptr as u64;
+    let child_tidptr = t.scratch + 0x280;
+    let flags = (CLONE_VM
+        | CLONE_THREAD
+        | CLONE_SIGHAND
+        | CLONE_FS
+        | CLONE_SETTLS
+        | CLONE_CHILD_SETTID
+        | CLONE_CHILD_CLEARTID) as u64;
+    let child_stack = 0x88000u64;
+    let tls = 0x1234_5000u64;
+
+    let ret = thread_impl::sys_clone(&mut t.vm, t.base, flags, child_stack, 0, tls, child_tidptr);
+    assert!(ret > 0);
+    assert_eq!(t.vm.status, STATUS_CLONE_SPAWN);
+    assert_eq!(
+        supervisor_next_host_op(0, 0),
+        supervisor_host_op_record_bytes() as i32
+    );
+
+    let mut too_small = [0u8; 63];
+    assert_eq!(
+        supervisor_next_host_op(too_small.as_mut_ptr() as u32, too_small.len() as u32),
+        ENOSPC as i32
+    );
+
+    let mut record = [0u8; 64];
+    assert_eq!(
+        supervisor_next_host_op(record.as_mut_ptr() as u32, record.len() as u32),
+        supervisor_host_op_record_bytes() as i32
+    );
+
+    assert_eq!(read_u32_le(&record, 0), 0x4f48_5354);
+    assert_eq!(read_u32_le(&record, 4), supervisor_abi_version());
+    assert_eq!(read_u32_le(&record, 8), supervisor_host_op_record_bytes());
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_host_op_kind_spawn_thread_worker()
+    );
+    assert_eq!(read_u64_le(&record, 16), 1);
+    assert_eq!(read_u32_le(&record, 24), parent_vm_ptr);
+
+    let child_ptr = read_u32_le(&record, 28);
+    assert_ne!(child_ptr, 0);
+    assert_eq!(read_u32_le(&record, 32), ret as u32);
+    assert_eq!(read_u32_le(&record, 36), t.vm.process_ptr);
+    assert_eq!(read_u32_le(&record, 40), STATUS_OK as u32);
+    assert_eq!(read_u64_le(&record, 48), flags);
+    assert_eq!(read_u64_le(&record, 56), child_tidptr);
+    assert_eq!(supervisor_shadow_host_op_emit_count(), 1);
+
+    let child = unsafe { &*(child_ptr as *const ThreadState) };
+    assert_eq!(child.tid, ret as i32);
+    assert_eq!(child.pc, 0x4567_89ab);
+    assert_eq!(child.x[1], 0x1234_5678);
+    assert_eq!(child.x[3], 0x2345_6789);
+    assert_eq!(child.x[27], 0x3456_789a);
+    assert_eq!(child.x[10], 0);
+    assert_eq!(child.x[2], child_stack);
+    assert_eq!(child.x[4], tls);
+    assert_eq!(child.tls_base, tls);
+    assert_eq!(child.clear_child_tid, child_tidptr);
+
+    let written_tid = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, child_tidptr) };
+    assert_eq!(written_tid, ret as u32);
+
+    let threads_off = core::mem::offset_of!(ProcessState, threads) as u64;
+    let record_size = core::mem::size_of::<ThreadRecord>() as u64;
+    let record_off = ps_ptr + threads_off + ((ret as u64) - 1) * record_size;
+    let state = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, record_off) };
+    let thread_ptr = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, record_off + 8) };
+    assert_eq!(state as i32, THREAD_RUNNING);
+    assert_eq!(thread_ptr, child_ptr);
+
+    assert_eq!(t.vm.clone_pending, 0);
+    assert_eq!(t.vm.clone_child_tid, 0);
+    assert_eq!(t.vm.clone_child_stack, 0);
+    assert_eq!(t.vm.clone_tls, 0);
+    assert_eq!(t.vm.clone_child_tidptr, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(supervisor_next_host_op(0, 0), 0);
 }
 
 #[test]
