@@ -8,6 +8,9 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 pub const SUPERVISOR_ABI_VERSION: u32 = 1;
 pub const SUPERVISOR_DEBUG_SNAPSHOT_BYTES: u32 = 88;
+pub const SUPERVISOR_RESUME_RECORD_BYTES: u32 = 48;
+pub const SUPERVISOR_RESUME_RECORD_MAGIC: u32 = 0x5255_5354; // "TSUR" little-endian.
+pub const SUPERVISOR_RESUME_KIND_FUTEX_WAKE: u32 = 1;
 pub const SUPERVISOR_FUTEX_WAIT_COMPLETION_WOKEN: u32 = 1;
 pub const SUPERVISOR_FUTEX_WAIT_COMPLETION_NOT_EQUAL: u32 = 2;
 pub const SUPERVISOR_FUTEX_WAIT_COMPLETION_TIMED_OUT: u32 = 3;
@@ -17,29 +20,67 @@ pub const SUPERVISOR_FUTEX_WAIT_COMPLETION_SIGNAL_CHECK: u32 = 5;
 const SNAPSHOT_MAGIC: u32 = 0x5055_5354; // "TSUP" little-endian.
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+const RESUME_QUEUE_CAP: usize = 256;
+const RESUME_QUEUE_EMPTY: SupervisorResumeRecord = SupervisorResumeRecord {
+    kind: 0,
+    seq: 0,
+    vm_ptr: 0,
+    tid: 0,
+    process_ptr: 0,
+    status: 0,
+    detail0: 0,
+};
 
 static THREAD_EVENT_COUNT: AtomicU64 = AtomicU64::new(0);
 static HOST_COMPLETION_COUNT: AtomicU64 = AtomicU64::new(0);
 static HOST_OP_POLL_COUNT: AtomicU64 = AtomicU64::new(0);
 static RESUME_POLL_COUNT: AtomicU64 = AtomicU64::new(0);
+static RESUME_ENQUEUE_COUNT: AtomicU64 = AtomicU64::new(0);
+static RESUME_OVERFLOW_COUNT: AtomicU64 = AtomicU64::new(0);
 static THREAD_EVENT_LOG_HASH: AtomicU64 = AtomicU64::new(FNV_OFFSET);
 static HOST_COMPLETION_LOG_HASH: AtomicU64 = AtomicU64::new(FNV_OFFSET);
 static LAST_THREAD_EVENT_HASH: AtomicU64 = AtomicU64::new(0);
 static LAST_HOST_COMPLETION_HASH: AtomicU64 = AtomicU64::new(0);
 static LAST_THREAD_EVENT_LEN: AtomicU32 = AtomicU32::new(0);
 static LAST_HOST_COMPLETION_LEN: AtomicU32 = AtomicU32::new(0);
+static RESUME_QUEUE_LOCK: AtomicU32 = AtomicU32::new(0);
+static RESUME_QUEUE_HEAD: AtomicU32 = AtomicU32::new(0);
+static RESUME_QUEUE_TAIL: AtomicU32 = AtomicU32::new(0);
+static mut RESUME_QUEUE: [SupervisorResumeRecord; RESUME_QUEUE_CAP] =
+    [RESUME_QUEUE_EMPTY; RESUME_QUEUE_CAP];
+
+#[derive(Clone, Copy)]
+struct SupervisorResumeRecord {
+    kind: u32,
+    seq: u64,
+    vm_ptr: u32,
+    tid: u32,
+    process_ptr: u32,
+    status: u32,
+    detail0: u64,
+}
 
 pub fn init() {
     THREAD_EVENT_COUNT.store(0, Ordering::Relaxed);
     HOST_COMPLETION_COUNT.store(0, Ordering::Relaxed);
     HOST_OP_POLL_COUNT.store(0, Ordering::Relaxed);
     RESUME_POLL_COUNT.store(0, Ordering::Relaxed);
+    RESUME_ENQUEUE_COUNT.store(0, Ordering::Relaxed);
+    RESUME_OVERFLOW_COUNT.store(0, Ordering::Relaxed);
     THREAD_EVENT_LOG_HASH.store(FNV_OFFSET, Ordering::Relaxed);
     HOST_COMPLETION_LOG_HASH.store(FNV_OFFSET, Ordering::Relaxed);
     LAST_THREAD_EVENT_HASH.store(0, Ordering::Relaxed);
     LAST_HOST_COMPLETION_HASH.store(0, Ordering::Relaxed);
     LAST_THREAD_EVENT_LEN.store(0, Ordering::Relaxed);
     LAST_HOST_COMPLETION_LEN.store(0, Ordering::Relaxed);
+    with_resume_queue_lock(|| unsafe {
+        RESUME_QUEUE_HEAD.store(0, Ordering::Relaxed);
+        RESUME_QUEUE_TAIL.store(0, Ordering::Relaxed);
+        let queue_ptr = core::ptr::addr_of_mut!(RESUME_QUEUE) as *mut SupervisorResumeRecord;
+        for idx in 0..RESUME_QUEUE_CAP {
+            core::ptr::write(queue_ptr.add(idx), RESUME_QUEUE_EMPTY);
+        }
+    });
 }
 
 pub fn thread_event_count() -> u64 {
@@ -56,6 +97,14 @@ pub fn host_op_poll_count() -> u64 {
 
 pub fn resume_poll_count() -> u64 {
     RESUME_POLL_COUNT.load(Ordering::Relaxed)
+}
+
+pub fn resume_enqueue_count() -> u64 {
+    RESUME_ENQUEUE_COUNT.load(Ordering::Relaxed)
+}
+
+pub fn resume_overflow_count() -> u64 {
+    RESUME_OVERFLOW_COUNT.load(Ordering::Relaxed)
 }
 
 pub fn thread_event_log_hash() -> u64 {
@@ -107,6 +156,104 @@ fn write_u32(buf: &mut [u8], offset: usize, value: u32) {
 
 fn write_u64(buf: &mut [u8], offset: usize, value: u64) {
     buf[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+fn with_resume_queue_lock<T>(f: impl FnOnce() -> T) -> T {
+    loop {
+        if RESUME_QUEUE_LOCK
+            .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    let result = f();
+    RESUME_QUEUE_LOCK.store(0, Ordering::Release);
+    result
+}
+
+fn push_resume_record(record: SupervisorResumeRecord) -> bool {
+    with_resume_queue_lock(|| unsafe {
+        let head = RESUME_QUEUE_HEAD.load(Ordering::Relaxed);
+        let tail = RESUME_QUEUE_TAIL.load(Ordering::Relaxed);
+        let next_tail = (tail + 1) % RESUME_QUEUE_CAP as u32;
+        if next_tail == head {
+            RESUME_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        let queue_ptr = core::ptr::addr_of_mut!(RESUME_QUEUE) as *mut SupervisorResumeRecord;
+        core::ptr::write(queue_ptr.add(tail as usize), record);
+        RESUME_QUEUE_TAIL.store(next_tail, Ordering::Relaxed);
+        true
+    })
+}
+
+fn peek_resume_record() -> Option<SupervisorResumeRecord> {
+    with_resume_queue_lock(|| unsafe {
+        let head = RESUME_QUEUE_HEAD.load(Ordering::Relaxed);
+        let tail = RESUME_QUEUE_TAIL.load(Ordering::Relaxed);
+        if head == tail {
+            return None;
+        }
+        let queue_ptr = core::ptr::addr_of!(RESUME_QUEUE) as *const SupervisorResumeRecord;
+        Some(core::ptr::read(queue_ptr.add(head as usize)))
+    })
+}
+
+fn pop_resume_record() -> Option<SupervisorResumeRecord> {
+    with_resume_queue_lock(|| unsafe {
+        let head = RESUME_QUEUE_HEAD.load(Ordering::Relaxed);
+        let tail = RESUME_QUEUE_TAIL.load(Ordering::Relaxed);
+        if head == tail {
+            return None;
+        }
+        let queue_ptr = core::ptr::addr_of_mut!(RESUME_QUEUE) as *mut SupervisorResumeRecord;
+        let record = core::ptr::read(queue_ptr.add(head as usize));
+        core::ptr::write(queue_ptr.add(head as usize), RESUME_QUEUE_EMPTY);
+        RESUME_QUEUE_HEAD.store((head + 1) % RESUME_QUEUE_CAP as u32, Ordering::Relaxed);
+        Some(record)
+    })
+}
+
+fn write_resume_record(out_ptr: u32, out_len: u32) -> i32 {
+    RESUME_POLL_COUNT.fetch_add(1, Ordering::Relaxed);
+    if out_len == 0 {
+        return if peek_resume_record().is_some() {
+            SUPERVISOR_RESUME_RECORD_BYTES as i32
+        } else {
+            0
+        };
+    }
+    if out_ptr == 0 {
+        return crate::abi::EFAULT as i32;
+    }
+    if out_len < SUPERVISOR_RESUME_RECORD_BYTES {
+        return crate::abi::ENOSPC as i32;
+    }
+    let Some(record) = pop_resume_record() else {
+        return 0;
+    };
+    let mut encoded = [0u8; SUPERVISOR_RESUME_RECORD_BYTES as usize];
+    write_u32(&mut encoded, 0, SUPERVISOR_RESUME_RECORD_MAGIC);
+    write_u32(&mut encoded, 4, SUPERVISOR_ABI_VERSION);
+    write_u32(&mut encoded, 8, SUPERVISOR_RESUME_RECORD_BYTES);
+    write_u32(&mut encoded, 12, record.kind);
+    write_u64(&mut encoded, 16, record.seq);
+    write_u32(&mut encoded, 24, record.vm_ptr);
+    write_u32(&mut encoded, 28, record.tid);
+    write_u32(&mut encoded, 32, record.process_ptr);
+    write_u32(&mut encoded, 36, record.status);
+    write_u64(&mut encoded, 40, record.detail0);
+
+    let out = unsafe {
+        core::slice::from_raw_parts_mut(
+            out_ptr as usize as *mut u8,
+            SUPERVISOR_RESUME_RECORD_BYTES as usize,
+        )
+    };
+    out.copy_from_slice(&encoded);
+    SUPERVISOR_RESUME_RECORD_BYTES as i32
 }
 
 fn write_snapshot(out_ptr: u32, out_len: u32) -> i32 {
@@ -162,6 +309,22 @@ fn write_snapshot(out_ptr: u32, out_len: u32) -> i32 {
     SUPERVISOR_DEBUG_SNAPSHOT_BYTES as i32
 }
 
+pub fn enqueue_futex_resume(process_ptr: u32, vm_ptr: u32, tid: i32, futex_addr: u64) -> bool {
+    if process_ptr == 0 || vm_ptr == 0 || tid <= 0 {
+        return false;
+    }
+    let seq = RESUME_ENQUEUE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    push_resume_record(SupervisorResumeRecord {
+        kind: SUPERVISOR_RESUME_KIND_FUTEX_WAKE,
+        seq,
+        vm_ptr,
+        tid: tid as u32,
+        process_ptr,
+        status: crate::abi::STATUS_OK as u32,
+        detail0: futex_addr,
+    })
+}
+
 fn thread_state_from_ptr_mut(vm_ptr: u32) -> Result<&'static mut crate::types::ThreadState, i32> {
     if vm_ptr == 0 {
         return Err(crate::abi::EFAULT as i32);
@@ -210,6 +373,16 @@ pub extern "C" fn supervisor_abi_version() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_debug_snapshot_bytes() -> u32 {
     SUPERVISOR_DEBUG_SNAPSHOT_BYTES
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_resume_record_bytes() -> u32 {
+    SUPERVISOR_RESUME_RECORD_BYTES
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_resume_kind_futex_wake() -> u32 {
+    SUPERVISOR_RESUME_KIND_FUTEX_WAKE
 }
 
 #[unsafe(no_mangle)]
@@ -263,6 +436,16 @@ pub extern "C" fn supervisor_shadow_resume_poll_count() -> u64 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_shadow_resume_enqueue_count() -> u64 {
+    resume_enqueue_count()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_shadow_resume_overflow_count() -> u64 {
+    resume_overflow_count()
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_shadow_thread_event_log_hash() -> u64 {
     thread_event_log_hash()
 }
@@ -313,8 +496,7 @@ pub extern "C" fn supervisor_next_host_op(_out_ptr: u32, _out_len: u32) -> i32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_next_resume(_out_ptr: u32, _out_len: u32) -> i32 {
-    RESUME_POLL_COUNT.fetch_add(1, Ordering::Relaxed);
-    0
+    write_resume_record(_out_ptr, _out_len)
 }
 
 #[unsafe(no_mangle)]

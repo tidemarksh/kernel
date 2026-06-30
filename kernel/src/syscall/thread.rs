@@ -405,8 +405,15 @@ fn wake_futex_waiters_by_process_ptr(
             if (waiter_bitset & wake_bitset) == 0 {
                 continue;
             }
+            let woken_record = read_thread_record(record);
             write_thread_record_state(record, THREAD_RUNNING);
             write_thread_record_blocked_addr(record, 0);
+            crate::supervisor::enqueue_futex_resume(
+                process_ptr,
+                woken_record.thread_ptr,
+                woken_record.tid,
+                addr,
+            );
             woken += 1;
         }
         woken

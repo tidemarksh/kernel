@@ -744,10 +744,12 @@ pub use crate::supervisor::{
     supervisor_futex_wait_completion_invalid_address, supervisor_futex_wait_completion_not_equal,
     supervisor_futex_wait_completion_signal_check, supervisor_futex_wait_completion_timed_out,
     supervisor_futex_wait_completion_woken, supervisor_next_host_op, supervisor_next_resume,
-    supervisor_reset_shadow_log, supervisor_shadow_host_completion_count,
-    supervisor_shadow_host_completion_log_hash, supervisor_shadow_host_op_poll_count,
-    supervisor_shadow_resume_poll_count, supervisor_shadow_thread_event_count,
-    supervisor_shadow_thread_event_log_hash, supervisor_submit_thread_event,
+    supervisor_reset_shadow_log, supervisor_resume_kind_futex_wake, supervisor_resume_record_bytes,
+    supervisor_shadow_host_completion_count, supervisor_shadow_host_completion_log_hash,
+    supervisor_shadow_host_op_poll_count, supervisor_shadow_resume_enqueue_count,
+    supervisor_shadow_resume_overflow_count, supervisor_shadow_resume_poll_count,
+    supervisor_shadow_thread_event_count, supervisor_shadow_thread_event_log_hash,
+    supervisor_submit_thread_event,
 };
 
 // =============================================================================

@@ -1,5 +1,17 @@
 use super::support::*;
 
+fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
+    let mut value = [0u8; 4];
+    value.copy_from_slice(&bytes[offset..offset + 4]);
+    u32::from_le_bytes(value)
+}
+
+fn read_u64_le(bytes: &[u8], offset: usize) -> u64 {
+    let mut value = [0u8; 8];
+    value.copy_from_slice(&bytes[offset..offset + 8]);
+    u64::from_le_bytes(value)
+}
+
 #[test]
 fn supervisor_futex_completion_resumes_only_kernel_selected_waiter() {
     let mut t = TestVm::new();
@@ -57,6 +69,78 @@ fn supervisor_futex_completion_resumes_only_kernel_selected_waiter() {
     );
     assert_eq!(t.vm.status, STATUS_OK);
     assert_eq!(t.vm.x[10], 0);
+}
+
+#[test]
+fn supervisor_next_resume_publishes_kernel_selected_futex_wake() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    let futex_addr = t.scratch + 0x120;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, futex_addr, 11);
+    }
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+
+    let wait = thread_impl::sys_futex(
+        &mut t.vm,
+        t.base,
+        futex_addr as u64,
+        FUTEX_WAIT as u64,
+        11,
+        0,
+        0,
+        0,
+    );
+    assert_eq!(wait, 0);
+    assert_eq!(supervisor_next_resume(0, 0), 0);
+
+    let wake = thread_impl::sys_futex(
+        &mut t.vm,
+        t.base,
+        futex_addr as u64,
+        FUTEX_WAKE as u64,
+        1,
+        0,
+        0,
+        0,
+    );
+    assert_eq!(wake, 1);
+    assert_eq!(supervisor_shadow_resume_enqueue_count(), 1);
+    assert_eq!(
+        supervisor_next_resume(0, 0),
+        supervisor_resume_record_bytes() as i32
+    );
+
+    let mut too_small = [0u8; 47];
+    assert_eq!(
+        supervisor_next_resume(too_small.as_mut_ptr() as u32, too_small.len() as u32),
+        ENOSPC as i32
+    );
+
+    let mut record = [0u8; 48];
+    assert_eq!(
+        supervisor_next_resume(record.as_mut_ptr() as u32, record.len() as u32),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&record, 0), 0x5255_5354);
+    assert_eq!(read_u32_le(&record, 4), supervisor_abi_version());
+    assert_eq!(read_u32_le(&record, 8), supervisor_resume_record_bytes());
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_resume_kind_futex_wake()
+    );
+    assert_eq!(read_u64_le(&record, 16), 1);
+    assert_eq!(
+        read_u32_le(&record, 24),
+        (&mut t.vm as *mut ThreadState) as u32
+    );
+    assert_eq!(read_u32_le(&record, 28), t.vm.tid as u32);
+    assert_eq!(read_u32_le(&record, 32), t.vm.process_ptr);
+    assert_eq!(read_u32_le(&record, 36), STATUS_OK as u32);
+    assert_eq!(read_u64_le(&record, 40), futex_addr as u64);
+    assert_eq!(supervisor_next_resume(0, 0), 0);
 }
 
 #[test]
