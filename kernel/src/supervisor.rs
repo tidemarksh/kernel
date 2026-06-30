@@ -46,6 +46,12 @@ pub const SUPERVISOR_FD_CONTROL_KIND_EPOLL_CTL_DEL: u32 = 7;
 pub const SUPERVISOR_FD_CONTROL_KIND_EPOLL_CTL_MOD: u32 = 8;
 pub const SUPERVISOR_FD_CONTROL_KIND_SOCKET_CREATED: u32 = 9;
 pub const SUPERVISOR_FD_CONTROL_KIND_SOCKETPAIR_CREATED: u32 = 10;
+pub const SUPERVISOR_FD_CONTROL_KIND_SOCKET_BOUND: u32 = 11;
+pub const SUPERVISOR_FD_CONTROL_KIND_SOCKET_LISTENING: u32 = 12;
+pub const SUPERVISOR_FD_CONTROL_KIND_SOCKET_CONNECT_STARTED: u32 = 13;
+pub const SUPERVISOR_FD_CONTROL_KIND_SOCKET_CONNECTED: u32 = 14;
+pub const SUPERVISOR_FD_CONTROL_KIND_SOCKET_CONNECT_FAILED: u32 = 15;
+pub const SUPERVISOR_FD_CONTROL_KIND_SOCKET_ACCEPTED: u32 = 16;
 pub const SUPERVISOR_RUNNABLE_SELECTION_BYTES: u32 = 48;
 pub const SUPERVISOR_RUNNABLE_SELECTION_MAGIC: u32 = 0x4e52_5354; // "TSRN" little-endian.
 pub const SUPERVISOR_FUTEX_WAIT_COMPLETION_WOKEN: u32 = 1;
@@ -1667,6 +1673,36 @@ pub extern "C" fn supervisor_fd_control_kind_socket_created() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fd_control_kind_socketpair_created() -> u32 {
     SUPERVISOR_FD_CONTROL_KIND_SOCKETPAIR_CREATED
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fd_control_kind_socket_bound() -> u32 {
+    SUPERVISOR_FD_CONTROL_KIND_SOCKET_BOUND
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fd_control_kind_socket_listening() -> u32 {
+    SUPERVISOR_FD_CONTROL_KIND_SOCKET_LISTENING
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fd_control_kind_socket_connect_started() -> u32 {
+    SUPERVISOR_FD_CONTROL_KIND_SOCKET_CONNECT_STARTED
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fd_control_kind_socket_connected() -> u32 {
+    SUPERVISOR_FD_CONTROL_KIND_SOCKET_CONNECTED
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fd_control_kind_socket_connect_failed() -> u32 {
+    SUPERVISOR_FD_CONTROL_KIND_SOCKET_CONNECT_FAILED
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fd_control_kind_socket_accepted() -> u32 {
+    SUPERVISOR_FD_CONTROL_KIND_SOCKET_ACCEPTED
 }
 
 #[unsafe(no_mangle)]

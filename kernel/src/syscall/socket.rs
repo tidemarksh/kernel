@@ -50,6 +50,10 @@ pub(super) fn socket_identity_detail(domain: u32, sock_type: u32, protocol: u32)
     (domain as u64) | ((sock_type as u64) << 16) | ((protocol as u64) << 32)
 }
 
+pub(super) fn socket_state_transition_detail(before: u32, after: u32) -> u64 {
+    (before as u64) | ((after as u64) << 32)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn record_socket_control(
     kind: u32,

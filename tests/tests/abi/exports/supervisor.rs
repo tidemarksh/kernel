@@ -55,6 +55,12 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_fd_control_kind_epoll_ctl_mod(), 8);
     assert_eq!(supervisor_fd_control_kind_socket_created(), 9);
     assert_eq!(supervisor_fd_control_kind_socketpair_created(), 10);
+    assert_eq!(supervisor_fd_control_kind_socket_bound(), 11);
+    assert_eq!(supervisor_fd_control_kind_socket_listening(), 12);
+    assert_eq!(supervisor_fd_control_kind_socket_connect_started(), 13);
+    assert_eq!(supervisor_fd_control_kind_socket_connected(), 14);
+    assert_eq!(supervisor_fd_control_kind_socket_connect_failed(), 15);
+    assert_eq!(supervisor_fd_control_kind_socket_accepted(), 16);
 
     let empty_hash = supervisor_shadow_thread_event_log_hash();
     assert_eq!(supervisor_shadow_thread_event_count(), 0);
