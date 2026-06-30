@@ -8,6 +8,11 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 pub const SUPERVISOR_ABI_VERSION: u32 = 1;
 pub const SUPERVISOR_DEBUG_SNAPSHOT_BYTES: u32 = 88;
+pub const SUPERVISOR_FUTEX_WAIT_COMPLETION_WOKEN: u32 = 1;
+pub const SUPERVISOR_FUTEX_WAIT_COMPLETION_NOT_EQUAL: u32 = 2;
+pub const SUPERVISOR_FUTEX_WAIT_COMPLETION_TIMED_OUT: u32 = 3;
+pub const SUPERVISOR_FUTEX_WAIT_COMPLETION_INVALID_ADDRESS: u32 = 4;
+pub const SUPERVISOR_FUTEX_WAIT_COMPLETION_SIGNAL_CHECK: u32 = 5;
 
 const SNAPSHOT_MAGIC: u32 = 0x5055_5354; // "TSUP" little-endian.
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
@@ -157,6 +162,46 @@ fn write_snapshot(out_ptr: u32, out_len: u32) -> i32 {
     SUPERVISOR_DEBUG_SNAPSHOT_BYTES as i32
 }
 
+fn thread_state_from_ptr_mut(vm_ptr: u32) -> Result<&'static mut crate::types::ThreadState, i32> {
+    if vm_ptr == 0 {
+        return Err(crate::abi::EFAULT as i32);
+    }
+    Ok(unsafe { &mut *(vm_ptr as *mut crate::types::ThreadState) })
+}
+
+fn complete_futex_wait(vm_ptr: u32, completion: u32) -> i32 {
+    let vm = match thread_state_from_ptr_mut(vm_ptr) {
+        Ok(vm) => vm,
+        Err(errno) => return errno,
+    };
+    let base = vm.guest_base;
+    let blocked_addr = crate::syscall::thread::thread_record_blocked_addr(vm, base);
+    let signal_pending =
+        crate::syscall::signal::pending_signal_interrupts_blocked_syscall(vm, base)
+            || vm.sig_pending != 0;
+
+    let result = if blocked_addr == 0 {
+        Some(0)
+    } else if blocked_addr == u64::MAX {
+        Some(crate::abi::EAGAIN)
+    } else if signal_pending || completion == SUPERVISOR_FUTEX_WAIT_COMPLETION_SIGNAL_CHECK {
+        Some(crate::abi::EINTR)
+    } else {
+        match completion {
+            SUPERVISOR_FUTEX_WAIT_COMPLETION_NOT_EQUAL => Some(0),
+            SUPERVISOR_FUTEX_WAIT_COMPLETION_TIMED_OUT => Some(crate::abi::ETIMEDOUT),
+            SUPERVISOR_FUTEX_WAIT_COMPLETION_INVALID_ADDRESS => Some(crate::abi::EAGAIN),
+            SUPERVISOR_FUTEX_WAIT_COMPLETION_WOKEN => None,
+            _ => Some(crate::abi::EINVAL),
+        }
+    };
+
+    if let Some(result) = result {
+        crate::syscall::thread::resume_futex_wait_result(vm, base, result);
+    }
+    vm.status
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_abi_version() -> u32 {
     SUPERVISOR_ABI_VERSION
@@ -165,6 +210,31 @@ pub extern "C" fn supervisor_abi_version() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_debug_snapshot_bytes() -> u32 {
     SUPERVISOR_DEBUG_SNAPSHOT_BYTES
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_futex_wait_completion_woken() -> u32 {
+    SUPERVISOR_FUTEX_WAIT_COMPLETION_WOKEN
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_futex_wait_completion_not_equal() -> u32 {
+    SUPERVISOR_FUTEX_WAIT_COMPLETION_NOT_EQUAL
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_futex_wait_completion_timed_out() -> u32 {
+    SUPERVISOR_FUTEX_WAIT_COMPLETION_TIMED_OUT
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_futex_wait_completion_invalid_address() -> u32 {
+    SUPERVISOR_FUTEX_WAIT_COMPLETION_INVALID_ADDRESS
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_futex_wait_completion_signal_check() -> u32 {
+    SUPERVISOR_FUTEX_WAIT_COMPLETION_SIGNAL_CHECK
 }
 
 #[unsafe(no_mangle)]
@@ -228,6 +298,11 @@ pub extern "C" fn supervisor_complete_host_op(completion_ptr: u32, completion_le
     LAST_HOST_COMPLETION_LEN.store(completion_len, Ordering::Relaxed);
     fold_log_hash(&HOST_COMPLETION_LOG_HASH, entry_hash, completion_len);
     0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_complete_futex_wait(vm_ptr: u32, completion: u32) -> i32 {
+    complete_futex_wait(vm_ptr, completion)
 }
 
 #[unsafe(no_mangle)]

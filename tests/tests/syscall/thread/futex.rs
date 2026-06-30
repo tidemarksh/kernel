@@ -1,6 +1,98 @@
 use super::support::*;
 
 #[test]
+fn supervisor_futex_completion_resumes_only_kernel_selected_waiter() {
+    let mut t = TestVm::new();
+    let futex_addr = t.scratch + 0x100;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, futex_addr, 7);
+    }
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+
+    let wait = thread_impl::sys_futex(
+        &mut t.vm,
+        t.base,
+        futex_addr as u64,
+        FUTEX_WAIT as u64,
+        7,
+        0,
+        0,
+        0,
+    );
+    assert_eq!(wait, 0);
+    assert_eq!(t.vm.status, STATUS_FUTEX_WAIT);
+    assert_eq!(
+        thread_impl::thread_record_blocked_addr(&t.vm, t.base),
+        futex_addr as u64
+    );
+
+    let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    assert_eq!(
+        supervisor_complete_futex_wait(vm_ptr, supervisor_futex_wait_completion_woken()),
+        STATUS_FUTEX_WAIT
+    );
+    assert_eq!(t.vm.status, STATUS_FUTEX_WAIT);
+    assert_eq!(
+        thread_impl::thread_record_blocked_addr(&t.vm, t.base),
+        futex_addr as u64
+    );
+
+    let wake = thread_impl::sys_futex(
+        &mut t.vm,
+        t.base,
+        futex_addr as u64,
+        FUTEX_WAKE as u64,
+        1,
+        0,
+        0,
+        0,
+    );
+    assert_eq!(wake, 1);
+    assert_eq!(thread_impl::thread_record_blocked_addr(&t.vm, t.base), 0);
+
+    assert_eq!(
+        supervisor_complete_futex_wait(vm_ptr, supervisor_futex_wait_completion_woken()),
+        STATUS_OK
+    );
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.x[10], 0);
+}
+
+#[test]
+fn supervisor_futex_completion_owns_timeout_result() {
+    let mut t = TestVm::new();
+    let futex_addr = t.scratch + 0x140;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, futex_addr, 9);
+    }
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+
+    let wait = thread_impl::sys_futex(
+        &mut t.vm,
+        t.base,
+        futex_addr as u64,
+        FUTEX_WAIT as u64,
+        9,
+        0,
+        0,
+        0,
+    );
+    assert_eq!(wait, 0);
+    assert_eq!(t.vm.status, STATUS_FUTEX_WAIT);
+
+    let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    assert_eq!(
+        supervisor_complete_futex_wait(vm_ptr, supervisor_futex_wait_completion_timed_out()),
+        STATUS_OK
+    );
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.x[10] as i64, ETIMEDOUT);
+    assert_eq!(thread_impl::thread_record_blocked_addr(&t.vm, t.base), 0);
+}
+
+#[test]
 fn contract_futex_wait_return_path_preserves_thread_context() {
     let mut t = TestVm::new();
     let notesleep_page = t.sys_mmap(
