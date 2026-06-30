@@ -146,6 +146,41 @@ fn epoll_supports_fd_type(fd_type: i32) -> bool {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
+fn record_epoll_control(
+    kind: u32,
+    vm: &ThreadState,
+    base: u32,
+    epfd: u64,
+    fd: u64,
+    epoll_ofd_id: u32,
+    watched_ofd_id: u32,
+    watched_fd_type: i32,
+    epoll_idx: u32,
+    result: i64,
+    events: u32,
+    data: u64,
+    count: u32,
+) {
+    crate::supervisor::record_fd_control(
+        kind,
+        vm as *const ThreadState as u32,
+        vm.process_ptr,
+        crate::syscall::process::current_process_pid(vm, base),
+        epfd as u32,
+        fd as u32,
+        epoll_ofd_id,
+        watched_ofd_id,
+        watched_fd_type as u32,
+        epoll_idx,
+        count,
+        result,
+        events as u64,
+        data,
+        count as u64,
+    );
+}
+
 pub fn release_interest_for_ofd(ofd_id: u32) {
     if ofd_id == 0 {
         return;
@@ -197,7 +232,26 @@ pub fn sys_epoll_create1(vm: &mut ThreadState, base: u32, flags: u64) -> i64 {
     }
 
     // Create an FD for this epoll instance
-    fd_table::open_epoll(vm, base, slot_idx as u32, flags as i32)
+    let fd = fd_table::open_epoll(vm, base, slot_idx as u32, flags as i32);
+    if fd >= 0 {
+        let ofd_id = fd_table::get_ofd_id(base, vm, fd as u64).unwrap_or(0);
+        record_epoll_control(
+            crate::supervisor::SUPERVISOR_FD_CONTROL_KIND_EPOLL_CREATED,
+            vm,
+            base,
+            fd as u64,
+            0,
+            ofd_id,
+            0,
+            FD_TYPE_EPOLL,
+            slot_idx as u32,
+            fd,
+            flags as u32,
+            epoll_ptr(slot_idx) as u32 as u64,
+            0,
+        );
+    }
+    fd
 }
 
 // =========================================================================
@@ -213,6 +267,10 @@ pub fn sys_epoll_ctl(
     fd: u64,
     event_addr: u64,
 ) -> i64 {
+    let epoll_ofd_id = match fd_table::get_ofd_id(base, vm, epfd) {
+        Some(id) => id,
+        None => return EBADF,
+    };
     let epoll_ofd = match fd_table::get_ofd(base, vm, epfd) {
         Some(o) => o,
         None => return EBADF,
@@ -258,12 +316,43 @@ pub fn sys_epoll_ctl(
                 last_revents: 0,
             };
             inst.count += 1;
+            record_epoll_control(
+                crate::supervisor::SUPERVISOR_FD_CONTROL_KIND_EPOLL_CTL_ADD,
+                vm,
+                base,
+                epfd,
+                fd,
+                epoll_ofd_id,
+                watched_ofd_id,
+                watched_ofd.fd_type,
+                epoll_ofd.ino,
+                0,
+                events,
+                data,
+                inst.count,
+            );
             0
         }
         EPOLL_CTL_DEL => {
             for i in 0..inst.count as usize {
                 if inst.entries[i].fd == fd as u32 && inst.entries[i].ofd_id == watched_ofd_id {
+                    let entry = inst.entries[i];
                     remove_entry(inst, i);
+                    record_epoll_control(
+                        crate::supervisor::SUPERVISOR_FD_CONTROL_KIND_EPOLL_CTL_DEL,
+                        vm,
+                        base,
+                        epfd,
+                        fd,
+                        epoll_ofd_id,
+                        watched_ofd_id,
+                        watched_ofd.fd_type,
+                        epoll_ofd.ino,
+                        0,
+                        entry.events,
+                        entry.data,
+                        inst.count,
+                    );
                     return 0;
                 }
             }
@@ -272,10 +361,27 @@ pub fn sys_epoll_ctl(
         EPOLL_CTL_MOD => {
             for i in 0..inst.count as usize {
                 if inst.entries[i].fd == fd as u32 && inst.entries[i].ofd_id == watched_ofd_id {
-                    inst.entries[i].events = unsafe { guest_mem::read_u32(base, event_addr) };
-                    inst.entries[i].data =
+                    let events = unsafe { guest_mem::read_u32(base, event_addr) };
+                    let data =
                         unsafe { guest_mem::read_u64(base, event_addr + EPOLL_EVENT_DATA_OFFSET) };
+                    inst.entries[i].events = events;
+                    inst.entries[i].data = data;
                     inst.entries[i].last_revents = 0;
+                    record_epoll_control(
+                        crate::supervisor::SUPERVISOR_FD_CONTROL_KIND_EPOLL_CTL_MOD,
+                        vm,
+                        base,
+                        epfd,
+                        fd,
+                        epoll_ofd_id,
+                        watched_ofd_id,
+                        watched_ofd.fd_type,
+                        epoll_ofd.ino,
+                        0,
+                        events,
+                        data,
+                        inst.count,
+                    );
                     return 0;
                 }
             }

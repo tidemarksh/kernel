@@ -40,6 +40,10 @@ pub const SUPERVISOR_FD_CONTROL_KIND_PIPE_CREATED: u32 = 1;
 pub const SUPERVISOR_FD_CONTROL_KIND_FD_CLOSED: u32 = 2;
 pub const SUPERVISOR_FD_CONTROL_KIND_FD_DUPLICATED: u32 = 3;
 pub const SUPERVISOR_FD_CONTROL_KIND_FD_FLAGS_UPDATED: u32 = 4;
+pub const SUPERVISOR_FD_CONTROL_KIND_EPOLL_CREATED: u32 = 5;
+pub const SUPERVISOR_FD_CONTROL_KIND_EPOLL_CTL_ADD: u32 = 6;
+pub const SUPERVISOR_FD_CONTROL_KIND_EPOLL_CTL_DEL: u32 = 7;
+pub const SUPERVISOR_FD_CONTROL_KIND_EPOLL_CTL_MOD: u32 = 8;
 pub const SUPERVISOR_RUNNABLE_SELECTION_BYTES: u32 = 48;
 pub const SUPERVISOR_RUNNABLE_SELECTION_MAGIC: u32 = 0x4e52_5354; // "TSRN" little-endian.
 pub const SUPERVISOR_FUTEX_WAIT_COMPLETION_WOKEN: u32 = 1;
@@ -1631,6 +1635,26 @@ pub extern "C" fn supervisor_fd_control_kind_fd_duplicated() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fd_control_kind_fd_flags_updated() -> u32 {
     SUPERVISOR_FD_CONTROL_KIND_FD_FLAGS_UPDATED
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fd_control_kind_epoll_created() -> u32 {
+    SUPERVISOR_FD_CONTROL_KIND_EPOLL_CREATED
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fd_control_kind_epoll_ctl_add() -> u32 {
+    SUPERVISOR_FD_CONTROL_KIND_EPOLL_CTL_ADD
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fd_control_kind_epoll_ctl_del() -> u32 {
+    SUPERVISOR_FD_CONTROL_KIND_EPOLL_CTL_DEL
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fd_control_kind_epoll_ctl_mod() -> u32 {
+    SUPERVISOR_FD_CONTROL_KIND_EPOLL_CTL_MOD
 }
 
 #[unsafe(no_mangle)]
