@@ -78,6 +78,22 @@ pub fn sys_wait4(
                 unsafe { guest_mem::write_u32(base, wstatus_addr, wait_status) };
             }
 
+            let published_seq = crate::supervisor::process_lifecycle_count();
+            crate::supervisor::record_process_lifecycle(
+                crate::supervisor::SUPERVISOR_PROCESS_LIFECYCLE_KIND_WAIT4_COMPLETED,
+                vm as *const ThreadState as u32,
+                caller_pid,
+                child_pid,
+                wait_status as i32,
+                WAIT_KIND_WAIT4,
+                STATUS_OK as u32,
+                child_pid as i64,
+                pid,
+                options,
+                wstatus_addr,
+                rusage_addr,
+                published_seq,
+            );
             clear_wait4_state(vm);
             vm.status = STATUS_OK;
             return child_pid as i64;

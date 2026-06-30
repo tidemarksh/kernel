@@ -1,5 +1,17 @@
 use super::support::*;
 
+fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
+    let mut value = [0u8; 4];
+    value.copy_from_slice(&bytes[offset..offset + 4]);
+    u32::from_le_bytes(value)
+}
+
+fn read_u64_le(bytes: &[u8], offset: usize) -> u64 {
+    let mut value = [0u8; 8];
+    value.copy_from_slice(&bytes[offset..offset + 8]);
+    u64::from_le_bytes(value)
+}
+
 #[test]
 fn semantics_waitid_wnowait_reports_without_reaping() {
     let mut t = TestVm::new();
@@ -102,6 +114,70 @@ fn semantics_wait4_accepts_common_waitpid_flags_when_reaping_exited_child() {
     );
     assert_eq!(ret, child as i64);
     assert_eq!(unsafe { guest_mem::read_u32(t.base, wstatus_addr) }, 7 << 8);
+}
+
+#[test]
+fn supervisor_process_lifecycle_records_child_exit_before_wait4_completion() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    let wstatus_addr = t.scratch + 0x1280;
+    let parent_pid = process_impl::current_process_pid(&t.vm, t.base);
+
+    let child = process_impl::sys_fork(&mut t.vm, t.base, 0, 0, 0, 0, 0) as i32;
+    assert!(child > 0);
+    t.vm.status = STATUS_OK;
+
+    process_impl::record_child_exit_for_parent(parent_pid, child, 7 << 8);
+    assert_eq!(supervisor_shadow_process_lifecycle_count(), 1);
+
+    let mut record = [0u8; 96];
+    assert_eq!(
+        supervisor_process_lifecycle_record(record.as_mut_ptr() as u32, record.len() as u32),
+        supervisor_process_lifecycle_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&record, 0), 0x4350_5354);
+    assert_eq!(
+        read_u32_le(&record, 8),
+        supervisor_process_lifecycle_record_bytes()
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_process_lifecycle_kind_child_exit_published()
+    );
+    assert_eq!(read_u64_le(&record, 16), 1);
+    assert_eq!(read_u32_le(&record, 24), 0);
+    assert_eq!(read_u32_le(&record, 28), parent_pid as u32);
+    assert_eq!(read_u32_le(&record, 32), child as u32);
+    assert_eq!(read_u32_le(&record, 36), (7 << 8) as u32);
+
+    let ret = process_impl::sys_wait4(&mut t.vm, t.base, child as i64, wstatus_addr, 0, 0);
+    assert_eq!(ret, child as i64);
+    assert_eq!(unsafe { guest_mem::read_u32(t.base, wstatus_addr) }, 7 << 8);
+    assert_eq!(supervisor_shadow_process_lifecycle_count(), 2);
+
+    assert_eq!(
+        supervisor_process_lifecycle_record(record.as_mut_ptr() as u32, record.len() as u32),
+        supervisor_process_lifecycle_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_process_lifecycle_kind_wait4_completed()
+    );
+    assert_eq!(read_u64_le(&record, 16), 2);
+    assert_eq!(read_u32_le(&record, 24), vm_ptr);
+    assert_eq!(read_u32_le(&record, 28), parent_pid as u32);
+    assert_eq!(read_u32_le(&record, 32), child as u32);
+    assert_eq!(read_u32_le(&record, 36), (7 << 8) as u32);
+    assert_eq!(read_u32_le(&record, 40), 1);
+    assert_eq!(read_u32_le(&record, 44), STATUS_OK as u32);
+    assert_eq!(read_u64_le(&record, 48), child as u64);
+    assert_eq!(read_u64_le(&record, 56), child as u64);
+    assert_eq!(read_u64_le(&record, 64), 0);
+    assert_eq!(read_u64_le(&record, 72), wstatus_addr);
+    assert_eq!(read_u64_le(&record, 80), 0);
+    assert_eq!(read_u64_le(&record, 88), 1);
 }
 
 #[test]

@@ -564,6 +564,24 @@ pub(super) fn record_child(parent_pid: i32, pid: i32) {
     }
 }
 
+fn record_child_exit_publication(parent_pid: i32, pid: i32, wait_status: i32) {
+    crate::supervisor::record_process_lifecycle(
+        crate::supervisor::SUPERVISOR_PROCESS_LIFECYCLE_KIND_CHILD_EXIT_PUBLISHED,
+        0,
+        parent_pid,
+        pid,
+        wait_status,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    );
+}
+
 pub fn record_child_exit(pid: i32, wait_status: i32) {
     for c in children().iter_mut() {
         if c.pid == pid && !c.exited {
@@ -573,6 +591,7 @@ pub fn record_child_exit(pid: i32, wait_status: i32) {
             }
             c.exited = true;
             c.wait_status = wait_status;
+            record_child_exit_publication(c.parent_pid, pid, wait_status);
             crate::syscall::signal::queue_process_signal(c.parent_pid, SIGCHLD);
             return;
         }
@@ -592,6 +611,7 @@ pub fn record_child_exit_for_parent(parent_pid: i32, pid: i32, wait_status: i32)
             }
             c.exited = true;
             c.wait_status = wait_status;
+            record_child_exit_publication(parent_pid, pid, wait_status);
             crate::syscall::signal::queue_process_signal(parent_pid, SIGCHLD);
             return;
         }
@@ -605,6 +625,7 @@ pub fn record_child_exit_for_parent(parent_pid: i32, pid: i32, wait_status: i32)
                 exited: true,
                 wait_status,
             };
+            record_child_exit_publication(parent_pid, pid, wait_status);
             crate::syscall::signal::queue_process_signal(parent_pid, SIGCHLD);
             return;
         }

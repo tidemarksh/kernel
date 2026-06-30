@@ -27,6 +27,10 @@ pub const SUPERVISOR_FAULT_EXIT_KIND_PROCESS_EXIT: u32 = 2;
 pub const SUPERVISOR_THREAD_EXIT_CLEANUP_BYTES: u32 = 96;
 pub const SUPERVISOR_THREAD_EXIT_CLEANUP_MAGIC: u32 = 0x4358_5354; // "TSXC" little-endian.
 pub const SUPERVISOR_THREAD_EXIT_CLEANUP_KIND_THREAD_EXIT: u32 = 1;
+pub const SUPERVISOR_PROCESS_LIFECYCLE_BYTES: u32 = 96;
+pub const SUPERVISOR_PROCESS_LIFECYCLE_MAGIC: u32 = 0x4350_5354; // "TSPC" little-endian.
+pub const SUPERVISOR_PROCESS_LIFECYCLE_KIND_CHILD_EXIT_PUBLISHED: u32 = 1;
+pub const SUPERVISOR_PROCESS_LIFECYCLE_KIND_WAIT4_COMPLETED: u32 = 2;
 pub const SUPERVISOR_RUNNABLE_SELECTION_BYTES: u32 = 48;
 pub const SUPERVISOR_RUNNABLE_SELECTION_MAGIC: u32 = 0x4e52_5354; // "TSRN" little-endian.
 pub const SUPERVISOR_FUTEX_WAIT_COMPLETION_WOKEN: u32 = 1;
@@ -61,6 +65,7 @@ static HOST_OP_EMIT_COUNT: AtomicU64 = AtomicU64::new(0);
 static HOST_OP_OVERFLOW_COUNT: AtomicU64 = AtomicU64::new(0);
 static FAULT_EXIT_DECISION_COUNT: AtomicU64 = AtomicU64::new(0);
 static THREAD_EXIT_CLEANUP_COUNT: AtomicU64 = AtomicU64::new(0);
+static PROCESS_LIFECYCLE_COUNT: AtomicU64 = AtomicU64::new(0);
 static RESUME_POLL_COUNT: AtomicU64 = AtomicU64::new(0);
 static RESUME_ENQUEUE_COUNT: AtomicU64 = AtomicU64::new(0);
 static RESUME_OVERFLOW_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -85,6 +90,9 @@ static mut HOST_OP_QUEUE: [SupervisorHostOpRequest; HOST_OP_QUEUE_CAP] =
 static THREAD_EXIT_CLEANUP_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_THREAD_EXIT_CLEANUP: SupervisorThreadExitCleanupRecord =
     SupervisorThreadExitCleanupRecord::empty();
+static PROCESS_LIFECYCLE_LOCK: AtomicU32 = AtomicU32::new(0);
+static mut LAST_PROCESS_LIFECYCLE: SupervisorProcessLifecycleRecord =
+    SupervisorProcessLifecycleRecord::empty();
 
 #[derive(Clone, Copy)]
 struct SupervisorResumeRecord {
@@ -177,6 +185,45 @@ impl SupervisorThreadExitCleanupRecord {
 }
 
 #[derive(Clone, Copy)]
+pub struct SupervisorProcessLifecycleRecord {
+    kind: u32,
+    seq: u64,
+    vm_ptr: u32,
+    parent_pid: u32,
+    child_pid: u32,
+    wait_status: u32,
+    wait_kind: u32,
+    vm_status: u32,
+    result: i64,
+    wait_target: i64,
+    options: u64,
+    wstatus_addr: u64,
+    rusage_addr: u64,
+    detail: u64,
+}
+
+impl SupervisorProcessLifecycleRecord {
+    const fn empty() -> Self {
+        Self {
+            kind: 0,
+            seq: 0,
+            vm_ptr: 0,
+            parent_pid: 0,
+            child_pid: 0,
+            wait_status: 0,
+            wait_kind: 0,
+            vm_status: 0,
+            result: 0,
+            wait_target: 0,
+            options: 0,
+            wstatus_addr: 0,
+            rusage_addr: 0,
+            detail: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 struct SupervisorRunnableSelection {
     seq: u64,
     vm_ptr: u32,
@@ -195,6 +242,7 @@ pub fn init() {
     HOST_OP_OVERFLOW_COUNT.store(0, Ordering::Relaxed);
     FAULT_EXIT_DECISION_COUNT.store(0, Ordering::Relaxed);
     THREAD_EXIT_CLEANUP_COUNT.store(0, Ordering::Relaxed);
+    PROCESS_LIFECYCLE_COUNT.store(0, Ordering::Relaxed);
     RESUME_POLL_COUNT.store(0, Ordering::Relaxed);
     RESUME_ENQUEUE_COUNT.store(0, Ordering::Relaxed);
     RESUME_OVERFLOW_COUNT.store(0, Ordering::Relaxed);
@@ -225,6 +273,9 @@ pub fn init() {
     with_thread_exit_cleanup_lock(|| unsafe {
         LAST_THREAD_EXIT_CLEANUP = SupervisorThreadExitCleanupRecord::empty();
     });
+    with_process_lifecycle_lock(|| unsafe {
+        LAST_PROCESS_LIFECYCLE = SupervisorProcessLifecycleRecord::empty();
+    });
 }
 
 pub fn thread_event_count() -> u64 {
@@ -249,6 +300,10 @@ pub fn host_op_overflow_count() -> u64 {
 
 pub fn thread_exit_cleanup_count() -> u64 {
     THREAD_EXIT_CLEANUP_COUNT.load(Ordering::Relaxed)
+}
+
+pub fn process_lifecycle_count() -> u64 {
+    PROCESS_LIFECYCLE_COUNT.load(Ordering::Relaxed)
 }
 
 pub fn resume_poll_count() -> u64 {
@@ -356,6 +411,21 @@ fn with_thread_exit_cleanup_lock<T>(f: impl FnOnce() -> T) -> T {
     }
     let result = f();
     THREAD_EXIT_CLEANUP_LOCK.store(0, Ordering::Release);
+    result
+}
+
+fn with_process_lifecycle_lock<T>(f: impl FnOnce() -> T) -> T {
+    loop {
+        if PROCESS_LIFECYCLE_LOCK
+            .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    let result = f();
+    PROCESS_LIFECYCLE_LOCK.store(0, Ordering::Release);
     result
 }
 
@@ -963,6 +1033,83 @@ fn write_thread_exit_cleanup_record(out_ptr: u32, out_len: u32) -> i32 {
     SUPERVISOR_THREAD_EXIT_CLEANUP_BYTES as i32
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn record_process_lifecycle(
+    kind: u32,
+    vm_ptr: u32,
+    parent_pid: i32,
+    child_pid: i32,
+    wait_status: i32,
+    wait_kind: u32,
+    vm_status: u32,
+    result: i64,
+    wait_target: i64,
+    options: u64,
+    wstatus_addr: u64,
+    rusage_addr: u64,
+    detail: u64,
+) {
+    let seq = PROCESS_LIFECYCLE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    let record = SupervisorProcessLifecycleRecord {
+        kind,
+        seq,
+        vm_ptr,
+        parent_pid: parent_pid as u32,
+        child_pid: child_pid as u32,
+        wait_status: wait_status as u32,
+        wait_kind,
+        vm_status,
+        result,
+        wait_target,
+        options,
+        wstatus_addr,
+        rusage_addr,
+        detail,
+    };
+    with_process_lifecycle_lock(|| unsafe {
+        LAST_PROCESS_LIFECYCLE = record;
+    });
+}
+
+fn write_process_lifecycle_record(out_ptr: u32, out_len: u32) -> i32 {
+    if out_len == 0 {
+        return SUPERVISOR_PROCESS_LIFECYCLE_BYTES as i32;
+    }
+    if out_ptr == 0 {
+        return crate::abi::EFAULT as i32;
+    }
+    if out_len < SUPERVISOR_PROCESS_LIFECYCLE_BYTES {
+        return crate::abi::ENOSPC as i32;
+    }
+    let record = with_process_lifecycle_lock(|| unsafe { LAST_PROCESS_LIFECYCLE });
+    let mut encoded = [0u8; SUPERVISOR_PROCESS_LIFECYCLE_BYTES as usize];
+    write_u32(&mut encoded, 0, SUPERVISOR_PROCESS_LIFECYCLE_MAGIC);
+    write_u32(&mut encoded, 4, SUPERVISOR_ABI_VERSION);
+    write_u32(&mut encoded, 8, SUPERVISOR_PROCESS_LIFECYCLE_BYTES);
+    write_u32(&mut encoded, 12, record.kind);
+    write_u64(&mut encoded, 16, record.seq);
+    write_u32(&mut encoded, 24, record.vm_ptr);
+    write_u32(&mut encoded, 28, record.parent_pid);
+    write_u32(&mut encoded, 32, record.child_pid);
+    write_u32(&mut encoded, 36, record.wait_status);
+    write_u32(&mut encoded, 40, record.wait_kind);
+    write_u32(&mut encoded, 44, record.vm_status);
+    write_u64(&mut encoded, 48, record.result as u64);
+    write_u64(&mut encoded, 56, record.wait_target as u64);
+    write_u64(&mut encoded, 64, record.options);
+    write_u64(&mut encoded, 72, record.wstatus_addr);
+    write_u64(&mut encoded, 80, record.rusage_addr);
+    write_u64(&mut encoded, 88, record.detail);
+    let out = unsafe {
+        core::slice::from_raw_parts_mut(
+            out_ptr as usize as *mut u8,
+            SUPERVISOR_PROCESS_LIFECYCLE_BYTES as usize,
+        )
+    };
+    out.copy_from_slice(&encoded);
+    SUPERVISOR_PROCESS_LIFECYCLE_BYTES as i32
+}
+
 fn write_snapshot(out_ptr: u32, out_len: u32) -> i32 {
     if out_len == 0 {
         return SUPERVISOR_DEBUG_SNAPSHOT_BYTES as i32;
@@ -1191,6 +1338,21 @@ pub extern "C" fn supervisor_thread_exit_cleanup_kind_thread_exit() -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_lifecycle_record_bytes() -> u32 {
+    SUPERVISOR_PROCESS_LIFECYCLE_BYTES
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_lifecycle_kind_child_exit_published() -> u32 {
+    SUPERVISOR_PROCESS_LIFECYCLE_KIND_CHILD_EXIT_PUBLISHED
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_lifecycle_kind_wait4_completed() -> u32 {
+    SUPERVISOR_PROCESS_LIFECYCLE_KIND_WAIT4_COMPLETED
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_runnable_selection_bytes() -> u32 {
     SUPERVISOR_RUNNABLE_SELECTION_BYTES
 }
@@ -1258,6 +1420,11 @@ pub extern "C" fn supervisor_shadow_host_op_overflow_count() -> u64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_shadow_thread_exit_cleanup_count() -> u64 {
     thread_exit_cleanup_count()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_shadow_process_lifecycle_count() -> u64 {
+    process_lifecycle_count()
 }
 
 #[unsafe(no_mangle)]
@@ -1347,6 +1514,11 @@ pub extern "C" fn supervisor_fault_exit_decision(vm_ptr: u32, out_ptr: u32, out_
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_thread_exit_cleanup_record(out_ptr: u32, out_len: u32) -> i32 {
     write_thread_exit_cleanup_record(out_ptr, out_len)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_lifecycle_record(out_ptr: u32, out_len: u32) -> i32 {
+    write_process_lifecycle_record(out_ptr, out_len)
 }
 
 #[unsafe(no_mangle)]

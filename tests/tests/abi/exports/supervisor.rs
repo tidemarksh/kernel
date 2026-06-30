@@ -39,6 +39,9 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_fault_exit_kind_process_exit(), 2);
     assert_eq!(supervisor_thread_exit_cleanup_record_bytes(), 96);
     assert_eq!(supervisor_thread_exit_cleanup_kind_thread_exit(), 1);
+    assert_eq!(supervisor_process_lifecycle_record_bytes(), 96);
+    assert_eq!(supervisor_process_lifecycle_kind_child_exit_published(), 1);
+    assert_eq!(supervisor_process_lifecycle_kind_wait4_completed(), 2);
 
     let empty_hash = supervisor_shadow_thread_event_log_hash();
     assert_eq!(supervisor_shadow_thread_event_count(), 0);
@@ -55,6 +58,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_shadow_host_op_emit_count(), 0);
     assert_eq!(supervisor_shadow_host_op_overflow_count(), 0);
     assert_eq!(supervisor_shadow_thread_exit_cleanup_count(), 0);
+    assert_eq!(supervisor_shadow_process_lifecycle_count(), 0);
     assert_eq!(supervisor_next_resume(0, 0), 0);
     assert_eq!(supervisor_shadow_resume_poll_count(), 1);
 
