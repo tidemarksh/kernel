@@ -738,6 +738,14 @@ export_const!(abi_max_signalfds, MAX_SIGNALFDS as i32);
 pub use crate::exports::kernel::*;
 pub use crate::exports::memfs::*;
 pub use crate::exports::thread::*;
+pub use crate::supervisor::{
+    supervisor_abi_version, supervisor_complete_host_op, supervisor_debug_snapshot,
+    supervisor_debug_snapshot_bytes, supervisor_next_host_op, supervisor_next_resume,
+    supervisor_reset_shadow_log, supervisor_shadow_host_completion_count,
+    supervisor_shadow_host_completion_log_hash, supervisor_shadow_host_op_poll_count,
+    supervisor_shadow_resume_poll_count, supervisor_shadow_thread_event_count,
+    supervisor_shadow_thread_event_log_hash, supervisor_submit_thread_event,
+};
 
 // =============================================================================
 // WASM exports — runtime calls these to manage processes and threads

@@ -58,6 +58,7 @@ pub mod guest_mem;
 pub mod harness;
 pub mod jit;
 pub mod net;
+pub mod supervisor;
 pub mod syscall;
 mod tracepoints;
 pub mod types;
