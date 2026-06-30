@@ -52,6 +52,12 @@ pub const SUPERVISOR_FD_CONTROL_KIND_SOCKET_CONNECT_STARTED: u32 = 13;
 pub const SUPERVISOR_FD_CONTROL_KIND_SOCKET_CONNECTED: u32 = 14;
 pub const SUPERVISOR_FD_CONTROL_KIND_SOCKET_CONNECT_FAILED: u32 = 15;
 pub const SUPERVISOR_FD_CONTROL_KIND_SOCKET_ACCEPTED: u32 = 16;
+pub const SUPERVISOR_FS_CONTROL_RECORD_BYTES: u32 = 112;
+pub const SUPERVISOR_FS_CONTROL_RECORD_MAGIC: u32 = 0x5346_5354; // "TSFS" little-endian.
+pub const SUPERVISOR_FS_CONTROL_KIND_PAGE_CACHE_MISS: u32 = 1;
+pub const SUPERVISOR_FS_CONTROL_KIND_PAGE_CACHE_FILL: u32 = 2;
+pub const SUPERVISOR_FS_CONTROL_KIND_DIRTY_PAGE_PUBLISHED: u32 = 3;
+pub const SUPERVISOR_FS_CONTROL_KIND_DIRTY_PAGE_FLUSHED: u32 = 4;
 pub const SUPERVISOR_RUNNABLE_SELECTION_BYTES: u32 = 48;
 pub const SUPERVISOR_RUNNABLE_SELECTION_MAGIC: u32 = 0x4e52_5354; // "TSRN" little-endian.
 pub const SUPERVISOR_FUTEX_WAIT_COMPLETION_WOKEN: u32 = 1;
@@ -88,6 +94,7 @@ static FAULT_EXIT_DECISION_COUNT: AtomicU64 = AtomicU64::new(0);
 static THREAD_EXIT_CLEANUP_COUNT: AtomicU64 = AtomicU64::new(0);
 static PROCESS_LIFECYCLE_COUNT: AtomicU64 = AtomicU64::new(0);
 static FD_CONTROL_COUNT: AtomicU64 = AtomicU64::new(0);
+static FS_CONTROL_COUNT: AtomicU64 = AtomicU64::new(0);
 static RESUME_POLL_COUNT: AtomicU64 = AtomicU64::new(0);
 static RESUME_ENQUEUE_COUNT: AtomicU64 = AtomicU64::new(0);
 static RESUME_OVERFLOW_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -117,6 +124,8 @@ static mut LAST_PROCESS_LIFECYCLE: SupervisorProcessLifecycleRecord =
     SupervisorProcessLifecycleRecord::empty();
 static FD_CONTROL_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_FD_CONTROL: SupervisorFdControlRecord = SupervisorFdControlRecord::empty();
+static FS_CONTROL_LOCK: AtomicU32 = AtomicU32::new(0);
+static mut LAST_FS_CONTROL: SupervisorFsControlRecord = SupervisorFsControlRecord::empty();
 
 #[derive(Clone, Copy)]
 struct SupervisorResumeRecord {
@@ -308,6 +317,49 @@ impl SupervisorFdControlRecord {
 }
 
 #[derive(Clone, Copy)]
+pub struct SupervisorFsControlRecord {
+    kind: u32,
+    seq: u64,
+    vm_ptr: u32,
+    process_ptr: u32,
+    pid: u32,
+    fd: u32,
+    ino: u32,
+    opcode: u32,
+    file_object_id: u64,
+    page_index: u64,
+    offset: u64,
+    length: u64,
+    result: i64,
+    flags: u64,
+    detail0: u64,
+    detail1: u64,
+}
+
+impl SupervisorFsControlRecord {
+    const fn empty() -> Self {
+        Self {
+            kind: 0,
+            seq: 0,
+            vm_ptr: 0,
+            process_ptr: 0,
+            pid: 0,
+            fd: 0,
+            ino: 0,
+            opcode: 0,
+            file_object_id: 0,
+            page_index: 0,
+            offset: 0,
+            length: 0,
+            result: 0,
+            flags: 0,
+            detail0: 0,
+            detail1: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 struct SupervisorRunnableSelection {
     seq: u64,
     vm_ptr: u32,
@@ -328,6 +380,7 @@ pub fn init() {
     THREAD_EXIT_CLEANUP_COUNT.store(0, Ordering::Relaxed);
     PROCESS_LIFECYCLE_COUNT.store(0, Ordering::Relaxed);
     FD_CONTROL_COUNT.store(0, Ordering::Relaxed);
+    FS_CONTROL_COUNT.store(0, Ordering::Relaxed);
     RESUME_POLL_COUNT.store(0, Ordering::Relaxed);
     RESUME_ENQUEUE_COUNT.store(0, Ordering::Relaxed);
     RESUME_OVERFLOW_COUNT.store(0, Ordering::Relaxed);
@@ -364,6 +417,9 @@ pub fn init() {
     with_fd_control_lock(|| unsafe {
         LAST_FD_CONTROL = SupervisorFdControlRecord::empty();
     });
+    with_fs_control_lock(|| unsafe {
+        LAST_FS_CONTROL = SupervisorFsControlRecord::empty();
+    });
 }
 
 pub fn thread_event_count() -> u64 {
@@ -396,6 +452,10 @@ pub fn process_lifecycle_count() -> u64 {
 
 pub fn fd_control_count() -> u64 {
     FD_CONTROL_COUNT.load(Ordering::Relaxed)
+}
+
+pub fn fs_control_count() -> u64 {
+    FS_CONTROL_COUNT.load(Ordering::Relaxed)
 }
 
 pub fn resume_poll_count() -> u64 {
@@ -533,6 +593,21 @@ fn with_fd_control_lock<T>(f: impl FnOnce() -> T) -> T {
     }
     let result = f();
     FD_CONTROL_LOCK.store(0, Ordering::Release);
+    result
+}
+
+fn with_fs_control_lock<T>(f: impl FnOnce() -> T) -> T {
+    loop {
+        if FS_CONTROL_LOCK
+            .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    let result = f();
+    FS_CONTROL_LOCK.store(0, Ordering::Release);
     result
 }
 
@@ -1327,6 +1402,48 @@ pub fn record_fd_control(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn record_fs_control(
+    kind: u32,
+    vm_ptr: u32,
+    process_ptr: u32,
+    pid: i32,
+    fd: u32,
+    ino: u32,
+    opcode: u32,
+    file_object_id: u64,
+    page_index: u64,
+    offset: u64,
+    length: u64,
+    result: i64,
+    flags: u64,
+    detail0: u64,
+    detail1: u64,
+) {
+    let seq = FS_CONTROL_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    let record = SupervisorFsControlRecord {
+        kind,
+        seq,
+        vm_ptr,
+        process_ptr,
+        pid: pid as u32,
+        fd,
+        ino,
+        opcode,
+        file_object_id,
+        page_index,
+        offset,
+        length,
+        result,
+        flags,
+        detail0,
+        detail1,
+    };
+    with_fs_control_lock(|| unsafe {
+        LAST_FS_CONTROL = record;
+    });
+}
+
 fn write_fd_control_record(out_ptr: u32, out_len: u32) -> i32 {
     if out_len == 0 {
         return SUPERVISOR_FD_CONTROL_RECORD_BYTES as i32;
@@ -1366,6 +1483,47 @@ fn write_fd_control_record(out_ptr: u32, out_len: u32) -> i32 {
     };
     out.copy_from_slice(&encoded);
     SUPERVISOR_FD_CONTROL_RECORD_BYTES as i32
+}
+
+fn write_fs_control_record(out_ptr: u32, out_len: u32) -> i32 {
+    if out_len == 0 {
+        return SUPERVISOR_FS_CONTROL_RECORD_BYTES as i32;
+    }
+    if out_ptr == 0 {
+        return crate::abi::EFAULT as i32;
+    }
+    if out_len < SUPERVISOR_FS_CONTROL_RECORD_BYTES {
+        return crate::abi::ENOSPC as i32;
+    }
+    let record = with_fs_control_lock(|| unsafe { LAST_FS_CONTROL });
+    let mut encoded = [0u8; SUPERVISOR_FS_CONTROL_RECORD_BYTES as usize];
+    write_u32(&mut encoded, 0, SUPERVISOR_FS_CONTROL_RECORD_MAGIC);
+    write_u32(&mut encoded, 4, SUPERVISOR_ABI_VERSION);
+    write_u32(&mut encoded, 8, SUPERVISOR_FS_CONTROL_RECORD_BYTES);
+    write_u32(&mut encoded, 12, record.kind);
+    write_u64(&mut encoded, 16, record.seq);
+    write_u32(&mut encoded, 24, record.vm_ptr);
+    write_u32(&mut encoded, 28, record.process_ptr);
+    write_u32(&mut encoded, 32, record.pid);
+    write_u32(&mut encoded, 36, record.fd);
+    write_u32(&mut encoded, 40, record.ino);
+    write_u32(&mut encoded, 44, record.opcode);
+    write_u64(&mut encoded, 48, record.file_object_id);
+    write_u64(&mut encoded, 56, record.page_index);
+    write_u64(&mut encoded, 64, record.offset);
+    write_u64(&mut encoded, 72, record.length);
+    write_u64(&mut encoded, 80, record.result as u64);
+    write_u64(&mut encoded, 88, record.flags);
+    write_u64(&mut encoded, 96, record.detail0);
+    write_u64(&mut encoded, 104, record.detail1);
+    let out = unsafe {
+        core::slice::from_raw_parts_mut(
+            out_ptr as usize as *mut u8,
+            SUPERVISOR_FS_CONTROL_RECORD_BYTES as usize,
+        )
+    };
+    out.copy_from_slice(&encoded);
+    SUPERVISOR_FS_CONTROL_RECORD_BYTES as i32
 }
 
 fn write_snapshot(out_ptr: u32, out_len: u32) -> i32 {
@@ -1706,6 +1864,31 @@ pub extern "C" fn supervisor_fd_control_kind_socket_accepted() -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_control_record_bytes() -> u32 {
+    SUPERVISOR_FS_CONTROL_RECORD_BYTES
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_control_kind_page_cache_miss() -> u32 {
+    SUPERVISOR_FS_CONTROL_KIND_PAGE_CACHE_MISS
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_control_kind_page_cache_fill() -> u32 {
+    SUPERVISOR_FS_CONTROL_KIND_PAGE_CACHE_FILL
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_control_kind_dirty_page_published() -> u32 {
+    SUPERVISOR_FS_CONTROL_KIND_DIRTY_PAGE_PUBLISHED
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_control_kind_dirty_page_flushed() -> u32 {
+    SUPERVISOR_FS_CONTROL_KIND_DIRTY_PAGE_FLUSHED
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_runnable_selection_bytes() -> u32 {
     SUPERVISOR_RUNNABLE_SELECTION_BYTES
 }
@@ -1783,6 +1966,11 @@ pub extern "C" fn supervisor_shadow_process_lifecycle_count() -> u64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_shadow_fd_control_count() -> u64 {
     fd_control_count()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_shadow_fs_control_count() -> u64 {
+    fs_control_count()
 }
 
 #[unsafe(no_mangle)]
@@ -1887,6 +2075,11 @@ pub extern "C" fn supervisor_process_lifecycle_record(out_ptr: u32, out_len: u32
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fd_control_record(out_ptr: u32, out_len: u32) -> i32 {
     write_fd_control_record(out_ptr, out_len)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_control_record(out_ptr: u32, out_len: u32) -> i32 {
+    write_fs_control_record(out_ptr, out_len)
 }
 
 #[unsafe(no_mangle)]
