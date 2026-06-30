@@ -20,6 +20,9 @@ pub const SUPERVISOR_RESUME_KIND_FUTEX_WAKE: u32 = 1;
 pub const SUPERVISOR_HOST_OP_RECORD_BYTES: u32 = 64;
 pub const SUPERVISOR_HOST_OP_RECORD_MAGIC: u32 = 0x4f48_5354; // "TSHO" little-endian.
 pub const SUPERVISOR_HOST_OP_KIND_SPAWN_THREAD_WORKER: u32 = 1;
+pub const SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES: u32 = 96;
+pub const SUPERVISOR_PROCESS_HOST_OP_RECORD_MAGIC: u32 = 0x4850_5354; // "TSPH" little-endian.
+pub const SUPERVISOR_PROCESS_HOST_OP_KIND_SPAWN_PROCESS_WORKER: u32 = 1;
 pub const SUPERVISOR_FAULT_EXIT_DECISION_BYTES: u32 = 88;
 pub const SUPERVISOR_FAULT_EXIT_DECISION_MAGIC: u32 = 0x5846_5354; // "TSFX" little-endian.
 pub const SUPERVISOR_FAULT_EXIT_KIND_THREAD_EXIT: u32 = 1;
@@ -122,6 +125,23 @@ struct SupervisorHostOpRecord {
     status: u32,
     flags: u64,
     child_tidptr: u64,
+}
+
+#[derive(Clone, Copy)]
+struct SupervisorProcessHostOpRecord {
+    kind: u32,
+    seq: u64,
+    parent_vm_ptr: u32,
+    spawn_kind: u32,
+    child_pid: i32,
+    process_ptr: u32,
+    status: u32,
+    address_profile: u32,
+    guest_memory_policy_limit: u64,
+    process_max_memory_pages: u32,
+    path: u64,
+    argv: u64,
+    envp: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -651,6 +671,74 @@ fn write_host_op_record(out_ptr: u32, out_len: u32) -> i32 {
     };
     out.copy_from_slice(&encoded);
     SUPERVISOR_HOST_OP_RECORD_BYTES as i32
+}
+
+fn select_process_host_op(vm_ptr: u32) -> Result<Option<SupervisorProcessHostOpRecord>, i32> {
+    let vm = thread_state_from_ptr(vm_ptr).ok_or(crate::abi::EFAULT as i32)?;
+    if vm.spawn_kind == crate::abi::SPAWN_KIND_NONE || vm.spawn_child_pid <= 0 {
+        return Ok(None);
+    }
+    Ok(Some(SupervisorProcessHostOpRecord {
+        kind: SUPERVISOR_PROCESS_HOST_OP_KIND_SPAWN_PROCESS_WORKER,
+        seq: 0,
+        parent_vm_ptr: vm_ptr,
+        spawn_kind: vm.spawn_kind,
+        child_pid: vm.spawn_child_pid,
+        process_ptr: vm.process_ptr,
+        status: vm.status as u32,
+        address_profile: vm.spawn_address_profile,
+        guest_memory_policy_limit: vm.spawn_guest_memory_policy_limit,
+        process_max_memory_pages: vm.spawn_process_max_memory_pages,
+        path: vm.spawn_path,
+        argv: vm.spawn_argv,
+        envp: vm.spawn_envp,
+    }))
+}
+
+fn write_process_host_op_record(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i32 {
+    HOST_OP_POLL_COUNT.fetch_add(1, Ordering::Relaxed);
+    let mut record = match select_process_host_op(vm_ptr) {
+        Ok(Some(record)) => record,
+        Ok(None) => return 0,
+        Err(errno) => return errno,
+    };
+    if out_len == 0 {
+        return SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES as i32;
+    }
+    if out_ptr == 0 {
+        return crate::abi::EFAULT as i32;
+    }
+    if out_len < SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES {
+        return crate::abi::ENOSPC as i32;
+    }
+    record.seq = HOST_OP_EMIT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    let mut encoded = [0u8; SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES as usize];
+    write_u32(&mut encoded, 0, SUPERVISOR_PROCESS_HOST_OP_RECORD_MAGIC);
+    write_u32(&mut encoded, 4, SUPERVISOR_ABI_VERSION);
+    write_u32(&mut encoded, 8, SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES);
+    write_u32(&mut encoded, 12, record.kind);
+    write_u64(&mut encoded, 16, record.seq);
+    write_u32(&mut encoded, 24, record.parent_vm_ptr);
+    write_u32(&mut encoded, 28, record.spawn_kind);
+    write_u32(&mut encoded, 32, record.child_pid as u32);
+    write_u32(&mut encoded, 36, record.process_ptr);
+    write_u32(&mut encoded, 40, record.status);
+    write_u32(&mut encoded, 44, record.address_profile);
+    write_u64(&mut encoded, 48, record.guest_memory_policy_limit);
+    write_u32(&mut encoded, 56, record.process_max_memory_pages);
+    write_u32(&mut encoded, 60, 0);
+    write_u64(&mut encoded, 64, record.path);
+    write_u64(&mut encoded, 72, record.argv);
+    write_u64(&mut encoded, 80, record.envp);
+    write_u64(&mut encoded, 88, 0);
+    let out = unsafe {
+        core::slice::from_raw_parts_mut(
+            out_ptr as usize as *mut u8,
+            SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES as usize,
+        )
+    };
+    out.copy_from_slice(&encoded);
+    SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES as i32
 }
 
 pub fn enqueue_clone_spawn(parent_vm_ptr: u32) -> bool {
@@ -1313,6 +1401,16 @@ pub extern "C" fn supervisor_host_op_kind_spawn_thread_worker() -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_host_op_record_bytes() -> u32 {
+    SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_host_op_kind_spawn_process_worker() -> u32 {
+    SUPERVISOR_PROCESS_HOST_OP_KIND_SPAWN_PROCESS_WORKER
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fault_exit_decision_bytes() -> u32 {
     SUPERVISOR_FAULT_EXIT_DECISION_BYTES
 }
@@ -1488,6 +1586,11 @@ pub extern "C" fn supervisor_complete_futex_wait(vm_ptr: u32, completion: u32) -
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_next_host_op(_out_ptr: u32, _out_len: u32) -> i32 {
     write_host_op_record(_out_ptr, _out_len)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_host_op(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i32 {
+    write_process_host_op_record(vm_ptr, out_ptr, out_len)
 }
 
 #[unsafe(no_mangle)]

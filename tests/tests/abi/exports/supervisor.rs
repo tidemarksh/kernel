@@ -34,6 +34,8 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     );
     assert_eq!(supervisor_host_op_record_bytes(), 64);
     assert_eq!(supervisor_host_op_kind_spawn_thread_worker(), 1);
+    assert_eq!(supervisor_process_host_op_record_bytes(), 96);
+    assert_eq!(supervisor_process_host_op_kind_spawn_process_worker(), 1);
     assert_eq!(supervisor_fault_exit_decision_bytes(), 88);
     assert_eq!(supervisor_fault_exit_kind_thread_exit(), 1);
     assert_eq!(supervisor_fault_exit_kind_process_exit(), 2);
@@ -101,6 +103,7 @@ fn supervisor_shadow_rejects_non_empty_null_records() {
 
     assert_eq!(supervisor_submit_thread_event(0, 1), EFAULT as i32);
     assert_eq!(supervisor_complete_host_op(0, 1), EFAULT as i32);
+    assert_eq!(supervisor_process_host_op(0, 0, 1), EFAULT as i32);
     assert_eq!(supervisor_shadow_thread_event_count(), 0);
     assert_eq!(supervisor_shadow_host_completion_count(), 0);
 }
