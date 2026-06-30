@@ -1,5 +1,11 @@
 use tidemark_kernel::abi::*;
 use tidemark_kernel::harness::TestVm;
+use tidemark_kernel::supervisor::{
+    supervisor_abi_version, supervisor_fd_control_kind_fd_closed,
+    supervisor_fd_control_kind_pipe_created, supervisor_fd_control_record,
+    supervisor_fd_control_record_bytes, supervisor_reset_shadow_log,
+    supervisor_shadow_fd_control_count,
+};
 use tidemark_kernel::syscall::pipe::{self, PipeCloseOutcome};
 use tidemark_kernel::syscall::{poll, pty};
 use tidemark_kernel::types::FdEntry;
@@ -10,6 +16,18 @@ const FIONBIO: u64 = 0x5421;
 const SYNC_EFFECT_PIPE_STATE: u32 = 1 << 0;
 const SYNC_EFFECT_EPOLL_STATE: u32 = 1 << 2;
 const SYNC_EFFECT_FORK_SHARED_OFD_STATE: u32 = 1 << 6;
+
+fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
+    let mut value = [0u8; 4];
+    value.copy_from_slice(&bytes[offset..offset + 4]);
+    u32::from_le_bytes(value)
+}
+
+fn read_u64_le(bytes: &[u8], offset: usize) -> u64 {
+    let mut value = [0u8; 8];
+    value.copy_from_slice(&bytes[offset..offset + 8]);
+    u64::from_le_bytes(value)
+}
 
 #[test]
 fn write_read_roundtrip() {
@@ -430,6 +448,83 @@ fn pipe_close_outcome_reports_remaining_open_ends() {
             slot_released: true,
         }
     );
+}
+
+#[test]
+fn supervisor_fd_control_records_pipe_create_and_close() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    let pipefd_addr = t.scratch + 0x1380;
+    let flags = (O_CLOEXEC | O_NONBLOCK) as u64;
+
+    assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, flags), 0);
+
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) };
+    let write_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr + 4) };
+    let read_ofd = tidemark_kernel::fs::fd_table::get_ofd_id(t.base, &t.vm, read_fd as u64)
+        .expect("pipe read fd should have OFD");
+    let write_ofd = tidemark_kernel::fs::fd_table::get_ofd_id(t.base, &t.vm, write_fd as u64)
+        .expect("pipe write fd should have OFD");
+    let pipe_slot = tidemark_kernel::fs::fd_table::get_ofd_by_id(read_ofd)
+        .expect("pipe read OFD should exist")
+        .ino;
+    let generation = pipe::pipe_generation(pipe_slot);
+
+    assert_eq!(supervisor_shadow_fd_control_count(), 1);
+    let mut record = vec![0u8; supervisor_fd_control_record_bytes() as usize];
+    assert_eq!(
+        supervisor_fd_control_record(record.as_mut_ptr() as u32, record.len() as u32),
+        supervisor_fd_control_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&record, 0), 0x4446_5354);
+    assert_eq!(read_u32_le(&record, 4), supervisor_abi_version());
+    assert_eq!(
+        read_u32_le(&record, 8),
+        supervisor_fd_control_record_bytes()
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_fd_control_kind_pipe_created()
+    );
+    assert_eq!(read_u64_le(&record, 16), 1);
+    assert_eq!(read_u32_le(&record, 24), vm_ptr);
+    assert_eq!(read_u32_le(&record, 28), t.vm.process_ptr);
+    assert_eq!(read_u32_le(&record, 36), read_fd);
+    assert_eq!(read_u32_le(&record, 40), write_fd);
+    assert_eq!(read_u32_le(&record, 44), read_ofd);
+    assert_eq!(read_u32_le(&record, 48), write_ofd);
+    assert_eq!(read_u32_le(&record, 52), FD_TYPE_PIPE as u32);
+    assert_eq!(read_u32_le(&record, 56), pipe_slot);
+    assert_eq!(read_u32_le(&record, 60), generation);
+    assert_eq!(read_u64_le(&record, 64), 0);
+    assert_eq!(read_u64_le(&record, 72), flags);
+    assert_eq!(read_u64_le(&record, 80), 1);
+    assert_eq!(read_u64_le(&record, 88), 1);
+
+    assert_eq!(t.sys_close(write_fd as i64), 0);
+    assert_eq!(supervisor_shadow_fd_control_count(), 2);
+    assert_eq!(
+        supervisor_fd_control_record(record.as_mut_ptr() as u32, record.len() as u32),
+        supervisor_fd_control_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_fd_control_kind_fd_closed()
+    );
+    assert_eq!(read_u64_le(&record, 16), 2);
+    assert_eq!(read_u32_le(&record, 24), vm_ptr);
+    assert_eq!(read_u32_le(&record, 28), t.vm.process_ptr);
+    assert_eq!(read_u32_le(&record, 36), write_fd);
+    assert_eq!(read_u32_le(&record, 44), write_ofd);
+    assert_eq!(read_u32_le(&record, 52), FD_TYPE_PIPE as u32);
+    assert_eq!(read_u32_le(&record, 56), pipe_slot);
+    assert_eq!(read_u32_le(&record, 60), generation);
+    assert_eq!(read_u64_le(&record, 64), 0);
+    assert_eq!(read_u64_le(&record, 72), (O_WRONLY | O_NONBLOCK) as u64);
+    assert_eq!(read_u64_le(&record, 80), 1);
+    assert_eq!(read_u64_le(&record, 88), 0);
 }
 
 #[test]

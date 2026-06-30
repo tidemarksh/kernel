@@ -106,11 +106,37 @@ pub fn sys_close(vm: &mut ThreadState, base: u32, fd: u64) -> i64 {
         }
 
         let ofd_id = entry.ofd_id;
+        let ofd = ofd_table()[ofd_id as usize];
         clear_process_fd_entry_ptr(ps, fd as usize);
         release_process_fd_ref(base, vm, ofd_id);
         clear_pipe_eof_marker_for_fd(vm, fd);
 
         vm.socket_timeout_ms = -1;
+        let mut detail0 = 0;
+        let mut detail1 = 0;
+        if ofd.fd_type == FD_TYPE_PIPE
+            && crate::syscall::pipe::pipe_generation_matches(ofd.ino, ofd.offset as u32)
+        {
+            detail0 = crate::syscall::pipe::debug_read_open(ofd.ino) as u64;
+            detail1 = crate::syscall::pipe::debug_write_open(ofd.ino) as u64;
+        }
+        crate::supervisor::record_fd_control(
+            crate::supervisor::SUPERVISOR_FD_CONTROL_KIND_FD_CLOSED,
+            vm as *mut ThreadState as u32,
+            vm.process_ptr,
+            crate::syscall::process::current_process_pid(vm, base),
+            fd as u32,
+            0,
+            ofd_id,
+            0,
+            ofd.fd_type as u32,
+            ofd.ino,
+            ofd.offset as u32,
+            0,
+            ofd.status_flags as u64,
+            detail0,
+            detail1,
+        );
         0
     }
 }

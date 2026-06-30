@@ -232,6 +232,25 @@ pub fn sys_pipe2(vm: &mut ThreadState, base: u32, pipefd_addr: u64, flags: u64) 
         guest_mem::write_u32(base, pipefd_addr, read_fd as u32);
         guest_mem::write_u32(base, pipefd_addr + 4, write_fd as u32);
     }
+    let read_ofd_id = fd_table::get_ofd_id(base, vm, read_fd as u64).unwrap_or(0);
+    let write_ofd_id = fd_table::get_ofd_id(base, vm, write_fd as u64).unwrap_or(0);
+    crate::supervisor::record_fd_control(
+        crate::supervisor::SUPERVISOR_FD_CONTROL_KIND_PIPE_CREATED,
+        vm as *mut ThreadState as u32,
+        vm.process_ptr,
+        crate::syscall::process::current_process_pid(vm, base),
+        read_fd as u32,
+        write_fd as u32,
+        read_ofd_id,
+        write_ofd_id,
+        FD_TYPE_PIPE as u32,
+        pipe_idx,
+        pipe_generation(pipe_idx),
+        0,
+        flags,
+        1,
+        1,
+    );
     0
 }
 
