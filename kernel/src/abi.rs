@@ -749,7 +749,8 @@ pub use crate::supervisor::{
     supervisor_shadow_host_op_poll_count, supervisor_shadow_resume_enqueue_count,
     supervisor_shadow_resume_overflow_count, supervisor_shadow_resume_poll_count,
     supervisor_shadow_thread_event_count, supervisor_shadow_thread_event_log_hash,
-    supervisor_submit_thread_event,
+    supervisor_submit_thread_event, supervisor_thread_state_snapshot,
+    supervisor_thread_state_snapshot_bytes,
 };
 
 // =============================================================================

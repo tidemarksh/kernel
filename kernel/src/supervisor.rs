@@ -8,6 +8,12 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 pub const SUPERVISOR_ABI_VERSION: u32 = 1;
 pub const SUPERVISOR_DEBUG_SNAPSHOT_BYTES: u32 = 88;
+pub const SUPERVISOR_THREAD_STATE_HEADER_BYTES: usize = 32;
+pub const SUPERVISOR_THREAD_STATE_RECORD_BYTES: usize = 32;
+pub const SUPERVISOR_THREAD_STATE_SNAPSHOT_BYTES: u32 = (SUPERVISOR_THREAD_STATE_HEADER_BYTES
+    + crate::abi::MAX_THREADS * SUPERVISOR_THREAD_STATE_RECORD_BYTES)
+    as u32;
+pub const SUPERVISOR_THREAD_STATE_SNAPSHOT_MAGIC: u32 = 0x4854_5354; // "TSTH" little-endian.
 pub const SUPERVISOR_RESUME_RECORD_BYTES: u32 = 48;
 pub const SUPERVISOR_RESUME_RECORD_MAGIC: u32 = 0x5255_5354; // "TSUR" little-endian.
 pub const SUPERVISOR_RESUME_KIND_FUTEX_WAKE: u32 = 1;
@@ -309,6 +315,88 @@ fn write_snapshot(out_ptr: u32, out_len: u32) -> i32 {
     SUPERVISOR_DEBUG_SNAPSHOT_BYTES as i32
 }
 
+fn thread_status_from_record(
+    record: &crate::types::ThreadRecord,
+    base: u32,
+    process_ptr: u32,
+) -> u32 {
+    if record.thread_ptr == 0 {
+        return 0;
+    }
+    let absolute = record.thread_ptr as usize;
+    let align = core::mem::align_of::<crate::types::ThreadState>();
+    if (absolute & (align - 1)) != 0 {
+        return 0;
+    }
+    let Some(end) = absolute.checked_add(core::mem::size_of::<crate::types::ThreadState>()) else {
+        return 0;
+    };
+    let memory_size = crate::wasm::memory_size_bytes();
+    if memory_size == 0 || end as u64 > memory_size {
+        return 0;
+    }
+    let thread = unsafe { &*(absolute as *const crate::types::ThreadState) };
+    if thread.guest_base != base || thread.process_ptr != process_ptr || thread.tid != record.tid {
+        return 0;
+    }
+    thread.status as u32
+}
+
+fn write_thread_state_snapshot(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i32 {
+    if out_len == 0 {
+        return SUPERVISOR_THREAD_STATE_SNAPSHOT_BYTES as i32;
+    }
+    if vm_ptr == 0 || out_ptr == 0 {
+        return crate::abi::EFAULT as i32;
+    }
+    if out_len < SUPERVISOR_THREAD_STATE_SNAPSHOT_BYTES {
+        return crate::abi::ENOSPC as i32;
+    }
+    let vm = unsafe { &*(vm_ptr as *const crate::types::ThreadState) };
+    if vm.process_ptr == 0 {
+        return crate::abi::EINVAL as i32;
+    }
+    let ps = unsafe {
+        &*((vm.guest_base as u64 + vm.process_ptr as u64) as *const crate::types::ProcessState)
+    };
+    let mut snapshot = [0u8; SUPERVISOR_THREAD_STATE_SNAPSHOT_BYTES as usize];
+    write_u32(&mut snapshot, 0, SUPERVISOR_THREAD_STATE_SNAPSHOT_MAGIC);
+    write_u32(&mut snapshot, 4, SUPERVISOR_ABI_VERSION);
+    write_u32(&mut snapshot, 8, SUPERVISOR_THREAD_STATE_SNAPSHOT_BYTES);
+    write_u32(&mut snapshot, 12, crate::abi::MAX_THREADS as u32);
+    write_u32(&mut snapshot, 16, vm.process_ptr);
+    write_u32(&mut snapshot, 20, vm_ptr);
+    write_u32(
+        &mut snapshot,
+        24,
+        SUPERVISOR_THREAD_STATE_RECORD_BYTES as u32,
+    );
+    write_u32(&mut snapshot, 28, 0);
+    for slot in 0..crate::abi::MAX_THREADS {
+        let record = ps.threads[slot];
+        let offset =
+            SUPERVISOR_THREAD_STATE_HEADER_BYTES + slot * SUPERVISOR_THREAD_STATE_RECORD_BYTES;
+        write_u32(&mut snapshot, offset, record.tid as u32);
+        write_u32(&mut snapshot, offset + 4, record.state as u32);
+        write_u32(&mut snapshot, offset + 8, record.thread_ptr);
+        write_u32(
+            &mut snapshot,
+            offset + 12,
+            thread_status_from_record(&record, vm.guest_base, vm.process_ptr),
+        );
+        write_u64(&mut snapshot, offset + 16, record.blocked_addr);
+        write_u64(&mut snapshot, offset + 24, record.pending_sigset);
+    }
+    let out = unsafe {
+        core::slice::from_raw_parts_mut(
+            out_ptr as usize as *mut u8,
+            SUPERVISOR_THREAD_STATE_SNAPSHOT_BYTES as usize,
+        )
+    };
+    out.copy_from_slice(&snapshot);
+    SUPERVISOR_THREAD_STATE_SNAPSHOT_BYTES as i32
+}
+
 pub fn enqueue_futex_resume(process_ptr: u32, vm_ptr: u32, tid: i32, futex_addr: u64) -> bool {
     if process_ptr == 0 || vm_ptr == 0 || tid <= 0 {
         return false;
@@ -373,6 +461,11 @@ pub extern "C" fn supervisor_abi_version() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_debug_snapshot_bytes() -> u32 {
     SUPERVISOR_DEBUG_SNAPSHOT_BYTES
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_thread_state_snapshot_bytes() -> u32 {
+    SUPERVISOR_THREAD_STATE_SNAPSHOT_BYTES
 }
 
 #[unsafe(no_mangle)]
@@ -502,4 +595,9 @@ pub extern "C" fn supervisor_next_resume(_out_ptr: u32, _out_len: u32) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_debug_snapshot(out_ptr: u32, out_len: u32) -> i32 {
     write_snapshot(out_ptr, out_len)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_thread_state_snapshot(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i32 {
+    write_thread_state_snapshot(vm_ptr, out_ptr, out_len)
 }

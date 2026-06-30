@@ -144,6 +144,81 @@ fn supervisor_next_resume_publishes_kernel_selected_futex_wake() {
 }
 
 #[test]
+fn supervisor_thread_state_snapshot_reports_process_thread_states() {
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+
+    let vm_ptr = (&mut t.vm as *mut ThreadState) as u32;
+    let blocked_addr = t.scratch + 0x180;
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[1] = ThreadRecord::new(2, THREAD_BLOCKED_FUTEX, 0, 0, blocked_addr as u64);
+        ps.threads[1].pending_sigset = 0x55aa;
+        ps.threads[2] = ThreadRecord::new(3, THREAD_DEAD, 0, 0, 0);
+        ps.thread_count
+            .store(3, std::sync::atomic::Ordering::Release);
+    }
+
+    let snapshot_bytes = supervisor_thread_state_snapshot_bytes();
+    assert_eq!(snapshot_bytes, 32 + abi_max_threads() as u32 * 32);
+    assert_eq!(
+        supervisor_thread_state_snapshot(0, 0, 0),
+        snapshot_bytes as i32
+    );
+
+    let mut too_small = vec![0u8; snapshot_bytes as usize - 1];
+    assert_eq!(
+        supervisor_thread_state_snapshot(
+            vm_ptr,
+            too_small.as_mut_ptr() as u32,
+            too_small.len() as u32
+        ),
+        ENOSPC as i32
+    );
+
+    let mut snapshot = vec![0u8; snapshot_bytes as usize];
+    assert_eq!(
+        supervisor_thread_state_snapshot(
+            vm_ptr,
+            snapshot.as_mut_ptr() as u32,
+            snapshot.len() as u32
+        ),
+        snapshot_bytes as i32
+    );
+
+    assert_eq!(read_u32_le(&snapshot, 0), 0x4854_5354);
+    assert_eq!(read_u32_le(&snapshot, 4), supervisor_abi_version());
+    assert_eq!(read_u32_le(&snapshot, 8), snapshot_bytes);
+    assert_eq!(read_u32_le(&snapshot, 12), abi_max_threads() as u32);
+    assert_eq!(read_u32_le(&snapshot, 16), t.vm.process_ptr);
+    assert_eq!(read_u32_le(&snapshot, 20), vm_ptr);
+    assert_eq!(read_u32_le(&snapshot, 24), 32);
+
+    let slot0 = 32;
+    assert_eq!(read_u32_le(&snapshot, slot0), 1);
+    assert_eq!(read_u32_le(&snapshot, slot0 + 4), THREAD_RUNNING as u32);
+    assert_eq!(read_u32_le(&snapshot, slot0 + 8), vm_ptr);
+    assert_eq!(read_u32_le(&snapshot, slot0 + 12), STATUS_OK as u32);
+    assert_eq!(read_u64_le(&snapshot, slot0 + 16), 0);
+
+    let slot1 = 32 + 32;
+    assert_eq!(read_u32_le(&snapshot, slot1), 2);
+    assert_eq!(
+        read_u32_le(&snapshot, slot1 + 4),
+        THREAD_BLOCKED_FUTEX as u32
+    );
+    assert_eq!(read_u32_le(&snapshot, slot1 + 8), 0);
+    assert_eq!(read_u32_le(&snapshot, slot1 + 12), 0);
+    assert_eq!(read_u64_le(&snapshot, slot1 + 16), blocked_addr as u64);
+    assert_eq!(read_u64_le(&snapshot, slot1 + 24), 0x55aa);
+
+    let slot2 = 32 + 32 * 2;
+    assert_eq!(read_u32_le(&snapshot, slot2), 3);
+    assert_eq!(read_u32_le(&snapshot, slot2 + 4), THREAD_DEAD as u32);
+}
+
+#[test]
 fn supervisor_futex_completion_owns_timeout_result() {
     let mut t = TestVm::new();
     let futex_addr = t.scratch + 0x140;

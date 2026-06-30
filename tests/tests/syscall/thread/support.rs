@@ -3,7 +3,8 @@ pub(super) use tidemark_kernel::harness::TestVm;
 pub(super) use tidemark_kernel::syscall::signal;
 pub(super) use tidemark_kernel::syscall::thread as thread_impl;
 pub(super) use tidemark_kernel::types::{
-    ProcessState, THREAD_BLOCKED_FUTEX, THREAD_NONE, THREAD_RUNNING, ThreadRecord, ThreadState,
+    ProcessState, THREAD_BLOCKED_FUTEX, THREAD_DEAD, THREAD_NONE, THREAD_RUNNING, ThreadRecord,
+    ThreadState,
 };
 
 pub(super) const FUTEX_WAITERS: u32 = 0x8000_0000;

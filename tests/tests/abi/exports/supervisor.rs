@@ -19,6 +19,14 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_abi_version(), 1);
     assert_eq!(supervisor_debug_snapshot_bytes(), 88);
     assert_eq!(supervisor_debug_snapshot(0, 0), 88);
+    assert_eq!(
+        supervisor_thread_state_snapshot_bytes(),
+        32 + abi_max_threads() as u32 * 32
+    );
+    assert_eq!(
+        supervisor_thread_state_snapshot(0, 0, 0),
+        supervisor_thread_state_snapshot_bytes() as i32
+    );
 
     let empty_hash = supervisor_shadow_thread_event_log_hash();
     assert_eq!(supervisor_shadow_thread_event_count(), 0);
