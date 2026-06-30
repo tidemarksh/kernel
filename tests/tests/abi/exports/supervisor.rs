@@ -34,6 +34,9 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     );
     assert_eq!(supervisor_host_op_record_bytes(), 64);
     assert_eq!(supervisor_host_op_kind_spawn_thread_worker(), 1);
+    assert_eq!(supervisor_fault_exit_decision_bytes(), 88);
+    assert_eq!(supervisor_fault_exit_kind_thread_exit(), 1);
+    assert_eq!(supervisor_fault_exit_kind_process_exit(), 2);
 
     let empty_hash = supervisor_shadow_thread_event_log_hash();
     assert_eq!(supervisor_shadow_thread_event_count(), 0);

@@ -1,5 +1,15 @@
 use super::support::*;
 
+fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
+    let mut value = [0u8; 4];
+    value.copy_from_slice(&bytes[offset..offset + 4]);
+    u32::from_le_bytes(value)
+}
+
+fn read_i32_le(bytes: &[u8], offset: usize) -> i32 {
+    read_u32_le(bytes, offset) as i32
+}
+
 #[test]
 fn contract_exit_decrements_thread_count() {
     let mut t = TestVm::new();
@@ -13,6 +23,89 @@ fn contract_exit_decrements_thread_count() {
 
     let tc = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, ps_ptr + tc_off) };
     assert_eq!(tc, 1);
+}
+
+#[test]
+fn supervisor_fault_exit_decision_keeps_process_alive_with_one_remaining_thread() {
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+    let current_vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    let child_ptr = unsafe {
+        tidemark_kernel::alloc::alloc_zeroed(
+            core::mem::size_of::<ThreadState>() as u32,
+            core::mem::align_of::<ThreadState>() as u32,
+        )
+    };
+    assert_ne!(child_ptr, 0);
+    let child = unsafe { &mut *(child_ptr as *mut ThreadState) };
+    child.tid = 2;
+    child.guest_base = t.base;
+    child.process_ptr = t.vm.process_ptr;
+    child.status = STATUS_OK;
+
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    ps.thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
+    ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, child_ptr, 0, 0);
+
+    let status = thread_impl::sys_exit(&mut t.vm, t.base, 42);
+    assert_eq!(status, STATUS_FAULT);
+
+    let mut record = [0u8; 88];
+    assert_eq!(
+        supervisor_fault_exit_decision(
+            current_vm_ptr,
+            record.as_mut_ptr() as u32,
+            record.len() as u32,
+        ),
+        supervisor_fault_exit_decision_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&record, 0), 0x5846_5354);
+    assert_eq!(
+        read_u32_le(&record, 8),
+        supervisor_fault_exit_decision_bytes()
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_fault_exit_kind_thread_exit()
+    );
+    assert_eq!(read_u32_le(&record, 24), current_vm_ptr);
+    assert_eq!(read_u32_le(&record, 28), current_vm_ptr);
+    assert_eq!(read_u32_le(&record, 40), 1);
+    assert_eq!(read_u32_le(&record, 44), 1);
+    assert_eq!(read_i32_le(&record, 48), 42);
+    assert_eq!(read_u32_le(&record, 56), STATUS_FAULT as u32);
+}
+
+#[test]
+fn supervisor_fault_exit_decision_reports_process_exit_when_no_threads_remain() {
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+    let current_vm_ptr = &mut t.vm as *mut ThreadState as u32;
+
+    let status = thread_impl::sys_exit(&mut t.vm, t.base, 7);
+    assert_eq!(status, STATUS_FAULT);
+
+    let mut record = [0u8; 88];
+    assert_eq!(
+        supervisor_fault_exit_decision(
+            current_vm_ptr,
+            record.as_mut_ptr() as u32,
+            record.len() as u32,
+        ),
+        supervisor_fault_exit_decision_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_fault_exit_kind_process_exit()
+    );
+    assert_eq!(read_u32_le(&record, 24), current_vm_ptr);
+    assert_eq!(read_u32_le(&record, 28), current_vm_ptr);
+    assert_eq!(read_u32_le(&record, 40), 0);
+    assert_eq!(read_u32_le(&record, 44), 0);
+    assert_eq!(read_i32_le(&record, 48), 7);
 }
 
 #[test]
