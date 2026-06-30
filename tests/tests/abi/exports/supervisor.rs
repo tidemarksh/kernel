@@ -44,6 +44,11 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_process_lifecycle_record_bytes(), 96);
     assert_eq!(supervisor_process_lifecycle_kind_child_exit_published(), 1);
     assert_eq!(supervisor_process_lifecycle_kind_wait4_completed(), 2);
+    assert_eq!(supervisor_fd_control_record_bytes(), 96);
+    assert_eq!(supervisor_fd_control_kind_pipe_created(), 1);
+    assert_eq!(supervisor_fd_control_kind_fd_closed(), 2);
+    assert_eq!(supervisor_fd_control_kind_fd_duplicated(), 3);
+    assert_eq!(supervisor_fd_control_kind_fd_flags_updated(), 4);
 
     let empty_hash = supervisor_shadow_thread_event_log_hash();
     assert_eq!(supervisor_shadow_thread_event_count(), 0);

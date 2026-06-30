@@ -38,6 +38,8 @@ pub const SUPERVISOR_FD_CONTROL_RECORD_BYTES: u32 = 96;
 pub const SUPERVISOR_FD_CONTROL_RECORD_MAGIC: u32 = 0x4446_5354; // "TSFD" little-endian.
 pub const SUPERVISOR_FD_CONTROL_KIND_PIPE_CREATED: u32 = 1;
 pub const SUPERVISOR_FD_CONTROL_KIND_FD_CLOSED: u32 = 2;
+pub const SUPERVISOR_FD_CONTROL_KIND_FD_DUPLICATED: u32 = 3;
+pub const SUPERVISOR_FD_CONTROL_KIND_FD_FLAGS_UPDATED: u32 = 4;
 pub const SUPERVISOR_RUNNABLE_SELECTION_BYTES: u32 = 48;
 pub const SUPERVISOR_RUNNABLE_SELECTION_MAGIC: u32 = 0x4e52_5354; // "TSRN" little-endian.
 pub const SUPERVISOR_FUTEX_WAIT_COMPLETION_WOKEN: u32 = 1;
@@ -1619,6 +1621,16 @@ pub extern "C" fn supervisor_fd_control_kind_pipe_created() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fd_control_kind_fd_closed() -> u32 {
     SUPERVISOR_FD_CONTROL_KIND_FD_CLOSED
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fd_control_kind_fd_duplicated() -> u32 {
+    SUPERVISOR_FD_CONTROL_KIND_FD_DUPLICATED
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fd_control_kind_fd_flags_updated() -> u32 {
+    SUPERVISOR_FD_CONTROL_KIND_FD_FLAGS_UPDATED
 }
 
 #[unsafe(no_mangle)]
