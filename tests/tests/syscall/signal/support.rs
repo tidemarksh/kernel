@@ -1,6 +1,12 @@
 pub(super) use tidemark_kernel::abi::{
-    self, CLONE_FS, CLONE_SIGHAND, CLONE_THREAD, CLONE_VM, EINTR, O_NONBLOCK, SIGABRT, SIGALRM,
-    SIGCHLD, SIGSEGV, SIGURG, STATUS_FAULT, STATUS_OK, SYS_RT_SIGRETURN, SYS_SIGNALFD4, SYS_TGKILL,
+    self, CLONE_FS, CLONE_SIGHAND, CLONE_THREAD, CLONE_VM, EINTR, FUTEX_WAIT, O_NONBLOCK, SIGABRT,
+    SIGALRM, SIGCHLD, SIGSEGV, SIGURG, STATUS_FAULT, STATUS_FUTEX_WAIT, STATUS_OK,
+    SYS_RT_SIGRETURN, SYS_SIGNALFD4, SYS_TGKILL, supervisor_complete_futex_wait,
+    supervisor_futex_wait_completion_signal_check, supervisor_reset_shadow_log,
+    supervisor_shadow_signal_control_count,
+    supervisor_signal_control_kind_blocked_wait_interrupted,
+    supervisor_signal_control_kind_signal_delivered, supervisor_signal_control_record,
+    supervisor_signal_control_record_bytes, supervisor_signal_pending_for_blocked_wait,
 };
 pub(super) use tidemark_kernel::harness::TestVm;
 pub(super) use tidemark_kernel::harness::signal as signal_harness;
@@ -9,7 +15,7 @@ pub(super) use tidemark_kernel::syscall::signal;
 pub(super) use tidemark_kernel::syscall::thread as thread_impl;
 pub(super) use tidemark_kernel::types::{
     ProcessState, SIG_DFL, SIG_IGN, SigAction, THREAD_BLOCKED_FUTEX, THREAD_DEAD, THREAD_NONE,
-    ThreadState,
+    THREAD_RUNNING, ThreadRecord, ThreadState,
 };
 
 pub(super) const SA_SIGINFO: u64 = 0x00000004;

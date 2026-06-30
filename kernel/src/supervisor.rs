@@ -58,6 +58,13 @@ pub const SUPERVISOR_FS_CONTROL_KIND_PAGE_CACHE_MISS: u32 = 1;
 pub const SUPERVISOR_FS_CONTROL_KIND_PAGE_CACHE_FILL: u32 = 2;
 pub const SUPERVISOR_FS_CONTROL_KIND_DIRTY_PAGE_PUBLISHED: u32 = 3;
 pub const SUPERVISOR_FS_CONTROL_KIND_DIRTY_PAGE_FLUSHED: u32 = 4;
+pub const SUPERVISOR_SIGNAL_CONTROL_RECORD_BYTES: u32 = 120;
+pub const SUPERVISOR_SIGNAL_CONTROL_RECORD_MAGIC: u32 = 0x4753_5354; // "TSSG" little-endian.
+pub const SUPERVISOR_SIGNAL_CONTROL_KIND_BOUNDARY_CHECK: u32 = 1;
+pub const SUPERVISOR_SIGNAL_CONTROL_KIND_SIGNAL_DELIVERED: u32 = 2;
+pub const SUPERVISOR_SIGNAL_CONTROL_KIND_BLOCKED_WAIT_INTERRUPTED: u32 = 3;
+pub const SUPERVISOR_SIGNAL_BOUNDARY_SYSCALL_RETURN: u32 = 1;
+pub const SUPERVISOR_SIGNAL_BOUNDARY_BLOCKED_WAIT: u32 = 2;
 pub const SUPERVISOR_RUNNABLE_SELECTION_BYTES: u32 = 48;
 pub const SUPERVISOR_RUNNABLE_SELECTION_MAGIC: u32 = 0x4e52_5354; // "TSRN" little-endian.
 pub const SUPERVISOR_FUTEX_WAIT_COMPLETION_WOKEN: u32 = 1;
@@ -95,6 +102,7 @@ static THREAD_EXIT_CLEANUP_COUNT: AtomicU64 = AtomicU64::new(0);
 static PROCESS_LIFECYCLE_COUNT: AtomicU64 = AtomicU64::new(0);
 static FD_CONTROL_COUNT: AtomicU64 = AtomicU64::new(0);
 static FS_CONTROL_COUNT: AtomicU64 = AtomicU64::new(0);
+static SIGNAL_CONTROL_COUNT: AtomicU64 = AtomicU64::new(0);
 static RESUME_POLL_COUNT: AtomicU64 = AtomicU64::new(0);
 static RESUME_ENQUEUE_COUNT: AtomicU64 = AtomicU64::new(0);
 static RESUME_OVERFLOW_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -126,6 +134,9 @@ static FD_CONTROL_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_FD_CONTROL: SupervisorFdControlRecord = SupervisorFdControlRecord::empty();
 static FS_CONTROL_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_FS_CONTROL: SupervisorFsControlRecord = SupervisorFsControlRecord::empty();
+static SIGNAL_CONTROL_LOCK: AtomicU32 = AtomicU32::new(0);
+static mut LAST_SIGNAL_CONTROL: SupervisorSignalControlRecord =
+    SupervisorSignalControlRecord::empty();
 
 #[derive(Clone, Copy)]
 struct SupervisorResumeRecord {
@@ -360,6 +371,53 @@ impl SupervisorFsControlRecord {
 }
 
 #[derive(Clone, Copy)]
+pub struct SupervisorSignalControlRecord {
+    kind: u32,
+    seq: u64,
+    vm_ptr: u32,
+    process_ptr: u32,
+    pid: u32,
+    tid: u32,
+    sig: u32,
+    status: u32,
+    sig_info_code: i32,
+    boundary: u32,
+    thread_pending: u64,
+    process_pending: u64,
+    record_pending: u64,
+    deliverable: u64,
+    mask: u64,
+    pc: u64,
+    detail0: u64,
+    detail1: u64,
+}
+
+impl SupervisorSignalControlRecord {
+    const fn empty() -> Self {
+        Self {
+            kind: 0,
+            seq: 0,
+            vm_ptr: 0,
+            process_ptr: 0,
+            pid: 0,
+            tid: 0,
+            sig: 0,
+            status: 0,
+            sig_info_code: 0,
+            boundary: 0,
+            thread_pending: 0,
+            process_pending: 0,
+            record_pending: 0,
+            deliverable: 0,
+            mask: 0,
+            pc: 0,
+            detail0: 0,
+            detail1: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 struct SupervisorRunnableSelection {
     seq: u64,
     vm_ptr: u32,
@@ -381,6 +439,7 @@ pub fn init() {
     PROCESS_LIFECYCLE_COUNT.store(0, Ordering::Relaxed);
     FD_CONTROL_COUNT.store(0, Ordering::Relaxed);
     FS_CONTROL_COUNT.store(0, Ordering::Relaxed);
+    SIGNAL_CONTROL_COUNT.store(0, Ordering::Relaxed);
     RESUME_POLL_COUNT.store(0, Ordering::Relaxed);
     RESUME_ENQUEUE_COUNT.store(0, Ordering::Relaxed);
     RESUME_OVERFLOW_COUNT.store(0, Ordering::Relaxed);
@@ -420,6 +479,9 @@ pub fn init() {
     with_fs_control_lock(|| unsafe {
         LAST_FS_CONTROL = SupervisorFsControlRecord::empty();
     });
+    with_signal_control_lock(|| unsafe {
+        LAST_SIGNAL_CONTROL = SupervisorSignalControlRecord::empty();
+    });
 }
 
 pub fn thread_event_count() -> u64 {
@@ -456,6 +518,10 @@ pub fn fd_control_count() -> u64 {
 
 pub fn fs_control_count() -> u64 {
     FS_CONTROL_COUNT.load(Ordering::Relaxed)
+}
+
+pub fn signal_control_count() -> u64 {
+    SIGNAL_CONTROL_COUNT.load(Ordering::Relaxed)
 }
 
 pub fn resume_poll_count() -> u64 {
@@ -608,6 +674,21 @@ fn with_fs_control_lock<T>(f: impl FnOnce() -> T) -> T {
     }
     let result = f();
     FS_CONTROL_LOCK.store(0, Ordering::Release);
+    result
+}
+
+fn with_signal_control_lock<T>(f: impl FnOnce() -> T) -> T {
+    loop {
+        if SIGNAL_CONTROL_LOCK
+            .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    let result = f();
+    SIGNAL_CONTROL_LOCK.store(0, Ordering::Release);
     result
 }
 
@@ -1444,6 +1525,71 @@ pub fn record_fs_control(
     });
 }
 
+fn first_signal_from_bits(bits: u64) -> u32 {
+    if bits == 0 {
+        0
+    } else {
+        bits.trailing_zeros() + 1
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn record_signal_control(
+    kind: u32,
+    vm: &crate::types::ThreadState,
+    base: u32,
+    sig: u32,
+    boundary: u32,
+    thread_pending: u64,
+    process_pending: u64,
+    record_pending: u64,
+    deliverable: u64,
+    detail0: u64,
+    detail1: u64,
+) {
+    let seq = SIGNAL_CONTROL_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    let record = SupervisorSignalControlRecord {
+        kind,
+        seq,
+        vm_ptr: vm as *const crate::types::ThreadState as u32,
+        process_ptr: vm.process_ptr,
+        pid: crate::syscall::signal::pid_from_vm(vm, base) as u32,
+        tid: vm.tid as u32,
+        sig,
+        status: vm.status as u32,
+        sig_info_code: vm.sig_info_code,
+        boundary,
+        thread_pending,
+        process_pending,
+        record_pending,
+        deliverable,
+        mask: vm.sig_mask,
+        pc: vm.pc,
+        detail0,
+        detail1,
+    };
+    with_signal_control_lock(|| unsafe {
+        LAST_SIGNAL_CONTROL = record;
+    });
+}
+
+fn blocked_wait_signal_pending(vm: &crate::types::ThreadState, base: u32) -> bool {
+    crate::syscall::signal::pending_signal_interrupts_blocked_syscall(vm, base)
+        || vm.sig_pending != 0
+}
+
+fn blocked_wait_signal_decision(vm_ptr: u32) -> i32 {
+    if vm_ptr == 0 {
+        return crate::abi::EFAULT as i32;
+    }
+    let vm = unsafe { &*(vm_ptr as *const crate::types::ThreadState) };
+    if blocked_wait_signal_pending(vm, vm.guest_base) {
+        1
+    } else {
+        0
+    }
+}
+
 fn write_fd_control_record(out_ptr: u32, out_len: u32) -> i32 {
     if out_len == 0 {
         return SUPERVISOR_FD_CONTROL_RECORD_BYTES as i32;
@@ -1524,6 +1670,49 @@ fn write_fs_control_record(out_ptr: u32, out_len: u32) -> i32 {
     };
     out.copy_from_slice(&encoded);
     SUPERVISOR_FS_CONTROL_RECORD_BYTES as i32
+}
+
+fn write_signal_control_record(out_ptr: u32, out_len: u32) -> i32 {
+    if out_len == 0 {
+        return SUPERVISOR_SIGNAL_CONTROL_RECORD_BYTES as i32;
+    }
+    if out_ptr == 0 {
+        return crate::abi::EFAULT as i32;
+    }
+    if out_len < SUPERVISOR_SIGNAL_CONTROL_RECORD_BYTES {
+        return crate::abi::ENOSPC as i32;
+    }
+    let record = with_signal_control_lock(|| unsafe { LAST_SIGNAL_CONTROL });
+    let mut encoded = [0u8; SUPERVISOR_SIGNAL_CONTROL_RECORD_BYTES as usize];
+    write_u32(&mut encoded, 0, SUPERVISOR_SIGNAL_CONTROL_RECORD_MAGIC);
+    write_u32(&mut encoded, 4, SUPERVISOR_ABI_VERSION);
+    write_u32(&mut encoded, 8, SUPERVISOR_SIGNAL_CONTROL_RECORD_BYTES);
+    write_u32(&mut encoded, 12, record.kind);
+    write_u64(&mut encoded, 16, record.seq);
+    write_u32(&mut encoded, 24, record.vm_ptr);
+    write_u32(&mut encoded, 28, record.process_ptr);
+    write_u32(&mut encoded, 32, record.pid);
+    write_u32(&mut encoded, 36, record.tid);
+    write_u32(&mut encoded, 40, record.sig);
+    write_u32(&mut encoded, 44, record.status);
+    write_u32(&mut encoded, 48, record.sig_info_code as u32);
+    write_u32(&mut encoded, 52, record.boundary);
+    write_u64(&mut encoded, 56, record.thread_pending);
+    write_u64(&mut encoded, 64, record.process_pending);
+    write_u64(&mut encoded, 72, record.record_pending);
+    write_u64(&mut encoded, 80, record.deliverable);
+    write_u64(&mut encoded, 88, record.mask);
+    write_u64(&mut encoded, 96, record.pc);
+    write_u64(&mut encoded, 104, record.detail0);
+    write_u64(&mut encoded, 112, record.detail1);
+    let out = unsafe {
+        core::slice::from_raw_parts_mut(
+            out_ptr as usize as *mut u8,
+            SUPERVISOR_SIGNAL_CONTROL_RECORD_BYTES as usize,
+        )
+    };
+    out.copy_from_slice(&encoded);
+    SUPERVISOR_SIGNAL_CONTROL_RECORD_BYTES as i32
 }
 
 fn write_snapshot(out_ptr: u32, out_len: u32) -> i32 {
@@ -1672,16 +1861,31 @@ fn complete_futex_wait(vm_ptr: u32, completion: u32) -> i32 {
     };
     let base = vm.guest_base;
     let blocked_addr = crate::syscall::thread::thread_record_blocked_addr(vm, base);
-    let signal_pending =
-        crate::syscall::signal::pending_signal_interrupts_blocked_syscall(vm, base)
-            || vm.sig_pending != 0;
+    let signal_pending = blocked_wait_signal_pending(vm, base);
 
     let result = if blocked_addr == 0 {
         Some(0)
     } else if blocked_addr == u64::MAX {
         Some(crate::abi::EAGAIN)
-    } else if signal_pending || completion == SUPERVISOR_FUTEX_WAIT_COMPLETION_SIGNAL_CHECK {
+    } else if signal_pending {
+        let (thread_pending, process_pending, record_pending, deliverable) =
+            crate::syscall::signal::pending_signal_snapshot(vm, base);
+        record_signal_control(
+            SUPERVISOR_SIGNAL_CONTROL_KIND_BLOCKED_WAIT_INTERRUPTED,
+            vm,
+            base,
+            first_signal_from_bits(deliverable | vm.sig_pending | record_pending),
+            SUPERVISOR_SIGNAL_BOUNDARY_BLOCKED_WAIT,
+            thread_pending,
+            process_pending,
+            record_pending,
+            deliverable,
+            completion as u64,
+            blocked_addr,
+        );
         Some(crate::abi::EINTR)
+    } else if completion == SUPERVISOR_FUTEX_WAIT_COMPLETION_SIGNAL_CHECK {
+        None
     } else {
         match completion {
             SUPERVISOR_FUTEX_WAIT_COMPLETION_NOT_EQUAL => Some(0),
@@ -1889,6 +2093,26 @@ pub extern "C" fn supervisor_fs_control_kind_dirty_page_flushed() -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_signal_control_record_bytes() -> u32 {
+    SUPERVISOR_SIGNAL_CONTROL_RECORD_BYTES
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_signal_control_kind_boundary_check() -> u32 {
+    SUPERVISOR_SIGNAL_CONTROL_KIND_BOUNDARY_CHECK
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_signal_control_kind_signal_delivered() -> u32 {
+    SUPERVISOR_SIGNAL_CONTROL_KIND_SIGNAL_DELIVERED
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_signal_control_kind_blocked_wait_interrupted() -> u32 {
+    SUPERVISOR_SIGNAL_CONTROL_KIND_BLOCKED_WAIT_INTERRUPTED
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_runnable_selection_bytes() -> u32 {
     SUPERVISOR_RUNNABLE_SELECTION_BYTES
 }
@@ -1974,6 +2198,11 @@ pub extern "C" fn supervisor_shadow_fs_control_count() -> u64 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_shadow_signal_control_count() -> u64 {
+    signal_control_count()
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_shadow_resume_poll_count() -> u64 {
     resume_poll_count()
 }
@@ -2032,6 +2261,11 @@ pub extern "C" fn supervisor_complete_futex_wait(vm_ptr: u32, completion: u32) -
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_signal_pending_for_blocked_wait(vm_ptr: u32) -> i32 {
+    blocked_wait_signal_decision(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_next_host_op(_out_ptr: u32, _out_len: u32) -> i32 {
     write_host_op_record(_out_ptr, _out_len)
 }
@@ -2080,6 +2314,11 @@ pub extern "C" fn supervisor_fd_control_record(out_ptr: u32, out_len: u32) -> i3
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fs_control_record(out_ptr: u32, out_len: u32) -> i32 {
     write_fs_control_record(out_ptr, out_len)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_signal_control_record(out_ptr: u32, out_len: u32) -> i32 {
+    write_signal_control_record(out_ptr, out_len)
 }
 
 #[unsafe(no_mangle)]

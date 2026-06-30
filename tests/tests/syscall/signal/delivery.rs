@@ -1,6 +1,19 @@
 use super::support::*;
 
 const SIGUSR1: i32 = 10;
+const SUPERVISOR_SIGNAL_CONTROL_MAGIC: u32 = 0x4753_5354;
+
+fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
+    let mut value = [0u8; 4];
+    value.copy_from_slice(&bytes[offset..offset + 4]);
+    u32::from_le_bytes(value)
+}
+
+fn read_u64_le(bytes: &[u8], offset: usize) -> u64 {
+    let mut value = [0u8; 8];
+    value.copy_from_slice(&bytes[offset..offset + 8]);
+    u64::from_le_bytes(value)
+}
 
 #[test]
 fn send_signal_to_tid_targets_requested_thread() {
@@ -107,6 +120,47 @@ fn tgkill_caught_handler_delivery_enters_target_thread() {
 }
 
 #[test]
+fn supervisor_signal_control_records_delivery_boundary() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    let handler = 0x91_000;
+    let act_addr = t.scratch;
+    write_sigaction(t.base, act_addr, handler, SA_SIGINFO, 0);
+    assert_eq!(
+        signal::sys_rt_sigaction(&mut t.vm, t.base, SIGUSR1 as u64, act_addr, 0, 8),
+        0
+    );
+    t.vm.pc = 0x77_000;
+    t.vm.x[2] = 0x9fff0;
+    t.vm.sig_mask = 0;
+    signal::send_signal(&mut t.vm, SIGUSR1);
+
+    assert!(signal::check_pending(&mut t.vm, t.base));
+    assert_eq!(t.vm.pc, handler);
+    assert_eq!(supervisor_shadow_signal_control_count(), 2);
+
+    let bytes_len = supervisor_signal_control_record_bytes() as usize;
+    let mut bytes = vec![0u8; bytes_len];
+    assert_eq!(
+        supervisor_signal_control_record(bytes.as_mut_ptr() as u32, bytes_len as u32),
+        bytes_len as i32
+    );
+    assert_eq!(read_u32_le(&bytes, 0), SUPERVISOR_SIGNAL_CONTROL_MAGIC);
+    assert_eq!(read_u32_le(&bytes, 8), bytes_len as u32);
+    assert_eq!(
+        read_u32_le(&bytes, 12),
+        supervisor_signal_control_kind_signal_delivered()
+    );
+    assert_eq!(read_u32_le(&bytes, 40), SIGUSR1 as u32);
+    assert_eq!(read_u32_le(&bytes, 44), STATUS_OK as u32);
+    assert_eq!(read_u32_le(&bytes, 52), 1);
+    assert_ne!(read_u64_le(&bytes, 80) & (1u64 << (SIGUSR1 - 1)), 0);
+    assert_eq!(read_u64_le(&bytes, 96), handler);
+    assert_eq!(read_u64_le(&bytes, 104), handler);
+}
+
+#[test]
 fn tgkill_caught_handler_resumes_blocked_futex_target_thread() {
     let mut t = TestVm::new();
     t.vm.tid = 1;
@@ -183,6 +237,73 @@ fn tgkill_caught_handler_resumes_blocked_futex_target_thread() {
         assert_eq!(record.pending_sigset, 0);
         assert_eq!(record.pending_siginfo_code, 0);
     }
+}
+
+#[test]
+fn supervisor_signal_control_records_blocked_futex_signal_decision() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    let futex_addr = t.scratch + 0x500;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, futex_addr, 7);
+    }
+    t.vm.tid = 1;
+    let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[0] = ThreadRecord::new(t.vm.tid, THREAD_RUNNING, vm_ptr, 0, 0);
+        ps.thread_count
+            .store(1, core::sync::atomic::Ordering::Release);
+    }
+
+    assert_eq!(
+        thread_impl::sys_futex(
+            &mut t.vm,
+            t.base,
+            futex_addr as u64,
+            FUTEX_WAIT as u64,
+            7,
+            0,
+            0,
+            0,
+        ),
+        0
+    );
+    assert_eq!(t.vm.status, STATUS_FUTEX_WAIT);
+    t.vm.sig_mask = 1u64 << (SIGURG - 1);
+    signal::send_signal(&mut t.vm, SIGURG);
+
+    assert_eq!(supervisor_signal_pending_for_blocked_wait(vm_ptr), 1);
+    assert_eq!(
+        supervisor_complete_futex_wait(vm_ptr, supervisor_futex_wait_completion_signal_check()),
+        STATUS_OK
+    );
+    assert_eq!(t.vm.x[10] as i64, EINTR);
+    assert_eq!(supervisor_shadow_signal_control_count(), 1);
+
+    let bytes_len = supervisor_signal_control_record_bytes() as usize;
+    let mut bytes = vec![0u8; bytes_len];
+    assert_eq!(
+        supervisor_signal_control_record(bytes.as_mut_ptr() as u32, bytes_len as u32),
+        bytes_len as i32
+    );
+    assert_eq!(read_u32_le(&bytes, 0), SUPERVISOR_SIGNAL_CONTROL_MAGIC);
+    assert_eq!(
+        read_u32_le(&bytes, 12),
+        supervisor_signal_control_kind_blocked_wait_interrupted()
+    );
+    assert_eq!(read_u32_le(&bytes, 40), SIGURG as u32);
+    assert_eq!(read_u32_le(&bytes, 44), STATUS_FUTEX_WAIT as u32);
+    assert_eq!(read_u32_le(&bytes, 52), 2);
+    assert_ne!(read_u64_le(&bytes, 56) & (1u64 << (SIGURG - 1)), 0);
+    assert_eq!(read_u64_le(&bytes, 80), 0);
+    assert_ne!(read_u64_le(&bytes, 88) & (1u64 << (SIGURG - 1)), 0);
+    assert_eq!(
+        read_u64_le(&bytes, 104),
+        supervisor_futex_wait_completion_signal_check() as u64
+    );
+    assert_eq!(read_u64_le(&bytes, 112), futex_addr as u64);
 }
 
 #[test]

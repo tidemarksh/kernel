@@ -67,6 +67,11 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_fs_control_kind_page_cache_fill(), 2);
     assert_eq!(supervisor_fs_control_kind_dirty_page_published(), 3);
     assert_eq!(supervisor_fs_control_kind_dirty_page_flushed(), 4);
+    assert_eq!(supervisor_signal_control_record_bytes(), 120);
+    assert_eq!(supervisor_signal_control_record(0, 0), 120);
+    assert_eq!(supervisor_signal_control_kind_boundary_check(), 1);
+    assert_eq!(supervisor_signal_control_kind_signal_delivered(), 2);
+    assert_eq!(supervisor_signal_control_kind_blocked_wait_interrupted(), 3);
 
     let empty_hash = supervisor_shadow_thread_event_log_hash();
     assert_eq!(supervisor_shadow_thread_event_count(), 0);
@@ -85,6 +90,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_shadow_thread_exit_cleanup_count(), 0);
     assert_eq!(supervisor_shadow_process_lifecycle_count(), 0);
     assert_eq!(supervisor_shadow_fs_control_count(), 0);
+    assert_eq!(supervisor_shadow_signal_control_count(), 0);
     assert_eq!(supervisor_next_resume(0, 0), 0);
     assert_eq!(supervisor_shadow_resume_poll_count(), 1);
 

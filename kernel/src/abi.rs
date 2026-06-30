@@ -770,11 +770,16 @@ pub use crate::supervisor::{
     supervisor_shadow_host_op_emit_count, supervisor_shadow_host_op_overflow_count,
     supervisor_shadow_host_op_poll_count, supervisor_shadow_process_lifecycle_count,
     supervisor_shadow_resume_enqueue_count, supervisor_shadow_resume_overflow_count,
-    supervisor_shadow_resume_poll_count, supervisor_shadow_thread_event_count,
-    supervisor_shadow_thread_event_log_hash, supervisor_shadow_thread_exit_cleanup_count,
-    supervisor_submit_thread_event, supervisor_thread_exit_cleanup_kind_thread_exit,
-    supervisor_thread_exit_cleanup_record, supervisor_thread_exit_cleanup_record_bytes,
-    supervisor_thread_state_snapshot, supervisor_thread_state_snapshot_bytes,
+    supervisor_shadow_resume_poll_count, supervisor_shadow_signal_control_count,
+    supervisor_shadow_thread_event_count, supervisor_shadow_thread_event_log_hash,
+    supervisor_shadow_thread_exit_cleanup_count,
+    supervisor_signal_control_kind_blocked_wait_interrupted,
+    supervisor_signal_control_kind_boundary_check, supervisor_signal_control_kind_signal_delivered,
+    supervisor_signal_control_record, supervisor_signal_control_record_bytes,
+    supervisor_signal_pending_for_blocked_wait, supervisor_submit_thread_event,
+    supervisor_thread_exit_cleanup_kind_thread_exit, supervisor_thread_exit_cleanup_record,
+    supervisor_thread_exit_cleanup_record_bytes, supervisor_thread_state_snapshot,
+    supervisor_thread_state_snapshot_bytes,
 };
 
 // =============================================================================
