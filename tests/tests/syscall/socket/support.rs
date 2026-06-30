@@ -30,3 +30,19 @@ pub(super) const IPPROTO_UDP: u64 = 17;
 pub(super) const TCP_NODELAY: u64 = 1;
 pub(super) const F_GETFD: u64 = 1;
 pub(super) const F_GETFL: u64 = 3;
+
+pub(super) fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
+    let mut value = [0u8; 4];
+    value.copy_from_slice(&bytes[offset..offset + 4]);
+    u32::from_le_bytes(value)
+}
+
+pub(super) fn read_u64_le(bytes: &[u8], offset: usize) -> u64 {
+    let mut value = [0u8; 8];
+    value.copy_from_slice(&bytes[offset..offset + 8]);
+    u64::from_le_bytes(value)
+}
+
+pub(super) fn socket_identity_detail(domain: u32, sock_type: u32, protocol: u32) -> u64 {
+    (domain as u64) | ((sock_type as u64) << 16) | ((protocol as u64) << 32)
+}
