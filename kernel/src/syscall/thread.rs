@@ -156,6 +156,35 @@ const FUTEX_TID_MASK: u32 = 0x3fff_ffff;
 const ROBUST_LIST_LIMIT: u32 = 2048;
 
 #[derive(Clone, Copy)]
+struct RobustCleanupStats {
+    head: u64,
+    pending: u64,
+    marked: u32,
+    woken: u32,
+    first_futex_addr: u64,
+}
+
+impl RobustCleanupStats {
+    const fn empty(head: u64) -> Self {
+        Self {
+            head,
+            pending: 0,
+            marked: 0,
+            woken: 0,
+            first_futex_addr: 0,
+        }
+    }
+
+    fn record_marked(&mut self, futex_addr: u64, woken: u32) {
+        self.marked = self.marked.saturating_add(1);
+        self.woken = self.woken.saturating_add(woken);
+        if self.first_futex_addr == 0 {
+            self.first_futex_addr = futex_addr;
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 struct CloneSpawnTrace {
     tid: i32,
     flags: u64,
@@ -484,51 +513,59 @@ fn mark_robust_futex_owner_died(
     owner_tid: u32,
     entry_addr: u64,
     futex_offset: i64,
-) {
+) -> Option<(u64, u32)> {
     let futex_addr = if futex_offset >= 0 {
         match entry_addr.checked_add(futex_offset as u64) {
             Some(addr) => addr,
-            None => return,
+            None => return None,
         }
     } else {
         match entry_addr.checked_sub((-futex_offset) as u64) {
             Some(addr) => addr,
-            None => return,
+            None => return None,
         }
     };
 
     if !crate::syscall::memory::guest_range_accessible(base, futex_addr, 4) {
-        return;
+        return None;
     }
     let owner = unsafe { guest_mem::read_u32(base, futex_addr) };
     if owner & FUTEX_TID_MASK != owner_tid {
-        return;
+        return None;
     }
 
     let updated = (owner & FUTEX_WAITERS) | FUTEX_OWNER_DIED;
     unsafe {
         guest_mem::write_u32(base, futex_addr, updated);
     }
-    wake_futex_waiters_by_process_ptr(
+    let woken = wake_futex_waiters_by_process_ptr(
         process_ptr,
         base,
         futex_addr,
         u32::MAX,
         FUTEX_BITSET_MATCH_ANY,
     );
+    Some((futex_addr, woken))
 }
 
-fn cleanup_robust_futexes(process_ptr: u32, base: u32, owner_tid: u32, robust_head: u64) {
+fn cleanup_robust_futexes(
+    process_ptr: u32,
+    base: u32,
+    owner_tid: u32,
+    robust_head: u64,
+) -> RobustCleanupStats {
+    let mut stats = RobustCleanupStats::empty(robust_head);
     if process_ptr == 0 || owner_tid == 0 || robust_head == 0 {
-        return;
+        return stats;
     }
     if !crate::syscall::memory::guest_range_accessible(base, robust_head, ROBUST_LIST_HEAD_LEN) {
-        return;
+        return stats;
     }
 
     let first = unsafe { guest_mem::read_u64(base, robust_head) };
     let futex_offset = unsafe { guest_mem::read_u64(base, robust_head + 8) as i64 };
     let pending = unsafe { guest_mem::read_u64(base, robust_head + 16) };
+    stats.pending = pending;
 
     let mut entry = first;
     let mut walked = 0;
@@ -536,14 +573,23 @@ fn cleanup_robust_futexes(process_ptr: u32, base: u32, owner_tid: u32, robust_he
         if !crate::syscall::memory::guest_range_accessible(base, entry, 8) {
             break;
         }
-        mark_robust_futex_owner_died(process_ptr, base, owner_tid, entry, futex_offset);
+        if let Some((futex_addr, woken)) =
+            mark_robust_futex_owner_died(process_ptr, base, owner_tid, entry, futex_offset)
+        {
+            stats.record_marked(futex_addr, woken);
+        }
         entry = unsafe { guest_mem::read_u64(base, entry) };
         walked += 1;
     }
 
     if pending != 0 && pending != robust_head {
-        mark_robust_futex_owner_died(process_ptr, base, owner_tid, pending, futex_offset);
+        if let Some((futex_addr, woken)) =
+            mark_robust_futex_owner_died(process_ptr, base, owner_tid, pending, futex_offset)
+        {
+            stats.record_marked(futex_addr, woken);
+        }
     }
+    stats
 }
 
 fn decrement_thread_count(vm: &ThreadState, base: u32) -> u32 {
@@ -751,15 +797,28 @@ pub fn sys_exit(vm: &mut ThreadState, base: u32, exit_code: u64) -> i32 {
             write_thread_record(record, updated);
         }
     }
-    cleanup_robust_futexes(vm.process_ptr, base, vm.tid as u32, vm.robust_list_head);
+    let robust_order = if vm.robust_list_head != 0 { 1 } else { 0 };
+    let robust_stats =
+        cleanup_robust_futexes(vm.process_ptr, base, vm.tid as u32, vm.robust_list_head);
     vm.robust_list_head = 0;
     vm.robust_list_len = 0;
     crate::fs::fd_table::clear_blocked_ofd_pin(vm);
     let remaining_threads = decrement_thread_count(vm, base);
 
     // clear_child_tid: write 0 and wake futex waiters
+    let clear_child_tid = vm.clear_child_tid;
+    let mut clear_child_tid_woken = 0;
+    let clear_child_tid_order = if clear_child_tid != 0 {
+        if robust_order == 0 {
+            1
+        } else {
+            robust_order + 1
+        }
+    } else {
+        0
+    };
     if vm.clear_child_tid != 0 {
-        clear_tid_and_wake(vm.process_ptr, base, vm.clear_child_tid);
+        clear_child_tid_woken = clear_tid_and_wake(vm.process_ptr, base, vm.clear_child_tid);
         vm.clear_child_tid = 0;
     }
 
@@ -775,6 +834,22 @@ pub fn sys_exit(vm: &mut ThreadState, base: u32, exit_code: u64) -> i32 {
     }
 
     vm.status = STATUS_FAULT;
+    crate::supervisor::record_thread_exit_cleanup(
+        crate::supervisor::SUPERVISOR_THREAD_EXIT_CLEANUP_KIND_THREAD_EXIT,
+        vm as *const ThreadState as u32,
+        vm.tid as u32,
+        vm.process_ptr,
+        vm.status as u32,
+        robust_stats.marked,
+        robust_stats.woken,
+        clear_child_tid_woken,
+        robust_order,
+        clear_child_tid_order,
+        clear_child_tid,
+        robust_stats.head,
+        robust_stats.pending,
+        robust_stats.first_futex_addr,
+    );
     STATUS_FAULT
 }
 

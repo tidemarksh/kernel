@@ -24,6 +24,9 @@ pub const SUPERVISOR_FAULT_EXIT_DECISION_BYTES: u32 = 88;
 pub const SUPERVISOR_FAULT_EXIT_DECISION_MAGIC: u32 = 0x5846_5354; // "TSFX" little-endian.
 pub const SUPERVISOR_FAULT_EXIT_KIND_THREAD_EXIT: u32 = 1;
 pub const SUPERVISOR_FAULT_EXIT_KIND_PROCESS_EXIT: u32 = 2;
+pub const SUPERVISOR_THREAD_EXIT_CLEANUP_BYTES: u32 = 96;
+pub const SUPERVISOR_THREAD_EXIT_CLEANUP_MAGIC: u32 = 0x4358_5354; // "TSXC" little-endian.
+pub const SUPERVISOR_THREAD_EXIT_CLEANUP_KIND_THREAD_EXIT: u32 = 1;
 pub const SUPERVISOR_RUNNABLE_SELECTION_BYTES: u32 = 48;
 pub const SUPERVISOR_RUNNABLE_SELECTION_MAGIC: u32 = 0x4e52_5354; // "TSRN" little-endian.
 pub const SUPERVISOR_FUTEX_WAIT_COMPLETION_WOKEN: u32 = 1;
@@ -57,6 +60,7 @@ static HOST_OP_POLL_COUNT: AtomicU64 = AtomicU64::new(0);
 static HOST_OP_EMIT_COUNT: AtomicU64 = AtomicU64::new(0);
 static HOST_OP_OVERFLOW_COUNT: AtomicU64 = AtomicU64::new(0);
 static FAULT_EXIT_DECISION_COUNT: AtomicU64 = AtomicU64::new(0);
+static THREAD_EXIT_CLEANUP_COUNT: AtomicU64 = AtomicU64::new(0);
 static RESUME_POLL_COUNT: AtomicU64 = AtomicU64::new(0);
 static RESUME_ENQUEUE_COUNT: AtomicU64 = AtomicU64::new(0);
 static RESUME_OVERFLOW_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -78,6 +82,9 @@ static HOST_OP_QUEUE_HEAD: AtomicU32 = AtomicU32::new(0);
 static HOST_OP_QUEUE_TAIL: AtomicU32 = AtomicU32::new(0);
 static mut HOST_OP_QUEUE: [SupervisorHostOpRequest; HOST_OP_QUEUE_CAP] =
     [HOST_OP_QUEUE_EMPTY; HOST_OP_QUEUE_CAP];
+static THREAD_EXIT_CLEANUP_LOCK: AtomicU32 = AtomicU32::new(0);
+static mut LAST_THREAD_EXIT_CLEANUP: SupervisorThreadExitCleanupRecord =
+    SupervisorThreadExitCleanupRecord::empty();
 
 #[derive(Clone, Copy)]
 struct SupervisorResumeRecord {
@@ -129,6 +136,47 @@ struct SupervisorFaultExitDecision {
 }
 
 #[derive(Clone, Copy)]
+pub struct SupervisorThreadExitCleanupRecord {
+    kind: u32,
+    seq: u64,
+    vm_ptr: u32,
+    tid: u32,
+    process_ptr: u32,
+    status: u32,
+    robust_marked: u32,
+    robust_woken: u32,
+    clear_child_tid_woken: u32,
+    robust_order: u32,
+    clear_child_tid_order: u32,
+    clear_child_tid: u64,
+    robust_head: u64,
+    robust_pending: u64,
+    first_robust_futex_addr: u64,
+}
+
+impl SupervisorThreadExitCleanupRecord {
+    const fn empty() -> Self {
+        Self {
+            kind: 0,
+            seq: 0,
+            vm_ptr: 0,
+            tid: 0,
+            process_ptr: 0,
+            status: 0,
+            robust_marked: 0,
+            robust_woken: 0,
+            clear_child_tid_woken: 0,
+            robust_order: 0,
+            clear_child_tid_order: 0,
+            clear_child_tid: 0,
+            robust_head: 0,
+            robust_pending: 0,
+            first_robust_futex_addr: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
 struct SupervisorRunnableSelection {
     seq: u64,
     vm_ptr: u32,
@@ -146,6 +194,7 @@ pub fn init() {
     HOST_OP_EMIT_COUNT.store(0, Ordering::Relaxed);
     HOST_OP_OVERFLOW_COUNT.store(0, Ordering::Relaxed);
     FAULT_EXIT_DECISION_COUNT.store(0, Ordering::Relaxed);
+    THREAD_EXIT_CLEANUP_COUNT.store(0, Ordering::Relaxed);
     RESUME_POLL_COUNT.store(0, Ordering::Relaxed);
     RESUME_ENQUEUE_COUNT.store(0, Ordering::Relaxed);
     RESUME_OVERFLOW_COUNT.store(0, Ordering::Relaxed);
@@ -173,6 +222,9 @@ pub fn init() {
             core::ptr::write(queue_ptr.add(idx), HOST_OP_QUEUE_EMPTY);
         }
     });
+    with_thread_exit_cleanup_lock(|| unsafe {
+        LAST_THREAD_EXIT_CLEANUP = SupervisorThreadExitCleanupRecord::empty();
+    });
 }
 
 pub fn thread_event_count() -> u64 {
@@ -193,6 +245,10 @@ pub fn host_op_emit_count() -> u64 {
 
 pub fn host_op_overflow_count() -> u64 {
     HOST_OP_OVERFLOW_COUNT.load(Ordering::Relaxed)
+}
+
+pub fn thread_exit_cleanup_count() -> u64 {
+    THREAD_EXIT_CLEANUP_COUNT.load(Ordering::Relaxed)
 }
 
 pub fn resume_poll_count() -> u64 {
@@ -285,6 +341,21 @@ fn with_host_op_queue_lock<T>(f: impl FnOnce() -> T) -> T {
     }
     let result = f();
     HOST_OP_QUEUE_LOCK.store(0, Ordering::Release);
+    result
+}
+
+fn with_thread_exit_cleanup_lock<T>(f: impl FnOnce() -> T) -> T {
+    loop {
+        if THREAD_EXIT_CLEANUP_LOCK
+            .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    let result = f();
+    THREAD_EXIT_CLEANUP_LOCK.store(0, Ordering::Release);
     result
 }
 
@@ -811,6 +882,87 @@ fn write_fault_exit_decision(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i32 {
     SUPERVISOR_FAULT_EXIT_DECISION_BYTES as i32
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn record_thread_exit_cleanup(
+    kind: u32,
+    vm_ptr: u32,
+    tid: u32,
+    process_ptr: u32,
+    status: u32,
+    robust_marked: u32,
+    robust_woken: u32,
+    clear_child_tid_woken: u32,
+    robust_order: u32,
+    clear_child_tid_order: u32,
+    clear_child_tid: u64,
+    robust_head: u64,
+    robust_pending: u64,
+    first_robust_futex_addr: u64,
+) {
+    let seq = THREAD_EXIT_CLEANUP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    let record = SupervisorThreadExitCleanupRecord {
+        kind,
+        seq,
+        vm_ptr,
+        tid,
+        process_ptr,
+        status,
+        robust_marked,
+        robust_woken,
+        clear_child_tid_woken,
+        robust_order,
+        clear_child_tid_order,
+        clear_child_tid,
+        robust_head,
+        robust_pending,
+        first_robust_futex_addr,
+    };
+    with_thread_exit_cleanup_lock(|| unsafe {
+        LAST_THREAD_EXIT_CLEANUP = record;
+    });
+}
+
+fn write_thread_exit_cleanup_record(out_ptr: u32, out_len: u32) -> i32 {
+    if out_len == 0 {
+        return SUPERVISOR_THREAD_EXIT_CLEANUP_BYTES as i32;
+    }
+    if out_ptr == 0 {
+        return crate::abi::EFAULT as i32;
+    }
+    if out_len < SUPERVISOR_THREAD_EXIT_CLEANUP_BYTES {
+        return crate::abi::ENOSPC as i32;
+    }
+    let record = with_thread_exit_cleanup_lock(|| unsafe { LAST_THREAD_EXIT_CLEANUP });
+    let mut encoded = [0u8; SUPERVISOR_THREAD_EXIT_CLEANUP_BYTES as usize];
+    write_u32(&mut encoded, 0, SUPERVISOR_THREAD_EXIT_CLEANUP_MAGIC);
+    write_u32(&mut encoded, 4, SUPERVISOR_ABI_VERSION);
+    write_u32(&mut encoded, 8, SUPERVISOR_THREAD_EXIT_CLEANUP_BYTES);
+    write_u32(&mut encoded, 12, record.kind);
+    write_u64(&mut encoded, 16, record.seq);
+    write_u32(&mut encoded, 24, record.vm_ptr);
+    write_u32(&mut encoded, 28, record.tid);
+    write_u32(&mut encoded, 32, record.process_ptr);
+    write_u32(&mut encoded, 36, record.status);
+    write_u32(&mut encoded, 40, record.robust_marked);
+    write_u32(&mut encoded, 44, record.robust_woken);
+    write_u32(&mut encoded, 48, record.clear_child_tid_woken);
+    write_u32(&mut encoded, 52, record.robust_order);
+    write_u32(&mut encoded, 56, record.clear_child_tid_order);
+    write_u32(&mut encoded, 60, 0);
+    write_u64(&mut encoded, 64, record.clear_child_tid);
+    write_u64(&mut encoded, 72, record.robust_head);
+    write_u64(&mut encoded, 80, record.robust_pending);
+    write_u64(&mut encoded, 88, record.first_robust_futex_addr);
+    let out = unsafe {
+        core::slice::from_raw_parts_mut(
+            out_ptr as usize as *mut u8,
+            SUPERVISOR_THREAD_EXIT_CLEANUP_BYTES as usize,
+        )
+    };
+    out.copy_from_slice(&encoded);
+    SUPERVISOR_THREAD_EXIT_CLEANUP_BYTES as i32
+}
+
 fn write_snapshot(out_ptr: u32, out_len: u32) -> i32 {
     if out_len == 0 {
         return SUPERVISOR_DEBUG_SNAPSHOT_BYTES as i32;
@@ -1029,6 +1181,16 @@ pub extern "C" fn supervisor_fault_exit_kind_process_exit() -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_thread_exit_cleanup_record_bytes() -> u32 {
+    SUPERVISOR_THREAD_EXIT_CLEANUP_BYTES
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_thread_exit_cleanup_kind_thread_exit() -> u32 {
+    SUPERVISOR_THREAD_EXIT_CLEANUP_KIND_THREAD_EXIT
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_runnable_selection_bytes() -> u32 {
     SUPERVISOR_RUNNABLE_SELECTION_BYTES
 }
@@ -1091,6 +1253,11 @@ pub extern "C" fn supervisor_shadow_host_op_emit_count() -> u64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_shadow_host_op_overflow_count() -> u64 {
     host_op_overflow_count()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_shadow_thread_exit_cleanup_count() -> u64 {
+    thread_exit_cleanup_count()
 }
 
 #[unsafe(no_mangle)]
@@ -1175,6 +1342,11 @@ pub extern "C" fn supervisor_select_runnable(
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fault_exit_decision(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i32 {
     write_fault_exit_decision(vm_ptr, out_ptr, out_len)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_thread_exit_cleanup_record(out_ptr: u32, out_len: u32) -> i32 {
+    write_thread_exit_cleanup_record(out_ptr, out_len)
 }
 
 #[unsafe(no_mangle)]
