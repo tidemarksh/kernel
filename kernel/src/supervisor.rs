@@ -11,6 +11,7 @@ mod codec;
 mod debug;
 mod event;
 mod exports;
+mod fault;
 mod futex;
 mod host_op;
 mod log;
@@ -26,7 +27,6 @@ pub(in crate::supervisor) use codec::{read_shadow_bytes, write_u32, write_u64};
 pub use exports::*;
 pub(super) use records::*;
 
-static FAULT_EXIT_DECISION_COUNT: AtomicU64 = AtomicU64::new(0);
 static THREAD_EXIT_CLEANUP_COUNT: AtomicU64 = AtomicU64::new(0);
 static PROCESS_LIFECYCLE_COUNT: AtomicU64 = AtomicU64::new(0);
 static FD_CONTROL_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -48,13 +48,13 @@ static mut LAST_SIGNAL_CONTROL: SupervisorSignalControlRecord =
 
 pub fn init() {
     log::init();
-    FAULT_EXIT_DECISION_COUNT.store(0, Ordering::Relaxed);
     THREAD_EXIT_CLEANUP_COUNT.store(0, Ordering::Relaxed);
     PROCESS_LIFECYCLE_COUNT.store(0, Ordering::Relaxed);
     FD_CONTROL_COUNT.store(0, Ordering::Relaxed);
     FS_CONTROL_COUNT.store(0, Ordering::Relaxed);
     SIGNAL_CONTROL_COUNT.store(0, Ordering::Relaxed);
     event::init_state();
+    fault::init();
     runnable::init();
     resume::init();
     host_op::init();
@@ -232,135 +232,6 @@ pub fn enqueue_sleep_timer(vm: &crate::types::ThreadState) -> bool {
 
 pub fn enqueue_blocked_wait_timer(vm: &crate::types::ThreadState, status: i32) -> bool {
     timer::enqueue_blocked_wait_timer(vm, status)
-}
-
-fn fault_exit_priority(thread: &crate::types::ThreadState) -> u32 {
-    if thread.fault_signal != 0 {
-        return 4;
-    }
-    if thread.fault_kind != 0 {
-        return 3;
-    }
-    if thread.fault_pc != 0 || thread.fault_addr != 0 {
-        return 2;
-    }
-    if thread.term_signal != 0 {
-        return 1;
-    }
-    0
-}
-
-fn select_fault_exit_decision(vm_ptr: u32) -> Result<SupervisorFaultExitDecision, i32> {
-    let vm = thread::state_from_ptr(vm_ptr).ok_or(crate::abi::EFAULT as i32)?;
-    if vm.process_ptr == 0 {
-        return Err(crate::abi::EINVAL as i32);
-    }
-    let ps = unsafe {
-        &*((vm.guest_base as u64 + vm.process_ptr as u64) as *const crate::types::ProcessState)
-    };
-    let remaining_threads = ps.thread_count.load(Ordering::Acquire);
-    let mut live_threads = 0u32;
-    let mut selected_vm_ptr = vm_ptr;
-    let mut selected = vm;
-    let mut selected_priority = fault_exit_priority(vm);
-    for record in ps.threads.iter() {
-        if matches!(
-            record.state,
-            crate::types::THREAD_NONE | crate::types::THREAD_DEAD
-        ) || record.thread_ptr == 0
-        {
-            continue;
-        }
-        let Some(thread) =
-            state::validated_thread_from_record(record, vm.guest_base, vm.process_ptr)
-        else {
-            continue;
-        };
-        live_threads = live_threads.saturating_add(1);
-        let priority = fault_exit_priority(thread);
-        if priority > selected_priority {
-            selected_priority = priority;
-            selected_vm_ptr = record.thread_ptr;
-            selected = thread;
-        }
-    }
-    let kind = if remaining_threads == 0 || live_threads == 0 {
-        SUPERVISOR_FAULT_EXIT_KIND_PROCESS_EXIT
-    } else {
-        SUPERVISOR_FAULT_EXIT_KIND_THREAD_EXIT
-    };
-    let exit_vm_ptr = if kind == SUPERVISOR_FAULT_EXIT_KIND_PROCESS_EXIT {
-        selected_vm_ptr
-    } else {
-        vm_ptr
-    };
-    let exit_thread = if kind == SUPERVISOR_FAULT_EXIT_KIND_PROCESS_EXIT {
-        selected
-    } else {
-        vm
-    };
-    let seq = FAULT_EXIT_DECISION_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-    Ok(SupervisorFaultExitDecision {
-        kind,
-        seq,
-        vm_ptr,
-        exit_vm_ptr,
-        tid: exit_thread.tid as u32,
-        process_ptr: vm.process_ptr,
-        remaining_threads,
-        live_threads,
-        exit_code: exit_thread.exit_code,
-        term_signal: exit_thread.term_signal,
-        status: exit_thread.status as u32,
-        fault_signal: exit_thread.fault_signal as u32,
-        fault_kind: exit_thread.fault_kind,
-        fault_pc: exit_thread.fault_pc,
-        fault_addr: exit_thread.fault_addr,
-    })
-}
-
-fn write_fault_exit_decision(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i32 {
-    if out_len == 0 {
-        return SUPERVISOR_FAULT_EXIT_DECISION_BYTES as i32;
-    }
-    if out_ptr == 0 {
-        return crate::abi::EFAULT as i32;
-    }
-    if out_len < SUPERVISOR_FAULT_EXIT_DECISION_BYTES {
-        return crate::abi::ENOSPC as i32;
-    }
-    let decision = match select_fault_exit_decision(vm_ptr) {
-        Ok(decision) => decision,
-        Err(errno) => return errno,
-    };
-    let mut encoded = [0u8; SUPERVISOR_FAULT_EXIT_DECISION_BYTES as usize];
-    write_u32(&mut encoded, 0, SUPERVISOR_FAULT_EXIT_DECISION_MAGIC);
-    write_u32(&mut encoded, 4, SUPERVISOR_ABI_VERSION);
-    write_u32(&mut encoded, 8, SUPERVISOR_FAULT_EXIT_DECISION_BYTES);
-    write_u32(&mut encoded, 12, decision.kind);
-    write_u64(&mut encoded, 16, decision.seq);
-    write_u32(&mut encoded, 24, decision.vm_ptr);
-    write_u32(&mut encoded, 28, decision.exit_vm_ptr);
-    write_u32(&mut encoded, 32, decision.tid);
-    write_u32(&mut encoded, 36, decision.process_ptr);
-    write_u32(&mut encoded, 40, decision.remaining_threads);
-    write_u32(&mut encoded, 44, decision.live_threads);
-    write_u32(&mut encoded, 48, decision.exit_code as u32);
-    write_u32(&mut encoded, 52, decision.term_signal as u32);
-    write_u32(&mut encoded, 56, decision.status);
-    write_u32(&mut encoded, 60, decision.fault_signal);
-    write_u32(&mut encoded, 64, decision.fault_kind);
-    write_u32(&mut encoded, 68, 0);
-    write_u64(&mut encoded, 72, decision.fault_pc);
-    write_u64(&mut encoded, 80, decision.fault_addr);
-    let out = unsafe {
-        core::slice::from_raw_parts_mut(
-            out_ptr as usize as *mut u8,
-            SUPERVISOR_FAULT_EXIT_DECISION_BYTES as usize,
-        )
-    };
-    out.copy_from_slice(&encoded);
-    SUPERVISOR_FAULT_EXIT_DECISION_BYTES as i32
 }
 
 #[allow(clippy::too_many_arguments)]

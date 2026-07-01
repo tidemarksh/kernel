@@ -443,7 +443,7 @@ pub extern "C" fn supervisor_process_resume(vm_ptr: u32, out_ptr: u32, out_len: 
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fault_exit_decision(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i32 {
-    super::write_fault_exit_decision(vm_ptr, out_ptr, out_len)
+    super::fault::write_decision(vm_ptr, out_ptr, out_len)
 }
 
 #[unsafe(no_mangle)]
