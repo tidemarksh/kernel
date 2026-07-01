@@ -109,6 +109,7 @@ fn debug_return_with_fd_trace(
     } else {
         fd_table::clear_blocked_ofd_pin(vm);
     }
+    crate::supervisor::enqueue_blocked_wait_timer(vm, status);
     status
 }
 

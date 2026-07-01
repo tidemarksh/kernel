@@ -300,6 +300,10 @@ pub fn enqueue_sleep_timer(vm: &crate::types::ThreadState) -> bool {
     timer::enqueue_sleep_timer(vm)
 }
 
+pub fn enqueue_blocked_wait_timer(vm: &crate::types::ThreadState, status: i32) -> bool {
+    timer::enqueue_blocked_wait_timer(vm, status)
+}
+
 fn fault_exit_priority(thread: &crate::types::ThreadState) -> u32 {
     if thread.fault_signal != 0 {
         return 4;

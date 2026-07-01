@@ -48,6 +48,14 @@ pub(super) fn read_u64_le(bytes: &[u8], offset: usize) -> u64 {
     u64::from_le_bytes(value)
 }
 
+pub(super) fn write_u32_le(bytes: &mut [u8], offset: usize, value: u32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+pub(super) fn write_u64_le(bytes: &mut [u8], offset: usize, value: u64) {
+    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
 pub(super) fn socket_identity_detail(domain: u32, sock_type: u32, protocol: u32) -> u64 {
     (domain as u64) | ((sock_type as u64) << 16) | ((protocol as u64) << 32)
 }

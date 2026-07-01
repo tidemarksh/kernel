@@ -27,6 +27,14 @@ fn read_u64_le(bytes: &[u8], offset: usize) -> u64 {
     u64::from_le_bytes(value)
 }
 
+fn write_u32_le(bytes: &mut [u8], offset: usize, value: u32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_u64_le(bytes: &mut [u8], offset: usize, value: u64) {
+    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
 #[test]
 fn close_epoll_clears_instance_slot() {
     let mut t = TestVm::new();
@@ -377,6 +385,118 @@ fn epoll_pwait_pins_blocked_epoll_fd_and_releases_on_timeout() {
     assert_eq!(t.vm.blocked_ofd_id, 0);
     let released = fd_table::get_ofd_by_id(epoll_ofd).expect("epoll OFD should still exist");
     assert_eq!(released.refcount, 1);
+}
+
+#[test]
+fn supervisor_epoll_timeout_host_op_resumes_and_publishes_runnable() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    let pipefd_addr = t.scratch + 0x1000;
+    assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) } as u64;
+
+    let epfd = epoll::sys_epoll_create1(&mut t.vm, t.base, 0);
+    assert!(epfd >= 3);
+
+    let event_addr = t.scratch + 0x2000;
+    let out_addr = t.scratch + 0x3000;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, event_addr, EPOLLIN);
+        tidemark_kernel::guest_mem::write_u64(t.base, event_addr + 8, 0x55);
+    }
+
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            read_fd,
+            event_addr,
+        ),
+        0
+    );
+
+    t.vm.x[10] = epfd as u64;
+    t.vm.x[11] = out_addr;
+    t.vm.x[12] = 1;
+    t.vm.x[13] = 10;
+    t.vm.x[14] = 0;
+    t.vm.x[17] = SYS_EPOLL_PWAIT;
+
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        STATUS_EPOLL_WAIT
+    );
+    assert_eq!(t.vm.status, STATUS_EPOLL_WAIT);
+
+    let mut host_op = vec![0u8; supervisor_host_op_record_bytes() as usize];
+    assert_eq!(
+        supervisor_next_host_op(host_op.as_mut_ptr() as u32, host_op.len() as u32),
+        supervisor_host_op_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&host_op, 0), 0x4f48_5354);
+    assert_eq!(read_u32_le(&host_op, 4), supervisor_abi_version());
+    assert_eq!(read_u32_le(&host_op, 8), supervisor_host_op_record_bytes());
+    assert_eq!(
+        read_u32_le(&host_op, 12),
+        supervisor_host_op_kind_arm_host_timer()
+    );
+    assert_eq!(
+        read_u32_le(&host_op, 24),
+        &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32
+    );
+    assert_eq!(read_u32_le(&host_op, 32), t.vm.tid as u32);
+    assert_eq!(read_u32_le(&host_op, 36), t.vm.process_ptr);
+    assert_eq!(read_u32_le(&host_op, 40), STATUS_EPOLL_WAIT as u32);
+    assert_eq!(read_u64_le(&host_op, 48), 10);
+    assert_eq!(read_u64_le(&host_op, 56), 0);
+    assert_eq!(supervisor_next_host_op(0, 0), 0);
+
+    let mut completion = [0u8; 64];
+    write_u32_le(&mut completion, 0, 0x4348_5354);
+    write_u32_le(&mut completion, 4, supervisor_abi_version());
+    write_u32_le(&mut completion, 8, 64);
+    write_u32_le(&mut completion, 12, read_u32_le(&host_op, 12));
+    write_u64_le(&mut completion, 16, read_u64_le(&host_op, 16));
+    write_u32_le(&mut completion, 24, read_u32_le(&host_op, 24));
+    write_u32_le(&mut completion, 28, read_u32_le(&host_op, 28));
+    write_u32_le(&mut completion, 32, read_u32_le(&host_op, 32));
+    write_u32_le(&mut completion, 36, 1);
+    write_u32_le(&mut completion, 40, 0);
+    write_u64_le(&mut completion, 48, read_u64_le(&host_op, 48));
+    write_u64_le(&mut completion, 56, read_u64_le(&host_op, 56));
+
+    assert_eq!(
+        supervisor_complete_host_op(completion.as_ptr() as u32, completion.len() as u32),
+        STATUS_OK
+    );
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.x[10], 0);
+    assert_eq!(t.vm.blocked_fd, 0);
+    assert_eq!(t.vm.blocked_ofd_id, 0);
+
+    let mut resume = vec![0u8; supervisor_resume_record_bytes() as usize];
+    assert_eq!(
+        supervisor_next_resume(resume.as_mut_ptr() as u32, resume.len() as u32),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&resume, 0), 0x5255_5354);
+    assert_eq!(read_u32_le(&resume, 4), supervisor_abi_version());
+    assert_eq!(read_u32_le(&resume, 8), supervisor_resume_record_bytes());
+    assert_eq!(
+        read_u32_le(&resume, 12),
+        supervisor_resume_kind_runnable_thread()
+    );
+    assert_eq!(
+        read_u32_le(&resume, 24),
+        &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32
+    );
+    assert_eq!(read_u32_le(&resume, 28), t.vm.tid as u32);
+    assert_eq!(read_u32_le(&resume, 32), t.vm.process_ptr);
+    assert_eq!(read_u32_le(&resume, 36), STATUS_OK as u32);
 }
 
 #[test]
