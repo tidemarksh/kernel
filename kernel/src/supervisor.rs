@@ -1865,6 +1865,11 @@ fn complete_futex_wait(vm_ptr: u32, completion: u32) -> i32 {
 
     let result = if blocked_addr == 0 {
         Some(0)
+    } else if completion == SUPERVISOR_FUTEX_WAIT_COMPLETION_WOKEN
+        && vm.status == crate::abi::STATUS_OK
+        && vm.futex_wait_addr == 0
+    {
+        Some(vm.x[10] as i64)
     } else if blocked_addr == u64::MAX {
         Some(crate::abi::EAGAIN)
     } else if signal_pending {
