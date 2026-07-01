@@ -22,44 +22,14 @@ pub(super) use records::*;
 const SNAPSHOT_MAGIC: u32 = 0x5055_5354; // "TSUP" little-endian.
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
-const RESUME_QUEUE_CAP: usize = 256;
-const HOST_OP_QUEUE_CAP: usize = 256;
-const RESUME_QUEUE_EMPTY: SupervisorResumeRecord = SupervisorResumeRecord {
-    kind: 0,
-    seq: 0,
-    vm_ptr: 0,
-    tid: 0,
-    process_ptr: 0,
-    status: 0,
-    detail0: 0,
-};
-const HOST_OP_QUEUE_EMPTY: SupervisorHostOpRequest = SupervisorHostOpRequest {
-    kind: 0,
-    parent_vm_ptr: 0,
-    child_vm_ptr: 0,
-    tid: 0,
-    process_ptr: 0,
-    status: 0,
-    detail0: 0,
-    detail1: 0,
-};
-
 static THREAD_EVENT_COUNT: AtomicU64 = AtomicU64::new(0);
 static HOST_COMPLETION_COUNT: AtomicU64 = AtomicU64::new(0);
-static HOST_OP_POLL_COUNT: AtomicU64 = AtomicU64::new(0);
-static HOST_OP_EMIT_COUNT: AtomicU64 = AtomicU64::new(0);
-static HOST_OP_OVERFLOW_COUNT: AtomicU64 = AtomicU64::new(0);
 static FAULT_EXIT_DECISION_COUNT: AtomicU64 = AtomicU64::new(0);
 static THREAD_EXIT_CLEANUP_COUNT: AtomicU64 = AtomicU64::new(0);
 static PROCESS_LIFECYCLE_COUNT: AtomicU64 = AtomicU64::new(0);
 static FD_CONTROL_COUNT: AtomicU64 = AtomicU64::new(0);
 static FS_CONTROL_COUNT: AtomicU64 = AtomicU64::new(0);
 static SIGNAL_CONTROL_COUNT: AtomicU64 = AtomicU64::new(0);
-static RESUME_POLL_COUNT: AtomicU64 = AtomicU64::new(0);
-static RESUME_ENQUEUE_COUNT: AtomicU64 = AtomicU64::new(0);
-static RESUME_OVERFLOW_COUNT: AtomicU64 = AtomicU64::new(0);
-static RUNNABLE_SELECTION_COUNT: AtomicU64 = AtomicU64::new(0);
-static RUNNABLE_SELECTION_CURSOR: AtomicU32 = AtomicU32::new(0);
 static THREAD_EVENT_LOG_HASH: AtomicU64 = AtomicU64::new(FNV_OFFSET);
 static HOST_COMPLETION_LOG_HASH: AtomicU64 = AtomicU64::new(FNV_OFFSET);
 static HOST_OP_LOG_HASH: AtomicU64 = AtomicU64::new(FNV_OFFSET);
@@ -69,16 +39,6 @@ static LAST_HOST_OP_HASH: AtomicU64 = AtomicU64::new(0);
 static LAST_THREAD_EVENT_LEN: AtomicU32 = AtomicU32::new(0);
 static LAST_HOST_COMPLETION_LEN: AtomicU32 = AtomicU32::new(0);
 static LAST_HOST_OP_LEN: AtomicU32 = AtomicU32::new(0);
-static RESUME_QUEUE_LOCK: AtomicU32 = AtomicU32::new(0);
-static RESUME_QUEUE_HEAD: AtomicU32 = AtomicU32::new(0);
-static RESUME_QUEUE_TAIL: AtomicU32 = AtomicU32::new(0);
-static mut RESUME_QUEUE: [SupervisorResumeRecord; RESUME_QUEUE_CAP] =
-    [RESUME_QUEUE_EMPTY; RESUME_QUEUE_CAP];
-static HOST_OP_QUEUE_LOCK: AtomicU32 = AtomicU32::new(0);
-static HOST_OP_QUEUE_HEAD: AtomicU32 = AtomicU32::new(0);
-static HOST_OP_QUEUE_TAIL: AtomicU32 = AtomicU32::new(0);
-static mut HOST_OP_QUEUE: [SupervisorHostOpRequest; HOST_OP_QUEUE_CAP] =
-    [HOST_OP_QUEUE_EMPTY; HOST_OP_QUEUE_CAP];
 static THREAD_EXIT_CLEANUP_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_THREAD_EXIT_CLEANUP: SupervisorThreadExitCleanupRecord =
     SupervisorThreadExitCleanupRecord::empty();
@@ -96,20 +56,12 @@ static mut LAST_SIGNAL_CONTROL: SupervisorSignalControlRecord =
 pub fn init() {
     THREAD_EVENT_COUNT.store(0, Ordering::Relaxed);
     HOST_COMPLETION_COUNT.store(0, Ordering::Relaxed);
-    HOST_OP_POLL_COUNT.store(0, Ordering::Relaxed);
-    HOST_OP_EMIT_COUNT.store(0, Ordering::Relaxed);
-    HOST_OP_OVERFLOW_COUNT.store(0, Ordering::Relaxed);
     FAULT_EXIT_DECISION_COUNT.store(0, Ordering::Relaxed);
     THREAD_EXIT_CLEANUP_COUNT.store(0, Ordering::Relaxed);
     PROCESS_LIFECYCLE_COUNT.store(0, Ordering::Relaxed);
     FD_CONTROL_COUNT.store(0, Ordering::Relaxed);
     FS_CONTROL_COUNT.store(0, Ordering::Relaxed);
     SIGNAL_CONTROL_COUNT.store(0, Ordering::Relaxed);
-    RESUME_POLL_COUNT.store(0, Ordering::Relaxed);
-    RESUME_ENQUEUE_COUNT.store(0, Ordering::Relaxed);
-    RESUME_OVERFLOW_COUNT.store(0, Ordering::Relaxed);
-    RUNNABLE_SELECTION_COUNT.store(0, Ordering::Relaxed);
-    RUNNABLE_SELECTION_CURSOR.store(0, Ordering::Relaxed);
     THREAD_EVENT_LOG_HASH.store(FNV_OFFSET, Ordering::Relaxed);
     HOST_COMPLETION_LOG_HASH.store(FNV_OFFSET, Ordering::Relaxed);
     HOST_OP_LOG_HASH.store(FNV_OFFSET, Ordering::Relaxed);
@@ -120,8 +72,9 @@ pub fn init() {
     LAST_HOST_COMPLETION_LEN.store(0, Ordering::Relaxed);
     LAST_HOST_OP_LEN.store(0, Ordering::Relaxed);
     event::init_state();
-    resume::init_queue();
-    host_op::init_queue();
+    runnable::init();
+    resume::init();
+    host_op::init();
     with_thread_exit_cleanup_lock(|| unsafe {
         LAST_THREAD_EXIT_CLEANUP = SupervisorThreadExitCleanupRecord::empty();
     });
@@ -148,15 +101,15 @@ pub fn host_completion_count() -> u64 {
 }
 
 pub fn host_op_poll_count() -> u64 {
-    HOST_OP_POLL_COUNT.load(Ordering::Relaxed)
+    host_op::poll_count()
 }
 
 pub fn host_op_emit_count() -> u64 {
-    HOST_OP_EMIT_COUNT.load(Ordering::Relaxed)
+    host_op::emit_count()
 }
 
 pub fn host_op_overflow_count() -> u64 {
-    HOST_OP_OVERFLOW_COUNT.load(Ordering::Relaxed)
+    host_op::overflow_count()
 }
 
 pub fn thread_exit_cleanup_count() -> u64 {
@@ -180,15 +133,15 @@ pub fn signal_control_count() -> u64 {
 }
 
 pub fn resume_poll_count() -> u64 {
-    RESUME_POLL_COUNT.load(Ordering::Relaxed)
+    resume::poll_count()
 }
 
 pub fn resume_enqueue_count() -> u64 {
-    RESUME_ENQUEUE_COUNT.load(Ordering::Relaxed)
+    resume::enqueue_count()
 }
 
 pub fn resume_overflow_count() -> u64 {
-    RESUME_OVERFLOW_COUNT.load(Ordering::Relaxed)
+    resume::overflow_count()
 }
 
 pub fn thread_event_log_hash() -> u64 {

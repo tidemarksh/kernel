@@ -1,5 +1,3 @@
-use core::sync::atomic::Ordering;
-
 fn blocked_wait_signal_pending(vm: &crate::types::ThreadState, base: u32) -> bool {
     crate::syscall::signal::pending_signal_interrupts_blocked_syscall(vm, base)
         || vm.sig_pending != 0
@@ -21,7 +19,7 @@ pub(super) fn enqueue_resume(process_ptr: u32, vm_ptr: u32, tid: i32, futex_addr
     if process_ptr == 0 || vm_ptr == 0 || tid <= 0 {
         return false;
     }
-    let seq = super::RESUME_ENQUEUE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    let seq = super::resume::next_enqueue_seq();
     super::resume::push_record(super::SupervisorResumeRecord {
         kind: super::SUPERVISOR_RESUME_KIND_FUTEX_WAKE,
         seq,

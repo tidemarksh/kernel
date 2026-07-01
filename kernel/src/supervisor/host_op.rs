@@ -1,8 +1,28 @@
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
+const QUEUE_CAP: usize = 256;
+const QUEUE_EMPTY: super::SupervisorHostOpRequest = super::SupervisorHostOpRequest {
+    kind: 0,
+    parent_vm_ptr: 0,
+    child_vm_ptr: 0,
+    tid: 0,
+    process_ptr: 0,
+    status: 0,
+    detail0: 0,
+    detail1: 0,
+};
+
+static POLL_COUNT: AtomicU64 = AtomicU64::new(0);
+static EMIT_COUNT: AtomicU64 = AtomicU64::new(0);
+static OVERFLOW_COUNT: AtomicU64 = AtomicU64::new(0);
+static QUEUE_LOCK: AtomicU32 = AtomicU32::new(0);
+static QUEUE_HEAD: AtomicU32 = AtomicU32::new(0);
+static QUEUE_TAIL: AtomicU32 = AtomicU32::new(0);
+static mut QUEUE: [super::SupervisorHostOpRequest; QUEUE_CAP] = [QUEUE_EMPTY; QUEUE_CAP];
 
 fn with_queue_lock<T>(f: impl FnOnce() -> T) -> T {
     loop {
-        if super::HOST_OP_QUEUE_LOCK
+        if QUEUE_LOCK
             .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
         {
@@ -11,98 +31,109 @@ fn with_queue_lock<T>(f: impl FnOnce() -> T) -> T {
         core::hint::spin_loop();
     }
     let result = f();
-    super::HOST_OP_QUEUE_LOCK.store(0, Ordering::Release);
+    QUEUE_LOCK.store(0, Ordering::Release);
     result
 }
 
-pub(super) fn init_queue() {
+pub(super) fn init() {
+    POLL_COUNT.store(0, Ordering::Relaxed);
+    EMIT_COUNT.store(0, Ordering::Relaxed);
+    OVERFLOW_COUNT.store(0, Ordering::Relaxed);
     with_queue_lock(|| unsafe {
-        super::HOST_OP_QUEUE_HEAD.store(0, Ordering::Relaxed);
-        super::HOST_OP_QUEUE_TAIL.store(0, Ordering::Relaxed);
-        let queue_ptr =
-            core::ptr::addr_of_mut!(super::HOST_OP_QUEUE) as *mut super::SupervisorHostOpRequest;
-        for idx in 0..super::HOST_OP_QUEUE_CAP {
-            core::ptr::write(queue_ptr.add(idx), super::HOST_OP_QUEUE_EMPTY);
+        QUEUE_HEAD.store(0, Ordering::Relaxed);
+        QUEUE_TAIL.store(0, Ordering::Relaxed);
+        let queue_ptr = core::ptr::addr_of_mut!(QUEUE) as *mut super::SupervisorHostOpRequest;
+        for idx in 0..QUEUE_CAP {
+            core::ptr::write(queue_ptr.add(idx), QUEUE_EMPTY);
         }
     });
 }
 
+pub(super) fn poll_count() -> u64 {
+    POLL_COUNT.load(Ordering::Relaxed)
+}
+
+pub(super) fn emit_count() -> u64 {
+    EMIT_COUNT.load(Ordering::Relaxed)
+}
+
+pub(super) fn overflow_count() -> u64 {
+    OVERFLOW_COUNT.load(Ordering::Relaxed)
+}
+
+fn next_emit_seq() -> u64 {
+    EMIT_COUNT.fetch_add(1, Ordering::Relaxed) + 1
+}
+
 fn push_request(record: super::SupervisorHostOpRequest) -> bool {
     with_queue_lock(|| unsafe {
-        let head = super::HOST_OP_QUEUE_HEAD.load(Ordering::Relaxed);
-        let tail = super::HOST_OP_QUEUE_TAIL.load(Ordering::Relaxed);
-        let next_tail = (tail + 1) % super::HOST_OP_QUEUE_CAP as u32;
+        let head = QUEUE_HEAD.load(Ordering::Relaxed);
+        let tail = QUEUE_TAIL.load(Ordering::Relaxed);
+        let next_tail = (tail + 1) % QUEUE_CAP as u32;
         if next_tail == head {
-            super::HOST_OP_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
+            OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
             return false;
         }
-        let queue_ptr =
-            core::ptr::addr_of_mut!(super::HOST_OP_QUEUE) as *mut super::SupervisorHostOpRequest;
+        let queue_ptr = core::ptr::addr_of_mut!(QUEUE) as *mut super::SupervisorHostOpRequest;
         core::ptr::write(queue_ptr.add(tail as usize), record);
-        super::HOST_OP_QUEUE_TAIL.store(next_tail, Ordering::Relaxed);
+        QUEUE_TAIL.store(next_tail, Ordering::Relaxed);
         true
     })
 }
 
 fn peek_request() -> Option<super::SupervisorHostOpRequest> {
     with_queue_lock(|| unsafe {
-        let head = super::HOST_OP_QUEUE_HEAD.load(Ordering::Relaxed);
-        let tail = super::HOST_OP_QUEUE_TAIL.load(Ordering::Relaxed);
+        let head = QUEUE_HEAD.load(Ordering::Relaxed);
+        let tail = QUEUE_TAIL.load(Ordering::Relaxed);
         if head == tail {
             return None;
         }
-        let queue_ptr =
-            core::ptr::addr_of!(super::HOST_OP_QUEUE) as *const super::SupervisorHostOpRequest;
+        let queue_ptr = core::ptr::addr_of!(QUEUE) as *const super::SupervisorHostOpRequest;
         Some(core::ptr::read(queue_ptr.add(head as usize)))
     })
 }
 
 fn pop_request() -> Option<super::SupervisorHostOpRequest> {
     with_queue_lock(|| unsafe {
-        let head = super::HOST_OP_QUEUE_HEAD.load(Ordering::Relaxed);
-        let tail = super::HOST_OP_QUEUE_TAIL.load(Ordering::Relaxed);
+        let head = QUEUE_HEAD.load(Ordering::Relaxed);
+        let tail = QUEUE_TAIL.load(Ordering::Relaxed);
         if head == tail {
             return None;
         }
-        let queue_ptr =
-            core::ptr::addr_of_mut!(super::HOST_OP_QUEUE) as *mut super::SupervisorHostOpRequest;
+        let queue_ptr = core::ptr::addr_of_mut!(QUEUE) as *mut super::SupervisorHostOpRequest;
         let record = core::ptr::read(queue_ptr.add(head as usize));
-        core::ptr::write(queue_ptr.add(head as usize), super::HOST_OP_QUEUE_EMPTY);
-        super::HOST_OP_QUEUE_HEAD.store(
-            (head + 1) % super::HOST_OP_QUEUE_CAP as u32,
-            Ordering::Relaxed,
-        );
+        core::ptr::write(queue_ptr.add(head as usize), QUEUE_EMPTY);
+        QUEUE_HEAD.store((head + 1) % QUEUE_CAP as u32, Ordering::Relaxed);
         Some(record)
     })
 }
 
 fn remove_request(kind: u32, parent_vm_ptr: u32) -> bool {
     with_queue_lock(|| unsafe {
-        let head = super::HOST_OP_QUEUE_HEAD.load(Ordering::Relaxed);
-        let tail = super::HOST_OP_QUEUE_TAIL.load(Ordering::Relaxed);
-        let queue_ptr =
-            core::ptr::addr_of_mut!(super::HOST_OP_QUEUE) as *mut super::SupervisorHostOpRequest;
+        let head = QUEUE_HEAD.load(Ordering::Relaxed);
+        let tail = QUEUE_TAIL.load(Ordering::Relaxed);
+        let queue_ptr = core::ptr::addr_of_mut!(QUEUE) as *mut super::SupervisorHostOpRequest;
         let mut read = head;
         let mut write = head;
         let mut removed = false;
         while read != tail {
             let current = read;
             let record = core::ptr::read(queue_ptr.add(current as usize));
-            read = (read + 1) % super::HOST_OP_QUEUE_CAP as u32;
+            read = (read + 1) % QUEUE_CAP as u32;
             if !removed && record.kind == kind && record.parent_vm_ptr == parent_vm_ptr {
                 removed = true;
                 continue;
             }
             core::ptr::write(queue_ptr.add(write as usize), record);
-            write = (write + 1) % super::HOST_OP_QUEUE_CAP as u32;
+            write = (write + 1) % QUEUE_CAP as u32;
         }
         if removed {
             let mut clear = write;
             while clear != tail {
-                core::ptr::write(queue_ptr.add(clear as usize), super::HOST_OP_QUEUE_EMPTY);
-                clear = (clear + 1) % super::HOST_OP_QUEUE_CAP as u32;
+                core::ptr::write(queue_ptr.add(clear as usize), QUEUE_EMPTY);
+                clear = (clear + 1) % QUEUE_CAP as u32;
             }
-            super::HOST_OP_QUEUE_TAIL.store(write, Ordering::Relaxed);
+            QUEUE_TAIL.store(write, Ordering::Relaxed);
         }
         removed
     })
@@ -175,7 +206,7 @@ pub(super) fn complete_host_op(bytes: &[u8]) -> i32 {
 }
 
 pub(super) fn write_record(out_ptr: u32, out_len: u32) -> i32 {
-    super::HOST_OP_POLL_COUNT.fetch_add(1, Ordering::Relaxed);
+    POLL_COUNT.fetch_add(1, Ordering::Relaxed);
     if out_len == 0 {
         return if peek_request().is_some() {
             super::SUPERVISOR_HOST_OP_RECORD_BYTES as i32
@@ -192,7 +223,7 @@ pub(super) fn write_record(out_ptr: u32, out_len: u32) -> i32 {
     let Some(request) = pop_request() else {
         return 0;
     };
-    let seq = super::HOST_OP_EMIT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    let seq = next_emit_seq();
     let record = match request.kind {
         super::SUPERVISOR_HOST_OP_KIND_SPAWN_THREAD_WORKER => {
             let parent = unsafe { &*(request.parent_vm_ptr as *const crate::types::ThreadState) };
@@ -267,8 +298,7 @@ fn select_process_op(vm_ptr: u32) -> Result<Option<super::SupervisorProcessHostO
     }
     let log_emission = vm.spawn_supervisor_host_op_seq == 0;
     if log_emission {
-        vm.spawn_supervisor_host_op_seq =
-            super::HOST_OP_EMIT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        vm.spawn_supervisor_host_op_seq = next_emit_seq();
     }
     Ok(Some(super::SupervisorProcessHostOpRecord {
         kind: super::SUPERVISOR_PROCESS_HOST_OP_KIND_SPAWN_PROCESS_WORKER,
@@ -289,7 +319,7 @@ fn select_process_op(vm_ptr: u32) -> Result<Option<super::SupervisorProcessHostO
 }
 
 pub(super) fn write_process_record(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i32 {
-    super::HOST_OP_POLL_COUNT.fetch_add(1, Ordering::Relaxed);
+    POLL_COUNT.fetch_add(1, Ordering::Relaxed);
     if out_len == 0 {
         return match process_op_pending(vm_ptr) {
             Ok(true) => super::SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES as i32,
