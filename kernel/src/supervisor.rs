@@ -7,6 +7,7 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 mod abi;
+mod blocked;
 mod codec;
 mod debug;
 mod event;
