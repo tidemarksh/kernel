@@ -37,6 +37,9 @@ fn select_from_supervisor_state(
                 continue;
             }
         }
+        if super::event::suppresses_runnable(record.thread_ptr, record.tid as u32) {
+            continue;
+        }
         let Some(status) = super::state::validated_thread_status_from_record(
             &record,
             vm.guest_base,

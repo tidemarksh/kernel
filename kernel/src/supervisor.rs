@@ -6,6 +6,7 @@
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
+mod event;
 mod futex;
 mod host_op;
 mod resume;
@@ -492,6 +493,7 @@ pub fn init() {
     LAST_THREAD_EVENT_LEN.store(0, Ordering::Relaxed);
     LAST_HOST_COMPLETION_LEN.store(0, Ordering::Relaxed);
     LAST_HOST_OP_LEN.store(0, Ordering::Relaxed);
+    event::init_state();
     resume::init_queue();
     host_op::init_queue();
     with_thread_exit_cleanup_lock(|| unsafe {
@@ -1885,16 +1887,7 @@ pub extern "C" fn supervisor_shadow_host_op_last_len() -> u32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_submit_thread_event(event_ptr: u32, event_len: u32) -> i32 {
-    let bytes = match read_shadow_bytes(event_ptr, event_len) {
-        Ok(bytes) => bytes,
-        Err(errno) => return errno,
-    };
-    let entry_hash = fnv_hash(bytes);
-    THREAD_EVENT_COUNT.fetch_add(1, Ordering::Relaxed);
-    LAST_THREAD_EVENT_HASH.store(entry_hash, Ordering::Relaxed);
-    LAST_THREAD_EVENT_LEN.store(event_len, Ordering::Relaxed);
-    fold_log_hash(&THREAD_EVENT_LOG_HASH, entry_hash, event_len);
-    0
+    event::submit(event_ptr, event_len)
 }
 
 #[unsafe(no_mangle)]
