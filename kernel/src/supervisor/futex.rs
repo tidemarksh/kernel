@@ -22,7 +22,7 @@ pub(super) fn enqueue_resume(process_ptr: u32, vm_ptr: u32, tid: i32, futex_addr
         return false;
     }
     let seq = super::RESUME_ENQUEUE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-    super::push_resume_record(super::SupervisorResumeRecord {
+    super::resume::push_record(super::SupervisorResumeRecord {
         kind: super::SUPERVISOR_RESUME_KIND_FUTEX_WAKE,
         seq,
         vm_ptr,

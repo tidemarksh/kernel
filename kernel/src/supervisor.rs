@@ -7,6 +7,8 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 mod futex;
+mod host_op;
+mod resume;
 mod runnable;
 mod state;
 
@@ -490,22 +492,8 @@ pub fn init() {
     LAST_THREAD_EVENT_LEN.store(0, Ordering::Relaxed);
     LAST_HOST_COMPLETION_LEN.store(0, Ordering::Relaxed);
     LAST_HOST_OP_LEN.store(0, Ordering::Relaxed);
-    with_resume_queue_lock(|| unsafe {
-        RESUME_QUEUE_HEAD.store(0, Ordering::Relaxed);
-        RESUME_QUEUE_TAIL.store(0, Ordering::Relaxed);
-        let queue_ptr = core::ptr::addr_of_mut!(RESUME_QUEUE) as *mut SupervisorResumeRecord;
-        for idx in 0..RESUME_QUEUE_CAP {
-            core::ptr::write(queue_ptr.add(idx), RESUME_QUEUE_EMPTY);
-        }
-    });
-    with_host_op_queue_lock(|| unsafe {
-        HOST_OP_QUEUE_HEAD.store(0, Ordering::Relaxed);
-        HOST_OP_QUEUE_TAIL.store(0, Ordering::Relaxed);
-        let queue_ptr = core::ptr::addr_of_mut!(HOST_OP_QUEUE) as *mut SupervisorHostOpRequest;
-        for idx in 0..HOST_OP_QUEUE_CAP {
-            core::ptr::write(queue_ptr.add(idx), HOST_OP_QUEUE_EMPTY);
-        }
-    });
+    resume::init_queue();
+    host_op::init_queue();
     with_thread_exit_cleanup_lock(|| unsafe {
         LAST_THREAD_EXIT_CLEANUP = SupervisorThreadExitCleanupRecord::empty();
     });
@@ -637,36 +625,6 @@ fn write_u64(buf: &mut [u8], offset: usize, value: u64) {
     buf[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
 
-fn with_resume_queue_lock<T>(f: impl FnOnce() -> T) -> T {
-    loop {
-        if RESUME_QUEUE_LOCK
-            .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-            .is_ok()
-        {
-            break;
-        }
-        core::hint::spin_loop();
-    }
-    let result = f();
-    RESUME_QUEUE_LOCK.store(0, Ordering::Release);
-    result
-}
-
-fn with_host_op_queue_lock<T>(f: impl FnOnce() -> T) -> T {
-    loop {
-        if HOST_OP_QUEUE_LOCK
-            .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
-            .is_ok()
-        {
-            break;
-        }
-        core::hint::spin_loop();
-    }
-    let result = f();
-    HOST_OP_QUEUE_LOCK.store(0, Ordering::Release);
-    result
-}
-
 fn with_thread_exit_cleanup_lock<T>(f: impl FnOnce() -> T) -> T {
     loop {
         if THREAD_EXIT_CLEANUP_LOCK
@@ -742,368 +700,16 @@ fn with_signal_control_lock<T>(f: impl FnOnce() -> T) -> T {
     result
 }
 
-fn push_resume_record(record: SupervisorResumeRecord) -> bool {
-    with_resume_queue_lock(|| unsafe {
-        let head = RESUME_QUEUE_HEAD.load(Ordering::Relaxed);
-        let tail = RESUME_QUEUE_TAIL.load(Ordering::Relaxed);
-        let next_tail = (tail + 1) % RESUME_QUEUE_CAP as u32;
-        if next_tail == head {
-            RESUME_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
-            return false;
-        }
-        let queue_ptr = core::ptr::addr_of_mut!(RESUME_QUEUE) as *mut SupervisorResumeRecord;
-        core::ptr::write(queue_ptr.add(tail as usize), record);
-        RESUME_QUEUE_TAIL.store(next_tail, Ordering::Relaxed);
-        true
-    })
-}
-
-fn push_host_op_request(record: SupervisorHostOpRequest) -> bool {
-    with_host_op_queue_lock(|| unsafe {
-        let head = HOST_OP_QUEUE_HEAD.load(Ordering::Relaxed);
-        let tail = HOST_OP_QUEUE_TAIL.load(Ordering::Relaxed);
-        let next_tail = (tail + 1) % HOST_OP_QUEUE_CAP as u32;
-        if next_tail == head {
-            HOST_OP_OVERFLOW_COUNT.fetch_add(1, Ordering::Relaxed);
-            return false;
-        }
-        let queue_ptr = core::ptr::addr_of_mut!(HOST_OP_QUEUE) as *mut SupervisorHostOpRequest;
-        core::ptr::write(queue_ptr.add(tail as usize), record);
-        HOST_OP_QUEUE_TAIL.store(next_tail, Ordering::Relaxed);
-        true
-    })
-}
-
-fn peek_resume_record() -> Option<SupervisorResumeRecord> {
-    with_resume_queue_lock(|| unsafe {
-        let head = RESUME_QUEUE_HEAD.load(Ordering::Relaxed);
-        let tail = RESUME_QUEUE_TAIL.load(Ordering::Relaxed);
-        if head == tail {
-            return None;
-        }
-        let queue_ptr = core::ptr::addr_of!(RESUME_QUEUE) as *const SupervisorResumeRecord;
-        Some(core::ptr::read(queue_ptr.add(head as usize)))
-    })
-}
-
-fn peek_host_op_request() -> Option<SupervisorHostOpRequest> {
-    with_host_op_queue_lock(|| unsafe {
-        let head = HOST_OP_QUEUE_HEAD.load(Ordering::Relaxed);
-        let tail = HOST_OP_QUEUE_TAIL.load(Ordering::Relaxed);
-        if head == tail {
-            return None;
-        }
-        let queue_ptr = core::ptr::addr_of!(HOST_OP_QUEUE) as *const SupervisorHostOpRequest;
-        Some(core::ptr::read(queue_ptr.add(head as usize)))
-    })
-}
-
-fn pop_resume_record() -> Option<SupervisorResumeRecord> {
-    with_resume_queue_lock(|| unsafe {
-        let head = RESUME_QUEUE_HEAD.load(Ordering::Relaxed);
-        let tail = RESUME_QUEUE_TAIL.load(Ordering::Relaxed);
-        if head == tail {
-            return None;
-        }
-        let queue_ptr = core::ptr::addr_of_mut!(RESUME_QUEUE) as *mut SupervisorResumeRecord;
-        let record = core::ptr::read(queue_ptr.add(head as usize));
-        core::ptr::write(queue_ptr.add(head as usize), RESUME_QUEUE_EMPTY);
-        RESUME_QUEUE_HEAD.store((head + 1) % RESUME_QUEUE_CAP as u32, Ordering::Relaxed);
-        Some(record)
-    })
-}
-
-fn pop_host_op_request() -> Option<SupervisorHostOpRequest> {
-    with_host_op_queue_lock(|| unsafe {
-        let head = HOST_OP_QUEUE_HEAD.load(Ordering::Relaxed);
-        let tail = HOST_OP_QUEUE_TAIL.load(Ordering::Relaxed);
-        if head == tail {
-            return None;
-        }
-        let queue_ptr = core::ptr::addr_of_mut!(HOST_OP_QUEUE) as *mut SupervisorHostOpRequest;
-        let record = core::ptr::read(queue_ptr.add(head as usize));
-        core::ptr::write(queue_ptr.add(head as usize), HOST_OP_QUEUE_EMPTY);
-        HOST_OP_QUEUE_HEAD.store((head + 1) % HOST_OP_QUEUE_CAP as u32, Ordering::Relaxed);
-        Some(record)
-    })
-}
-
-fn remove_host_op_request(kind: u32, parent_vm_ptr: u32) -> bool {
-    with_host_op_queue_lock(|| unsafe {
-        let head = HOST_OP_QUEUE_HEAD.load(Ordering::Relaxed);
-        let tail = HOST_OP_QUEUE_TAIL.load(Ordering::Relaxed);
-        let queue_ptr = core::ptr::addr_of_mut!(HOST_OP_QUEUE) as *mut SupervisorHostOpRequest;
-        let mut read = head;
-        let mut write = head;
-        let mut removed = false;
-        while read != tail {
-            let current = read;
-            let record = core::ptr::read(queue_ptr.add(current as usize));
-            read = (read + 1) % HOST_OP_QUEUE_CAP as u32;
-            if !removed && record.kind == kind && record.parent_vm_ptr == parent_vm_ptr {
-                removed = true;
-                continue;
-            }
-            core::ptr::write(queue_ptr.add(write as usize), record);
-            write = (write + 1) % HOST_OP_QUEUE_CAP as u32;
-        }
-        if removed {
-            let mut clear = write;
-            while clear != tail {
-                core::ptr::write(queue_ptr.add(clear as usize), HOST_OP_QUEUE_EMPTY);
-                clear = (clear + 1) % HOST_OP_QUEUE_CAP as u32;
-            }
-            HOST_OP_QUEUE_TAIL.store(write, Ordering::Relaxed);
-        }
-        removed
-    })
-}
-
-fn write_resume_record(out_ptr: u32, out_len: u32) -> i32 {
-    RESUME_POLL_COUNT.fetch_add(1, Ordering::Relaxed);
-    if out_len == 0 {
-        return if peek_resume_record().is_some() {
-            SUPERVISOR_RESUME_RECORD_BYTES as i32
-        } else {
-            0
-        };
-    }
-    if out_ptr == 0 {
-        return crate::abi::EFAULT as i32;
-    }
-    if out_len < SUPERVISOR_RESUME_RECORD_BYTES {
-        return crate::abi::ENOSPC as i32;
-    }
-    let Some(record) = pop_resume_record() else {
-        return 0;
-    };
-    let mut encoded = [0u8; SUPERVISOR_RESUME_RECORD_BYTES as usize];
-    write_u32(&mut encoded, 0, SUPERVISOR_RESUME_RECORD_MAGIC);
-    write_u32(&mut encoded, 4, SUPERVISOR_ABI_VERSION);
-    write_u32(&mut encoded, 8, SUPERVISOR_RESUME_RECORD_BYTES);
-    write_u32(&mut encoded, 12, record.kind);
-    write_u64(&mut encoded, 16, record.seq);
-    write_u32(&mut encoded, 24, record.vm_ptr);
-    write_u32(&mut encoded, 28, record.tid);
-    write_u32(&mut encoded, 32, record.process_ptr);
-    write_u32(&mut encoded, 36, record.status);
-    write_u64(&mut encoded, 40, record.detail0);
-
-    let out = unsafe {
-        core::slice::from_raw_parts_mut(
-            out_ptr as usize as *mut u8,
-            SUPERVISOR_RESUME_RECORD_BYTES as usize,
-        )
-    };
-    out.copy_from_slice(&encoded);
-    SUPERVISOR_RESUME_RECORD_BYTES as i32
-}
-
-fn write_host_op_record(out_ptr: u32, out_len: u32) -> i32 {
-    HOST_OP_POLL_COUNT.fetch_add(1, Ordering::Relaxed);
-    if out_len == 0 {
-        return if peek_host_op_request().is_some() {
-            SUPERVISOR_HOST_OP_RECORD_BYTES as i32
-        } else {
-            0
-        };
-    }
-    if out_ptr == 0 {
-        return crate::abi::EFAULT as i32;
-    }
-    if out_len < SUPERVISOR_HOST_OP_RECORD_BYTES {
-        return crate::abi::ENOSPC as i32;
-    }
-    let Some(request) = pop_host_op_request() else {
-        return 0;
-    };
-    let seq = HOST_OP_EMIT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-    let record = match request.kind {
-        SUPERVISOR_HOST_OP_KIND_SPAWN_THREAD_WORKER => {
-            let parent = unsafe { &*(request.parent_vm_ptr as *const crate::types::ThreadState) };
-            let flags = parent.clone_flags;
-            let child_tidptr = parent.clone_child_tidptr;
-            let process_ptr = parent.process_ptr;
-            let child_vm_ptr =
-                crate::syscall::thread::spawn_from_clone(request.parent_vm_ptr, parent.guest_base);
-            if child_vm_ptr == 0 {
-                return crate::abi::EINVAL as i32;
-            }
-            let child = unsafe { &*(child_vm_ptr as *const crate::types::ThreadState) };
-            SupervisorHostOpRecord {
-                kind: request.kind,
-                seq,
-                parent_vm_ptr: request.parent_vm_ptr,
-                child_vm_ptr,
-                tid: child.tid as u32,
-                process_ptr,
-                status: crate::abi::STATUS_OK as u32,
-                flags,
-                child_tidptr,
-            }
-        }
-        SUPERVISOR_HOST_OP_KIND_ARM_HOST_TIMER => SupervisorHostOpRecord {
-            kind: request.kind,
-            seq,
-            parent_vm_ptr: request.parent_vm_ptr,
-            child_vm_ptr: request.child_vm_ptr,
-            tid: request.tid,
-            process_ptr: request.process_ptr,
-            status: request.status,
-            flags: request.detail0,
-            child_tidptr: request.detail1,
-        },
-        _ => return crate::abi::EINVAL as i32,
-    };
-    let mut encoded = [0u8; SUPERVISOR_HOST_OP_RECORD_BYTES as usize];
-    write_u32(&mut encoded, 0, SUPERVISOR_HOST_OP_RECORD_MAGIC);
-    write_u32(&mut encoded, 4, SUPERVISOR_ABI_VERSION);
-    write_u32(&mut encoded, 8, SUPERVISOR_HOST_OP_RECORD_BYTES);
-    write_u32(&mut encoded, 12, record.kind);
-    write_u64(&mut encoded, 16, record.seq);
-    write_u32(&mut encoded, 24, record.parent_vm_ptr);
-    write_u32(&mut encoded, 28, record.child_vm_ptr);
-    write_u32(&mut encoded, 32, record.tid);
-    write_u32(&mut encoded, 36, record.process_ptr);
-    write_u32(&mut encoded, 40, record.status);
-    write_u32(&mut encoded, 44, 0);
-    write_u64(&mut encoded, 48, record.flags);
-    write_u64(&mut encoded, 56, record.child_tidptr);
-    record_host_op_log_entry(&encoded, SUPERVISOR_HOST_OP_RECORD_BYTES);
-    let out = unsafe {
-        core::slice::from_raw_parts_mut(
-            out_ptr as usize as *mut u8,
-            SUPERVISOR_HOST_OP_RECORD_BYTES as usize,
-        )
-    };
-    out.copy_from_slice(&encoded);
-    SUPERVISOR_HOST_OP_RECORD_BYTES as i32
-}
-
-fn select_process_host_op(vm_ptr: u32) -> Result<Option<SupervisorProcessHostOpRecord>, i32> {
-    let vm = thread_state_mut_from_ptr(vm_ptr).ok_or(crate::abi::EFAULT as i32)?;
-    if vm.spawn_kind == crate::abi::SPAWN_KIND_NONE || vm.spawn_child_pid <= 0 {
-        return Ok(None);
-    }
-    let log_emission = vm.spawn_supervisor_host_op_seq == 0;
-    if log_emission {
-        vm.spawn_supervisor_host_op_seq = HOST_OP_EMIT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-    }
-    Ok(Some(SupervisorProcessHostOpRecord {
-        kind: SUPERVISOR_PROCESS_HOST_OP_KIND_SPAWN_PROCESS_WORKER,
-        seq: vm.spawn_supervisor_host_op_seq,
-        log_emission,
-        parent_vm_ptr: vm_ptr,
-        spawn_kind: vm.spawn_kind,
-        child_pid: vm.spawn_child_pid,
-        process_ptr: vm.process_ptr,
-        status: vm.status as u32,
-        address_profile: vm.spawn_address_profile,
-        guest_memory_policy_limit: vm.spawn_guest_memory_policy_limit,
-        process_max_memory_pages: vm.spawn_process_max_memory_pages,
-        path: vm.spawn_path,
-        argv: vm.spawn_argv,
-        envp: vm.spawn_envp,
-    }))
-}
-
-fn write_process_host_op_record(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i32 {
-    HOST_OP_POLL_COUNT.fetch_add(1, Ordering::Relaxed);
-    if out_len == 0 {
-        return match process_host_op_pending(vm_ptr) {
-            Ok(true) => SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES as i32,
-            Ok(false) => 0,
-            Err(errno) => errno,
-        };
-    }
-    if out_ptr == 0 {
-        return crate::abi::EFAULT as i32;
-    }
-    if out_len < SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES {
-        return crate::abi::ENOSPC as i32;
-    }
-    let record = match select_process_host_op(vm_ptr) {
-        Ok(Some(record)) => record,
-        Ok(None) => return 0,
-        Err(errno) => return errno,
-    };
-    let mut encoded = [0u8; SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES as usize];
-    write_u32(&mut encoded, 0, SUPERVISOR_PROCESS_HOST_OP_RECORD_MAGIC);
-    write_u32(&mut encoded, 4, SUPERVISOR_ABI_VERSION);
-    write_u32(&mut encoded, 8, SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES);
-    write_u32(&mut encoded, 12, record.kind);
-    write_u64(&mut encoded, 16, record.seq);
-    write_u32(&mut encoded, 24, record.parent_vm_ptr);
-    write_u32(&mut encoded, 28, record.spawn_kind);
-    write_u32(&mut encoded, 32, record.child_pid as u32);
-    write_u32(&mut encoded, 36, record.process_ptr);
-    write_u32(&mut encoded, 40, record.status);
-    write_u32(&mut encoded, 44, record.address_profile);
-    write_u64(&mut encoded, 48, record.guest_memory_policy_limit);
-    write_u32(&mut encoded, 56, record.process_max_memory_pages);
-    write_u32(&mut encoded, 60, 0);
-    write_u64(&mut encoded, 64, record.path);
-    write_u64(&mut encoded, 72, record.argv);
-    write_u64(&mut encoded, 80, record.envp);
-    write_u64(&mut encoded, 88, 0);
-    if record.log_emission {
-        record_host_op_log_entry(&encoded, SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES);
-    }
-    let out = unsafe {
-        core::slice::from_raw_parts_mut(
-            out_ptr as usize as *mut u8,
-            SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES as usize,
-        )
-    };
-    out.copy_from_slice(&encoded);
-    SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES as i32
-}
-
 pub fn enqueue_clone_spawn(parent_vm_ptr: u32) -> bool {
-    if parent_vm_ptr == 0 {
-        return false;
-    }
-    push_host_op_request(SupervisorHostOpRequest {
-        kind: SUPERVISOR_HOST_OP_KIND_SPAWN_THREAD_WORKER,
-        parent_vm_ptr,
-        child_vm_ptr: 0,
-        tid: 0,
-        process_ptr: 0,
-        status: 0,
-        detail0: 0,
-        detail1: 0,
-    })
+    host_op::enqueue_clone_spawn(parent_vm_ptr)
 }
 
 pub fn discard_clone_spawn(parent_vm_ptr: u32) -> bool {
-    if parent_vm_ptr == 0 {
-        return false;
-    }
-    remove_host_op_request(SUPERVISOR_HOST_OP_KIND_SPAWN_THREAD_WORKER, parent_vm_ptr)
+    host_op::discard_clone_spawn(parent_vm_ptr)
 }
 
 pub fn enqueue_futex_wait_timer(vm: &crate::types::ThreadState) -> bool {
-    if vm.futex_wait_timeout == 0 {
-        return false;
-    }
-    let delay_ticks = crate::syscall::time::timeout_timespec_delta_ticks(
-        vm.guest_base,
-        vm.futex_wait_timeout,
-        vm.futex_wait_absolute != 0,
-        (vm.futex_wait_flags & crate::abi::FUTEX_CLOCK_REALTIME) != 0,
-    )
-    .unwrap_or(0);
-    let delay_ms = crate::syscall::time::ticks_to_millis_ceil(delay_ticks);
-    push_host_op_request(SupervisorHostOpRequest {
-        kind: SUPERVISOR_HOST_OP_KIND_ARM_HOST_TIMER,
-        parent_vm_ptr: vm as *const crate::types::ThreadState as u32,
-        child_vm_ptr: 0,
-        tid: vm.tid as u32,
-        process_ptr: vm.process_ptr,
-        status: vm.status as u32,
-        detail0: delay_ms,
-        detail1: delay_ticks,
-    })
+    host_op::enqueue_futex_wait_timer(vm)
 }
 
 fn candidate_list_contains(candidates: &[u8], vm_ptr: u32) -> bool {
@@ -1142,11 +748,6 @@ fn thread_state_mut_from_ptr(vm_ptr: u32) -> Option<&'static mut crate::types::T
         return None;
     }
     Some(unsafe { &mut *(absolute as *mut crate::types::ThreadState) })
-}
-
-fn process_host_op_pending(vm_ptr: u32) -> Result<bool, i32> {
-    let vm = thread_state_from_ptr(vm_ptr).ok_or(crate::abi::EFAULT as i32)?;
-    Ok(vm.spawn_kind != crate::abi::SPAWN_KIND_NONE && vm.spawn_child_pid > 0)
 }
 
 fn fault_exit_priority(thread: &crate::types::ThreadState) -> u32 {
@@ -2322,17 +1923,17 @@ pub extern "C" fn supervisor_signal_pending_for_blocked_wait(vm_ptr: u32) -> i32
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_next_host_op(_out_ptr: u32, _out_len: u32) -> i32 {
-    write_host_op_record(_out_ptr, _out_len)
+    host_op::write_record(_out_ptr, _out_len)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_process_host_op(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i32 {
-    write_process_host_op_record(vm_ptr, out_ptr, out_len)
+    host_op::write_process_record(vm_ptr, out_ptr, out_len)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_next_resume(_out_ptr: u32, _out_len: u32) -> i32 {
-    write_resume_record(_out_ptr, _out_len)
+    resume::write_record(_out_ptr, _out_len)
 }
 
 #[unsafe(no_mangle)]
