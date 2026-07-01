@@ -54,6 +54,8 @@ fn write_thread_event_record_with_detail(
 
 #[test]
 fn supervisor_futex_completion_resumes_only_kernel_selected_waiter() {
+    supervisor_reset_shadow_log();
+
     let mut t = TestVm::new();
     let futex_addr = t.scratch + 0x100;
     unsafe {
@@ -113,6 +115,8 @@ fn supervisor_futex_completion_resumes_only_kernel_selected_waiter() {
 
 #[test]
 fn supervisor_futex_completion_clears_stale_resolved_record_without_rewriting_result() {
+    supervisor_reset_shadow_log();
+
     let mut t = TestVm::new();
     let futex_addr = t.scratch + 0x110;
     unsafe {
@@ -609,7 +613,65 @@ fn supervisor_process_resume_ready_event_overrides_stale_blocked_record() {
 }
 
 #[test]
+fn supervisor_process_resume_skips_dead_thread_records() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+
+    let mut dead_thread: ThreadState = unsafe { std::mem::zeroed() };
+    dead_thread.guest_base = t.base;
+    dead_thread.process_ptr = t.vm.process_ptr;
+    dead_thread.tid = 2;
+    dead_thread.status = STATUS_OK;
+    let dead_thread_ptr = (&mut dead_thread as *mut ThreadState) as u32;
+
+    let mut runnable_thread: ThreadState = unsafe { std::mem::zeroed() };
+    runnable_thread.guest_base = t.base;
+    runnable_thread.process_ptr = t.vm.process_ptr;
+    runnable_thread.tid = 3;
+    runnable_thread.status = STATUS_OK;
+    let runnable_thread_ptr = (&mut runnable_thread as *mut ThreadState) as u32;
+
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[0].state = THREAD_BLOCKED_FUTEX;
+        ps.threads[0].blocked_addr = 0x6300;
+        ps.threads[1] = ThreadRecord::new(2, THREAD_DEAD, dead_thread_ptr, 0, 0);
+        ps.threads[2] = ThreadRecord::new(3, THREAD_RUNNING, runnable_thread_ptr, 0, 0);
+        ps.thread_count
+            .store(3, std::sync::atomic::Ordering::Release);
+    }
+
+    let vm_ptr = (&mut t.vm as *mut ThreadState) as u32;
+    let mut resume = [0u8; 48];
+    assert_eq!(
+        supervisor_process_resume(vm_ptr, resume.as_mut_ptr() as u32, resume.len() as u32,),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&resume, 12),
+        supervisor_resume_kind_runnable_thread()
+    );
+    assert_eq!(read_u32_le(&resume, 24), runnable_thread_ptr);
+    assert_eq!(read_u32_le(&resume, 28), 3);
+
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[2].state = THREAD_DEAD;
+    }
+    resume.fill(0);
+    assert_eq!(
+        supervisor_process_resume(vm_ptr, resume.as_mut_ptr() as u32, resume.len() as u32,),
+        0
+    );
+}
+
+#[test]
 fn supervisor_futex_completion_owns_timeout_result() {
+    supervisor_reset_shadow_log();
+
     let mut t = TestVm::new();
     let futex_addr = t.scratch + 0x140;
     unsafe {
