@@ -111,6 +111,10 @@ pub fn enqueue_sleep_timer(vm: &crate::types::ThreadState) -> bool {
     timer::enqueue_sleep_timer(vm)
 }
 
+pub fn enqueue_runnable_thread(vm: &crate::types::ThreadState) -> bool {
+    resume::enqueue_runnable_thread(vm)
+}
+
 pub fn enqueue_blocked_wait_timer(vm: &crate::types::ThreadState, status: i32) -> bool {
     timer::enqueue_blocked_wait_timer(vm, status)
 }

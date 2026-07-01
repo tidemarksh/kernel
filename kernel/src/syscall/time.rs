@@ -705,6 +705,9 @@ pub fn sys_nanosleep(vm: &mut ThreadState, base: u32, req: u64, _rem: u64) -> i3
         vm.fault_pc = nsec;
     }
     vm.x[10] = 0; // return 0 on success
+    if vm.fault_addr == 0 && vm.fault_pc == 0 {
+        return suspend_with_supervisor_runnable_resume(vm);
+    }
     vm.status = abi::STATUS_SLEEP;
     crate::supervisor::enqueue_sleep_timer(vm);
     abi::STATUS_SLEEP
@@ -766,6 +769,9 @@ pub fn sys_clock_nanosleep(
     vm.fault_addr = sleep_sec;
     vm.fault_pc = sleep_nsec;
     vm.x[10] = 0;
+    if sleep_sec == 0 && sleep_nsec == 0 {
+        return suspend_with_supervisor_runnable_resume(vm);
+    }
     vm.status = abi::STATUS_SLEEP;
     crate::supervisor::enqueue_sleep_timer(vm);
     abi::STATUS_SLEEP
@@ -776,11 +782,16 @@ pub fn sys_clock_nanosleep(
 /// before resuming this one; guest-visible return value remains 0.
 /// https://man7.org/linux/man-pages/man2/sched_yield.2.html
 pub fn sys_sched_yield(vm: &mut ThreadState) -> i32 {
+    suspend_with_supervisor_runnable_resume(vm)
+}
+
+fn suspend_with_supervisor_runnable_resume(vm: &mut ThreadState) -> i32 {
     vm.fault_addr = 0;
     vm.fault_pc = 0;
     vm.x[10] = 0;
-    vm.status = abi::STATUS_SLEEP;
-    0
+    vm.status = abi::STATUS_OK;
+    crate::supervisor::enqueue_runnable_thread(vm);
+    abi::STATUS_SLEEP
 }
 
 /// sched_getaffinity: expose a single online CPU.

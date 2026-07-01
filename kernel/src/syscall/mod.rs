@@ -88,22 +88,11 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
         }
         SYS_SCHED_GETAFFINITY => time::sys_sched_getaffinity(vm, base, a0 as i64, a1, a2),
         SYS_SCHED_YIELD => {
-            let ret = time::sys_sched_yield(vm);
-            if vm.status == abi::STATUS_SLEEP {
-                return debug_return(
-                    vm,
-                    nr,
-                    a0,
-                    a1,
-                    a2,
-                    a3,
-                    a4,
-                    a5,
-                    ret as i64,
-                    abi::STATUS_SLEEP,
-                );
+            let status = time::sys_sched_yield(vm);
+            if status == abi::STATUS_SLEEP {
+                return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, vm.x[10] as i64, status);
             }
-            ret as i64
+            vm.x[10] as i64
         }
         SYS_TIMES => ENOSYS,
 

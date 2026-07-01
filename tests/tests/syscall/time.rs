@@ -34,6 +34,26 @@ fn write_u64_le(bytes: &mut [u8], offset: usize, value: u64) {
     bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
 
+fn assert_next_runnable_resume(vm: &ThreadState) {
+    let mut resume = vec![0u8; supervisor_resume_record_bytes() as usize];
+    assert_eq!(
+        supervisor_next_resume(resume.as_mut_ptr() as u32, resume.len() as u32),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&resume, 0), 0x5255_5354);
+    assert_eq!(read_u32_le(&resume, 4), supervisor_abi_version());
+    assert_eq!(read_u32_le(&resume, 8), supervisor_resume_record_bytes());
+    assert_eq!(
+        read_u32_le(&resume, 12),
+        supervisor_resume_kind_runnable_thread()
+    );
+    assert_eq!(read_u32_le(&resume, 24), vm as *const ThreadState as u32);
+    assert_eq!(read_u32_le(&resume, 28), vm.tid as u32);
+    assert_eq!(read_u32_le(&resume, 32), vm.process_ptr);
+    assert_eq!(read_u32_le(&resume, 36), abi::STATUS_OK as u32);
+    assert_eq!(supervisor_next_resume(0, 0), 0);
+}
+
 fn write_itimerspec(
     base: u32,
     addr: u64,
@@ -451,6 +471,49 @@ fn clock_nanosleep_relative_sets_sleep_status() {
     );
     assert_eq!(t.vm.fault_addr, 0);
     assert_eq!(t.vm.fault_pc, 50_000_000);
+}
+
+#[test]
+fn nanosleep_zero_duration_publishes_runnable_resume_without_host_timer() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    let req = t.scratch + 0x510;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, req, 0);
+        tidemark_kernel::guest_mem::write_u64(t.base, req + 8, 0);
+    }
+    t.vm.tid = 1;
+
+    assert_eq!(
+        tidemark_kernel::syscall::time::sys_nanosleep(&mut t.vm, t.base, req, 0),
+        abi::STATUS_SLEEP
+    );
+    assert_eq!(t.vm.status, abi::STATUS_OK);
+    assert_eq!(t.vm.x[10], 0);
+    assert_eq!(t.vm.fault_addr, 0);
+    assert_eq!(t.vm.fault_pc, 0);
+    assert_eq!(supervisor_next_host_op(0, 0), 0);
+    assert_next_runnable_resume(&t.vm);
+}
+
+#[test]
+fn sched_yield_publishes_runnable_resume_without_host_timer() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+
+    assert_eq!(
+        tidemark_kernel::syscall::time::sys_sched_yield(&mut t.vm),
+        abi::STATUS_SLEEP
+    );
+    assert_eq!(t.vm.status, abi::STATUS_OK);
+    assert_eq!(t.vm.x[10], 0);
+    assert_eq!(t.vm.fault_addr, 0);
+    assert_eq!(t.vm.fault_pc, 0);
+    assert_eq!(supervisor_next_host_op(0, 0), 0);
+    assert_next_runnable_resume(&t.vm);
 }
 
 #[test]
