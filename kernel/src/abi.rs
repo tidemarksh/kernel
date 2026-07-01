@@ -740,7 +740,8 @@ pub use crate::exports::memfs::*;
 pub use crate::exports::thread::*;
 pub use crate::supervisor::{
     supervisor_abi_version, supervisor_complete_futex_wait, supervisor_complete_host_op,
-    supervisor_debug_snapshot, supervisor_debug_snapshot_bytes, supervisor_fault_exit_decision,
+    supervisor_debug_snapshot, supervisor_debug_snapshot_bytes,
+    supervisor_enqueue_blocked_wait_timer, supervisor_fault_exit_decision,
     supervisor_fault_exit_decision_bytes, supervisor_fault_exit_kind_process_exit,
     supervisor_fault_exit_kind_thread_exit, supervisor_fd_control_kind_epoll_created,
     supervisor_fd_control_kind_epoll_ctl_add, supervisor_fd_control_kind_epoll_ctl_del,

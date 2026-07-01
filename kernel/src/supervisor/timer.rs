@@ -119,6 +119,18 @@ pub(super) fn enqueue_blocked_wait_timer(vm: &crate::types::ThreadState, status:
     }
 }
 
+pub(super) fn enqueue_blocked_wait_timer_for_vm(vm_ptr: u32) -> i32 {
+    if vm_ptr == 0 {
+        return crate::abi::EFAULT as i32;
+    }
+    let vm = unsafe { &*(vm_ptr as *const crate::types::ThreadState) };
+    if enqueue_blocked_wait_timer(vm, vm.status) {
+        1
+    } else {
+        0
+    }
+}
+
 fn enqueue_epoll_wait_timer(vm: &crate::types::ThreadState) -> bool {
     if vm.epoll_timeout_ms >= 0 {
         return enqueue_timer_request(vm, vm.epoll_timeout_ms as u64, 0);

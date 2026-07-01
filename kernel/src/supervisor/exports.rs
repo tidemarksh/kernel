@@ -427,6 +427,11 @@ pub extern "C" fn supervisor_resume_blocked_syscall(vm_ptr: u32, flags: u32) -> 
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_enqueue_blocked_wait_timer(vm_ptr: u32) -> i32 {
+    super::enqueue_blocked_wait_timer_for_vm(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_next_host_op(out_ptr: u32, out_len: u32) -> i32 {
     super::host_op::write_record(out_ptr, out_len)
 }

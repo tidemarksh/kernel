@@ -114,6 +114,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_signal_control_kind_blocked_wait_interrupted(), 3);
     assert_eq!(supervisor_resume_kind_runnable_thread(), 2);
     assert_eq!(supervisor_resume_blocked_syscall(0, 0), -(EFAULT as i64));
+    assert_eq!(supervisor_enqueue_blocked_wait_timer(0), EFAULT as i32);
 
     let empty_hash = supervisor_shadow_thread_event_log_hash();
     assert_eq!(supervisor_shadow_thread_event_count(), 0);

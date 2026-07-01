@@ -235,6 +235,10 @@ pub fn enqueue_blocked_wait_timer(vm: &crate::types::ThreadState, status: i32) -
     timer::enqueue_blocked_wait_timer(vm, status)
 }
 
+pub fn enqueue_blocked_wait_timer_for_vm(vm_ptr: u32) -> i32 {
+    timer::enqueue_blocked_wait_timer_for_vm(vm_ptr)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn record_thread_exit_cleanup(
     kind: u32,
