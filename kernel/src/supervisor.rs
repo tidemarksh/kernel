@@ -16,6 +16,7 @@ mod resume;
 mod runnable;
 mod state;
 mod thread;
+mod timer;
 
 pub use abi::*;
 pub use exports::*;
@@ -292,11 +293,11 @@ pub fn discard_clone_spawn(parent_vm_ptr: u32) -> bool {
 }
 
 pub fn enqueue_futex_wait_timer(vm: &crate::types::ThreadState) -> bool {
-    host_op::enqueue_futex_wait_timer(vm)
+    timer::enqueue_futex_wait_timer(vm)
 }
 
 pub fn enqueue_sleep_timer(vm: &crate::types::ThreadState) -> bool {
-    host_op::enqueue_sleep_timer(vm)
+    timer::enqueue_sleep_timer(vm)
 }
 
 fn fault_exit_priority(thread: &crate::types::ThreadState) -> u32 {
