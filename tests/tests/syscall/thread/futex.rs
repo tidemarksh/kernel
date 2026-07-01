@@ -461,6 +461,69 @@ fn supervisor_futex_completion_owns_timeout_result() {
     assert_eq!(t.vm.status, STATUS_OK);
     assert_eq!(t.vm.x[10] as i64, ETIMEDOUT);
     assert_eq!(thread_impl::thread_record_blocked_addr(&t.vm, t.base), 0);
+
+    let mut resume = [0u8; 48];
+    assert_eq!(
+        supervisor_next_resume(resume.as_mut_ptr() as u32, resume.len() as u32),
+        48
+    );
+    assert_eq!(read_u32_le(&resume, 0), 0x5255_5354);
+    assert_eq!(read_u32_le(&resume, 24), vm_ptr);
+    assert_eq!(read_u32_le(&resume, 28), t.vm.tid as u32);
+    assert_eq!(read_u32_le(&resume, 32), t.vm.process_ptr);
+    assert_eq!(read_u32_le(&resume, 36), STATUS_OK as u32);
+}
+
+#[test]
+fn supervisor_futex_wait_timeout_publishes_arm_host_timer_host_op() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    let futex_addr = t.scratch + 0x150;
+    let timeout = t.scratch + 0x170;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, futex_addr, 9);
+        tidemark_kernel::guest_mem::write_u64(t.base, timeout, 0);
+        tidemark_kernel::guest_mem::write_u64(t.base, timeout + 8, 2_000_000);
+    }
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+
+    let wait = thread_impl::sys_futex(
+        &mut t.vm,
+        t.base,
+        futex_addr as u64,
+        FUTEX_WAIT as u64,
+        9,
+        timeout,
+        0,
+        0,
+    );
+    assert_eq!(wait, 0);
+    assert_eq!(t.vm.status, STATUS_FUTEX_WAIT);
+
+    let mut record = [0u8; 64];
+    assert_eq!(
+        supervisor_next_host_op(record.as_mut_ptr() as u32, record.len() as u32),
+        64
+    );
+    assert_eq!(read_u32_le(&record, 0), 0x4f48_5354);
+    assert_eq!(read_u32_le(&record, 8), 64);
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_host_op_kind_arm_host_timer()
+    );
+    assert_eq!(
+        read_u32_le(&record, 24),
+        &mut t.vm as *mut ThreadState as u32
+    );
+    assert_eq!(read_u32_le(&record, 28), 0);
+    assert_eq!(read_u32_le(&record, 32), t.vm.tid as u32);
+    assert_eq!(read_u32_le(&record, 36), t.vm.process_ptr);
+    assert_eq!(read_u32_le(&record, 40), STATUS_FUTEX_WAIT as u32);
+    assert_eq!(read_u64_le(&record, 48), 2);
+    assert_eq!(read_u64_le(&record, 56), 200_000);
+    assert_eq!(supervisor_next_host_op(0, 0), 0);
 }
 
 #[test]

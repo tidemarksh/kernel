@@ -117,6 +117,12 @@ const RESUME_QUEUE_EMPTY: SupervisorResumeRecord = SupervisorResumeRecord {
 const HOST_OP_QUEUE_EMPTY: SupervisorHostOpRequest = SupervisorHostOpRequest {
     kind: 0,
     parent_vm_ptr: 0,
+    child_vm_ptr: 0,
+    tid: 0,
+    process_ptr: 0,
+    status: 0,
+    detail0: 0,
+    detail1: 0,
 };
 
 static THREAD_EVENT_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -183,6 +189,12 @@ struct SupervisorResumeRecord {
 struct SupervisorHostOpRequest {
     kind: u32,
     parent_vm_ptr: u32,
+    child_vm_ptr: u32,
+    tid: u32,
+    process_ptr: u32,
+    status: u32,
+    detail0: u64,
+    detail1: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -912,30 +924,43 @@ fn write_host_op_record(out_ptr: u32, out_len: u32) -> i32 {
     let Some(request) = pop_host_op_request() else {
         return 0;
     };
-    if request.kind != SUPERVISOR_HOST_OP_KIND_SPAWN_THREAD_WORKER {
-        return crate::abi::EINVAL as i32;
-    }
-    let parent = unsafe { &*(request.parent_vm_ptr as *const crate::types::ThreadState) };
-    let flags = parent.clone_flags;
-    let child_tidptr = parent.clone_child_tidptr;
-    let process_ptr = parent.process_ptr;
-    let child_vm_ptr =
-        crate::syscall::thread::spawn_from_clone(request.parent_vm_ptr, parent.guest_base);
-    if child_vm_ptr == 0 {
-        return crate::abi::EINVAL as i32;
-    }
-    let child = unsafe { &*(child_vm_ptr as *const crate::types::ThreadState) };
     let seq = HOST_OP_EMIT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-    let record = SupervisorHostOpRecord {
-        kind: request.kind,
-        seq,
-        parent_vm_ptr: request.parent_vm_ptr,
-        child_vm_ptr,
-        tid: child.tid as u32,
-        process_ptr,
-        status: crate::abi::STATUS_OK as u32,
-        flags,
-        child_tidptr,
+    let record = match request.kind {
+        SUPERVISOR_HOST_OP_KIND_SPAWN_THREAD_WORKER => {
+            let parent = unsafe { &*(request.parent_vm_ptr as *const crate::types::ThreadState) };
+            let flags = parent.clone_flags;
+            let child_tidptr = parent.clone_child_tidptr;
+            let process_ptr = parent.process_ptr;
+            let child_vm_ptr =
+                crate::syscall::thread::spawn_from_clone(request.parent_vm_ptr, parent.guest_base);
+            if child_vm_ptr == 0 {
+                return crate::abi::EINVAL as i32;
+            }
+            let child = unsafe { &*(child_vm_ptr as *const crate::types::ThreadState) };
+            SupervisorHostOpRecord {
+                kind: request.kind,
+                seq,
+                parent_vm_ptr: request.parent_vm_ptr,
+                child_vm_ptr,
+                tid: child.tid as u32,
+                process_ptr,
+                status: crate::abi::STATUS_OK as u32,
+                flags,
+                child_tidptr,
+            }
+        }
+        SUPERVISOR_HOST_OP_KIND_ARM_HOST_TIMER => SupervisorHostOpRecord {
+            kind: request.kind,
+            seq,
+            parent_vm_ptr: request.parent_vm_ptr,
+            child_vm_ptr: request.child_vm_ptr,
+            tid: request.tid,
+            process_ptr: request.process_ptr,
+            status: request.status,
+            flags: request.detail0,
+            child_tidptr: request.detail1,
+        },
+        _ => return crate::abi::EINVAL as i32,
     };
     let mut encoded = [0u8; SUPERVISOR_HOST_OP_RECORD_BYTES as usize];
     write_u32(&mut encoded, 0, SUPERVISOR_HOST_OP_RECORD_MAGIC);
@@ -1048,6 +1073,12 @@ pub fn enqueue_clone_spawn(parent_vm_ptr: u32) -> bool {
     push_host_op_request(SupervisorHostOpRequest {
         kind: SUPERVISOR_HOST_OP_KIND_SPAWN_THREAD_WORKER,
         parent_vm_ptr,
+        child_vm_ptr: 0,
+        tid: 0,
+        process_ptr: 0,
+        status: 0,
+        detail0: 0,
+        detail1: 0,
     })
 }
 
@@ -1056,6 +1087,30 @@ pub fn discard_clone_spawn(parent_vm_ptr: u32) -> bool {
         return false;
     }
     remove_host_op_request(SUPERVISOR_HOST_OP_KIND_SPAWN_THREAD_WORKER, parent_vm_ptr)
+}
+
+pub fn enqueue_futex_wait_timer(vm: &crate::types::ThreadState) -> bool {
+    if vm.futex_wait_timeout == 0 {
+        return false;
+    }
+    let delay_ticks = crate::syscall::time::timeout_timespec_delta_ticks(
+        vm.guest_base,
+        vm.futex_wait_timeout,
+        vm.futex_wait_absolute != 0,
+        (vm.futex_wait_flags & crate::abi::FUTEX_CLOCK_REALTIME) != 0,
+    )
+    .unwrap_or(0);
+    let delay_ms = crate::syscall::time::ticks_to_millis_ceil(delay_ticks);
+    push_host_op_request(SupervisorHostOpRequest {
+        kind: SUPERVISOR_HOST_OP_KIND_ARM_HOST_TIMER,
+        parent_vm_ptr: vm as *const crate::types::ThreadState as u32,
+        child_vm_ptr: 0,
+        tid: vm.tid as u32,
+        process_ptr: vm.process_ptr,
+        status: vm.status as u32,
+        detail0: delay_ms,
+        detail1: delay_ticks,
+    })
 }
 
 fn candidate_list_contains(candidates: &[u8], vm_ptr: u32) -> bool {
@@ -1940,6 +1995,9 @@ fn complete_futex_wait(vm_ptr: u32, completion: u32) -> i32 {
         Err(errno) => return errno,
     };
     let base = vm.guest_base;
+    let process_ptr = vm.process_ptr;
+    let tid = vm.tid;
+    let futex_addr = vm.futex_wait_addr;
     let blocked_addr = crate::syscall::thread::thread_record_blocked_addr(vm, base);
     let signal_pending = blocked_wait_signal_pending(vm, base);
 
@@ -1983,6 +2041,11 @@ fn complete_futex_wait(vm_ptr: u32, completion: u32) -> i32 {
 
     if let Some(result) = result {
         crate::syscall::thread::resume_futex_wait_result(vm, base, result);
+        if completion == SUPERVISOR_FUTEX_WAIT_COMPLETION_TIMED_OUT
+            && vm.status == crate::abi::STATUS_OK
+        {
+            enqueue_futex_resume(process_ptr, vm_ptr, tid, futex_addr);
+        }
     }
     vm.status
 }

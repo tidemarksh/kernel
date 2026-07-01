@@ -182,6 +182,42 @@ fn timespec_to_ticks_ceil(sec: u64, nsec: u64) -> u64 {
     base.saturating_add(rounded)
 }
 
+pub fn timeout_timespec_delta_ticks(
+    base: u32,
+    timespec_ptr: u64,
+    absolute: bool,
+    realtime: bool,
+) -> Option<u64> {
+    if timespec_ptr == 0 {
+        return None;
+    }
+    let sec = unsafe { guest_mem::read_u64(base, timespec_ptr) };
+    let nsec = unsafe { guest_mem::read_u64(base, timespec_ptr + 8) };
+    if nsec >= 1_000_000_000 {
+        return Some(0);
+    }
+    let ticks = timespec_to_ticks_ceil(sec, nsec);
+    if !absolute {
+        return Some(ticks);
+    }
+    let clock_id = if realtime {
+        CLOCK_REALTIME
+    } else {
+        CLOCK_MONOTONIC
+    };
+    let now = current_ticks_for_clock(clock_id)?;
+    Some(ticks.saturating_sub(now))
+}
+
+pub fn ticks_to_millis_ceil(ticks: u64) -> u64 {
+    let ticks_per_ms = TICKS_PER_SEC / 1_000;
+    if ticks == 0 {
+        0
+    } else {
+        ticks.div_ceil(ticks_per_ms)
+    }
+}
+
 pub fn sleep_deadline_ticks(sec: u64, nsec: u64) -> u64 {
     monotonic_ticks().saturating_add(timespec_to_ticks_ceil(sec, nsec))
 }

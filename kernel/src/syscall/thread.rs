@@ -1349,6 +1349,7 @@ pub fn sys_futex(
             // Value matches — block. Return STATUS_FUTEX_WAIT for TS to Atomics.wait.
             vm.x[10] = addr; // stash addr for TS
             vm.status = STATUS_FUTEX_WAIT;
+            crate::supervisor::enqueue_futex_wait_timer(vm);
             record_futex_trace(
                 vm,
                 futex_op,
