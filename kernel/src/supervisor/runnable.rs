@@ -24,11 +24,21 @@ fn find_from_supervisor_state(vm_ptr: u32, commit: bool) -> Result<Option<Runnab
     for step in 0..crate::abi::MAX_THREADS {
         let slot = (cursor + step) % crate::abi::MAX_THREADS;
         let record = ps.threads[slot];
-        if record.state != crate::types::THREAD_RUNNING {
+        if matches!(
+            record.state,
+            crate::types::THREAD_NONE | crate::types::THREAD_DEAD
+        ) || record.thread_ptr == 0
+        {
             continue;
         }
-        if super::event::suppresses_runnable(record.thread_ptr, record.tid as u32) {
-            continue;
+        match super::event::runnable_override(record.thread_ptr, record.tid as u32) {
+            Some(false) => continue,
+            Some(true) => {}
+            None => {
+                if record.state != crate::types::THREAD_RUNNING {
+                    continue;
+                }
+            }
         }
         let Some(status) = super::state::validated_thread_status_from_record(
             &record,

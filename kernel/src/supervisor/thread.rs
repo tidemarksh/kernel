@@ -72,15 +72,25 @@ pub(super) fn write_state_snapshot(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i
         let record = ps.threads[slot];
         let offset = super::SUPERVISOR_THREAD_STATE_HEADER_BYTES
             + slot * super::SUPERVISOR_THREAD_STATE_RECORD_BYTES;
+        let override_state =
+            super::event::thread_state_override(record.thread_ptr, record.tid as u32);
+        let state = override_state
+            .as_ref()
+            .map(|event| event.state)
+            .unwrap_or(record.state as u32);
+        let status = override_state
+            .as_ref()
+            .map(|event| event.status)
+            .unwrap_or_else(|| status_from_record(&record, vm.guest_base, vm.process_ptr));
+        let blocked_addr = override_state
+            .as_ref()
+            .and_then(|event| (event.blocked_addr != 0).then_some(event.blocked_addr))
+            .unwrap_or(record.blocked_addr);
         super::write_u32(&mut snapshot, offset, record.tid as u32);
-        super::write_u32(&mut snapshot, offset + 4, record.state as u32);
+        super::write_u32(&mut snapshot, offset + 4, state);
         super::write_u32(&mut snapshot, offset + 8, record.thread_ptr);
-        super::write_u32(
-            &mut snapshot,
-            offset + 12,
-            status_from_record(&record, vm.guest_base, vm.process_ptr),
-        );
-        super::write_u64(&mut snapshot, offset + 16, record.blocked_addr);
+        super::write_u32(&mut snapshot, offset + 12, status);
+        super::write_u64(&mut snapshot, offset + 16, blocked_addr);
         super::write_u64(&mut snapshot, offset + 24, record.pending_sigset);
     }
     let out = unsafe {

@@ -18,6 +18,12 @@ struct ThreadEventState {
     detail: u64,
 }
 
+pub(super) struct ThreadEventOverride {
+    pub(super) state: u32,
+    pub(super) status: u32,
+    pub(super) blocked_addr: u64,
+}
+
 impl ThreadEventState {
     const fn empty() -> Self {
         Self {
@@ -143,6 +149,51 @@ fn find_event(vm_ptr: u32, tid: u32) -> Option<ThreadEventState> {
     })
 }
 
+fn event_state_override(event: ThreadEventState) -> Option<ThreadEventOverride> {
+    let state = match event.event_kind {
+        super::SUPERVISOR_THREAD_EVENT_KIND_BLOCKED => {
+            if event.status == crate::abi::STATUS_FUTEX_WAIT as u32 {
+                crate::types::THREAD_BLOCKED_FUTEX as u32
+            } else {
+                crate::types::THREAD_BLOCKED_POLL as u32
+            }
+        }
+        super::SUPERVISOR_THREAD_EVENT_KIND_READY => crate::types::THREAD_RUNNING as u32,
+        super::SUPERVISOR_THREAD_EVENT_KIND_FAULTED => crate::types::THREAD_EXITING as u32,
+        super::SUPERVISOR_THREAD_EVENT_KIND_EXITED => crate::types::THREAD_DEAD as u32,
+        _ => return None,
+    };
+    Some(ThreadEventOverride {
+        state,
+        status: event.status,
+        blocked_addr: event.detail,
+    })
+}
+
+pub(super) fn thread_state_override(vm_ptr: u32, tid: u32) -> Option<ThreadEventOverride> {
+    find_event(vm_ptr, tid).and_then(event_state_override)
+}
+
+pub(super) fn runnable_override(vm_ptr: u32, tid: u32) -> Option<bool> {
+    let event = find_event(vm_ptr, tid)?;
+    let _ = (
+        event.pid,
+        event.sequence,
+        event.arrival_seq,
+        event.sync_effects,
+        event.blocked_reason,
+        event.pc,
+        event.sp,
+    );
+    match event.event_kind {
+        super::SUPERVISOR_THREAD_EVENT_KIND_READY => Some(true),
+        super::SUPERVISOR_THREAD_EVENT_KIND_BLOCKED
+        | super::SUPERVISOR_THREAD_EVENT_KIND_FAULTED
+        | super::SUPERVISOR_THREAD_EVENT_KIND_EXITED => Some(false),
+        _ => None,
+    }
+}
+
 pub(super) fn init_state() {
     THREAD_EVENT_STATE_REPLACE_CURSOR.store(0, Ordering::Relaxed);
     with_state_lock(|| unsafe {
@@ -167,27 +218,4 @@ pub(super) fn submit(event_ptr: u32, event_len: u32) -> i32 {
         store_event(event);
     }
     0
-}
-
-pub(super) fn suppresses_runnable(vm_ptr: u32, tid: u32) -> bool {
-    let Some(event) = find_event(vm_ptr, tid) else {
-        return false;
-    };
-    let _ = (
-        event.pid,
-        event.status,
-        event.sequence,
-        event.arrival_seq,
-        event.sync_effects,
-        event.blocked_reason,
-        event.pc,
-        event.sp,
-        event.detail,
-    );
-    matches!(
-        event.event_kind,
-        super::SUPERVISOR_THREAD_EVENT_KIND_BLOCKED
-            | super::SUPERVISOR_THREAD_EVENT_KIND_FAULTED
-            | super::SUPERVISOR_THREAD_EVENT_KIND_EXITED
-    )
 }

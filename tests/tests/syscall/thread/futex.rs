@@ -28,6 +28,18 @@ fn write_thread_event_record(
     tid: u32,
     status: u32,
 ) {
+    write_thread_event_record_with_detail(bytes, event_kind, sequence, vm_ptr, tid, status, 0);
+}
+
+fn write_thread_event_record_with_detail(
+    bytes: &mut [u8; 80],
+    event_kind: u32,
+    sequence: u64,
+    vm_ptr: u32,
+    tid: u32,
+    status: u32,
+    detail: u64,
+) {
     write_u32_le(bytes, 0, 0x5645_5354);
     write_u32_le(bytes, 4, supervisor_abi_version());
     write_u32_le(bytes, 8, supervisor_thread_event_record_bytes());
@@ -37,6 +49,7 @@ fn write_thread_event_record(
     write_u32_le(bytes, 32, 0);
     write_u32_le(bytes, 36, tid);
     write_u32_le(bytes, 40, status);
+    write_u64_le(bytes, 72, detail);
 }
 
 #[test]
@@ -287,6 +300,90 @@ fn supervisor_thread_state_snapshot_reports_process_thread_states() {
 }
 
 #[test]
+fn supervisor_thread_state_snapshot_applies_latest_thread_event_state() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+
+    let mut thread2: ThreadState = unsafe { std::mem::zeroed() };
+    thread2.guest_base = t.base;
+    thread2.process_ptr = t.vm.process_ptr;
+    thread2.tid = 2;
+    thread2.status = STATUS_OK;
+    let thread2_ptr = (&mut thread2 as *mut ThreadState) as u32;
+
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, thread2_ptr, 0, 0);
+        ps.thread_count
+            .store(2, std::sync::atomic::Ordering::Release);
+    }
+
+    let blocked_addr = 0x6aa0_u64;
+    let mut event = [0u8; 80];
+    write_thread_event_record_with_detail(
+        &mut event,
+        supervisor_thread_event_kind_blocked(),
+        51,
+        thread2_ptr,
+        2,
+        STATUS_PIPE_WAIT as u32,
+        blocked_addr,
+    );
+    assert_eq!(
+        supervisor_submit_thread_event(event.as_ptr() as u32, event.len() as u32),
+        0
+    );
+
+    let vm_ptr = (&mut t.vm as *mut ThreadState) as u32;
+    let mut snapshot = vec![0u8; supervisor_thread_state_snapshot_bytes() as usize];
+    assert_eq!(
+        supervisor_thread_state_snapshot(
+            vm_ptr,
+            snapshot.as_mut_ptr() as u32,
+            snapshot.len() as u32
+        ),
+        supervisor_thread_state_snapshot_bytes() as i32
+    );
+    let slot1 = 32 + 32;
+    assert_eq!(read_u32_le(&snapshot, slot1), 2);
+    assert_eq!(
+        read_u32_le(&snapshot, slot1 + 4),
+        tidemark_kernel::types::THREAD_BLOCKED_POLL as u32
+    );
+    assert_eq!(read_u32_le(&snapshot, slot1 + 12), STATUS_PIPE_WAIT as u32);
+    assert_eq!(read_u64_le(&snapshot, slot1 + 16), blocked_addr);
+
+    event.fill(0);
+    write_thread_event_record(
+        &mut event,
+        supervisor_thread_event_kind_ready(),
+        52,
+        thread2_ptr,
+        2,
+        STATUS_OK as u32,
+    );
+    assert_eq!(
+        supervisor_submit_thread_event(event.as_ptr() as u32, event.len() as u32),
+        0
+    );
+
+    snapshot.fill(0);
+    assert_eq!(
+        supervisor_thread_state_snapshot(
+            vm_ptr,
+            snapshot.as_mut_ptr() as u32,
+            snapshot.len() as u32
+        ),
+        supervisor_thread_state_snapshot_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&snapshot, slot1 + 4), THREAD_RUNNING as u32);
+    assert_eq!(read_u32_le(&snapshot, slot1 + 12), STATUS_OK as u32);
+}
+
+#[test]
 fn supervisor_process_resume_publishes_kernel_selected_runnable_thread() {
     supervisor_reset_shadow_log();
 
@@ -450,6 +547,65 @@ fn supervisor_process_resume_honors_latest_thread_event_blocked_state() {
     assert_eq!(read_u32_le(&resume, 24), thread2_ptr);
     assert_eq!(read_u32_le(&resume, 28), 2);
     assert_eq!(supervisor_shadow_thread_event_count(), 2);
+}
+
+#[test]
+fn supervisor_process_resume_ready_event_overrides_stale_blocked_record() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+
+    let mut thread2: ThreadState = unsafe { std::mem::zeroed() };
+    thread2.guest_base = t.base;
+    thread2.process_ptr = t.vm.process_ptr;
+    thread2.tid = 2;
+    thread2.status = STATUS_OK;
+    let thread2_ptr = (&mut thread2 as *mut ThreadState) as u32;
+
+    let mut thread3: ThreadState = unsafe { std::mem::zeroed() };
+    thread3.guest_base = t.base;
+    thread3.process_ptr = t.vm.process_ptr;
+    thread3.tid = 3;
+    thread3.status = STATUS_OK;
+    let thread3_ptr = (&mut thread3 as *mut ThreadState) as u32;
+
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[0].state = THREAD_BLOCKED_FUTEX;
+        ps.threads[1] = ThreadRecord::new(2, THREAD_BLOCKED_FUTEX, thread2_ptr, 0, 0x6200);
+        ps.threads[2] = ThreadRecord::new(3, THREAD_RUNNING, thread3_ptr, 0, 0);
+        ps.thread_count
+            .store(3, std::sync::atomic::Ordering::Release);
+    }
+
+    let mut event = [0u8; 80];
+    write_thread_event_record(
+        &mut event,
+        supervisor_thread_event_kind_ready(),
+        61,
+        thread2_ptr,
+        2,
+        STATUS_OK as u32,
+    );
+    assert_eq!(
+        supervisor_submit_thread_event(event.as_ptr() as u32, event.len() as u32),
+        0
+    );
+
+    let vm_ptr = (&mut t.vm as *mut ThreadState) as u32;
+    let mut resume = [0u8; 48];
+    assert_eq!(
+        supervisor_process_resume(vm_ptr, resume.as_mut_ptr() as u32, resume.len() as u32,),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&resume, 12),
+        supervisor_resume_kind_runnable_thread()
+    );
+    assert_eq!(read_u32_le(&resume, 24), thread2_ptr);
+    assert_eq!(read_u32_le(&resume, 28), 2);
 }
 
 #[test]
