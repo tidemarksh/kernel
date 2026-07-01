@@ -1186,6 +1186,7 @@ pub extern "C" fn thread_set_execve_memory_handoff(
         vm.spawn_path = path_addr;
         vm.spawn_argv = argv_addr;
         vm.spawn_envp = envp_addr;
+        vm.spawn_supervisor_host_op_seq = 0;
     }
 }
 
@@ -1201,6 +1202,7 @@ pub extern "C" fn thread_clear_spawn_handoff(vm_ptr: u32) {
         vm.spawn_path = 0;
         vm.spawn_argv = 0;
         vm.spawn_envp = 0;
+        vm.spawn_supervisor_host_op_seq = 0;
     }
 }
 

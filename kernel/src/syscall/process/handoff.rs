@@ -17,6 +17,7 @@ pub(crate) fn set_spawn_handoff(
     vm.spawn_path = path_addr;
     vm.spawn_argv = argv_addr;
     vm.spawn_envp = envp_addr;
+    vm.spawn_supervisor_host_op_seq = 0;
 }
 
 pub(crate) fn clear_spawn_handoff(vm: &mut ThreadState) {
@@ -28,4 +29,5 @@ pub(crate) fn clear_spawn_handoff(vm: &mut ThreadState) {
     vm.spawn_path = 0;
     vm.spawn_argv = 0;
     vm.spawn_envp = 0;
+    vm.spawn_supervisor_host_op_seq = 0;
 }

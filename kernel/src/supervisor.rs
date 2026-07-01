@@ -7,7 +7,17 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 pub const SUPERVISOR_ABI_VERSION: u32 = 1;
-pub const SUPERVISOR_DEBUG_SNAPSHOT_BYTES: u32 = 88;
+pub const SUPERVISOR_DEBUG_SNAPSHOT_BYTES: u32 = 112;
+pub const SUPERVISOR_THREAD_EVENT_RECORD_BYTES: u32 = 80;
+pub const SUPERVISOR_THREAD_EVENT_RECORD_MAGIC: u32 = 0x5645_5354; // "TSEV" little-endian.
+pub const SUPERVISOR_THREAD_EVENT_KIND_BLOCKED: u32 = 1;
+pub const SUPERVISOR_THREAD_EVENT_KIND_READY: u32 = 2;
+pub const SUPERVISOR_THREAD_EVENT_KIND_FAULTED: u32 = 3;
+pub const SUPERVISOR_THREAD_EVENT_KIND_EXITED: u32 = 4;
+pub const SUPERVISOR_THREAD_EVENT_KIND_HOST_COMPLETION_ARRIVED: u32 = 5;
+pub const SUPERVISOR_THREAD_EVENT_KIND_TIMER_FIRED: u32 = 6;
+pub const SUPERVISOR_THREAD_EVENT_KIND_NETWORK_READABLE: u32 = 7;
+pub const SUPERVISOR_THREAD_EVENT_KIND_BACKING_STORE_READY: u32 = 8;
 pub const SUPERVISOR_THREAD_STATE_HEADER_BYTES: usize = 32;
 pub const SUPERVISOR_THREAD_STATE_RECORD_BYTES: usize = 32;
 pub const SUPERVISOR_THREAD_STATE_SNAPSHOT_BYTES: u32 = (SUPERVISOR_THREAD_STATE_HEADER_BYTES
@@ -17,9 +27,26 @@ pub const SUPERVISOR_THREAD_STATE_SNAPSHOT_MAGIC: u32 = 0x4854_5354; // "TSTH" l
 pub const SUPERVISOR_RESUME_RECORD_BYTES: u32 = 48;
 pub const SUPERVISOR_RESUME_RECORD_MAGIC: u32 = 0x5255_5354; // "TSUR" little-endian.
 pub const SUPERVISOR_RESUME_KIND_FUTEX_WAKE: u32 = 1;
+pub const SUPERVISOR_HOST_COMPLETION_RECORD_BYTES: u32 = 64;
+pub const SUPERVISOR_HOST_COMPLETION_RECORD_MAGIC: u32 = 0x4348_5354; // "TSHC" little-endian.
+pub const SUPERVISOR_HOST_COMPLETION_OUTCOME_SUCCESS: u32 = 1;
+pub const SUPERVISOR_HOST_COMPLETION_OUTCOME_FAILURE: u32 = 2;
 pub const SUPERVISOR_HOST_OP_RECORD_BYTES: u32 = 64;
 pub const SUPERVISOR_HOST_OP_RECORD_MAGIC: u32 = 0x4f48_5354; // "TSHO" little-endian.
 pub const SUPERVISOR_HOST_OP_KIND_SPAWN_THREAD_WORKER: u32 = 1;
+pub const SUPERVISOR_HOST_OP_KIND_SPAWN_PROCESS_WORKER: u32 = 2;
+pub const SUPERVISOR_HOST_OP_KIND_CREATE_PROCESS_MEMORY: u32 = 3;
+pub const SUPERVISOR_HOST_OP_KIND_COPY_MEMORY_RANGES: u32 = 4;
+pub const SUPERVISOR_HOST_OP_KIND_FILL_PAGE_FROM_BACKING: u32 = 5;
+pub const SUPERVISOR_HOST_OP_KIND_FLUSH_DIRTY_PAGE: u32 = 6;
+pub const SUPERVISOR_HOST_OP_KIND_PROCESS_FS_REQUEST: u32 = 7;
+pub const SUPERVISOR_HOST_OP_KIND_HOST_NETWORK_CONNECT: u32 = 8;
+pub const SUPERVISOR_HOST_OP_KIND_HOST_NETWORK_READ: u32 = 9;
+pub const SUPERVISOR_HOST_OP_KIND_HOST_NETWORK_WRITE: u32 = 10;
+pub const SUPERVISOR_HOST_OP_KIND_HOST_NETWORK_CLOSE: u32 = 11;
+pub const SUPERVISOR_HOST_OP_KIND_ARM_HOST_TIMER: u32 = 12;
+pub const SUPERVISOR_HOST_OP_KIND_RESUME_THREAD: u32 = 13;
+pub const SUPERVISOR_HOST_OP_KIND_TERMINATE_WORKER: u32 = 14;
 pub const SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES: u32 = 96;
 pub const SUPERVISOR_PROCESS_HOST_OP_RECORD_MAGIC: u32 = 0x4850_5354; // "TSPH" little-endian.
 pub const SUPERVISOR_PROCESS_HOST_OP_KIND_SPAWN_PROCESS_WORKER: u32 = 1;
@@ -110,10 +137,13 @@ static RUNNABLE_SELECTION_COUNT: AtomicU64 = AtomicU64::new(0);
 static RUNNABLE_SELECTION_CURSOR: AtomicU32 = AtomicU32::new(0);
 static THREAD_EVENT_LOG_HASH: AtomicU64 = AtomicU64::new(FNV_OFFSET);
 static HOST_COMPLETION_LOG_HASH: AtomicU64 = AtomicU64::new(FNV_OFFSET);
+static HOST_OP_LOG_HASH: AtomicU64 = AtomicU64::new(FNV_OFFSET);
 static LAST_THREAD_EVENT_HASH: AtomicU64 = AtomicU64::new(0);
 static LAST_HOST_COMPLETION_HASH: AtomicU64 = AtomicU64::new(0);
+static LAST_HOST_OP_HASH: AtomicU64 = AtomicU64::new(0);
 static LAST_THREAD_EVENT_LEN: AtomicU32 = AtomicU32::new(0);
 static LAST_HOST_COMPLETION_LEN: AtomicU32 = AtomicU32::new(0);
+static LAST_HOST_OP_LEN: AtomicU32 = AtomicU32::new(0);
 static RESUME_QUEUE_LOCK: AtomicU32 = AtomicU32::new(0);
 static RESUME_QUEUE_HEAD: AtomicU32 = AtomicU32::new(0);
 static RESUME_QUEUE_TAIL: AtomicU32 = AtomicU32::new(0);
@@ -172,6 +202,7 @@ struct SupervisorHostOpRecord {
 struct SupervisorProcessHostOpRecord {
     kind: u32,
     seq: u64,
+    log_emission: bool,
     parent_vm_ptr: u32,
     spawn_kind: u32,
     child_pid: i32,
@@ -447,10 +478,13 @@ pub fn init() {
     RUNNABLE_SELECTION_CURSOR.store(0, Ordering::Relaxed);
     THREAD_EVENT_LOG_HASH.store(FNV_OFFSET, Ordering::Relaxed);
     HOST_COMPLETION_LOG_HASH.store(FNV_OFFSET, Ordering::Relaxed);
+    HOST_OP_LOG_HASH.store(FNV_OFFSET, Ordering::Relaxed);
     LAST_THREAD_EVENT_HASH.store(0, Ordering::Relaxed);
     LAST_HOST_COMPLETION_HASH.store(0, Ordering::Relaxed);
+    LAST_HOST_OP_HASH.store(0, Ordering::Relaxed);
     LAST_THREAD_EVENT_LEN.store(0, Ordering::Relaxed);
     LAST_HOST_COMPLETION_LEN.store(0, Ordering::Relaxed);
+    LAST_HOST_OP_LEN.store(0, Ordering::Relaxed);
     with_resume_queue_lock(|| unsafe {
         RESUME_QUEUE_HEAD.store(0, Ordering::Relaxed);
         RESUME_QUEUE_TAIL.store(0, Ordering::Relaxed);
@@ -544,6 +578,10 @@ pub fn host_completion_log_hash() -> u64 {
     HOST_COMPLETION_LOG_HASH.load(Ordering::Relaxed)
 }
 
+pub fn host_op_log_hash() -> u64 {
+    HOST_OP_LOG_HASH.load(Ordering::Relaxed)
+}
+
 fn fnv_hash(bytes: &[u8]) -> u64 {
     let mut hash = FNV_OFFSET;
     for byte in bytes {
@@ -561,6 +599,13 @@ fn fold_log_hash(current: &AtomicU64, entry_hash: u64, entry_len: u32) -> u64 {
     next = next.wrapping_mul(FNV_PRIME);
     current.store(next, Ordering::Relaxed);
     next
+}
+
+fn record_host_op_log_entry(encoded: &[u8], entry_len: u32) {
+    let entry_hash = fnv_hash(encoded);
+    LAST_HOST_OP_HASH.store(entry_hash, Ordering::Relaxed);
+    LAST_HOST_OP_LEN.store(entry_len, Ordering::Relaxed);
+    fold_log_hash(&HOST_OP_LOG_HASH, entry_hash, entry_len);
 }
 
 fn read_shadow_bytes(ptr: u32, len: u32) -> Result<&'static [u8], i32> {
@@ -906,6 +951,7 @@ fn write_host_op_record(out_ptr: u32, out_len: u32) -> i32 {
     write_u32(&mut encoded, 44, 0);
     write_u64(&mut encoded, 48, record.flags);
     write_u64(&mut encoded, 56, record.child_tidptr);
+    record_host_op_log_entry(&encoded, SUPERVISOR_HOST_OP_RECORD_BYTES);
     let out = unsafe {
         core::slice::from_raw_parts_mut(
             out_ptr as usize as *mut u8,
@@ -917,13 +963,18 @@ fn write_host_op_record(out_ptr: u32, out_len: u32) -> i32 {
 }
 
 fn select_process_host_op(vm_ptr: u32) -> Result<Option<SupervisorProcessHostOpRecord>, i32> {
-    let vm = thread_state_from_ptr(vm_ptr).ok_or(crate::abi::EFAULT as i32)?;
+    let vm = thread_state_mut_from_ptr(vm_ptr).ok_or(crate::abi::EFAULT as i32)?;
     if vm.spawn_kind == crate::abi::SPAWN_KIND_NONE || vm.spawn_child_pid <= 0 {
         return Ok(None);
     }
+    let log_emission = vm.spawn_supervisor_host_op_seq == 0;
+    if log_emission {
+        vm.spawn_supervisor_host_op_seq = HOST_OP_EMIT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    }
     Ok(Some(SupervisorProcessHostOpRecord {
         kind: SUPERVISOR_PROCESS_HOST_OP_KIND_SPAWN_PROCESS_WORKER,
-        seq: 0,
+        seq: vm.spawn_supervisor_host_op_seq,
+        log_emission,
         parent_vm_ptr: vm_ptr,
         spawn_kind: vm.spawn_kind,
         child_pid: vm.spawn_child_pid,
@@ -940,13 +991,12 @@ fn select_process_host_op(vm_ptr: u32) -> Result<Option<SupervisorProcessHostOpR
 
 fn write_process_host_op_record(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i32 {
     HOST_OP_POLL_COUNT.fetch_add(1, Ordering::Relaxed);
-    let mut record = match select_process_host_op(vm_ptr) {
-        Ok(Some(record)) => record,
-        Ok(None) => return 0,
-        Err(errno) => return errno,
-    };
     if out_len == 0 {
-        return SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES as i32;
+        return match process_host_op_pending(vm_ptr) {
+            Ok(true) => SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES as i32,
+            Ok(false) => 0,
+            Err(errno) => errno,
+        };
     }
     if out_ptr == 0 {
         return crate::abi::EFAULT as i32;
@@ -954,7 +1004,11 @@ fn write_process_host_op_record(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i32 
     if out_len < SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES {
         return crate::abi::ENOSPC as i32;
     }
-    record.seq = HOST_OP_EMIT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    let record = match select_process_host_op(vm_ptr) {
+        Ok(Some(record)) => record,
+        Ok(None) => return 0,
+        Err(errno) => return errno,
+    };
     let mut encoded = [0u8; SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES as usize];
     write_u32(&mut encoded, 0, SUPERVISOR_PROCESS_HOST_OP_RECORD_MAGIC);
     write_u32(&mut encoded, 4, SUPERVISOR_ABI_VERSION);
@@ -974,6 +1028,9 @@ fn write_process_host_op_record(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i32 
     write_u64(&mut encoded, 72, record.argv);
     write_u64(&mut encoded, 80, record.envp);
     write_u64(&mut encoded, 88, 0);
+    if record.log_emission {
+        record_host_op_log_entry(&encoded, SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES);
+    }
     let out = unsafe {
         core::slice::from_raw_parts_mut(
             out_ptr as usize as *mut u8,
@@ -1026,6 +1083,22 @@ fn thread_state_from_ptr(vm_ptr: u32) -> Option<&'static crate::types::ThreadSta
         return None;
     }
     Some(unsafe { &*(absolute as *const crate::types::ThreadState) })
+}
+
+fn thread_state_mut_from_ptr(vm_ptr: u32) -> Option<&'static mut crate::types::ThreadState> {
+    if vm_ptr == 0 {
+        return None;
+    }
+    let absolute = vm_ptr as usize;
+    if absolute < core::mem::size_of::<crate::types::ThreadState>() {
+        return None;
+    }
+    Some(unsafe { &mut *(absolute as *mut crate::types::ThreadState) })
+}
+
+fn process_host_op_pending(vm_ptr: u32) -> Result<bool, i32> {
+    let vm = thread_state_from_ptr(vm_ptr).ok_or(crate::abi::EFAULT as i32)?;
+    Ok(vm.spawn_kind != crate::abi::SPAWN_KIND_NONE && vm.spawn_child_pid > 0)
 }
 
 fn validated_thread_from_record(
@@ -1757,6 +1830,10 @@ fn write_snapshot(out_ptr: u32, out_len: u32) -> i32 {
         80,
         LAST_HOST_COMPLETION_HASH.load(Ordering::Relaxed),
     );
+    write_u64(&mut snapshot, 88, host_op_log_hash());
+    write_u64(&mut snapshot, 96, LAST_HOST_OP_HASH.load(Ordering::Relaxed));
+    write_u32(&mut snapshot, 104, LAST_HOST_OP_LEN.load(Ordering::Relaxed));
+    write_u32(&mut snapshot, 108, 0);
 
     let out = unsafe {
         core::slice::from_raw_parts_mut(
@@ -1918,6 +1995,51 @@ pub extern "C" fn supervisor_debug_snapshot_bytes() -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_thread_event_record_bytes() -> u32 {
+    SUPERVISOR_THREAD_EVENT_RECORD_BYTES
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_thread_event_kind_blocked() -> u32 {
+    SUPERVISOR_THREAD_EVENT_KIND_BLOCKED
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_thread_event_kind_ready() -> u32 {
+    SUPERVISOR_THREAD_EVENT_KIND_READY
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_thread_event_kind_faulted() -> u32 {
+    SUPERVISOR_THREAD_EVENT_KIND_FAULTED
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_thread_event_kind_exited() -> u32 {
+    SUPERVISOR_THREAD_EVENT_KIND_EXITED
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_thread_event_kind_host_completion_arrived() -> u32 {
+    SUPERVISOR_THREAD_EVENT_KIND_HOST_COMPLETION_ARRIVED
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_thread_event_kind_timer_fired() -> u32 {
+    SUPERVISOR_THREAD_EVENT_KIND_TIMER_FIRED
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_thread_event_kind_network_readable() -> u32 {
+    SUPERVISOR_THREAD_EVENT_KIND_NETWORK_READABLE
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_thread_event_kind_backing_store_ready() -> u32 {
+    SUPERVISOR_THREAD_EVENT_KIND_BACKING_STORE_READY
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_thread_state_snapshot_bytes() -> u32 {
     SUPERVISOR_THREAD_STATE_SNAPSHOT_BYTES
 }
@@ -1928,6 +2050,21 @@ pub extern "C" fn supervisor_resume_record_bytes() -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_host_completion_record_bytes() -> u32 {
+    SUPERVISOR_HOST_COMPLETION_RECORD_BYTES
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_host_completion_outcome_success() -> u32 {
+    SUPERVISOR_HOST_COMPLETION_OUTCOME_SUCCESS
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_host_completion_outcome_failure() -> u32 {
+    SUPERVISOR_HOST_COMPLETION_OUTCOME_FAILURE
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_host_op_record_bytes() -> u32 {
     SUPERVISOR_HOST_OP_RECORD_BYTES
 }
@@ -1935,6 +2072,71 @@ pub extern "C" fn supervisor_host_op_record_bytes() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_host_op_kind_spawn_thread_worker() -> u32 {
     SUPERVISOR_HOST_OP_KIND_SPAWN_THREAD_WORKER
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_host_op_kind_spawn_process_worker() -> u32 {
+    SUPERVISOR_HOST_OP_KIND_SPAWN_PROCESS_WORKER
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_host_op_kind_create_process_memory() -> u32 {
+    SUPERVISOR_HOST_OP_KIND_CREATE_PROCESS_MEMORY
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_host_op_kind_copy_memory_ranges() -> u32 {
+    SUPERVISOR_HOST_OP_KIND_COPY_MEMORY_RANGES
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_host_op_kind_fill_page_from_backing() -> u32 {
+    SUPERVISOR_HOST_OP_KIND_FILL_PAGE_FROM_BACKING
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_host_op_kind_flush_dirty_page() -> u32 {
+    SUPERVISOR_HOST_OP_KIND_FLUSH_DIRTY_PAGE
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_host_op_kind_process_fs_request() -> u32 {
+    SUPERVISOR_HOST_OP_KIND_PROCESS_FS_REQUEST
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_host_op_kind_host_network_connect() -> u32 {
+    SUPERVISOR_HOST_OP_KIND_HOST_NETWORK_CONNECT
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_host_op_kind_host_network_read() -> u32 {
+    SUPERVISOR_HOST_OP_KIND_HOST_NETWORK_READ
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_host_op_kind_host_network_write() -> u32 {
+    SUPERVISOR_HOST_OP_KIND_HOST_NETWORK_WRITE
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_host_op_kind_host_network_close() -> u32 {
+    SUPERVISOR_HOST_OP_KIND_HOST_NETWORK_CLOSE
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_host_op_kind_arm_host_timer() -> u32 {
+    SUPERVISOR_HOST_OP_KIND_ARM_HOST_TIMER
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_host_op_kind_resume_thread() -> u32 {
+    SUPERVISOR_HOST_OP_KIND_RESUME_THREAD
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_host_op_kind_terminate_worker() -> u32 {
+    SUPERVISOR_HOST_OP_KIND_TERMINATE_WORKER
 }
 
 #[unsafe(no_mangle)]
@@ -2230,6 +2432,21 @@ pub extern "C" fn supervisor_shadow_thread_event_log_hash() -> u64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_shadow_host_completion_log_hash() -> u64 {
     host_completion_log_hash()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_shadow_host_op_log_hash() -> u64 {
+    host_op_log_hash()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_shadow_host_op_last_hash() -> u64 {
+    LAST_HOST_OP_HASH.load(Ordering::Relaxed)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_shadow_host_op_last_len() -> u32 {
+    LAST_HOST_OP_LEN.load(Ordering::Relaxed)
 }
 
 #[unsafe(no_mangle)]

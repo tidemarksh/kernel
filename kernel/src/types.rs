@@ -127,6 +127,8 @@ pub struct ThreadState {
     pub spawn_argv: u64,
     /// Guest pointer to envp vector.
     pub spawn_envp: u64,
+    /// Stable supervisor HostOp id for the pending process-spawn handoff.
+    pub spawn_supervisor_host_op_seq: u64,
     /// Pending blocking wait4 target pid.
     pub wait_pid: i64,
     /// wait-family selector (wait4/waitid).
