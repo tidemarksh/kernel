@@ -695,6 +695,8 @@ pub fn timerfd_read(base: u32, buf: u64, count: u64, timerfd_idx: u32) -> i64 {
 /// guest deadline expires.
 /// https://man7.org/linux/man-pages/man2/nanosleep.2.html
 pub fn sys_nanosleep(vm: &mut ThreadState, base: u32, req: u64, _rem: u64) -> i32 {
+    vm.fault_addr = 0;
+    vm.fault_pc = 0;
     if req != 0 {
         let sec = unsafe { guest_mem::read_u64(base, req) };
         let nsec = unsafe { guest_mem::read_u64(base, req + 8) };
@@ -704,6 +706,7 @@ pub fn sys_nanosleep(vm: &mut ThreadState, base: u32, req: u64, _rem: u64) -> i3
     }
     vm.x[10] = 0; // return 0 on success
     vm.status = abi::STATUS_SLEEP;
+    crate::supervisor::enqueue_sleep_timer(vm);
     abi::STATUS_SLEEP
 }
 
@@ -764,6 +767,7 @@ pub fn sys_clock_nanosleep(
     vm.fault_pc = sleep_nsec;
     vm.x[10] = 0;
     vm.status = abi::STATUS_SLEEP;
+    crate::supervisor::enqueue_sleep_timer(vm);
     abi::STATUS_SLEEP
 }
 

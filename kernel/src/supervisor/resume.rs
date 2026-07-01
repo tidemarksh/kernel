@@ -44,6 +44,23 @@ pub(super) fn push_record(record: super::SupervisorResumeRecord) -> bool {
     })
 }
 
+pub(super) fn enqueue_runnable_thread(vm: &crate::types::ThreadState) -> bool {
+    let vm_ptr = vm as *const crate::types::ThreadState as u32;
+    if vm_ptr == 0 || vm.process_ptr == 0 || vm.tid <= 0 {
+        return false;
+    }
+    let seq = super::RESUME_ENQUEUE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    push_record(super::SupervisorResumeRecord {
+        kind: super::SUPERVISOR_RESUME_KIND_RUNNABLE_THREAD,
+        seq,
+        vm_ptr,
+        tid: vm.tid as u32,
+        process_ptr: vm.process_ptr,
+        status: vm.status as u32,
+        detail0: 0,
+    })
+}
+
 fn peek_record() -> Option<super::SupervisorResumeRecord> {
     with_queue_lock(|| unsafe {
         let head = super::RESUME_QUEUE_HEAD.load(Ordering::Relaxed);

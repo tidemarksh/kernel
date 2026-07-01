@@ -340,6 +340,10 @@ pub fn enqueue_futex_wait_timer(vm: &crate::types::ThreadState) -> bool {
     host_op::enqueue_futex_wait_timer(vm)
 }
 
+pub fn enqueue_sleep_timer(vm: &crate::types::ThreadState) -> bool {
+    host_op::enqueue_sleep_timer(vm)
+}
+
 fn fault_exit_priority(thread: &crate::types::ThreadState) -> u32 {
     if thread.fault_signal != 0 {
         return 4;
@@ -1426,7 +1430,7 @@ pub extern "C" fn supervisor_complete_host_op(completion_ptr: u32, completion_le
     LAST_HOST_COMPLETION_HASH.store(entry_hash, Ordering::Relaxed);
     LAST_HOST_COMPLETION_LEN.store(completion_len, Ordering::Relaxed);
     fold_log_hash(&HOST_COMPLETION_LOG_HASH, entry_hash, completion_len);
-    0
+    host_op::complete_host_op(bytes)
 }
 
 #[unsafe(no_mangle)]
