@@ -773,7 +773,6 @@ pub use crate::supervisor::{
     supervisor_process_lifecycle_record_bytes, supervisor_process_resume,
     supervisor_reset_shadow_log, supervisor_resume_kind_futex_wake,
     supervisor_resume_kind_runnable_thread, supervisor_resume_record_bytes,
-    supervisor_runnable_selection_bytes, supervisor_select_runnable,
     supervisor_shadow_fd_control_count, supervisor_shadow_fs_control_count,
     supervisor_shadow_host_completion_count, supervisor_shadow_host_completion_log_hash,
     supervisor_shadow_host_op_emit_count, supervisor_shadow_host_op_last_hash,

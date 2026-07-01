@@ -287,177 +287,6 @@ fn supervisor_thread_state_snapshot_reports_process_thread_states() {
 }
 
 #[test]
-fn supervisor_select_runnable_uses_kernel_thread_order_not_candidate_order() {
-    supervisor_reset_shadow_log();
-
-    let mut t = TestVm::new();
-    t.vm.tid = 1;
-    install_current_thread_record(&mut t);
-
-    let mut thread2: ThreadState = unsafe { std::mem::zeroed() };
-    thread2.guest_base = t.base;
-    thread2.process_ptr = t.vm.process_ptr;
-    thread2.tid = 2;
-    thread2.status = STATUS_OK;
-    let thread2_ptr = (&mut thread2 as *mut ThreadState) as u32;
-
-    let mut thread3: ThreadState = unsafe { std::mem::zeroed() };
-    thread3.guest_base = t.base;
-    thread3.process_ptr = t.vm.process_ptr;
-    thread3.tid = 3;
-    thread3.status = STATUS_OK;
-    let thread3_ptr = (&mut thread3 as *mut ThreadState) as u32;
-
-    unsafe {
-        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
-        ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, thread2_ptr, 0, 0);
-        ps.threads[2] = ThreadRecord::new(3, THREAD_RUNNING, thread3_ptr, 0, 0);
-        ps.thread_count
-            .store(3, std::sync::atomic::Ordering::Release);
-    }
-
-    let vm_ptr = (&mut t.vm as *mut ThreadState) as u32;
-    let candidates = [thread3_ptr, thread2_ptr];
-    let mut too_small = [0u8; 47];
-    assert_eq!(
-        supervisor_select_runnable(
-            vm_ptr,
-            candidates.as_ptr() as u32,
-            candidates.len() as u32,
-            too_small.as_mut_ptr() as u32,
-            too_small.len() as u32,
-        ),
-        ENOSPC as i32
-    );
-
-    let mut selection = [0u8; 48];
-    assert_eq!(
-        supervisor_select_runnable(
-            vm_ptr,
-            candidates.as_ptr() as u32,
-            candidates.len() as u32,
-            selection.as_mut_ptr() as u32,
-            selection.len() as u32,
-        ),
-        supervisor_runnable_selection_bytes() as i32
-    );
-    assert_eq!(read_u32_le(&selection, 0), 0x4e52_5354);
-    assert_eq!(read_u32_le(&selection, 4), supervisor_abi_version());
-    assert_eq!(
-        read_u32_le(&selection, 8),
-        supervisor_runnable_selection_bytes()
-    );
-    assert_eq!(read_u64_le(&selection, 16), 1);
-    assert_eq!(read_u32_le(&selection, 24), thread2_ptr);
-    assert_eq!(read_u32_le(&selection, 28), 2);
-    assert_eq!(read_u32_le(&selection, 32), t.vm.process_ptr);
-    assert_eq!(read_u32_le(&selection, 36), THREAD_RUNNING as u32);
-    assert_eq!(read_u32_le(&selection, 40), STATUS_OK as u32);
-    assert_eq!(read_u32_le(&selection, 44), 1);
-
-    selection.fill(0);
-    assert_eq!(
-        supervisor_select_runnable(
-            vm_ptr,
-            candidates.as_ptr() as u32,
-            candidates.len() as u32,
-            selection.as_mut_ptr() as u32,
-            selection.len() as u32,
-        ),
-        supervisor_runnable_selection_bytes() as i32
-    );
-    assert_eq!(read_u64_le(&selection, 16), 2);
-    assert_eq!(read_u32_le(&selection, 24), thread3_ptr);
-    assert_eq!(read_u32_le(&selection, 28), 3);
-    assert_eq!(read_u32_le(&selection, 44), 2);
-
-    unsafe {
-        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
-        ps.threads[1].state = THREAD_BLOCKED_FUTEX;
-        ps.threads[2].state = THREAD_BLOCKED_FUTEX;
-    }
-    assert_eq!(
-        supervisor_select_runnable(
-            vm_ptr,
-            candidates.as_ptr() as u32,
-            candidates.len() as u32,
-            selection.as_mut_ptr() as u32,
-            selection.len() as u32,
-        ),
-        0
-    );
-}
-
-#[test]
-fn supervisor_select_runnable_without_runtime_candidates_uses_kernel_thread_state() {
-    supervisor_reset_shadow_log();
-
-    let mut t = TestVm::new();
-    t.vm.tid = 1;
-    install_current_thread_record(&mut t);
-
-    let mut thread2: ThreadState = unsafe { std::mem::zeroed() };
-    thread2.guest_base = t.base;
-    thread2.process_ptr = t.vm.process_ptr;
-    thread2.tid = 2;
-    thread2.status = STATUS_OK;
-    let thread2_ptr = (&mut thread2 as *mut ThreadState) as u32;
-
-    let mut thread3: ThreadState = unsafe { std::mem::zeroed() };
-    thread3.guest_base = t.base;
-    thread3.process_ptr = t.vm.process_ptr;
-    thread3.tid = 3;
-    thread3.status = STATUS_OK;
-    let thread3_ptr = (&mut thread3 as *mut ThreadState) as u32;
-
-    unsafe {
-        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
-        ps.threads[0].state = THREAD_BLOCKED_FUTEX;
-        ps.threads[0].blocked_addr = 0x6000;
-        ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, thread2_ptr, 0, 0);
-        ps.threads[2] = ThreadRecord::new(3, THREAD_BLOCKED_FUTEX, thread3_ptr, 0, 0x7000);
-        ps.thread_count
-            .store(3, std::sync::atomic::Ordering::Release);
-    }
-
-    let vm_ptr = (&mut t.vm as *mut ThreadState) as u32;
-    let mut selection = [0u8; 48];
-    assert_eq!(
-        supervisor_select_runnable(
-            vm_ptr,
-            0,
-            0,
-            selection.as_mut_ptr() as u32,
-            selection.len() as u32,
-        ),
-        supervisor_runnable_selection_bytes() as i32
-    );
-    assert_eq!(read_u32_le(&selection, 0), 0x4e52_5354);
-    assert_eq!(read_u64_le(&selection, 16), 1);
-    assert_eq!(read_u32_le(&selection, 24), thread2_ptr);
-    assert_eq!(read_u32_le(&selection, 28), 2);
-    assert_eq!(read_u32_le(&selection, 32), t.vm.process_ptr);
-    assert_eq!(read_u32_le(&selection, 36), THREAD_RUNNING as u32);
-    assert_eq!(read_u32_le(&selection, 40), STATUS_OK as u32);
-    assert_eq!(read_u32_le(&selection, 44), 1);
-
-    unsafe {
-        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
-        ps.threads[1].state = THREAD_BLOCKED_FUTEX;
-    }
-    assert_eq!(
-        supervisor_select_runnable(
-            vm_ptr,
-            0,
-            0,
-            selection.as_mut_ptr() as u32,
-            selection.len() as u32,
-        ),
-        0
-    );
-}
-
-#[test]
 fn supervisor_process_resume_publishes_kernel_selected_runnable_thread() {
     supervisor_reset_shadow_log();
 
@@ -535,7 +364,7 @@ fn supervisor_process_resume_publishes_kernel_selected_runnable_thread() {
 }
 
 #[test]
-fn supervisor_select_runnable_honors_latest_thread_event_blocked_state() {
+fn supervisor_process_resume_honors_latest_thread_event_blocked_state() {
     supervisor_reset_shadow_log();
 
     let mut t = TestVm::new();
@@ -581,19 +410,18 @@ fn supervisor_select_runnable_honors_latest_thread_event_blocked_state() {
     );
 
     let vm_ptr = (&mut t.vm as *mut ThreadState) as u32;
-    let mut selection = [0u8; 48];
+    let mut resume = [0u8; 48];
     assert_eq!(
-        supervisor_select_runnable(
-            vm_ptr,
-            0,
-            0,
-            selection.as_mut_ptr() as u32,
-            selection.len() as u32,
-        ),
-        supervisor_runnable_selection_bytes() as i32
+        supervisor_process_resume(vm_ptr, resume.as_mut_ptr() as u32, resume.len() as u32,),
+        supervisor_resume_record_bytes() as i32
     );
-    assert_eq!(read_u32_le(&selection, 24), thread3_ptr);
-    assert_eq!(read_u32_le(&selection, 28), 3);
+    assert_eq!(read_u32_le(&resume, 0), 0x5255_5354);
+    assert_eq!(
+        read_u32_le(&resume, 12),
+        supervisor_resume_kind_runnable_thread()
+    );
+    assert_eq!(read_u32_le(&resume, 24), thread3_ptr);
+    assert_eq!(read_u32_le(&resume, 28), 3);
 
     event.fill(0);
     write_thread_event_record(
@@ -609,19 +437,18 @@ fn supervisor_select_runnable_honors_latest_thread_event_blocked_state() {
         0
     );
 
-    selection.fill(0);
+    resume.fill(0);
     assert_eq!(
-        supervisor_select_runnable(
-            vm_ptr,
-            0,
-            0,
-            selection.as_mut_ptr() as u32,
-            selection.len() as u32,
-        ),
-        supervisor_runnable_selection_bytes() as i32
+        supervisor_process_resume(vm_ptr, resume.as_mut_ptr() as u32, resume.len() as u32,),
+        supervisor_resume_record_bytes() as i32
     );
-    assert_eq!(read_u32_le(&selection, 24), thread2_ptr);
-    assert_eq!(read_u32_le(&selection, 28), 2);
+    assert_eq!(read_u32_le(&resume, 0), 0x5255_5354);
+    assert_eq!(
+        read_u32_le(&resume, 12),
+        supervisor_resume_kind_runnable_thread()
+    );
+    assert_eq!(read_u32_le(&resume, 24), thread2_ptr);
+    assert_eq!(read_u32_le(&resume, 28), 2);
     assert_eq!(supervisor_shadow_thread_event_count(), 2);
 }
 

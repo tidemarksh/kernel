@@ -139,7 +139,7 @@ pub(super) fn write_process_record(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i
     if let Err(errno) = validate_output(out_ptr, out_len) {
         return errno;
     }
-    let selected = match super::runnable::select_from_supervisor_state(vm_ptr, None) {
+    let selected = match super::runnable::select_from_supervisor_state(vm_ptr) {
         Ok(Some(selected)) => selected,
         Ok(None) => return 0,
         Err(errno) => return errno,

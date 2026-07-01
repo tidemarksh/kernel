@@ -101,8 +101,6 @@ pub const SUPERVISOR_SIGNAL_CONTROL_KIND_SIGNAL_DELIVERED: u32 = 2;
 pub const SUPERVISOR_SIGNAL_CONTROL_KIND_BLOCKED_WAIT_INTERRUPTED: u32 = 3;
 pub const SUPERVISOR_SIGNAL_BOUNDARY_SYSCALL_RETURN: u32 = 1;
 pub const SUPERVISOR_SIGNAL_BOUNDARY_BLOCKED_WAIT: u32 = 2;
-pub const SUPERVISOR_RUNNABLE_SELECTION_BYTES: u32 = 48;
-pub const SUPERVISOR_RUNNABLE_SELECTION_MAGIC: u32 = 0x4e52_5354; // "TSRN" little-endian.
 pub const SUPERVISOR_FUTEX_WAIT_COMPLETION_WOKEN: u32 = 1;
 pub const SUPERVISOR_FUTEX_WAIT_COMPLETION_NOT_EQUAL: u32 = 2;
 pub const SUPERVISOR_FUTEX_WAIT_COMPLETION_TIMED_OUT: u32 = 3;
@@ -1657,11 +1655,6 @@ pub extern "C" fn supervisor_signal_control_kind_blocked_wait_interrupted() -> u
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn supervisor_runnable_selection_bytes() -> u32 {
-    SUPERVISOR_RUNNABLE_SELECTION_BYTES
-}
-
-#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_resume_kind_futex_wake() -> u32 {
     SUPERVISOR_RESUME_KIND_FUTEX_WAKE
 }
@@ -1838,17 +1831,6 @@ pub extern "C" fn supervisor_next_resume(_out_ptr: u32, _out_len: u32) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_process_resume(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i32 {
     resume::write_process_record(vm_ptr, out_ptr, out_len)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn supervisor_select_runnable(
-    vm_ptr: u32,
-    candidates_ptr: u32,
-    candidate_count: u32,
-    out_ptr: u32,
-    out_len: u32,
-) -> i32 {
-    runnable::write_selection(vm_ptr, candidates_ptr, candidate_count, out_ptr, out_len)
 }
 
 #[unsafe(no_mangle)]

@@ -56,11 +56,6 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_thread_state_snapshot(0, 0, 0),
         supervisor_thread_state_snapshot_bytes() as i32
     );
-    assert_eq!(supervisor_runnable_selection_bytes(), 48);
-    assert_eq!(
-        supervisor_select_runnable(0, 0, 0, 0, 0),
-        supervisor_runnable_selection_bytes() as i32
-    );
     assert_eq!(supervisor_host_op_record_bytes(), 64);
     assert_eq!(supervisor_host_op_kind_spawn_thread_worker(), 1);
     assert_eq!(supervisor_host_op_kind_spawn_process_worker(), 2);
