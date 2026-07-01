@@ -66,7 +66,7 @@ pub(super) fn complete_wait(vm_ptr: u32, completion: u32) -> i32 {
             super::SUPERVISOR_SIGNAL_CONTROL_KIND_BLOCKED_WAIT_INTERRUPTED,
             vm,
             base,
-            super::first_signal_from_bits(deliverable | vm.sig_pending | record_pending),
+            super::signal::first_signal_from_bits(deliverable | vm.sig_pending | record_pending),
             super::SUPERVISOR_SIGNAL_BOUNDARY_BLOCKED_WAIT,
             thread_pending,
             process_pending,

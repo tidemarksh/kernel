@@ -458,27 +458,27 @@ pub extern "C" fn supervisor_fault_exit_decision(vm_ptr: u32, out_ptr: u32, out_
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_thread_exit_cleanup_record(out_ptr: u32, out_len: u32) -> i32 {
-    super::write_thread_exit_cleanup_record(out_ptr, out_len)
+    super::thread_exit::write_record(out_ptr, out_len)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_process_lifecycle_record(out_ptr: u32, out_len: u32) -> i32 {
-    super::write_process_lifecycle_record(out_ptr, out_len)
+    super::process::write_record(out_ptr, out_len)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fd_control_record(out_ptr: u32, out_len: u32) -> i32 {
-    super::write_fd_control_record(out_ptr, out_len)
+    super::fd::write_record(out_ptr, out_len)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fs_control_record(out_ptr: u32, out_len: u32) -> i32 {
-    super::write_fs_control_record(out_ptr, out_len)
+    super::fs::write_record(out_ptr, out_len)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_signal_control_record(out_ptr: u32, out_len: u32) -> i32 {
-    super::write_signal_control_record(out_ptr, out_len)
+    super::signal::write_record(out_ptr, out_len)
 }
 
 #[unsafe(no_mangle)]
