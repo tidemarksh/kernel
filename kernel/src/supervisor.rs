@@ -34,6 +34,7 @@ pub const SUPERVISOR_THREAD_STATE_SNAPSHOT_MAGIC: u32 = 0x4854_5354; // "TSTH" l
 pub const SUPERVISOR_RESUME_RECORD_BYTES: u32 = 48;
 pub const SUPERVISOR_RESUME_RECORD_MAGIC: u32 = 0x5255_5354; // "TSUR" little-endian.
 pub const SUPERVISOR_RESUME_KIND_FUTEX_WAKE: u32 = 1;
+pub const SUPERVISOR_RESUME_KIND_RUNNABLE_THREAD: u32 = 2;
 pub const SUPERVISOR_HOST_COMPLETION_RECORD_BYTES: u32 = 64;
 pub const SUPERVISOR_HOST_COMPLETION_RECORD_MAGIC: u32 = 0x4348_5354; // "TSHC" little-endian.
 pub const SUPERVISOR_HOST_COMPLETION_OUTCOME_SUCCESS: u32 = 1;
@@ -1766,6 +1767,11 @@ pub extern "C" fn supervisor_resume_kind_futex_wake() -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_resume_kind_runnable_thread() -> u32 {
+    SUPERVISOR_RESUME_KIND_RUNNABLE_THREAD
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_futex_wait_completion_woken() -> u32 {
     SUPERVISOR_FUTEX_WAIT_COMPLETION_WOKEN
 }
@@ -1927,6 +1933,11 @@ pub extern "C" fn supervisor_process_host_op(vm_ptr: u32, out_ptr: u32, out_len:
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_next_resume(_out_ptr: u32, _out_len: u32) -> i32 {
     resume::write_record(_out_ptr, _out_len)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_resume(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i32 {
+    resume::write_process_record(vm_ptr, out_ptr, out_len)
 }
 
 #[unsafe(no_mangle)]

@@ -1,18 +1,19 @@
 use core::sync::atomic::Ordering;
 
-struct RunnableSelection {
-    seq: u64,
-    vm_ptr: u32,
-    tid: u32,
-    process_ptr: u32,
-    state: u32,
-    status: u32,
-    slot: u32,
+pub(super) struct RunnableSelection {
+    pub(super) seq: u64,
+    pub(super) vm_ptr: u32,
+    pub(super) tid: u32,
+    pub(super) process_ptr: u32,
+    pub(super) state: u32,
+    pub(super) status: u32,
+    pub(super) slot: u32,
 }
 
-fn select_from_supervisor_state(
+fn find_from_supervisor_state(
     vm_ptr: u32,
     candidates: Option<&[u8]>,
+    commit: bool,
 ) -> Result<Option<RunnableSelection>, i32> {
     if vm_ptr == 0 {
         return Err(crate::abi::EFAULT as i32);
@@ -50,11 +51,15 @@ fn select_from_supervisor_state(
         if status != crate::abi::STATUS_OK as u32 {
             continue;
         }
-        super::RUNNABLE_SELECTION_CURSOR.store(
-            ((slot + 1) % crate::abi::MAX_THREADS) as u32,
-            Ordering::Relaxed,
-        );
-        let seq = super::RUNNABLE_SELECTION_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+        let seq = if commit {
+            super::RUNNABLE_SELECTION_CURSOR.store(
+                ((slot + 1) % crate::abi::MAX_THREADS) as u32,
+                Ordering::Relaxed,
+            );
+            super::RUNNABLE_SELECTION_COUNT.fetch_add(1, Ordering::Relaxed) + 1
+        } else {
+            0
+        };
         return Ok(Some(RunnableSelection {
             seq,
             vm_ptr: record.thread_ptr,
@@ -66,6 +71,17 @@ fn select_from_supervisor_state(
         }));
     }
     Ok(None)
+}
+
+pub(super) fn has_selection(vm_ptr: u32) -> Result<bool, i32> {
+    find_from_supervisor_state(vm_ptr, None, false).map(|selection| selection.is_some())
+}
+
+pub(super) fn select_from_supervisor_state(
+    vm_ptr: u32,
+    candidates: Option<&[u8]>,
+) -> Result<Option<RunnableSelection>, i32> {
+    find_from_supervisor_state(vm_ptr, candidates, true)
 }
 
 pub(super) fn write_selection(

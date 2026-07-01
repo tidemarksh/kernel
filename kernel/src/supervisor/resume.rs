@@ -76,24 +76,7 @@ fn pop_record() -> Option<super::SupervisorResumeRecord> {
     })
 }
 
-pub(super) fn write_record(out_ptr: u32, out_len: u32) -> i32 {
-    super::RESUME_POLL_COUNT.fetch_add(1, Ordering::Relaxed);
-    if out_len == 0 {
-        return if peek_record().is_some() {
-            super::SUPERVISOR_RESUME_RECORD_BYTES as i32
-        } else {
-            0
-        };
-    }
-    if out_ptr == 0 {
-        return crate::abi::EFAULT as i32;
-    }
-    if out_len < super::SUPERVISOR_RESUME_RECORD_BYTES {
-        return crate::abi::ENOSPC as i32;
-    }
-    let Some(record) = pop_record() else {
-        return 0;
-    };
+fn write_encoded_record(record: super::SupervisorResumeRecord, out_ptr: u32) -> i32 {
     let mut encoded = [0u8; super::SUPERVISOR_RESUME_RECORD_BYTES as usize];
     super::write_u32(&mut encoded, 0, super::SUPERVISOR_RESUME_RECORD_MAGIC);
     super::write_u32(&mut encoded, 4, super::SUPERVISOR_ABI_VERSION);
@@ -114,4 +97,64 @@ pub(super) fn write_record(out_ptr: u32, out_len: u32) -> i32 {
     };
     out.copy_from_slice(&encoded);
     super::SUPERVISOR_RESUME_RECORD_BYTES as i32
+}
+
+fn validate_output(out_ptr: u32, out_len: u32) -> Result<(), i32> {
+    if out_ptr == 0 {
+        return Err(crate::abi::EFAULT as i32);
+    }
+    if out_len < super::SUPERVISOR_RESUME_RECORD_BYTES {
+        return Err(crate::abi::ENOSPC as i32);
+    }
+    Ok(())
+}
+
+pub(super) fn write_record(out_ptr: u32, out_len: u32) -> i32 {
+    super::RESUME_POLL_COUNT.fetch_add(1, Ordering::Relaxed);
+    if out_len == 0 {
+        return if peek_record().is_some() {
+            super::SUPERVISOR_RESUME_RECORD_BYTES as i32
+        } else {
+            0
+        };
+    }
+    if let Err(errno) = validate_output(out_ptr, out_len) {
+        return errno;
+    }
+    let Some(record) = pop_record() else {
+        return 0;
+    };
+    write_encoded_record(record, out_ptr)
+}
+
+pub(super) fn write_process_record(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i32 {
+    super::RESUME_POLL_COUNT.fetch_add(1, Ordering::Relaxed);
+    if out_len == 0 {
+        return match super::runnable::has_selection(vm_ptr) {
+            Ok(true) => super::SUPERVISOR_RESUME_RECORD_BYTES as i32,
+            Ok(false) => 0,
+            Err(errno) => errno,
+        };
+    }
+    if let Err(errno) = validate_output(out_ptr, out_len) {
+        return errno;
+    }
+    let selected = match super::runnable::select_from_supervisor_state(vm_ptr, None) {
+        Ok(Some(selected)) => selected,
+        Ok(None) => return 0,
+        Err(errno) => return errno,
+    };
+    let seq = super::RESUME_ENQUEUE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+    write_encoded_record(
+        super::SupervisorResumeRecord {
+            kind: super::SUPERVISOR_RESUME_KIND_RUNNABLE_THREAD,
+            seq,
+            vm_ptr: selected.vm_ptr,
+            tid: selected.tid,
+            process_ptr: selected.process_ptr,
+            status: selected.status,
+            detail0: selected.slot as u64,
+        },
+        out_ptr,
+    )
 }

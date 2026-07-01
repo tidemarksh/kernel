@@ -117,6 +117,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_signal_control_kind_boundary_check(), 1);
     assert_eq!(supervisor_signal_control_kind_signal_delivered(), 2);
     assert_eq!(supervisor_signal_control_kind_blocked_wait_interrupted(), 3);
+    assert_eq!(supervisor_resume_kind_runnable_thread(), 2);
 
     let empty_hash = supervisor_shadow_thread_event_log_hash();
     assert_eq!(supervisor_shadow_thread_event_count(), 0);
@@ -277,6 +278,7 @@ fn supervisor_shadow_rejects_non_empty_null_records() {
     assert_eq!(supervisor_submit_thread_event(0, 1), EFAULT as i32);
     assert_eq!(supervisor_complete_host_op(0, 1), EFAULT as i32);
     assert_eq!(supervisor_process_host_op(0, 0, 1), EFAULT as i32);
+    assert_eq!(supervisor_process_resume(0, 0, 1), EFAULT as i32);
     assert_eq!(supervisor_shadow_thread_event_count(), 0);
     assert_eq!(supervisor_shadow_host_completion_count(), 0);
 }
