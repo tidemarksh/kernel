@@ -362,6 +362,75 @@ fn supervisor_select_runnable_uses_kernel_thread_order_not_candidate_order() {
 }
 
 #[test]
+fn supervisor_select_runnable_without_runtime_candidates_uses_kernel_thread_state() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+
+    let mut thread2: ThreadState = unsafe { std::mem::zeroed() };
+    thread2.guest_base = t.base;
+    thread2.process_ptr = t.vm.process_ptr;
+    thread2.tid = 2;
+    thread2.status = STATUS_OK;
+    let thread2_ptr = (&mut thread2 as *mut ThreadState) as u32;
+
+    let mut thread3: ThreadState = unsafe { std::mem::zeroed() };
+    thread3.guest_base = t.base;
+    thread3.process_ptr = t.vm.process_ptr;
+    thread3.tid = 3;
+    thread3.status = STATUS_OK;
+    let thread3_ptr = (&mut thread3 as *mut ThreadState) as u32;
+
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[0].state = THREAD_BLOCKED_FUTEX;
+        ps.threads[0].blocked_addr = 0x6000;
+        ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, thread2_ptr, 0, 0);
+        ps.threads[2] = ThreadRecord::new(3, THREAD_BLOCKED_FUTEX, thread3_ptr, 0, 0x7000);
+        ps.thread_count
+            .store(3, std::sync::atomic::Ordering::Release);
+    }
+
+    let vm_ptr = (&mut t.vm as *mut ThreadState) as u32;
+    let mut selection = [0u8; 48];
+    assert_eq!(
+        supervisor_select_runnable(
+            vm_ptr,
+            0,
+            0,
+            selection.as_mut_ptr() as u32,
+            selection.len() as u32,
+        ),
+        supervisor_runnable_selection_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&selection, 0), 0x4e52_5354);
+    assert_eq!(read_u64_le(&selection, 16), 1);
+    assert_eq!(read_u32_le(&selection, 24), thread2_ptr);
+    assert_eq!(read_u32_le(&selection, 28), 2);
+    assert_eq!(read_u32_le(&selection, 32), t.vm.process_ptr);
+    assert_eq!(read_u32_le(&selection, 36), THREAD_RUNNING as u32);
+    assert_eq!(read_u32_le(&selection, 40), STATUS_OK as u32);
+    assert_eq!(read_u32_le(&selection, 44), 1);
+
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[1].state = THREAD_BLOCKED_FUTEX;
+    }
+    assert_eq!(
+        supervisor_select_runnable(
+            vm_ptr,
+            0,
+            0,
+            selection.as_mut_ptr() as u32,
+            selection.len() as u32,
+        ),
+        0
+    );
+}
+
+#[test]
 fn supervisor_futex_completion_owns_timeout_result() {
     let mut t = TestVm::new();
     let futex_addr = t.scratch + 0x140;

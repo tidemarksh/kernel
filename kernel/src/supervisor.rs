@@ -1121,9 +1121,9 @@ fn validated_thread_status_from_record(
     validated_thread_from_record(record, base, process_ptr).map(|thread| thread.status as u32)
 }
 
-fn select_runnable_from_candidates(
+fn select_runnable_from_supervisor_state(
     vm_ptr: u32,
-    candidates: &[u8],
+    candidates: Option<&[u8]>,
 ) -> Result<Option<SupervisorRunnableSelection>, i32> {
     if vm_ptr == 0 {
         return Err(crate::abi::EFAULT as i32);
@@ -1143,8 +1143,10 @@ fn select_runnable_from_candidates(
         if record.state != crate::types::THREAD_RUNNING {
             continue;
         }
-        if !candidate_list_contains(candidates, record.thread_ptr) {
-            continue;
+        if let Some(candidates) = candidates {
+            if !candidate_list_contains(candidates, record.thread_ptr) {
+                continue;
+            }
         }
         let Some(status) =
             validated_thread_status_from_record(&record, vm.guest_base, vm.process_ptr)
@@ -1188,20 +1190,21 @@ fn write_runnable_selection(
     if out_len < SUPERVISOR_RUNNABLE_SELECTION_BYTES {
         return crate::abi::ENOSPC as i32;
     }
-    if candidate_count == 0 {
-        return 0;
-    }
     if candidate_count as usize > crate::abi::MAX_THREADS {
         return crate::abi::EINVAL as i32;
     }
-    let Some(candidate_bytes_len) = candidate_count.checked_mul(4) else {
-        return crate::abi::EINVAL as i32;
+    let candidates = if candidate_count == 0 {
+        None
+    } else {
+        let Some(candidate_bytes_len) = candidate_count.checked_mul(4) else {
+            return crate::abi::EINVAL as i32;
+        };
+        match read_shadow_bytes(candidates_ptr, candidate_bytes_len) {
+            Ok(candidates) => Some(candidates),
+            Err(errno) => return errno,
+        }
     };
-    let candidates = match read_shadow_bytes(candidates_ptr, candidate_bytes_len) {
-        Ok(candidates) => candidates,
-        Err(errno) => return errno,
-    };
-    let selected = match select_runnable_from_candidates(vm_ptr, candidates) {
+    let selected = match select_runnable_from_supervisor_state(vm_ptr, candidates) {
         Ok(Some(selected)) => selected,
         Ok(None) => return 0,
         Err(errno) => return errno,
