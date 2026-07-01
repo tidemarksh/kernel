@@ -6,6 +6,10 @@
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
+mod futex;
+mod runnable;
+mod state;
+
 pub const SUPERVISOR_ABI_VERSION: u32 = 1;
 pub const SUPERVISOR_DEBUG_SNAPSHOT_BYTES: u32 = 112;
 pub const SUPERVISOR_THREAD_EVENT_RECORD_BYTES: u32 = 80;
@@ -458,17 +462,6 @@ impl SupervisorSignalControlRecord {
             detail1: 0,
         }
     }
-}
-
-#[derive(Clone, Copy)]
-struct SupervisorRunnableSelection {
-    seq: u64,
-    vm_ptr: u32,
-    tid: u32,
-    process_ptr: u32,
-    state: u32,
-    status: u32,
-    slot: u32,
 }
 
 pub fn init() {
@@ -1156,136 +1149,6 @@ fn process_host_op_pending(vm_ptr: u32) -> Result<bool, i32> {
     Ok(vm.spawn_kind != crate::abi::SPAWN_KIND_NONE && vm.spawn_child_pid > 0)
 }
 
-fn validated_thread_from_record(
-    record: &crate::types::ThreadRecord,
-    base: u32,
-    process_ptr: u32,
-) -> Option<&'static crate::types::ThreadState> {
-    let thread = thread_state_from_ptr(record.thread_ptr)?;
-    if thread.guest_base != base || thread.process_ptr != process_ptr || thread.tid != record.tid {
-        return None;
-    }
-    Some(thread)
-}
-
-fn validated_thread_status_from_record(
-    record: &crate::types::ThreadRecord,
-    base: u32,
-    process_ptr: u32,
-) -> Option<u32> {
-    validated_thread_from_record(record, base, process_ptr).map(|thread| thread.status as u32)
-}
-
-fn select_runnable_from_supervisor_state(
-    vm_ptr: u32,
-    candidates: Option<&[u8]>,
-) -> Result<Option<SupervisorRunnableSelection>, i32> {
-    if vm_ptr == 0 {
-        return Err(crate::abi::EFAULT as i32);
-    }
-    let vm = unsafe { &*(vm_ptr as *const crate::types::ThreadState) };
-    if vm.process_ptr == 0 {
-        return Err(crate::abi::EINVAL as i32);
-    }
-    let ps = unsafe {
-        &*((vm.guest_base as u64 + vm.process_ptr as u64) as *const crate::types::ProcessState)
-    };
-    let cursor =
-        RUNNABLE_SELECTION_CURSOR.load(Ordering::Relaxed) as usize % crate::abi::MAX_THREADS;
-    for step in 0..crate::abi::MAX_THREADS {
-        let slot = (cursor + step) % crate::abi::MAX_THREADS;
-        let record = ps.threads[slot];
-        if record.state != crate::types::THREAD_RUNNING {
-            continue;
-        }
-        if let Some(candidates) = candidates {
-            if !candidate_list_contains(candidates, record.thread_ptr) {
-                continue;
-            }
-        }
-        let Some(status) =
-            validated_thread_status_from_record(&record, vm.guest_base, vm.process_ptr)
-        else {
-            continue;
-        };
-        if status != crate::abi::STATUS_OK as u32 {
-            continue;
-        }
-        RUNNABLE_SELECTION_CURSOR.store(
-            ((slot + 1) % crate::abi::MAX_THREADS) as u32,
-            Ordering::Relaxed,
-        );
-        let seq = RUNNABLE_SELECTION_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-        return Ok(Some(SupervisorRunnableSelection {
-            seq,
-            vm_ptr: record.thread_ptr,
-            tid: record.tid as u32,
-            process_ptr: vm.process_ptr,
-            state: record.state as u32,
-            status,
-            slot: slot as u32,
-        }));
-    }
-    Ok(None)
-}
-
-fn write_runnable_selection(
-    vm_ptr: u32,
-    candidates_ptr: u32,
-    candidate_count: u32,
-    out_ptr: u32,
-    out_len: u32,
-) -> i32 {
-    if out_len == 0 {
-        return SUPERVISOR_RUNNABLE_SELECTION_BYTES as i32;
-    }
-    if out_ptr == 0 {
-        return crate::abi::EFAULT as i32;
-    }
-    if out_len < SUPERVISOR_RUNNABLE_SELECTION_BYTES {
-        return crate::abi::ENOSPC as i32;
-    }
-    if candidate_count as usize > crate::abi::MAX_THREADS {
-        return crate::abi::EINVAL as i32;
-    }
-    let candidates = if candidate_count == 0 {
-        None
-    } else {
-        let Some(candidate_bytes_len) = candidate_count.checked_mul(4) else {
-            return crate::abi::EINVAL as i32;
-        };
-        match read_shadow_bytes(candidates_ptr, candidate_bytes_len) {
-            Ok(candidates) => Some(candidates),
-            Err(errno) => return errno,
-        }
-    };
-    let selected = match select_runnable_from_supervisor_state(vm_ptr, candidates) {
-        Ok(Some(selected)) => selected,
-        Ok(None) => return 0,
-        Err(errno) => return errno,
-    };
-    let mut encoded = [0u8; SUPERVISOR_RUNNABLE_SELECTION_BYTES as usize];
-    write_u32(&mut encoded, 0, SUPERVISOR_RUNNABLE_SELECTION_MAGIC);
-    write_u32(&mut encoded, 4, SUPERVISOR_ABI_VERSION);
-    write_u32(&mut encoded, 8, SUPERVISOR_RUNNABLE_SELECTION_BYTES);
-    write_u32(&mut encoded, 12, 0);
-    write_u64(&mut encoded, 16, selected.seq);
-    write_u32(&mut encoded, 24, selected.vm_ptr);
-    write_u32(&mut encoded, 28, selected.tid);
-    write_u32(&mut encoded, 32, selected.process_ptr);
-    write_u32(&mut encoded, 36, selected.state);
-    write_u32(&mut encoded, 40, selected.status);
-    write_u32(&mut encoded, 44, selected.slot);
-    let out = unsafe {
-        core::slice::from_raw_parts_mut(
-            out_ptr as usize as *mut u8,
-            SUPERVISOR_RUNNABLE_SELECTION_BYTES as usize,
-        )
-    };
-    out.copy_from_slice(&encoded);
-    SUPERVISOR_RUNNABLE_SELECTION_BYTES as i32
-}
-
 fn fault_exit_priority(thread: &crate::types::ThreadState) -> u32 {
     if thread.fault_signal != 0 {
         return 4;
@@ -1323,7 +1186,8 @@ fn select_fault_exit_decision(vm_ptr: u32) -> Result<SupervisorFaultExitDecision
         {
             continue;
         }
-        let Some(thread) = validated_thread_from_record(record, vm.guest_base, vm.process_ptr)
+        let Some(thread) =
+            state::validated_thread_from_record(record, vm.guest_base, vm.process_ptr)
         else {
             continue;
         };
@@ -1704,23 +1568,6 @@ pub fn record_signal_control(
     });
 }
 
-fn blocked_wait_signal_pending(vm: &crate::types::ThreadState, base: u32) -> bool {
-    crate::syscall::signal::pending_signal_interrupts_blocked_syscall(vm, base)
-        || vm.sig_pending != 0
-}
-
-fn blocked_wait_signal_decision(vm_ptr: u32) -> i32 {
-    if vm_ptr == 0 {
-        return crate::abi::EFAULT as i32;
-    }
-    let vm = unsafe { &*(vm_ptr as *const crate::types::ThreadState) };
-    if blocked_wait_signal_pending(vm, vm.guest_base) {
-        1
-    } else {
-        0
-    }
-}
-
 fn write_fd_control_record(out_ptr: u32, out_len: u32) -> i32 {
     if out_len == 0 {
         return SUPERVISOR_FD_CONTROL_RECORD_BYTES as i32;
@@ -1908,7 +1755,7 @@ fn thread_status_from_record(
     base: u32,
     process_ptr: u32,
 ) -> u32 {
-    validated_thread_status_from_record(record, base, process_ptr).unwrap_or(0)
+    state::validated_thread_status_from_record(record, base, process_ptr).unwrap_or(0)
 }
 
 fn write_thread_state_snapshot(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i32 {
@@ -1967,87 +1814,7 @@ fn write_thread_state_snapshot(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i32 {
 }
 
 pub fn enqueue_futex_resume(process_ptr: u32, vm_ptr: u32, tid: i32, futex_addr: u64) -> bool {
-    if process_ptr == 0 || vm_ptr == 0 || tid <= 0 {
-        return false;
-    }
-    let seq = RESUME_ENQUEUE_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-    push_resume_record(SupervisorResumeRecord {
-        kind: SUPERVISOR_RESUME_KIND_FUTEX_WAKE,
-        seq,
-        vm_ptr,
-        tid: tid as u32,
-        process_ptr,
-        status: crate::abi::STATUS_OK as u32,
-        detail0: futex_addr,
-    })
-}
-
-fn thread_state_from_ptr_mut(vm_ptr: u32) -> Result<&'static mut crate::types::ThreadState, i32> {
-    if vm_ptr == 0 {
-        return Err(crate::abi::EFAULT as i32);
-    }
-    Ok(unsafe { &mut *(vm_ptr as *mut crate::types::ThreadState) })
-}
-
-fn complete_futex_wait(vm_ptr: u32, completion: u32) -> i32 {
-    let vm = match thread_state_from_ptr_mut(vm_ptr) {
-        Ok(vm) => vm,
-        Err(errno) => return errno,
-    };
-    let base = vm.guest_base;
-    let process_ptr = vm.process_ptr;
-    let tid = vm.tid;
-    let futex_addr = vm.futex_wait_addr;
-    let blocked_addr = crate::syscall::thread::thread_record_blocked_addr(vm, base);
-    let signal_pending = blocked_wait_signal_pending(vm, base);
-
-    let result = if blocked_addr == 0 {
-        Some(0)
-    } else if completion == SUPERVISOR_FUTEX_WAIT_COMPLETION_WOKEN
-        && vm.status == crate::abi::STATUS_OK
-        && vm.futex_wait_addr == 0
-    {
-        Some(vm.x[10] as i64)
-    } else if blocked_addr == u64::MAX {
-        Some(crate::abi::EAGAIN)
-    } else if signal_pending {
-        let (thread_pending, process_pending, record_pending, deliverable) =
-            crate::syscall::signal::pending_signal_snapshot(vm, base);
-        record_signal_control(
-            SUPERVISOR_SIGNAL_CONTROL_KIND_BLOCKED_WAIT_INTERRUPTED,
-            vm,
-            base,
-            first_signal_from_bits(deliverable | vm.sig_pending | record_pending),
-            SUPERVISOR_SIGNAL_BOUNDARY_BLOCKED_WAIT,
-            thread_pending,
-            process_pending,
-            record_pending,
-            deliverable,
-            completion as u64,
-            blocked_addr,
-        );
-        Some(crate::abi::EINTR)
-    } else if completion == SUPERVISOR_FUTEX_WAIT_COMPLETION_SIGNAL_CHECK {
-        None
-    } else {
-        match completion {
-            SUPERVISOR_FUTEX_WAIT_COMPLETION_NOT_EQUAL => Some(0),
-            SUPERVISOR_FUTEX_WAIT_COMPLETION_TIMED_OUT => Some(crate::abi::ETIMEDOUT),
-            SUPERVISOR_FUTEX_WAIT_COMPLETION_INVALID_ADDRESS => Some(crate::abi::EAGAIN),
-            SUPERVISOR_FUTEX_WAIT_COMPLETION_WOKEN => None,
-            _ => Some(crate::abi::EINVAL),
-        }
-    };
-
-    if let Some(result) = result {
-        crate::syscall::thread::resume_futex_wait_result(vm, base, result);
-        if completion == SUPERVISOR_FUTEX_WAIT_COMPLETION_TIMED_OUT
-            && vm.status == crate::abi::STATUS_OK
-        {
-            enqueue_futex_resume(process_ptr, vm_ptr, tid, futex_addr);
-        }
-    }
-    vm.status
+    futex::enqueue_resume(process_ptr, vm_ptr, tid, futex_addr)
 }
 
 #[unsafe(no_mangle)]
@@ -2545,12 +2312,12 @@ pub extern "C" fn supervisor_complete_host_op(completion_ptr: u32, completion_le
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_complete_futex_wait(vm_ptr: u32, completion: u32) -> i32 {
-    complete_futex_wait(vm_ptr, completion)
+    futex::complete_wait(vm_ptr, completion)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_signal_pending_for_blocked_wait(vm_ptr: u32) -> i32 {
-    blocked_wait_signal_decision(vm_ptr)
+    futex::blocked_wait_signal_decision(vm_ptr)
 }
 
 #[unsafe(no_mangle)]
@@ -2576,7 +2343,7 @@ pub extern "C" fn supervisor_select_runnable(
     out_ptr: u32,
     out_len: u32,
 ) -> i32 {
-    write_runnable_selection(vm_ptr, candidates_ptr, candidate_count, out_ptr, out_len)
+    runnable::write_selection(vm_ptr, candidates_ptr, candidate_count, out_ptr, out_len)
 }
 
 #[unsafe(no_mangle)]
