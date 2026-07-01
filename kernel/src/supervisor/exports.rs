@@ -388,12 +388,12 @@ pub extern "C" fn supervisor_shadow_host_op_log_hash() -> u64 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_shadow_host_op_last_hash() -> u64 {
-    super::LAST_HOST_OP_HASH.load(core::sync::atomic::Ordering::Relaxed)
+    super::log::last_host_op_hash()
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_shadow_host_op_last_len() -> u32 {
-    super::LAST_HOST_OP_LEN.load(core::sync::atomic::Ordering::Relaxed)
+    super::log::last_host_op_len()
 }
 
 #[unsafe(no_mangle)]
@@ -407,11 +407,7 @@ pub extern "C" fn supervisor_complete_host_op(completion_ptr: u32, completion_le
         Ok(bytes) => bytes,
         Err(errno) => return errno,
     };
-    let entry_hash = super::fnv_hash(bytes);
-    super::HOST_COMPLETION_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-    super::LAST_HOST_COMPLETION_HASH.store(entry_hash, core::sync::atomic::Ordering::Relaxed);
-    super::LAST_HOST_COMPLETION_LEN.store(completion_len, core::sync::atomic::Ordering::Relaxed);
-    super::fold_log_hash(&super::HOST_COMPLETION_LOG_HASH, entry_hash, completion_len);
+    super::log::record_host_completion(bytes, completion_len);
     super::host_op::complete_host_op(bytes)
 }
 
@@ -477,7 +473,7 @@ pub extern "C" fn supervisor_signal_control_record(out_ptr: u32, out_len: u32) -
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_debug_snapshot(out_ptr: u32, out_len: u32) -> i32 {
-    super::write_snapshot(out_ptr, out_len)
+    super::debug::write_snapshot(out_ptr, out_len)
 }
 
 #[unsafe(no_mangle)]

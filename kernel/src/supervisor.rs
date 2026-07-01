@@ -7,10 +7,13 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 mod abi;
+mod codec;
+mod debug;
 mod event;
 mod exports;
 mod futex;
 mod host_op;
+mod log;
 mod records;
 mod resume;
 mod runnable;
@@ -19,29 +22,16 @@ mod thread;
 mod timer;
 
 pub use abi::*;
+pub(in crate::supervisor) use codec::{read_shadow_bytes, write_u32, write_u64};
 pub use exports::*;
 pub(super) use records::*;
 
-const SNAPSHOT_MAGIC: u32 = 0x5055_5354; // "TSUP" little-endian.
-const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
-static THREAD_EVENT_COUNT: AtomicU64 = AtomicU64::new(0);
-static HOST_COMPLETION_COUNT: AtomicU64 = AtomicU64::new(0);
 static FAULT_EXIT_DECISION_COUNT: AtomicU64 = AtomicU64::new(0);
 static THREAD_EXIT_CLEANUP_COUNT: AtomicU64 = AtomicU64::new(0);
 static PROCESS_LIFECYCLE_COUNT: AtomicU64 = AtomicU64::new(0);
 static FD_CONTROL_COUNT: AtomicU64 = AtomicU64::new(0);
 static FS_CONTROL_COUNT: AtomicU64 = AtomicU64::new(0);
 static SIGNAL_CONTROL_COUNT: AtomicU64 = AtomicU64::new(0);
-static THREAD_EVENT_LOG_HASH: AtomicU64 = AtomicU64::new(FNV_OFFSET);
-static HOST_COMPLETION_LOG_HASH: AtomicU64 = AtomicU64::new(FNV_OFFSET);
-static HOST_OP_LOG_HASH: AtomicU64 = AtomicU64::new(FNV_OFFSET);
-static LAST_THREAD_EVENT_HASH: AtomicU64 = AtomicU64::new(0);
-static LAST_HOST_COMPLETION_HASH: AtomicU64 = AtomicU64::new(0);
-static LAST_HOST_OP_HASH: AtomicU64 = AtomicU64::new(0);
-static LAST_THREAD_EVENT_LEN: AtomicU32 = AtomicU32::new(0);
-static LAST_HOST_COMPLETION_LEN: AtomicU32 = AtomicU32::new(0);
-static LAST_HOST_OP_LEN: AtomicU32 = AtomicU32::new(0);
 static THREAD_EXIT_CLEANUP_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_THREAD_EXIT_CLEANUP: SupervisorThreadExitCleanupRecord =
     SupervisorThreadExitCleanupRecord::empty();
@@ -57,23 +47,13 @@ static mut LAST_SIGNAL_CONTROL: SupervisorSignalControlRecord =
     SupervisorSignalControlRecord::empty();
 
 pub fn init() {
-    THREAD_EVENT_COUNT.store(0, Ordering::Relaxed);
-    HOST_COMPLETION_COUNT.store(0, Ordering::Relaxed);
+    log::init();
     FAULT_EXIT_DECISION_COUNT.store(0, Ordering::Relaxed);
     THREAD_EXIT_CLEANUP_COUNT.store(0, Ordering::Relaxed);
     PROCESS_LIFECYCLE_COUNT.store(0, Ordering::Relaxed);
     FD_CONTROL_COUNT.store(0, Ordering::Relaxed);
     FS_CONTROL_COUNT.store(0, Ordering::Relaxed);
     SIGNAL_CONTROL_COUNT.store(0, Ordering::Relaxed);
-    THREAD_EVENT_LOG_HASH.store(FNV_OFFSET, Ordering::Relaxed);
-    HOST_COMPLETION_LOG_HASH.store(FNV_OFFSET, Ordering::Relaxed);
-    HOST_OP_LOG_HASH.store(FNV_OFFSET, Ordering::Relaxed);
-    LAST_THREAD_EVENT_HASH.store(0, Ordering::Relaxed);
-    LAST_HOST_COMPLETION_HASH.store(0, Ordering::Relaxed);
-    LAST_HOST_OP_HASH.store(0, Ordering::Relaxed);
-    LAST_THREAD_EVENT_LEN.store(0, Ordering::Relaxed);
-    LAST_HOST_COMPLETION_LEN.store(0, Ordering::Relaxed);
-    LAST_HOST_OP_LEN.store(0, Ordering::Relaxed);
     event::init_state();
     runnable::init();
     resume::init();
@@ -96,11 +76,11 @@ pub fn init() {
 }
 
 pub fn thread_event_count() -> u64 {
-    THREAD_EVENT_COUNT.load(Ordering::Relaxed)
+    log::thread_event_count()
 }
 
 pub fn host_completion_count() -> u64 {
-    HOST_COMPLETION_COUNT.load(Ordering::Relaxed)
+    log::host_completion_count()
 }
 
 pub fn host_op_poll_count() -> u64 {
@@ -148,65 +128,15 @@ pub fn resume_overflow_count() -> u64 {
 }
 
 pub fn thread_event_log_hash() -> u64 {
-    THREAD_EVENT_LOG_HASH.load(Ordering::Relaxed)
+    log::thread_event_log_hash()
 }
 
 pub fn host_completion_log_hash() -> u64 {
-    HOST_COMPLETION_LOG_HASH.load(Ordering::Relaxed)
+    log::host_completion_log_hash()
 }
 
 pub fn host_op_log_hash() -> u64 {
-    HOST_OP_LOG_HASH.load(Ordering::Relaxed)
-}
-
-fn fnv_hash(bytes: &[u8]) -> u64 {
-    let mut hash = FNV_OFFSET;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    hash
-}
-
-fn fold_log_hash(current: &AtomicU64, entry_hash: u64, entry_len: u32) -> u64 {
-    let previous = current.load(Ordering::Relaxed);
-    let mut next = previous ^ entry_hash;
-    next = next.wrapping_mul(FNV_PRIME);
-    next ^= u64::from(entry_len);
-    next = next.wrapping_mul(FNV_PRIME);
-    current.store(next, Ordering::Relaxed);
-    next
-}
-
-fn record_host_op_log_entry(encoded: &[u8], entry_len: u32) {
-    let entry_hash = fnv_hash(encoded);
-    LAST_HOST_OP_HASH.store(entry_hash, Ordering::Relaxed);
-    LAST_HOST_OP_LEN.store(entry_len, Ordering::Relaxed);
-    fold_log_hash(&HOST_OP_LOG_HASH, entry_hash, entry_len);
-}
-
-fn read_shadow_bytes(ptr: u32, len: u32) -> Result<&'static [u8], i32> {
-    if len == 0 {
-        return Ok(&[]);
-    }
-    if ptr == 0 {
-        return Err(crate::abi::EFAULT as i32);
-    }
-    let start = ptr as usize;
-    let len = len as usize;
-    let end = start.checked_add(len).ok_or(crate::abi::EFAULT as i32)?;
-    if end > isize::MAX as usize {
-        return Err(crate::abi::EFAULT as i32);
-    }
-    Ok(unsafe { core::slice::from_raw_parts(start as *const u8, len) })
-}
-
-fn write_u32(buf: &mut [u8], offset: usize, value: u32) {
-    buf[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-}
-
-fn write_u64(buf: &mut [u8], offset: usize, value: u64) {
-    buf[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+    log::host_op_log_hash()
 }
 
 fn with_thread_exit_cleanup_lock<T>(f: impl FnOnce() -> T) -> T {
@@ -846,63 +776,6 @@ fn write_signal_control_record(out_ptr: u32, out_len: u32) -> i32 {
     };
     out.copy_from_slice(&encoded);
     SUPERVISOR_SIGNAL_CONTROL_RECORD_BYTES as i32
-}
-
-fn write_snapshot(out_ptr: u32, out_len: u32) -> i32 {
-    if out_len == 0 {
-        return SUPERVISOR_DEBUG_SNAPSHOT_BYTES as i32;
-    }
-    if out_ptr == 0 {
-        return crate::abi::EFAULT as i32;
-    }
-    if out_len < SUPERVISOR_DEBUG_SNAPSHOT_BYTES {
-        return crate::abi::ENOSPC as i32;
-    }
-
-    let mut snapshot = [0u8; SUPERVISOR_DEBUG_SNAPSHOT_BYTES as usize];
-    write_u32(&mut snapshot, 0, SNAPSHOT_MAGIC);
-    write_u32(&mut snapshot, 4, SUPERVISOR_ABI_VERSION);
-    write_u32(&mut snapshot, 8, SUPERVISOR_DEBUG_SNAPSHOT_BYTES);
-    write_u32(&mut snapshot, 12, 0);
-    write_u64(&mut snapshot, 16, thread_event_count());
-    write_u64(&mut snapshot, 24, host_completion_count());
-    write_u64(&mut snapshot, 32, host_op_poll_count());
-    write_u64(&mut snapshot, 40, resume_poll_count());
-    write_u64(&mut snapshot, 48, thread_event_log_hash());
-    write_u64(&mut snapshot, 56, host_completion_log_hash());
-    write_u32(
-        &mut snapshot,
-        64,
-        LAST_THREAD_EVENT_LEN.load(Ordering::Relaxed),
-    );
-    write_u32(
-        &mut snapshot,
-        68,
-        LAST_HOST_COMPLETION_LEN.load(Ordering::Relaxed),
-    );
-    write_u64(
-        &mut snapshot,
-        72,
-        LAST_THREAD_EVENT_HASH.load(Ordering::Relaxed),
-    );
-    write_u64(
-        &mut snapshot,
-        80,
-        LAST_HOST_COMPLETION_HASH.load(Ordering::Relaxed),
-    );
-    write_u64(&mut snapshot, 88, host_op_log_hash());
-    write_u64(&mut snapshot, 96, LAST_HOST_OP_HASH.load(Ordering::Relaxed));
-    write_u32(&mut snapshot, 104, LAST_HOST_OP_LEN.load(Ordering::Relaxed));
-    write_u32(&mut snapshot, 108, 0);
-
-    let out = unsafe {
-        core::slice::from_raw_parts_mut(
-            out_ptr as usize as *mut u8,
-            SUPERVISOR_DEBUG_SNAPSHOT_BYTES as usize,
-        )
-    };
-    out.copy_from_slice(&snapshot);
-    SUPERVISOR_DEBUG_SNAPSHOT_BYTES as i32
 }
 
 pub fn enqueue_futex_resume(process_ptr: u32, vm_ptr: u32, tid: i32, futex_addr: u64) -> bool {

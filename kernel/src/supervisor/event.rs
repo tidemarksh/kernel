@@ -209,11 +209,7 @@ pub(super) fn submit(event_ptr: u32, event_len: u32) -> i32 {
         Ok(bytes) => bytes,
         Err(errno) => return errno,
     };
-    let entry_hash = super::fnv_hash(bytes);
-    let arrival_seq = super::THREAD_EVENT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-    super::LAST_THREAD_EVENT_HASH.store(entry_hash, Ordering::Relaxed);
-    super::LAST_THREAD_EVENT_LEN.store(event_len, Ordering::Relaxed);
-    super::fold_log_hash(&super::THREAD_EVENT_LOG_HASH, entry_hash, event_len);
+    let arrival_seq = super::log::record_thread_event(bytes, event_len);
     if let Some(event) = decode(bytes, arrival_seq) {
         store_event(event);
     }

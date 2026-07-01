@@ -253,7 +253,7 @@ pub(super) fn write_record(out_ptr: u32, out_len: u32) -> i32 {
     super::write_u32(&mut encoded, 44, 0);
     super::write_u64(&mut encoded, 48, record.flags);
     super::write_u64(&mut encoded, 56, record.child_tidptr);
-    super::record_host_op_log_entry(&encoded, super::SUPERVISOR_HOST_OP_RECORD_BYTES);
+    super::log::record_host_op(&encoded, super::SUPERVISOR_HOST_OP_RECORD_BYTES);
     let out = unsafe {
         core::slice::from_raw_parts_mut(
             out_ptr as usize as *mut u8,
@@ -344,7 +344,7 @@ pub(super) fn write_process_record(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i
     super::write_u64(&mut encoded, 80, record.envp);
     super::write_u64(&mut encoded, 88, 0);
     if record.log_emission {
-        super::record_host_op_log_entry(&encoded, super::SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES);
+        super::log::record_host_op(&encoded, super::SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES);
     }
     let out = unsafe {
         core::slice::from_raw_parts_mut(
