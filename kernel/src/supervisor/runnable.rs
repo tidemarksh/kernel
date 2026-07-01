@@ -1,5 +1,15 @@
 use core::sync::atomic::Ordering;
 
+fn candidate_list_contains(candidates: &[u8], vm_ptr: u32) -> bool {
+    for entry in candidates.chunks_exact(4) {
+        let candidate = u32::from_le_bytes([entry[0], entry[1], entry[2], entry[3]]);
+        if candidate == vm_ptr {
+            return true;
+        }
+    }
+    false
+}
+
 pub(super) struct RunnableSelection {
     pub(super) seq: u64,
     pub(super) vm_ptr: u32,
@@ -34,7 +44,7 @@ fn find_from_supervisor_state(
             continue;
         }
         if let Some(candidates) = candidates {
-            if !super::candidate_list_contains(candidates, record.thread_ptr) {
+            if !candidate_list_contains(candidates, record.thread_ptr) {
                 continue;
             }
         }

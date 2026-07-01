@@ -190,12 +190,12 @@ pub(super) fn write_record(out_ptr: u32, out_len: u32) -> i32 {
 }
 
 fn process_op_pending(vm_ptr: u32) -> Result<bool, i32> {
-    let vm = super::thread_state_from_ptr(vm_ptr).ok_or(crate::abi::EFAULT as i32)?;
+    let vm = super::thread::state_from_ptr(vm_ptr).ok_or(crate::abi::EFAULT as i32)?;
     Ok(vm.spawn_kind != crate::abi::SPAWN_KIND_NONE && vm.spawn_child_pid > 0)
 }
 
 fn select_process_op(vm_ptr: u32) -> Result<Option<super::SupervisorProcessHostOpRecord>, i32> {
-    let vm = super::thread_state_mut_from_ptr(vm_ptr).ok_or(crate::abi::EFAULT as i32)?;
+    let vm = super::thread::state_mut_from_ptr(vm_ptr).ok_or(crate::abi::EFAULT as i32)?;
     if vm.spawn_kind == crate::abi::SPAWN_KIND_NONE || vm.spawn_child_pid <= 0 {
         return Ok(None);
     }

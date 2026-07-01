@@ -3,7 +3,7 @@ pub(super) fn validated_thread_from_record(
     base: u32,
     process_ptr: u32,
 ) -> Option<&'static crate::types::ThreadState> {
-    let thread = super::thread_state_from_ptr(record.thread_ptr)?;
+    let thread = super::thread::state_from_ptr(record.thread_ptr)?;
     if thread.guest_base != base || thread.process_ptr != process_ptr || thread.tid != record.tid {
         return None;
     }
