@@ -5,6 +5,12 @@ pub(super) const RETRY_REASON_STANDARD_DEFER: u32 = 2;
 pub(super) const RETRY_REASON_ACTIVE_CHILD: u32 = 3;
 pub(super) const RETRY_REASON_PASSIVE_WAIT: u32 = 4;
 pub(super) const RETRY_REASON_PROCESS_GATE: u32 = 5;
+pub(super) const RESUME_DELEGATION_FLAG_KERNEL_WORKER_AVAILABLE: u32 = 1;
+pub(super) const RESUME_DELEGATION_DIRECT: u32 = 0;
+pub(super) const RESUME_DELEGATION_KERNEL_WORKER: u32 = 1;
+pub(super) const RESUME_DELEGATION_WAIT4_KERNEL_WORKER: u32 = 2;
+pub(super) const RESUME_DELEGATION_UNSUPPORTED: u32 = 3;
+pub(super) const RESUME_DELEGATION_EPOLL_DIRECT: u32 = 4;
 
 fn status(vm_ptr: u32) -> i32 {
     unsafe { (*(vm_ptr as *const crate::types::ThreadState)).status }
@@ -86,5 +92,53 @@ pub(super) fn retry_delay_ms(vm_ptr: u32, reason: u32) -> i32 {
                 1
             }
         }
+    }
+}
+
+pub(super) fn resume_delegation_flag_kernel_worker_available() -> u32 {
+    RESUME_DELEGATION_FLAG_KERNEL_WORKER_AVAILABLE
+}
+
+pub(super) fn resume_delegation_direct() -> u32 {
+    RESUME_DELEGATION_DIRECT
+}
+
+pub(super) fn resume_delegation_kernel_worker() -> u32 {
+    RESUME_DELEGATION_KERNEL_WORKER
+}
+
+pub(super) fn resume_delegation_wait4_kernel_worker() -> u32 {
+    RESUME_DELEGATION_WAIT4_KERNEL_WORKER
+}
+
+pub(super) fn resume_delegation_unsupported() -> u32 {
+    RESUME_DELEGATION_UNSUPPORTED
+}
+
+pub(super) fn resume_delegation_epoll_direct() -> u32 {
+    RESUME_DELEGATION_EPOLL_DIRECT
+}
+
+pub(super) fn resume_delegation(vm_ptr: u32, flags: u32) -> i32 {
+    if vm_ptr == 0 {
+        return -(crate::abi::EFAULT as i32);
+    }
+
+    let kernel_worker_available = (flags & RESUME_DELEGATION_FLAG_KERNEL_WORKER_AVAILABLE) != 0;
+    if kernel_worker_available {
+        return match status(vm_ptr) {
+            crate::abi::STATUS_PIPE_WAIT
+            | crate::abi::STATUS_CONNECT
+            | crate::abi::STATUS_SOCKET_RECV
+            | crate::abi::STATUS_SOCKET_SEND
+            | crate::abi::STATUS_FLOCK_WAIT => RESUME_DELEGATION_KERNEL_WORKER as i32,
+            crate::abi::STATUS_WAIT4 => RESUME_DELEGATION_WAIT4_KERNEL_WORKER as i32,
+            _ => RESUME_DELEGATION_UNSUPPORTED as i32,
+        };
+    }
+
+    match status(vm_ptr) {
+        crate::abi::STATUS_EPOLL_WAIT => RESUME_DELEGATION_EPOLL_DIRECT as i32,
+        _ => RESUME_DELEGATION_DIRECT as i32,
     }
 }

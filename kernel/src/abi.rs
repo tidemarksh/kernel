@@ -739,8 +739,13 @@ pub use crate::exports::kernel::*;
 pub use crate::exports::memfs::*;
 pub use crate::exports::thread::*;
 pub use crate::supervisor::{
-    supervisor_abi_version, supervisor_blocked_wait_retry_delay_ms,
-    supervisor_blocked_wait_retry_reason_active_child,
+    supervisor_abi_version, supervisor_blocked_resume_delegation,
+    supervisor_blocked_resume_delegation_direct, supervisor_blocked_resume_delegation_epoll_direct,
+    supervisor_blocked_resume_delegation_flag_kernel_worker_available,
+    supervisor_blocked_resume_delegation_kernel_worker,
+    supervisor_blocked_resume_delegation_unsupported,
+    supervisor_blocked_resume_delegation_wait4_kernel_worker,
+    supervisor_blocked_wait_retry_delay_ms, supervisor_blocked_wait_retry_reason_active_child,
     supervisor_blocked_wait_retry_reason_default, supervisor_blocked_wait_retry_reason_immediate,
     supervisor_blocked_wait_retry_reason_passive_wait,
     supervisor_blocked_wait_retry_reason_process_gate,

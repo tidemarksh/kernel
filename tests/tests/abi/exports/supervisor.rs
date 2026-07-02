@@ -114,6 +114,19 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_signal_control_kind_blocked_wait_interrupted(), 3);
     assert_eq!(supervisor_resume_kind_runnable_thread(), 2);
     assert_eq!(supervisor_resume_blocked_syscall(0, 0), -(EFAULT as i64));
+    assert_eq!(supervisor_blocked_resume_delegation_direct(), 0);
+    assert_eq!(supervisor_blocked_resume_delegation_kernel_worker(), 1);
+    assert_eq!(
+        supervisor_blocked_resume_delegation_wait4_kernel_worker(),
+        2
+    );
+    assert_eq!(supervisor_blocked_resume_delegation_unsupported(), 3);
+    assert_eq!(supervisor_blocked_resume_delegation_epoll_direct(), 4);
+    assert_eq!(
+        supervisor_blocked_resume_delegation_flag_kernel_worker_available(),
+        1
+    );
+    assert_eq!(supervisor_blocked_resume_delegation(0, 0), -(EFAULT as i32));
     assert_eq!(supervisor_blocked_wait_retry_reason_default(), 0);
     assert_eq!(supervisor_blocked_wait_retry_reason_immediate(), 1);
     assert_eq!(supervisor_blocked_wait_retry_reason_standard_defer(), 2);
@@ -186,6 +199,10 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         1
     );
     let initial_status = t.vm.status;
+    assert_eq!(
+        supervisor_blocked_resume_delegation(vm_ptr, 0),
+        supervisor_blocked_resume_delegation_direct() as i32
+    );
     t.vm.status = STATUS_WAIT4;
     assert_eq!(
         supervisor_blocked_wait_retry_delay_ms(
@@ -193,6 +210,53 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
             supervisor_blocked_wait_retry_reason_default()
         ),
         10
+    );
+    assert_eq!(
+        supervisor_blocked_resume_delegation(vm_ptr, 0),
+        supervisor_blocked_resume_delegation_direct() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_resume_delegation(
+            vm_ptr,
+            supervisor_blocked_resume_delegation_flag_kernel_worker_available()
+        ),
+        supervisor_blocked_resume_delegation_wait4_kernel_worker() as i32
+    );
+    t.vm.status = STATUS_PIPE_WAIT;
+    assert_eq!(
+        supervisor_blocked_resume_delegation(
+            vm_ptr,
+            supervisor_blocked_resume_delegation_flag_kernel_worker_available()
+        ),
+        supervisor_blocked_resume_delegation_kernel_worker() as i32
+    );
+    t.vm.status = STATUS_SOCKET_RECV;
+    assert_eq!(
+        supervisor_blocked_resume_delegation(
+            vm_ptr,
+            supervisor_blocked_resume_delegation_flag_kernel_worker_available()
+        ),
+        supervisor_blocked_resume_delegation_kernel_worker() as i32
+    );
+    t.vm.status = STATUS_FLOCK_WAIT;
+    assert_eq!(
+        supervisor_blocked_resume_delegation(
+            vm_ptr,
+            supervisor_blocked_resume_delegation_flag_kernel_worker_available()
+        ),
+        supervisor_blocked_resume_delegation_kernel_worker() as i32
+    );
+    t.vm.status = STATUS_EPOLL_WAIT;
+    assert_eq!(
+        supervisor_blocked_resume_delegation(vm_ptr, 0),
+        supervisor_blocked_resume_delegation_epoll_direct() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_resume_delegation(
+            vm_ptr,
+            supervisor_blocked_resume_delegation_flag_kernel_worker_available()
+        ),
+        supervisor_blocked_resume_delegation_unsupported() as i32
     );
     t.vm.status = initial_status;
     let child_pid = tidemark_kernel::syscall::process::sys_fork(&mut t.vm, t.base, 0, 0, 0, 0, 0);

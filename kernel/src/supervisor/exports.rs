@@ -432,6 +432,41 @@ pub extern "C" fn supervisor_blocked_wait_retry_delay_ms(vm_ptr: u32, reason: u3
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_resume_delegation(vm_ptr: u32, flags: u32) -> i32 {
+    super::blocked::resume_delegation(vm_ptr, flags)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_resume_delegation_flag_kernel_worker_available() -> u32 {
+    super::blocked::resume_delegation_flag_kernel_worker_available()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_resume_delegation_direct() -> u32 {
+    super::blocked::resume_delegation_direct()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_resume_delegation_kernel_worker() -> u32 {
+    super::blocked::resume_delegation_kernel_worker()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_resume_delegation_wait4_kernel_worker() -> u32 {
+    super::blocked::resume_delegation_wait4_kernel_worker()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_resume_delegation_unsupported() -> u32 {
+    super::blocked::resume_delegation_unsupported()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_resume_delegation_epoll_direct() -> u32 {
+    super::blocked::resume_delegation_epoll_direct()
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_wait_retry_reason_default() -> u32 {
     super::blocked::retry_reason_default()
 }
