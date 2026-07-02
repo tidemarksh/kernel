@@ -373,6 +373,26 @@ export_u32_const!(
     super::SUPERVISOR_FS_METADATA_BACKING_BACKING
 );
 export_u32_const!(
+    supervisor_fs_backing_object_op_source,
+    super::SUPERVISOR_FS_BACKING_OBJECT_OP_SOURCE
+);
+export_u32_const!(
+    supervisor_fs_backing_object_op_materialize,
+    super::SUPERVISOR_FS_BACKING_OBJECT_OP_MATERIALIZE
+);
+export_u32_const!(
+    supervisor_fs_backing_object_op_replace,
+    super::SUPERVISOR_FS_BACKING_OBJECT_OP_REPLACE
+);
+export_u32_const!(
+    supervisor_fs_backing_object_op_flush_write,
+    super::SUPERVISOR_FS_BACKING_OBJECT_OP_FLUSH_WRITE
+);
+export_u32_const!(
+    supervisor_fs_backing_object_op_flush_truncate,
+    super::SUPERVISOR_FS_BACKING_OBJECT_OP_FLUSH_TRUNCATE
+);
+export_u32_const!(
     supervisor_fs_backing_fill_mode_resident,
     super::SUPERVISOR_FS_BACKING_FILL_MODE_RESIDENT
 );
@@ -1216,6 +1236,35 @@ pub extern "C" fn supervisor_fs_metadata_sync_size() -> u64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fs_metadata_sync_backing_source() -> u32 {
     super::fs::metadata_sync_backing_source()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_backing_object_decision(
+    op: u32,
+    ino: u32,
+    published_file_object_id: u64,
+    published_generation: u64,
+    backing_file_object_id: u64,
+    backing_generation: u64,
+) -> i32 {
+    super::fs::backing_object_decision(
+        op,
+        ino,
+        published_file_object_id,
+        published_generation,
+        backing_file_object_id,
+        backing_generation,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_backing_object_file_object_id() -> u64 {
+    super::fs::backing_object_file_object_id()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_backing_object_generation() -> u64 {
+    super::fs::backing_object_generation()
 }
 
 #[unsafe(no_mangle)]

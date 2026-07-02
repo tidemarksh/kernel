@@ -20,6 +20,8 @@ static DIRTY_PREPARE_DECISION_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_DIRTY_PREPARE_DECISION: DirtyPrepareDecision = DirtyPrepareDecision::empty();
 static METADATA_SYNC_DECISION_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_METADATA_SYNC_DECISION: MetadataSyncDecision = MetadataSyncDecision::empty();
+static BACKING_OBJECT_DECISION_LOCK: AtomicU32 = AtomicU32::new(0);
+static mut LAST_BACKING_OBJECT_DECISION: BackingObjectDecision = BackingObjectDecision::empty();
 const MAX_SUPERVISOR_FS_INODES: u32 = 65_536;
 const DIRECT_BACKING_MMAP_MIN_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -106,6 +108,21 @@ impl MetadataSyncDecision {
     }
 }
 
+#[derive(Clone, Copy)]
+struct BackingObjectDecision {
+    file_object_id: u64,
+    generation: u64,
+}
+
+impl BackingObjectDecision {
+    const fn empty() -> Self {
+        Self {
+            file_object_id: 0,
+            generation: 0,
+        }
+    }
+}
+
 pub(super) fn init() {
     FS_CONTROL_COUNT.store(0, Ordering::Relaxed);
     super::lock::with_spin_lock(&FS_CONTROL_LOCK, || unsafe {
@@ -125,6 +142,9 @@ pub(super) fn init() {
     });
     super::lock::with_spin_lock(&METADATA_SYNC_DECISION_LOCK, || unsafe {
         LAST_METADATA_SYNC_DECISION = MetadataSyncDecision::empty();
+    });
+    super::lock::with_spin_lock(&BACKING_OBJECT_DECISION_LOCK, || unsafe {
+        LAST_BACKING_OBJECT_DECISION = BackingObjectDecision::empty();
     });
 }
 
@@ -375,6 +395,18 @@ fn latest_metadata_sync_decision() -> MetadataSyncDecision {
     })
 }
 
+fn store_backing_object_decision(decision: BackingObjectDecision) {
+    super::lock::with_spin_lock(&BACKING_OBJECT_DECISION_LOCK, || unsafe {
+        LAST_BACKING_OBJECT_DECISION = decision;
+    });
+}
+
+fn latest_backing_object_decision() -> BackingObjectDecision {
+    super::lock::with_spin_lock(&BACKING_OBJECT_DECISION_LOCK, || unsafe {
+        LAST_BACKING_OBJECT_DECISION
+    })
+}
+
 fn invalid_dirty_page_decision() -> DirtyPageDecision {
     DirtyPageDecision {
         result: crate::abi::EINVAL,
@@ -391,6 +423,43 @@ fn enospc_dirty_page_decision() -> DirtyPageDecision {
 
 fn valid_ino(ino: u32) -> bool {
     ino > 0 && ino < MAX_SUPERVISOR_FS_INODES
+}
+
+fn valid_backing_identity(file_object_id: u64, generation: u64) -> bool {
+    file_object_id > 0 && file_object_id <= u32::MAX as u64 && generation > 0
+}
+
+fn next_generation(generation: u64) -> u64 {
+    if generation == 0 {
+        1
+    } else {
+        generation.saturating_add(1)
+    }
+}
+
+fn preserved_backing_generation(
+    published_file_object_id: u64,
+    published_generation: u64,
+    backing_file_object_id: u64,
+    backing_generation: u64,
+) -> Option<BackingObjectDecision> {
+    if published_file_object_id != 0 {
+        return valid_backing_identity(published_file_object_id, published_generation).then_some(
+            BackingObjectDecision {
+                file_object_id: published_file_object_id,
+                generation: published_generation,
+            },
+        );
+    }
+    if backing_file_object_id != 0 {
+        return valid_backing_identity(backing_file_object_id, backing_generation).then_some(
+            BackingObjectDecision {
+                file_object_id: backing_file_object_id,
+                generation: backing_generation,
+            },
+        );
+    }
+    None
 }
 
 fn regular_mode(mode: u32) -> bool {
@@ -944,6 +1013,84 @@ pub fn metadata_sync_size() -> u64 {
 
 pub fn metadata_sync_backing_source() -> u32 {
     latest_metadata_sync_decision().backing_source
+}
+
+pub fn backing_object_decision(
+    op: u32,
+    ino: u32,
+    published_file_object_id: u64,
+    published_generation: u64,
+    backing_file_object_id: u64,
+    backing_generation: u64,
+) -> i32 {
+    store_backing_object_decision(BackingObjectDecision::empty());
+    if !valid_ino(ino)
+        || (published_file_object_id == 0 && published_generation != 0)
+        || (published_file_object_id != 0
+            && !valid_backing_identity(published_file_object_id, published_generation))
+        || (backing_file_object_id == 0 && backing_generation != 0)
+        || (backing_file_object_id != 0
+            && !valid_backing_identity(backing_file_object_id, backing_generation))
+    {
+        return crate::abi::EINVAL as i32;
+    }
+
+    let decision = match op {
+        super::SUPERVISOR_FS_BACKING_OBJECT_OP_SOURCE
+        | super::SUPERVISOR_FS_BACKING_OBJECT_OP_MATERIALIZE => preserved_backing_generation(
+            published_file_object_id,
+            published_generation,
+            backing_file_object_id,
+            backing_generation,
+        )
+        .unwrap_or(BackingObjectDecision {
+            file_object_id: ino as u64,
+            generation: 1,
+        }),
+        super::SUPERVISOR_FS_BACKING_OBJECT_OP_REPLACE => {
+            let file_object_id = if backing_file_object_id != 0 {
+                backing_file_object_id
+            } else if published_file_object_id != 0 {
+                published_file_object_id
+            } else {
+                ino as u64
+            };
+            let base_generation = if backing_generation != 0 {
+                backing_generation
+            } else {
+                published_generation
+            };
+            BackingObjectDecision {
+                file_object_id,
+                generation: next_generation(base_generation),
+            }
+        }
+        super::SUPERVISOR_FS_BACKING_OBJECT_OP_FLUSH_WRITE
+        | super::SUPERVISOR_FS_BACKING_OBJECT_OP_FLUSH_TRUNCATE => {
+            if !valid_backing_identity(published_file_object_id, published_generation) {
+                return crate::abi::EINVAL as i32;
+            }
+            BackingObjectDecision {
+                file_object_id: published_file_object_id,
+                generation: published_generation,
+            }
+        }
+        _ => return crate::abi::EINVAL as i32,
+    };
+
+    if !valid_backing_identity(decision.file_object_id, decision.generation) {
+        return crate::abi::EINVAL as i32;
+    }
+    store_backing_object_decision(decision);
+    0
+}
+
+pub fn backing_object_file_object_id() -> u64 {
+    latest_backing_object_decision().file_object_id
+}
+
+pub fn backing_object_generation() -> u64 {
+    latest_backing_object_decision().generation
 }
 
 #[allow(clippy::too_many_arguments)]

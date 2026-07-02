@@ -177,6 +177,11 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_fs_metadata_backing_none(), 0);
     assert_eq!(supervisor_fs_metadata_backing_published(), 1);
     assert_eq!(supervisor_fs_metadata_backing_backing(), 2);
+    assert_eq!(supervisor_fs_backing_object_op_source(), 1);
+    assert_eq!(supervisor_fs_backing_object_op_materialize(), 2);
+    assert_eq!(supervisor_fs_backing_object_op_replace(), 3);
+    assert_eq!(supervisor_fs_backing_object_op_flush_write(), 4);
+    assert_eq!(supervisor_fs_backing_object_op_flush_truncate(), 5);
     assert_eq!(supervisor_fs_backing_fill_mode_resident(), 0);
     assert_eq!(supervisor_fs_backing_fill_mode_direct(), 1);
     assert_eq!(supervisor_fs_backing_source_range_none(), 0);
@@ -501,6 +506,71 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_fs_metadata_sync_backing_source(),
         supervisor_fs_metadata_backing_backing()
     );
+    assert_eq!(
+        supervisor_fs_backing_object_decision(
+            supervisor_fs_backing_object_op_source(),
+            7,
+            0,
+            0,
+            0,
+            0,
+        ),
+        0
+    );
+    assert_eq!(supervisor_fs_backing_object_file_object_id(), 7);
+    assert_eq!(supervisor_fs_backing_object_generation(), 1);
+    assert_eq!(
+        supervisor_fs_backing_object_decision(
+            supervisor_fs_backing_object_op_materialize(),
+            7,
+            7,
+            3,
+            0,
+            0,
+        ),
+        0
+    );
+    assert_eq!(supervisor_fs_backing_object_file_object_id(), 7);
+    assert_eq!(supervisor_fs_backing_object_generation(), 3);
+    assert_eq!(
+        supervisor_fs_backing_object_decision(
+            supervisor_fs_backing_object_op_replace(),
+            7,
+            7,
+            3,
+            0,
+            0,
+        ),
+        0
+    );
+    assert_eq!(supervisor_fs_backing_object_file_object_id(), 7);
+    assert_eq!(supervisor_fs_backing_object_generation(), 4);
+    assert_eq!(
+        supervisor_fs_backing_object_decision(
+            supervisor_fs_backing_object_op_flush_write(),
+            7,
+            7,
+            9,
+            3,
+            4,
+        ),
+        0
+    );
+    assert_eq!(supervisor_fs_backing_object_file_object_id(), 7);
+    assert_eq!(supervisor_fs_backing_object_generation(), 9);
+    assert_eq!(
+        supervisor_fs_backing_object_decision(
+            supervisor_fs_backing_object_op_flush_truncate(),
+            0,
+            7,
+            9,
+            7,
+            8,
+        ),
+        EINVAL as i32
+    );
+    assert_eq!(supervisor_fs_backing_object_file_object_id(), 0);
+    assert_eq!(supervisor_fs_backing_object_generation(), 0);
     assert_eq!(
         supervisor_fs_page_table_source_decision(2, 0, 2, 3, 128, 2, 3, 128),
         supervisor_fs_page_table_source_backing() as i32
