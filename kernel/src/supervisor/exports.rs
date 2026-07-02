@@ -317,6 +317,18 @@ export_u32_const!(
     super::SUPERVISOR_FS_DIRTY_PAGE_FLAG_WRITEBACK_REQUIRED
 );
 export_u32_const!(
+    supervisor_fs_dirty_prepare_publish_none,
+    super::SUPERVISOR_FS_DIRTY_PREPARE_PUBLISH_NONE
+);
+export_u32_const!(
+    supervisor_fs_dirty_prepare_publish_missing,
+    super::SUPERVISOR_FS_DIRTY_PREPARE_PUBLISH_MISSING
+);
+export_u32_const!(
+    supervisor_fs_dirty_prepare_publish_size_update,
+    super::SUPERVISOR_FS_DIRTY_PREPARE_PUBLISH_SIZE_UPDATE
+);
+export_u32_const!(
     supervisor_fs_backing_fill_mode_resident,
     super::SUPERVISOR_FS_BACKING_FILL_MODE_RESIDENT
 );
@@ -1052,6 +1064,38 @@ pub extern "C" fn supervisor_fs_clean_backing_range_read_length() -> u64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fs_clean_backing_range_output_length() -> u64 {
     super::fs::clean_backing_range_output_length()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_dirty_prepare_decision(
+    ino: u32,
+    op: u32,
+    expected_size: i64,
+    published_present: u32,
+    published_size: i64,
+    published_file_object_id: u64,
+    published_data_off: u64,
+    source_is_regular: u32,
+    source_file_object_id: u64,
+    has_dirty_resident_pages: u32,
+) -> i32 {
+    super::fs::dirty_prepare_decision(
+        ino,
+        op,
+        expected_size,
+        published_present,
+        published_size,
+        published_file_object_id,
+        published_data_off,
+        source_is_regular,
+        source_file_object_id,
+        has_dirty_resident_pages,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_dirty_prepare_publish_mode() -> u32 {
+    super::fs::dirty_prepare_publish_mode()
 }
 
 #[unsafe(no_mangle)]

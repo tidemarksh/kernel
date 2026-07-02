@@ -163,6 +163,9 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_fs_dirty_page_flag_update_inode(), 1);
     assert_eq!(supervisor_fs_dirty_page_flag_publish_dirty(), 2);
     assert_eq!(supervisor_fs_dirty_page_flag_writeback_required(), 4);
+    assert_eq!(supervisor_fs_dirty_prepare_publish_none(), 0);
+    assert_eq!(supervisor_fs_dirty_prepare_publish_missing(), 1);
+    assert_eq!(supervisor_fs_dirty_prepare_publish_size_update(), 2);
     assert_eq!(supervisor_fs_backing_fill_mode_resident(), 0);
     assert_eq!(supervisor_fs_backing_fill_mode_direct(), 1);
     assert_eq!(supervisor_fs_backing_source_range_none(), 0);
@@ -273,6 +276,97 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_fs_dirty_page_decision_flags(),
         supervisor_fs_dirty_page_flag_writeback_required()
+    );
+    assert_eq!(
+        supervisor_fs_dirty_prepare_decision(
+            2,
+            supervisor_fs_dirty_page_op_write(),
+            6,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+        ),
+        EOPNOTSUPP as i32
+    );
+    assert_eq!(
+        supervisor_fs_dirty_prepare_publish_mode(),
+        supervisor_fs_dirty_prepare_publish_none()
+    );
+    assert_eq!(
+        supervisor_fs_dirty_prepare_decision(
+            2,
+            supervisor_fs_dirty_page_op_write(),
+            6,
+            0,
+            0,
+            0,
+            0,
+            1,
+            2,
+            0,
+        ),
+        0
+    );
+    assert_eq!(
+        supervisor_fs_dirty_prepare_publish_mode(),
+        supervisor_fs_dirty_prepare_publish_missing()
+    );
+    assert_eq!(
+        supervisor_fs_dirty_prepare_decision(
+            2,
+            supervisor_fs_dirty_page_op_write(),
+            6,
+            1,
+            3,
+            2,
+            0,
+            1,
+            2,
+            0,
+        ),
+        0
+    );
+    assert_eq!(
+        supervisor_fs_dirty_prepare_publish_mode(),
+        supervisor_fs_dirty_prepare_publish_size_update()
+    );
+    assert_eq!(
+        supervisor_fs_dirty_prepare_decision(
+            2,
+            supervisor_fs_dirty_page_op_truncate(),
+            6,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+        ),
+        0
+    );
+    assert_eq!(
+        supervisor_fs_dirty_prepare_publish_mode(),
+        supervisor_fs_dirty_prepare_publish_missing()
+    );
+    assert_eq!(
+        supervisor_fs_dirty_prepare_decision(
+            0,
+            supervisor_fs_dirty_page_op_write(),
+            6,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+        ),
+        EINVAL as i32
     );
     assert_eq!(
         supervisor_fs_page_table_source_decision(2, 0, 2, 3, 128, 2, 3, 128),

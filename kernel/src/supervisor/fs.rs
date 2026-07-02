@@ -16,6 +16,8 @@ static mut LAST_BACKING_SOURCE_RANGE_DECISION: BackingSourceRangeDecision =
 static CLEAN_BACKING_RANGE_DECISION_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_CLEAN_BACKING_RANGE_DECISION: CleanBackingRangeDecision =
     CleanBackingRangeDecision::empty();
+static DIRTY_PREPARE_DECISION_LOCK: AtomicU32 = AtomicU32::new(0);
+static mut LAST_DIRTY_PREPARE_DECISION: DirtyPrepareDecision = DirtyPrepareDecision::empty();
 const MAX_SUPERVISOR_FS_INODES: u32 = 65_536;
 const DIRECT_BACKING_MMAP_MIN_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -74,6 +76,19 @@ impl CleanBackingRangeDecision {
     }
 }
 
+#[derive(Clone, Copy)]
+struct DirtyPrepareDecision {
+    publish_mode: u32,
+}
+
+impl DirtyPrepareDecision {
+    const fn empty() -> Self {
+        Self {
+            publish_mode: super::SUPERVISOR_FS_DIRTY_PREPARE_PUBLISH_NONE,
+        }
+    }
+}
+
 pub(super) fn init() {
     FS_CONTROL_COUNT.store(0, Ordering::Relaxed);
     super::lock::with_spin_lock(&FS_CONTROL_LOCK, || unsafe {
@@ -87,6 +102,9 @@ pub(super) fn init() {
     });
     super::lock::with_spin_lock(&CLEAN_BACKING_RANGE_DECISION_LOCK, || unsafe {
         LAST_CLEAN_BACKING_RANGE_DECISION = CleanBackingRangeDecision::empty();
+    });
+    super::lock::with_spin_lock(&DIRTY_PREPARE_DECISION_LOCK, || unsafe {
+        LAST_DIRTY_PREPARE_DECISION = DirtyPrepareDecision::empty();
     });
 }
 
@@ -310,6 +328,18 @@ fn store_clean_backing_range_decision(decision: CleanBackingRangeDecision) {
 fn latest_clean_backing_range_decision() -> CleanBackingRangeDecision {
     super::lock::with_spin_lock(&CLEAN_BACKING_RANGE_DECISION_LOCK, || unsafe {
         LAST_CLEAN_BACKING_RANGE_DECISION
+    })
+}
+
+fn store_dirty_prepare_decision(decision: DirtyPrepareDecision) {
+    super::lock::with_spin_lock(&DIRTY_PREPARE_DECISION_LOCK, || unsafe {
+        LAST_DIRTY_PREPARE_DECISION = decision;
+    });
+}
+
+fn latest_dirty_prepare_decision() -> DirtyPrepareDecision {
+    super::lock::with_spin_lock(&DIRTY_PREPARE_DECISION_LOCK, || unsafe {
+        LAST_DIRTY_PREPARE_DECISION
     })
 }
 
@@ -670,6 +700,67 @@ pub fn clean_backing_range_read_length() -> u64 {
 
 pub fn clean_backing_range_output_length() -> u64 {
     latest_clean_backing_range_decision().output_length
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn dirty_prepare_decision(
+    ino: u32,
+    op: u32,
+    expected_size: i64,
+    published_present: u32,
+    published_size: i64,
+    published_file_object_id: u64,
+    published_data_off: u64,
+    source_is_regular: u32,
+    source_file_object_id: u64,
+    has_dirty_resident_pages: u32,
+) -> i32 {
+    let mut decision = DirtyPrepareDecision::empty();
+    let result = if !valid_ino(ino)
+        || expected_size < 0
+        || published_size < 0
+        || (op != super::SUPERVISOR_FS_DIRTY_PAGE_OP_WRITE
+            && op != super::SUPERVISOR_FS_DIRTY_PAGE_OP_TRUNCATE)
+    {
+        crate::abi::EINVAL as i32
+    } else {
+        let expected_size = expected_size as u64;
+        let published_size = if published_present != 0 {
+            published_size as u64
+        } else {
+            expected_size
+        };
+        let source_truncated_empty = source_is_regular != 0 && expected_size == 0;
+        let missing_source_object = source_file_object_id == 0;
+        let unsupported_write_source = op == super::SUPERVISOR_FS_DIRTY_PAGE_OP_WRITE
+            && missing_source_object
+            && has_dirty_resident_pages == 0
+            && published_file_object_id == 0
+            && published_data_off == 0
+            && published_size > 0
+            && !source_truncated_empty;
+        if unsupported_write_source {
+            crate::abi::EOPNOTSUPP as i32
+        } else {
+            decision.publish_mode = if published_present == 0 {
+                super::SUPERVISOR_FS_DIRTY_PREPARE_PUBLISH_MISSING
+            } else if op == super::SUPERVISOR_FS_DIRTY_PAGE_OP_WRITE
+                && source_is_regular != 0
+                && published_size != expected_size
+            {
+                super::SUPERVISOR_FS_DIRTY_PREPARE_PUBLISH_SIZE_UPDATE
+            } else {
+                super::SUPERVISOR_FS_DIRTY_PREPARE_PUBLISH_NONE
+            };
+            0
+        }
+    };
+    store_dirty_prepare_decision(decision);
+    result
+}
+
+pub fn dirty_prepare_publish_mode() -> u32 {
+    latest_dirty_prepare_decision().publish_mode
 }
 
 #[allow(clippy::too_many_arguments)]
