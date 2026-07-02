@@ -182,15 +182,55 @@ fn pid_in_use(pid: i32) -> bool {
 }
 
 pub fn has_active_child(parent_pid: i32) -> bool {
+    active_child_pid(parent_pid) > 0
+}
+
+pub fn active_child_pid(parent_pid: i32) -> i32 {
     if parent_pid <= 0 {
-        return false;
+        return 0;
     }
-    children().iter().any(|child| {
-        child.pid > 0
-            && child.parent_pid == parent_pid
-            && !child.exited
-            && process_entry(child.pid).is_some()
-    })
+    children()
+        .iter()
+        .find(|child| {
+            child.pid > 0
+                && child.parent_pid == parent_pid
+                && !child.exited
+                && process_entry(child.pid).is_some()
+        })
+        .map(|child| child.pid)
+        .unwrap_or(0)
+}
+
+pub fn child_ppid(pid: i32) -> i32 {
+    process_entry(pid)
+        .map(|entry| entry.ppid)
+        .or_else(|| {
+            children()
+                .iter()
+                .find(|child| child.pid == pid)
+                .map(|child| child.parent_pid)
+        })
+        .unwrap_or(0)
+}
+
+pub fn child_pgid(pid: i32) -> i32 {
+    process_entry(pid)
+        .map(|entry| entry.pgid)
+        .or_else(|| {
+            children()
+                .iter()
+                .find(|child| child.pid == pid)
+                .map(|child| child.pgid)
+        })
+        .unwrap_or(0)
+}
+
+pub fn child_sid(pid: i32) -> i32 {
+    process_entry(pid).map(|entry| entry.sid).unwrap_or(0)
+}
+
+pub fn next_pid() -> i32 {
+    prs().next_pid.max(3)
 }
 
 fn pid_conflicts_with_live_thread(vm: &ThreadState, base: u32, pid: i32) -> bool {

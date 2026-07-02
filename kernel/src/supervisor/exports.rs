@@ -437,6 +437,11 @@ pub extern "C" fn supervisor_blocked_wait_retry_reason(vm_ptr: u32, flags: u32) 
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_wait_active_child_pid(vm_ptr: u32) -> i32 {
+    super::blocked::blocked_wait_active_child_pid(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_resume_delegation(vm_ptr: u32, flags: u32) -> i32 {
     super::blocked::resume_delegation(vm_ptr, flags)
 }
@@ -584,6 +589,20 @@ pub extern "C" fn supervisor_thread_exit_cleanup_record(out_ptr: u32, out_len: u
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_process_lifecycle_record(out_ptr: u32, out_len: u32) -> i32 {
     super::process::write_record(out_ptr, out_len)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_vfork_execve_handoff_failure_wait_status() -> i32 {
+    super::process_vfork::vfork_execve_handoff_failure_wait_status()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_vfork_execve_rollback(vm_ptr: u32, child_pid: i32) -> i32 {
+    if vm_ptr == 0 {
+        return -(crate::abi::EFAULT as i32);
+    }
+    let vm = unsafe { &mut *(vm_ptr as *mut crate::types::ThreadState) };
+    super::process_vfork::rollback_execve_handoff(vm, child_pid)
 }
 
 #[unsafe(no_mangle)]

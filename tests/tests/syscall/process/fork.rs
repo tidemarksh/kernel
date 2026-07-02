@@ -24,6 +24,34 @@ fn contract_fork_returns_status_execve_spawn() {
 }
 
 #[test]
+fn supervisor_process_child_lifecycle_exports_follow_fork_table() {
+    let mut t = TestVm::new();
+    let parent_pid = process_impl::current_process_pid(&t.vm, t.base);
+    let parent_pgid = process_impl::current_process_pgid(&t.vm, t.base);
+    let parent_sid = process_impl::current_process_sid(&t.vm, t.base);
+
+    let child_pid = process_impl::sys_fork(&mut t.vm, t.base, 0, 0, 0, 0, 0) as i32;
+    assert!(child_pid > 0);
+
+    assert_eq!(
+        tidemark_kernel::abi::process_child_ppid(child_pid),
+        parent_pid
+    );
+    assert_eq!(
+        tidemark_kernel::abi::process_child_pgid(child_pid),
+        parent_pgid
+    );
+    assert_eq!(
+        tidemark_kernel::abi::process_child_sid(child_pid),
+        parent_sid
+    );
+    assert_eq!(
+        tidemark_kernel::abi::process_next_pid(),
+        (child_pid + 1).max(3)
+    );
+}
+
+#[test]
 fn supervisor_process_host_op_records_fork_spawn_handoff() {
     supervisor_reset_shadow_log();
     let mut t = TestVm::new();

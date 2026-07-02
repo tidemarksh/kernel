@@ -745,7 +745,8 @@ pub use crate::supervisor::{
     supervisor_blocked_resume_delegation_kernel_worker,
     supervisor_blocked_resume_delegation_unsupported,
     supervisor_blocked_resume_delegation_wait4_kernel_worker,
-    supervisor_blocked_wait_retry_delay_ms, supervisor_blocked_wait_retry_flag_active_child,
+    supervisor_blocked_wait_active_child_pid, supervisor_blocked_wait_retry_delay_ms,
+    supervisor_blocked_wait_retry_flag_active_child,
     supervisor_blocked_wait_retry_flag_host_progress,
     supervisor_blocked_wait_retry_flag_passive_wait,
     supervisor_blocked_wait_retry_flag_process_gate,
@@ -811,7 +812,8 @@ pub use crate::supervisor::{
     supervisor_thread_event_kind_timer_fired, supervisor_thread_event_record_bytes,
     supervisor_thread_exit_cleanup_kind_thread_exit, supervisor_thread_exit_cleanup_record,
     supervisor_thread_exit_cleanup_record_bytes, supervisor_thread_state_snapshot,
-    supervisor_thread_state_snapshot_bytes,
+    supervisor_thread_state_snapshot_bytes, supervisor_vfork_execve_handoff_failure_wait_status,
+    supervisor_vfork_execve_rollback,
 };
 
 // =============================================================================
@@ -1439,6 +1441,31 @@ pub extern "C" fn process_has_active_child(parent_pid: i32) -> i32 {
     i32::from(crate::supervisor::process_lifecycle::has_active_child(
         parent_pid,
     ))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn process_active_child_pid(parent_pid: i32) -> i32 {
+    crate::supervisor::process_lifecycle::active_child_pid(parent_pid)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn process_child_ppid(pid: i32) -> i32 {
+    crate::supervisor::process_lifecycle::child_ppid(pid)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn process_child_pgid(pid: i32) -> i32 {
+    crate::supervisor::process_lifecycle::child_pgid(pid)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn process_child_sid(pid: i32) -> i32 {
+    crate::supervisor::process_lifecycle::child_sid(pid)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn process_next_pid() -> i32 {
+    crate::supervisor::process_lifecycle::next_pid()
 }
 
 #[unsafe(no_mangle)]

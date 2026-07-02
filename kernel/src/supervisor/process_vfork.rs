@@ -15,6 +15,8 @@ use crate::syscall::process::runtime::{
 use crate::types::{ProcessState, THREAD_NONE, THREAD_RUNNING, ThreadRecord, ThreadState};
 use core::sync::atomic::Ordering;
 
+const VFORK_EXECVE_HANDOFF_FAILURE_WAIT_STATUS: i32 = 127 << 8;
+
 static mut VFORK_ADDRESS_SPACE_SNAPSHOT: Option<AddressSpaceStateImage> = None;
 
 fn store_vfork_address_space_snapshot(snapshot: AddressSpaceStateImage) {
@@ -329,4 +331,21 @@ pub fn vfork_restore_parent_proc_self_exe_snapshot() {
 pub fn clear_vfork_runtime_state() {
     clear_vfork_runtime_snapshot();
     clear_vfork_address_space_snapshot();
+}
+
+pub fn vfork_execve_handoff_failure_wait_status() -> i32 {
+    VFORK_EXECVE_HANDOFF_FAILURE_WAIT_STATUS
+}
+
+pub fn rollback_execve_handoff(vm: &mut ThreadState, child_pid: i32) -> i32 {
+    if child_pid <= 0 {
+        return -(crate::abi::EINVAL as i32);
+    }
+    crate::supervisor::process_lifecycle::record_child_exit(
+        child_pid,
+        VFORK_EXECVE_HANDOFF_FAILURE_WAIT_STATUS,
+    );
+    vfork_parent_restore_without_cleanup(vm, child_pid);
+    clear_vfork_runtime_state();
+    VFORK_EXECVE_HANDOFF_FAILURE_WAIT_STATUS
 }

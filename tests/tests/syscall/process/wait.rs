@@ -119,10 +119,15 @@ fn semantics_wait4_accepts_common_waitpid_flags_when_reaping_exited_child() {
 #[test]
 fn supervisor_process_has_active_child_tracks_kernel_child_table() {
     let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut ThreadState as u32;
     let parent_pid = process_impl::current_process_pid(&t.vm, t.base);
 
     assert_eq!(
         tidemark_kernel::abi::process_has_active_child(parent_pid),
+        0
+    );
+    assert_eq!(
+        tidemark_kernel::abi::process_active_child_pid(parent_pid),
         0
     );
     let child = process_impl::sys_fork(&mut t.vm, t.base, 0, 0, 0, 0, 0) as i32;
@@ -131,10 +136,33 @@ fn supervisor_process_has_active_child_tracks_kernel_child_table() {
         tidemark_kernel::abi::process_has_active_child(parent_pid),
         1
     );
+    assert_eq!(
+        tidemark_kernel::abi::process_active_child_pid(parent_pid),
+        child
+    );
+    t.vm.status = STATUS_WAIT4;
+    assert_eq!(t.vm.status, STATUS_WAIT4);
+    assert_eq!(supervisor_blocked_wait_active_child_pid(vm_ptr), child);
+    assert_eq!(
+        supervisor_blocked_wait_retry_reason(vm_ptr, 0),
+        supervisor_blocked_wait_retry_reason_active_child() as i32
+    );
+    t.vm.status = STATUS_PIPE_WAIT;
+    t.vm.epoll_timeout_ms = -1;
+    assert_eq!(t.vm.status, STATUS_PIPE_WAIT);
+    assert_eq!(t.vm.epoll_timeout_ms, -1);
+    assert_eq!(supervisor_blocked_wait_active_child_pid(vm_ptr), child);
+    t.vm.epoll_timeout_ms = 1;
+    assert_eq!(t.vm.epoll_timeout_ms, 1);
+    assert_eq!(supervisor_blocked_wait_active_child_pid(vm_ptr), 0);
 
     process_impl::record_child_exit(child, 7 << 8);
     assert_eq!(
         tidemark_kernel::abi::process_has_active_child(parent_pid),
+        0
+    );
+    assert_eq!(
+        tidemark_kernel::abi::process_active_child_pid(parent_pid),
         0
     );
 }

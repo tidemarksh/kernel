@@ -21,6 +21,37 @@ fn status(vm_ptr: u32) -> i32 {
     unsafe { (*(vm_ptr as *const crate::types::ThreadState)).status }
 }
 
+fn state(vm_ptr: u32) -> Result<&'static crate::types::ThreadState, i32> {
+    if vm_ptr == 0 {
+        return Err(crate::abi::EFAULT as i32);
+    }
+    Ok(unsafe { &*(vm_ptr as *const crate::types::ThreadState) })
+}
+
+fn active_child_pid_for_blocked_wait(vm: &crate::types::ThreadState) -> i32 {
+    match vm.status {
+        crate::abi::STATUS_PIPE_WAIT
+            if vm.epoll_timeout_ms < 0
+                && !crate::syscall::poll::wait_set_has_socket(vm, vm.guest_base) =>
+        {
+            let parent_pid = crate::syscall::signal::pid_from_vm(vm, vm.guest_base);
+            crate::supervisor::process_lifecycle::active_child_pid(parent_pid)
+        }
+        crate::abi::STATUS_WAIT4 => {
+            let parent_pid = crate::syscall::signal::pid_from_vm(vm, vm.guest_base);
+            crate::supervisor::process_lifecycle::active_child_pid(parent_pid)
+        }
+        _ => 0,
+    }
+}
+
+pub(super) fn blocked_wait_active_child_pid(vm_ptr: u32) -> i32 {
+    match state(vm_ptr) {
+        Ok(vm) => active_child_pid_for_blocked_wait(vm),
+        Err(errno) => -errno,
+    }
+}
+
 fn resume_socket_wait_timeout(vm_ptr: u32) -> i64 {
     crate::exports::thread::thread_resume_socket_wait_timeout(vm_ptr);
     0
@@ -101,10 +132,10 @@ pub(super) fn retry_flag_thread_init_pending() -> u32 {
 }
 
 pub(super) fn retry_reason(vm_ptr: u32, flags: u32) -> i32 {
-    if vm_ptr == 0 {
-        return -(crate::abi::EFAULT as i32);
-    }
-    let vm = unsafe { &*(vm_ptr as *const crate::types::ThreadState) };
+    let vm = match state(vm_ptr) {
+        Ok(vm) => vm,
+        Err(errno) => return -errno,
+    };
     if (flags & RETRY_FLAG_PROCESS_GATE) != 0 {
         return RETRY_REASON_PROCESS_GATE as i32;
     }
@@ -119,6 +150,9 @@ pub(super) fn retry_reason(vm_ptr: u32, flags: u32) -> i32 {
     }
     if (flags & RETRY_FLAG_THREAD_INIT_PENDING) != 0 {
         return RETRY_REASON_STANDARD_DEFER as i32;
+    }
+    if active_child_pid_for_blocked_wait(vm) > 0 {
+        return RETRY_REASON_ACTIVE_CHILD as i32;
     }
     match vm.status {
         crate::abi::STATUS_EPOLL_WAIT

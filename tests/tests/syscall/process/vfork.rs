@@ -205,6 +205,35 @@ fn contract_vfork_execve_failure_does_not_publish_spawn_handoff() {
 }
 
 #[test]
+fn supervisor_vfork_execve_rollback_restores_parent_and_publishes_child_exit() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    let wstatus_addr = t.scratch + 0x1500;
+    let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    let path_addr = install_exec_file(&t, b"test", &elf);
+
+    process_impl::sys_vfork(&mut t.vm, t.base);
+    let child_pid = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0) as i32;
+    assert!(child_pid > 0);
+    assert_eq!(t.vm.status, STATUS_EXECVE_SPAWN);
+
+    let wait_status = supervisor_vfork_execve_handoff_failure_wait_status();
+    assert_eq!(
+        supervisor_vfork_execve_rollback(vm_ptr, child_pid),
+        wait_status
+    );
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(process_impl::vfork_child_pid(), 0);
+
+    let ret = process_impl::sys_wait4(&mut t.vm, t.base, child_pid as i64, wstatus_addr, 0, 0);
+    assert_eq!(ret, child_pid as i64);
+    assert_eq!(
+        unsafe { guest_mem::read_u32(t.base, wstatus_addr) },
+        wait_status as u32
+    );
+}
+
+#[test]
 fn contract_vfork_preserves_parent_brk_base_while_staging_child_process_state() {
     let mut t = TestVm::new();
     let parent_brk_base = tidemark_kernel::harness::memory::debug_brk_base();

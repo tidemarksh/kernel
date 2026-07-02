@@ -140,9 +140,18 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_blocked_wait_retry_flag_thread_init_pending(), 16);
     assert_eq!(supervisor_blocked_wait_retry_reason(0, 0), -(EFAULT as i32));
     assert_eq!(
+        supervisor_blocked_wait_active_child_pid(0),
+        -(EFAULT as i32)
+    );
+    assert_eq!(
         supervisor_blocked_wait_retry_delay_ms(0, supervisor_blocked_wait_retry_reason_default()),
         -(EFAULT as i32)
     );
+    assert_eq!(
+        supervisor_vfork_execve_handoff_failure_wait_status(),
+        127 << 8
+    );
+    assert_eq!(supervisor_vfork_execve_rollback(0, 1), -(EFAULT as i32));
     assert_eq!(supervisor_enqueue_blocked_wait_timer(0), EFAULT as i32);
     assert_eq!(supervisor_blocked_wait_timer_required(0), EFAULT as i32);
 
