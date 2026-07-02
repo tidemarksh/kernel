@@ -333,6 +333,22 @@ export_u32_const!(
     super::SUPERVISOR_FS_BACKING_SOURCE_RANGE_READ
 );
 export_u32_const!(
+    supervisor_fs_clean_backing_range_none,
+    super::SUPERVISOR_FS_CLEAN_BACKING_RANGE_NONE
+);
+export_u32_const!(
+    supervisor_fs_clean_backing_range_read,
+    super::SUPERVISOR_FS_CLEAN_BACKING_RANGE_READ
+);
+export_u32_const!(
+    supervisor_fs_clean_backing_range_read_zero_tail,
+    super::SUPERVISOR_FS_CLEAN_BACKING_RANGE_READ_ZERO_TAIL
+);
+export_u32_const!(
+    supervisor_fs_clean_backing_range_zero,
+    super::SUPERVISOR_FS_CLEAN_BACKING_RANGE_ZERO
+);
+export_u32_const!(
     supervisor_fs_page_table_source_backing,
     super::SUPERVISOR_FS_PAGE_TABLE_SOURCE_BACKING
 );
@@ -1010,6 +1026,32 @@ pub extern "C" fn supervisor_fs_backing_source_range_source_offset() -> u64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fs_backing_source_range_read_length() -> u64 {
     super::fs::backing_source_range_read_length()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_clean_backing_range_decision(
+    ino: u32,
+    offset: i64,
+    length: i64,
+    published_size: i64,
+    backing_size: i64,
+) -> i32 {
+    super::fs::clean_backing_range_decision(ino, offset, length, published_size, backing_size)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_clean_backing_range_read_offset() -> u64 {
+    super::fs::clean_backing_range_read_offset()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_clean_backing_range_read_length() -> u64 {
+    super::fs::clean_backing_range_read_length()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_clean_backing_range_output_length() -> u64 {
+    super::fs::clean_backing_range_output_length()
 }
 
 #[unsafe(no_mangle)]

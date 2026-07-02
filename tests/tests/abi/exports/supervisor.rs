@@ -167,6 +167,10 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_fs_backing_fill_mode_direct(), 1);
     assert_eq!(supervisor_fs_backing_source_range_none(), 0);
     assert_eq!(supervisor_fs_backing_source_range_read(), 1);
+    assert_eq!(supervisor_fs_clean_backing_range_none(), 0);
+    assert_eq!(supervisor_fs_clean_backing_range_read(), 1);
+    assert_eq!(supervisor_fs_clean_backing_range_read_zero_tail(), 2);
+    assert_eq!(supervisor_fs_clean_backing_range_zero(), 3);
     assert_eq!(supervisor_fs_page_table_source_backing(), 0);
     assert_eq!(supervisor_fs_page_table_source_resident(), 1);
     assert_eq!(supervisor_fs_pending_ring_request(0), 0);
@@ -372,6 +376,42 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_fs_backing_source_range_decision(0, 3, 5, 14, 7, 14, 21, 1),
         supervisor_fs_backing_source_range_none() as i32
+    );
+    assert_eq!(
+        supervisor_fs_clean_backing_range_decision(2, 3, 5, 14, 10),
+        supervisor_fs_clean_backing_range_read() as i32
+    );
+    assert_eq!(supervisor_fs_clean_backing_range_read_offset(), 3);
+    assert_eq!(supervisor_fs_clean_backing_range_read_length(), 5);
+    assert_eq!(supervisor_fs_clean_backing_range_output_length(), 5);
+    assert_eq!(
+        supervisor_fs_clean_backing_range_decision(2, 8, 6, 14, 10),
+        supervisor_fs_clean_backing_range_read_zero_tail() as i32
+    );
+    assert_eq!(supervisor_fs_clean_backing_range_read_offset(), 8);
+    assert_eq!(supervisor_fs_clean_backing_range_read_length(), 2);
+    assert_eq!(supervisor_fs_clean_backing_range_output_length(), 6);
+    assert_eq!(
+        supervisor_fs_clean_backing_range_decision(2, 11, 3, 14, 10),
+        supervisor_fs_clean_backing_range_zero() as i32
+    );
+    assert_eq!(supervisor_fs_clean_backing_range_read_length(), 0);
+    assert_eq!(supervisor_fs_clean_backing_range_output_length(), 3);
+    assert_eq!(
+        supervisor_fs_clean_backing_range_decision(2, 8, 6, 9, 10),
+        supervisor_fs_clean_backing_range_read() as i32
+    );
+    assert_eq!(supervisor_fs_clean_backing_range_read_length(), 2);
+    assert_eq!(supervisor_fs_clean_backing_range_output_length(), 2);
+    assert_eq!(
+        supervisor_fs_clean_backing_range_decision(2, 11, 4, 14, 10),
+        supervisor_fs_clean_backing_range_none() as i32
+    );
+    assert_eq!(supervisor_fs_clean_backing_range_read_offset(), 0);
+    assert_eq!(supervisor_fs_clean_backing_range_output_length(), 0);
+    assert_eq!(
+        supervisor_fs_clean_backing_range_decision(0, 3, 5, 14, 10),
+        supervisor_fs_clean_backing_range_none() as i32
     );
     assert_eq!(supervisor_shadow_fs_control_count(), 3);
     supervisor_reset_shadow_log();

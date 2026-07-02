@@ -13,6 +13,9 @@ static mut LAST_DIRTY_PAGE_DECISION: DirtyPageDecision = DirtyPageDecision::empt
 static BACKING_SOURCE_RANGE_DECISION_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_BACKING_SOURCE_RANGE_DECISION: BackingSourceRangeDecision =
     BackingSourceRangeDecision::empty();
+static CLEAN_BACKING_RANGE_DECISION_LOCK: AtomicU32 = AtomicU32::new(0);
+static mut LAST_CLEAN_BACKING_RANGE_DECISION: CleanBackingRangeDecision =
+    CleanBackingRangeDecision::empty();
 const MAX_SUPERVISOR_FS_INODES: u32 = 65_536;
 const DIRECT_BACKING_MMAP_MIN_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -54,6 +57,23 @@ impl BackingSourceRangeDecision {
     }
 }
 
+#[derive(Clone, Copy)]
+struct CleanBackingRangeDecision {
+    read_offset: u64,
+    read_length: u64,
+    output_length: u64,
+}
+
+impl CleanBackingRangeDecision {
+    const fn empty() -> Self {
+        Self {
+            read_offset: 0,
+            read_length: 0,
+            output_length: 0,
+        }
+    }
+}
+
 pub(super) fn init() {
     FS_CONTROL_COUNT.store(0, Ordering::Relaxed);
     super::lock::with_spin_lock(&FS_CONTROL_LOCK, || unsafe {
@@ -64,6 +84,9 @@ pub(super) fn init() {
     });
     super::lock::with_spin_lock(&BACKING_SOURCE_RANGE_DECISION_LOCK, || unsafe {
         LAST_BACKING_SOURCE_RANGE_DECISION = BackingSourceRangeDecision::empty();
+    });
+    super::lock::with_spin_lock(&CLEAN_BACKING_RANGE_DECISION_LOCK, || unsafe {
+        LAST_CLEAN_BACKING_RANGE_DECISION = CleanBackingRangeDecision::empty();
     });
 }
 
@@ -275,6 +298,18 @@ fn store_backing_source_range_decision(decision: BackingSourceRangeDecision) {
 fn latest_backing_source_range_decision() -> BackingSourceRangeDecision {
     super::lock::with_spin_lock(&BACKING_SOURCE_RANGE_DECISION_LOCK, || unsafe {
         LAST_BACKING_SOURCE_RANGE_DECISION
+    })
+}
+
+fn store_clean_backing_range_decision(decision: CleanBackingRangeDecision) {
+    super::lock::with_spin_lock(&CLEAN_BACKING_RANGE_DECISION_LOCK, || unsafe {
+        LAST_CLEAN_BACKING_RANGE_DECISION = decision;
+    });
+}
+
+fn latest_clean_backing_range_decision() -> CleanBackingRangeDecision {
+    super::lock::with_spin_lock(&CLEAN_BACKING_RANGE_DECISION_LOCK, || unsafe {
+        LAST_CLEAN_BACKING_RANGE_DECISION
     })
 }
 
@@ -565,6 +600,76 @@ pub fn backing_source_range_source_offset() -> u64 {
 
 pub fn backing_source_range_read_length() -> u64 {
     latest_backing_source_range_decision().read_length
+}
+
+pub fn clean_backing_range_decision(
+    ino: u32,
+    offset: i64,
+    length: i64,
+    published_size: i64,
+    backing_size: i64,
+) -> i32 {
+    let mut decision = CleanBackingRangeDecision::empty();
+    let mode =
+        if !valid_ino(ino) || offset < 0 || length <= 0 || published_size < 0 || backing_size < 0 {
+            super::SUPERVISOR_FS_CLEAN_BACKING_RANGE_NONE as i32
+        } else {
+            let offset = offset as u64;
+            let length = length as u64;
+            let published_size = published_size as u64;
+            let backing_size = backing_size as u64;
+            if let Some(end) = offset.checked_add(length) {
+                if offset >= published_size {
+                    super::SUPERVISOR_FS_CLEAN_BACKING_RANGE_NONE as i32
+                } else if offset >= backing_size {
+                    if published_size > backing_size && end <= published_size {
+                        decision = CleanBackingRangeDecision {
+                            read_offset: offset,
+                            read_length: 0,
+                            output_length: length,
+                        };
+                        super::SUPERVISOR_FS_CLEAN_BACKING_RANGE_ZERO as i32
+                    } else {
+                        super::SUPERVISOR_FS_CLEAN_BACKING_RANGE_NONE as i32
+                    }
+                } else {
+                    let read_length = core::cmp::min(length, backing_size - offset);
+                    if read_length == length || published_size <= backing_size {
+                        decision = CleanBackingRangeDecision {
+                            read_offset: offset,
+                            read_length,
+                            output_length: read_length,
+                        };
+                        super::SUPERVISOR_FS_CLEAN_BACKING_RANGE_READ as i32
+                    } else if end > published_size {
+                        super::SUPERVISOR_FS_CLEAN_BACKING_RANGE_NONE as i32
+                    } else {
+                        decision = CleanBackingRangeDecision {
+                            read_offset: offset,
+                            read_length,
+                            output_length: length,
+                        };
+                        super::SUPERVISOR_FS_CLEAN_BACKING_RANGE_READ_ZERO_TAIL as i32
+                    }
+                }
+            } else {
+                super::SUPERVISOR_FS_CLEAN_BACKING_RANGE_NONE as i32
+            }
+        };
+    store_clean_backing_range_decision(decision);
+    mode
+}
+
+pub fn clean_backing_range_read_offset() -> u64 {
+    latest_clean_backing_range_decision().read_offset
+}
+
+pub fn clean_backing_range_read_length() -> u64 {
+    latest_clean_backing_range_decision().read_length
+}
+
+pub fn clean_backing_range_output_length() -> u64 {
+    latest_clean_backing_range_decision().output_length
 }
 
 #[allow(clippy::too_many_arguments)]
