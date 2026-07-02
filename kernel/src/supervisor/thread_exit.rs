@@ -2,7 +2,7 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crate::abi::*;
 use crate::guest_mem;
-use crate::types::ThreadState;
+use crate::types::{ProcessState, THREAD_DEAD, THREAD_NONE, ThreadRecord, ThreadState};
 
 const ROBUST_LIST_HEAD_LEN: u64 = 24;
 const FUTEX_WAITERS: u32 = 0x8000_0000;
@@ -160,7 +160,7 @@ pub fn cleanup_thread_robust_futexes(
 }
 
 pub fn complete_thread_exit(vm: &mut ThreadState, base: u32) -> u32 {
-    crate::syscall::thread::supervisor_mark_current_thread_exiting(vm, base);
+    super::thread::mark_current_thread_exiting(vm, base);
 
     let robust_order = if vm.robust_list_head != 0 { 1 } else { 0 };
     let robust_stats =
@@ -168,7 +168,7 @@ pub fn complete_thread_exit(vm: &mut ThreadState, base: u32) -> u32 {
     vm.robust_list_head = 0;
     vm.robust_list_len = 0;
 
-    let remaining_threads = crate::syscall::thread::supervisor_decrement_thread_count(vm, base);
+    let remaining_threads = super::thread::decrement_thread_count(vm, base);
 
     let clear_child_tid = vm.clear_child_tid;
     let clear_child_tid_order = if clear_child_tid != 0 {
@@ -189,10 +189,10 @@ pub fn complete_thread_exit(vm: &mut ThreadState, base: u32) -> u32 {
     };
 
     if remaining_threads == 0 {
-        crate::syscall::thread::supervisor_clear_next_tid_hint(base, vm.process_ptr);
+        super::thread::clear_next_tid_hint(base, vm.process_ptr);
     }
 
-    crate::syscall::thread::supervisor_mark_current_thread_dead(vm, base);
+    super::thread::mark_current_thread_dead(vm, base);
     vm.status = STATUS_FAULT;
     record_thread_exit_cleanup(
         super::SUPERVISOR_THREAD_EXIT_CLEANUP_KIND_THREAD_EXIT,
@@ -211,6 +211,96 @@ pub fn complete_thread_exit(vm: &mut ThreadState, base: u32) -> u32 {
         robust_stats.first_futex_addr,
     );
     remaining_threads
+}
+
+fn thread_state_from_record_ptr(thread_ptr: u32) -> Option<*mut ThreadState> {
+    if thread_ptr == 0 {
+        return None;
+    }
+
+    let align = core::mem::align_of::<ThreadState>();
+    let absolute = thread_ptr as usize;
+    if (absolute & (align - 1)) != 0 {
+        return None;
+    }
+
+    let end = absolute.checked_add(core::mem::size_of::<ThreadState>())?;
+    let memory_size = crate::wasm::memory_size_bytes();
+    if end as u64 > memory_size {
+        return None;
+    }
+
+    Some(absolute as *mut ThreadState)
+}
+
+pub fn complete_thread_group_exit(
+    vm: &mut ThreadState,
+    base: u32,
+    exit_code: i32,
+    term_signal: i32,
+) {
+    let process_ptr = vm.process_ptr;
+    unsafe {
+        if process_ptr == 0 {
+            vm.exit_code = exit_code;
+            vm.term_signal = term_signal;
+            vm.status = STATUS_FAULT;
+            vm.robust_list_head = 0;
+            vm.robust_list_len = 0;
+            vm.clear_child_tid = 0;
+            return;
+        }
+
+        let ps = &mut *((base as u64 + process_ptr as u64) as *mut ProcessState);
+        for record in ps.threads.iter_mut() {
+            if record.state == THREAD_NONE || record.state == THREAD_DEAD {
+                continue;
+            }
+
+            let thread_vm_ptr = thread_state_from_record_ptr(record.thread_ptr);
+            let robust_head = if record.tid == vm.tid {
+                vm.robust_list_head
+            } else if let Some(thread_vm) = thread_vm_ptr {
+                (*thread_vm).robust_list_head
+            } else {
+                0
+            };
+            let _ = cleanup_robust_futexes(process_ptr, base, record.tid as u32, robust_head);
+
+            let clear_child_tid = record.clear_child_tid;
+            if record.tid == vm.tid {
+                vm.exit_code = exit_code;
+                vm.term_signal = term_signal;
+                vm.status = STATUS_FAULT;
+                vm.robust_list_head = 0;
+                vm.robust_list_len = 0;
+                vm.clear_child_tid = 0;
+            } else if let Some(thread_vm) = thread_vm_ptr {
+                let thread_vm = &mut *thread_vm;
+                thread_vm.exit_code = exit_code;
+                thread_vm.term_signal = term_signal;
+                thread_vm.status = STATUS_FAULT;
+                thread_vm.robust_list_head = 0;
+                thread_vm.robust_list_len = 0;
+                thread_vm.clear_child_tid = 0;
+                crate::fs::fd_table::clear_blocked_ofd_pin(thread_vm);
+            }
+
+            if clear_child_tid != 0 {
+                clear_tid_and_wake(process_ptr, base, clear_child_tid);
+            }
+            *record = ThreadRecord::empty();
+        }
+
+        super::thread::reset_thread_count_for_group_exit(vm, base);
+    }
+
+    vm.exit_code = exit_code;
+    vm.term_signal = term_signal;
+    vm.status = STATUS_FAULT;
+    vm.robust_list_head = 0;
+    vm.robust_list_len = 0;
+    vm.clear_child_tid = 0;
 }
 
 #[allow(clippy::too_many_arguments)]

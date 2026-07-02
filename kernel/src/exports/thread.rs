@@ -218,7 +218,7 @@ pub extern "C" fn thread_blocked_syscall_arg(vm_ptr: u32, index: u32) -> u64 {
 pub extern "C" fn thread_spawn_from_clone(parent_vm_ptr: u32) -> u32 {
     unsafe {
         let parent = &*(parent_vm_ptr as *const ThreadState);
-        crate::syscall::thread::spawn_from_clone(parent_vm_ptr, parent.guest_base)
+        crate::supervisor::spawn_from_clone(parent_vm_ptr, parent.guest_base)
     }
 }
 
@@ -226,7 +226,7 @@ pub extern "C" fn thread_spawn_from_clone(parent_vm_ptr: u32) -> u32 {
 pub extern "C" fn thread_process_thread_count(vm_ptr: u32) -> u32 {
     unsafe {
         let vm = &*(vm_ptr as *const ThreadState);
-        crate::syscall::thread::process_thread_count(vm_ptr, vm.guest_base)
+        crate::supervisor::process_thread_count(vm_ptr, vm.guest_base)
     }
 }
 
@@ -1338,7 +1338,7 @@ pub extern "C" fn thread_sleep_deadline_ticks(vm_ptr: u32) -> u64 {
 pub extern "C" fn thread_record_blocked_addr(vm_ptr: u32) -> u64 {
     unsafe {
         let vm = &*(vm_ptr as *const ThreadState);
-        crate::syscall::thread::thread_record_blocked_addr(vm, vm.guest_base)
+        crate::supervisor::thread_record_blocked_addr(vm, vm.guest_base)
     }
 }
 

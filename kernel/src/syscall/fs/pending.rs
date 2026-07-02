@@ -551,7 +551,7 @@ mod tests {
         );
         assert!(clone_result > 0);
 
-        let child_vm_ptr = crate::syscall::thread::spawn_from_clone(parent_vm_ptr, vm.base);
+        let child_vm_ptr = crate::supervisor::spawn_from_clone(parent_vm_ptr, vm.base);
         assert_ne!(child_vm_ptr, 0);
         let child = unsafe { &mut *(child_vm_ptr as *mut ThreadState) };
         assert_eq!(child.process_ptr, vm.vm.process_ptr);

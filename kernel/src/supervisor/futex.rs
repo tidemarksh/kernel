@@ -47,7 +47,7 @@ pub(super) fn complete_wait(vm_ptr: u32, completion: u32) -> i32 {
     let process_ptr = vm.process_ptr;
     let tid = vm.tid;
     let futex_addr = vm.futex_wait_addr;
-    let blocked_addr = crate::syscall::thread::thread_record_blocked_addr(vm, base);
+    let blocked_addr = super::thread::thread_record_blocked_addr(vm, base);
     let signal_pending = blocked_wait_signal_pending(vm, base);
 
     let result = if blocked_addr == 0 {

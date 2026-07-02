@@ -35,9 +35,14 @@ pub use fs::{fs_control_count, record_fs_control};
 pub use process::{process_lifecycle_count, record_process_lifecycle};
 pub(super) use records::*;
 pub use signal::{record_signal_control, signal_control_count};
+pub use thread::{
+    discard_other_threads_for_exec, init_main_thread, last_clone_spawn, last_clone_spawn_details,
+    process_thread_count, register_clone_thread, reset_thread_clone_registry, spawn_from_clone,
+    thread_record_blocked_addr,
+};
 pub use thread_exit::{
     cleanup_thread_robust_futexes, clear_tid_and_wake, complete_thread_exit,
-    record_thread_exit_cleanup, thread_exit_cleanup_count,
+    complete_thread_group_exit, record_thread_exit_cleanup, thread_exit_cleanup_count,
 };
 
 pub fn init() {
@@ -47,6 +52,7 @@ pub fn init() {
     fd::init();
     fs::init();
     signal::init();
+    thread::init();
     event::init_state();
     fault::init();
     runnable::init();

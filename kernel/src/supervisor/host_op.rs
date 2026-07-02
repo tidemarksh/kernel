@@ -209,7 +209,7 @@ pub(super) fn write_record(out_ptr: u32, out_len: u32) -> i32 {
             let child_tidptr = parent.clone_child_tidptr;
             let process_ptr = parent.process_ptr;
             let child_vm_ptr =
-                crate::syscall::thread::spawn_from_clone(request.parent_vm_ptr, parent.guest_base);
+                super::thread::spawn_from_clone(request.parent_vm_ptr, parent.guest_base);
             if child_vm_ptr == 0 {
                 return crate::abi::EINVAL as i32;
             }

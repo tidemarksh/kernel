@@ -122,7 +122,7 @@ pub(super) fn retry_reason(vm_ptr: u32, flags: u32) -> i32 {
     }
     match vm.status {
         crate::abi::STATUS_EPOLL_WAIT
-            if crate::syscall::thread::process_thread_count(vm_ptr, vm.guest_base) > 1 =>
+            if super::thread::process_thread_count(vm_ptr, vm.guest_base) > 1 =>
         {
             RETRY_REASON_STANDARD_DEFER as i32
         }
