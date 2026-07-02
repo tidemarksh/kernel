@@ -11,6 +11,7 @@ static mut LAST_FS_CONTROL: super::SupervisorFsControlRecord =
 static DIRTY_PAGE_DECISION_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_DIRTY_PAGE_DECISION: DirtyPageDecision = DirtyPageDecision::empty();
 const MAX_SUPERVISOR_FS_INODES: u32 = 65_536;
+const DIRECT_BACKING_MMAP_MIN_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Clone, Copy)]
 struct DirtyPageDecision {
@@ -439,6 +440,32 @@ pub fn page_table_source_decision(
         return super::SUPERVISOR_FS_PAGE_TABLE_SOURCE_RESIDENT as i32;
     }
     super::SUPERVISOR_FS_PAGE_TABLE_SOURCE_BACKING as i32
+}
+
+pub fn backing_fill_probe_direct(opcode: u32, aligned_length: u64) -> i32 {
+    if aligned_length == 0 {
+        return crate::abi::EINVAL as i32;
+    }
+    (opcode == ring_buffer::FS_OP_MMAP && aligned_length >= DIRECT_BACKING_MMAP_MIN_BYTES) as i32
+}
+
+pub fn backing_fill_mode_decision(
+    opcode: u32,
+    aligned_length: u64,
+    head_probe_readable: u32,
+    tail_probe_readable: u32,
+) -> i32 {
+    let probe_direct = backing_fill_probe_direct(opcode, aligned_length);
+    if probe_direct < 0 {
+        return probe_direct;
+    }
+    if probe_direct == 0 {
+        return super::SUPERVISOR_FS_BACKING_FILL_MODE_RESIDENT as i32;
+    }
+    if head_probe_readable != 0 && tail_probe_readable != 0 {
+        return super::SUPERVISOR_FS_BACKING_FILL_MODE_DIRECT as i32;
+    }
+    super::SUPERVISOR_FS_BACKING_FILL_MODE_RESIDENT as i32
 }
 
 #[allow(clippy::too_many_arguments)]

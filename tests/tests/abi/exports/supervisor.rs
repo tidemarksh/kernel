@@ -163,6 +163,8 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_fs_dirty_page_flag_update_inode(), 1);
     assert_eq!(supervisor_fs_dirty_page_flag_publish_dirty(), 2);
     assert_eq!(supervisor_fs_dirty_page_flag_writeback_required(), 4);
+    assert_eq!(supervisor_fs_backing_fill_mode_resident(), 0);
+    assert_eq!(supervisor_fs_backing_fill_mode_direct(), 1);
     assert_eq!(supervisor_fs_page_table_source_backing(), 0);
     assert_eq!(supervisor_fs_page_table_source_resident(), 1);
     assert_eq!(supervisor_fs_pending_ring_request(0), 0);
@@ -289,6 +291,58 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_fs_page_table_source_decision(0, 0, 2, 3, 128, 2, 3, 128),
         EINVAL as i32
+    );
+    assert_eq!(
+        supervisor_fs_backing_fill_probe_direct(
+            tidemark_kernel::fs::ring_buffer::FS_OP_MMAP,
+            16 * 1024 * 1024,
+        ),
+        1
+    );
+    assert_eq!(
+        supervisor_fs_backing_fill_probe_direct(
+            tidemark_kernel::fs::ring_buffer::FS_OP_MMAP,
+            16 * 1024 * 1024 - 1,
+        ),
+        0
+    );
+    assert_eq!(
+        supervisor_fs_backing_fill_probe_direct(
+            tidemark_kernel::fs::ring_buffer::FS_OP_READ,
+            16 * 1024 * 1024,
+        ),
+        0
+    );
+    assert_eq!(
+        supervisor_fs_backing_fill_probe_direct(tidemark_kernel::fs::ring_buffer::FS_OP_MMAP, 0),
+        EINVAL as i32
+    );
+    assert_eq!(
+        supervisor_fs_backing_fill_mode_decision(
+            tidemark_kernel::fs::ring_buffer::FS_OP_MMAP,
+            16 * 1024 * 1024,
+            1,
+            1,
+        ),
+        supervisor_fs_backing_fill_mode_direct() as i32
+    );
+    assert_eq!(
+        supervisor_fs_backing_fill_mode_decision(
+            tidemark_kernel::fs::ring_buffer::FS_OP_MMAP,
+            16 * 1024 * 1024,
+            1,
+            0,
+        ),
+        supervisor_fs_backing_fill_mode_resident() as i32
+    );
+    assert_eq!(
+        supervisor_fs_backing_fill_mode_decision(
+            tidemark_kernel::fs::ring_buffer::FS_OP_READ,
+            16 * 1024 * 1024,
+            1,
+            1,
+        ),
+        supervisor_fs_backing_fill_mode_resident() as i32
     );
     assert_eq!(supervisor_shadow_fs_control_count(), 3);
     supervisor_reset_shadow_log();

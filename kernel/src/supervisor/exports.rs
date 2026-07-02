@@ -317,6 +317,14 @@ export_u32_const!(
     super::SUPERVISOR_FS_DIRTY_PAGE_FLAG_WRITEBACK_REQUIRED
 );
 export_u32_const!(
+    supervisor_fs_backing_fill_mode_resident,
+    super::SUPERVISOR_FS_BACKING_FILL_MODE_RESIDENT
+);
+export_u32_const!(
+    supervisor_fs_backing_fill_mode_direct,
+    super::SUPERVISOR_FS_BACKING_FILL_MODE_DIRECT
+);
+export_u32_const!(
     supervisor_fs_page_table_source_backing,
     super::SUPERVISOR_FS_PAGE_TABLE_SOURCE_BACKING
 );
@@ -935,6 +943,26 @@ pub extern "C" fn supervisor_fs_page_table_source_decision(
         backing_file_object_id,
         backing_generation,
         backing_size,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_backing_fill_probe_direct(opcode: u32, aligned_length: u64) -> i32 {
+    super::fs::backing_fill_probe_direct(opcode, aligned_length)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_backing_fill_mode_decision(
+    opcode: u32,
+    aligned_length: u64,
+    head_probe_readable: u32,
+    tail_probe_readable: u32,
+) -> i32 {
+    super::fs::backing_fill_mode_decision(
+        opcode,
+        aligned_length,
+        head_probe_readable,
+        tail_probe_readable,
     )
 }
 
