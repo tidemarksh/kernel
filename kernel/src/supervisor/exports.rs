@@ -329,6 +329,50 @@ export_u32_const!(
     super::SUPERVISOR_FS_DIRTY_PREPARE_PUBLISH_SIZE_UPDATE
 );
 export_u32_const!(
+    supervisor_fs_data_sync_kind_export,
+    super::SUPERVISOR_FS_DATA_SYNC_KIND_EXPORT
+);
+export_u32_const!(
+    supervisor_fs_data_sync_kind_restore,
+    super::SUPERVISOR_FS_DATA_SYNC_KIND_RESTORE
+);
+export_u32_const!(
+    supervisor_fs_sync_action_none,
+    super::SUPERVISOR_FS_SYNC_ACTION_NONE
+);
+export_u32_const!(
+    supervisor_fs_sync_action_externalize,
+    super::SUPERVISOR_FS_SYNC_ACTION_EXTERNALIZE
+);
+export_u32_const!(
+    supervisor_fs_metadata_sync_action_none,
+    super::SUPERVISOR_FS_METADATA_SYNC_ACTION_NONE
+);
+export_u32_const!(
+    supervisor_fs_metadata_sync_action_remove,
+    super::SUPERVISOR_FS_METADATA_SYNC_ACTION_REMOVE
+);
+export_u32_const!(
+    supervisor_fs_metadata_sync_action_ensure,
+    super::SUPERVISOR_FS_METADATA_SYNC_ACTION_ENSURE
+);
+export_u32_const!(
+    supervisor_fs_metadata_sync_action_publish_ensure,
+    super::SUPERVISOR_FS_METADATA_SYNC_ACTION_PUBLISH_ENSURE
+);
+export_u32_const!(
+    supervisor_fs_metadata_backing_none,
+    super::SUPERVISOR_FS_METADATA_BACKING_NONE
+);
+export_u32_const!(
+    supervisor_fs_metadata_backing_published,
+    super::SUPERVISOR_FS_METADATA_BACKING_PUBLISHED
+);
+export_u32_const!(
+    supervisor_fs_metadata_backing_backing,
+    super::SUPERVISOR_FS_METADATA_BACKING_BACKING
+);
+export_u32_const!(
     supervisor_fs_backing_fill_mode_resident,
     super::SUPERVISOR_FS_BACKING_FILL_MODE_RESIDENT
 );
@@ -1096,6 +1140,82 @@ pub extern "C" fn supervisor_fs_dirty_prepare_decision(
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fs_dirty_prepare_publish_mode() -> u32 {
     super::fs::dirty_prepare_publish_mode()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_data_sync_decision(
+    kind: u32,
+    ino: u32,
+    source_mode: u32,
+    source_size: i64,
+    target_mode: u32,
+    target_size: i64,
+    published_present: u32,
+    published_mode: u32,
+    published_size: i64,
+    published_file_object_id: u64,
+    has_dirty_resident_pages: u32,
+    page_map_newer: u32,
+    has_backing_file: u32,
+) -> i32 {
+    super::fs::data_sync_decision(
+        kind,
+        ino,
+        source_mode,
+        source_size,
+        target_mode,
+        target_size,
+        published_present,
+        published_mode,
+        published_size,
+        published_file_object_id,
+        has_dirty_resident_pages,
+        page_map_newer,
+        has_backing_file,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_metadata_sync_decision(
+    ino: u32,
+    source_present: u32,
+    source_mode: u32,
+    source_size: i64,
+    parent_present: u32,
+    parent_ino: u32,
+    published_present: u32,
+    published_mode: u32,
+    published_size: i64,
+    published_parent_ino: u32,
+    published_name_matches: u32,
+    has_dirty_resident_pages: u32,
+    backing_present: u32,
+) -> i32 {
+    super::fs::metadata_sync_decision(
+        ino,
+        source_present,
+        source_mode,
+        source_size,
+        parent_present,
+        parent_ino,
+        published_present,
+        published_mode,
+        published_size,
+        published_parent_ino,
+        published_name_matches,
+        has_dirty_resident_pages,
+        backing_present,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_metadata_sync_size() -> u64 {
+    super::fs::metadata_sync_size()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_metadata_sync_backing_source() -> u32 {
+    super::fs::metadata_sync_backing_source()
 }
 
 #[unsafe(no_mangle)]

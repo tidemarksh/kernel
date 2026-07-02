@@ -18,6 +18,8 @@ static mut LAST_CLEAN_BACKING_RANGE_DECISION: CleanBackingRangeDecision =
     CleanBackingRangeDecision::empty();
 static DIRTY_PREPARE_DECISION_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_DIRTY_PREPARE_DECISION: DirtyPrepareDecision = DirtyPrepareDecision::empty();
+static METADATA_SYNC_DECISION_LOCK: AtomicU32 = AtomicU32::new(0);
+static mut LAST_METADATA_SYNC_DECISION: MetadataSyncDecision = MetadataSyncDecision::empty();
 const MAX_SUPERVISOR_FS_INODES: u32 = 65_536;
 const DIRECT_BACKING_MMAP_MIN_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -89,6 +91,21 @@ impl DirtyPrepareDecision {
     }
 }
 
+#[derive(Clone, Copy)]
+struct MetadataSyncDecision {
+    size: u64,
+    backing_source: u32,
+}
+
+impl MetadataSyncDecision {
+    const fn empty() -> Self {
+        Self {
+            size: 0,
+            backing_source: super::SUPERVISOR_FS_METADATA_BACKING_NONE,
+        }
+    }
+}
+
 pub(super) fn init() {
     FS_CONTROL_COUNT.store(0, Ordering::Relaxed);
     super::lock::with_spin_lock(&FS_CONTROL_LOCK, || unsafe {
@@ -105,6 +122,9 @@ pub(super) fn init() {
     });
     super::lock::with_spin_lock(&DIRTY_PREPARE_DECISION_LOCK, || unsafe {
         LAST_DIRTY_PREPARE_DECISION = DirtyPrepareDecision::empty();
+    });
+    super::lock::with_spin_lock(&METADATA_SYNC_DECISION_LOCK, || unsafe {
+        LAST_METADATA_SYNC_DECISION = MetadataSyncDecision::empty();
     });
 }
 
@@ -343,6 +363,18 @@ fn latest_dirty_prepare_decision() -> DirtyPrepareDecision {
     })
 }
 
+fn store_metadata_sync_decision(decision: MetadataSyncDecision) {
+    super::lock::with_spin_lock(&METADATA_SYNC_DECISION_LOCK, || unsafe {
+        LAST_METADATA_SYNC_DECISION = decision;
+    });
+}
+
+fn latest_metadata_sync_decision() -> MetadataSyncDecision {
+    super::lock::with_spin_lock(&METADATA_SYNC_DECISION_LOCK, || unsafe {
+        LAST_METADATA_SYNC_DECISION
+    })
+}
+
 fn invalid_dirty_page_decision() -> DirtyPageDecision {
     DirtyPageDecision {
         result: crate::abi::EINVAL,
@@ -359,6 +391,14 @@ fn enospc_dirty_page_decision() -> DirtyPageDecision {
 
 fn valid_ino(ino: u32) -> bool {
     ino > 0 && ino < MAX_SUPERVISOR_FS_INODES
+}
+
+fn regular_mode(mode: u32) -> bool {
+    mode & memfs::S_IFMT == memfs::S_IFREG
+}
+
+fn dir_mode(mode: u32) -> bool {
+    mode & memfs::S_IFMT == memfs::S_IFDIR
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -761,6 +801,149 @@ pub fn dirty_prepare_decision(
 
 pub fn dirty_prepare_publish_mode() -> u32 {
     latest_dirty_prepare_decision().publish_mode
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn data_sync_decision(
+    kind: u32,
+    ino: u32,
+    source_mode: u32,
+    source_size: i64,
+    target_mode: u32,
+    target_size: i64,
+    published_present: u32,
+    published_mode: u32,
+    published_size: i64,
+    published_file_object_id: u64,
+    has_dirty_resident_pages: u32,
+    page_map_newer: u32,
+    has_backing_file: u32,
+) -> i32 {
+    if !valid_ino(ino) || source_size < 0 || target_size < 0 || published_size < 0 {
+        return crate::abi::EINVAL as i32;
+    }
+
+    match kind {
+        super::SUPERVISOR_FS_DATA_SYNC_KIND_EXPORT => {
+            if !regular_mode(source_mode) || !regular_mode(target_mode) {
+                return super::SUPERVISOR_FS_SYNC_ACTION_NONE as i32;
+            }
+            if published_present != 0 && !regular_mode(published_mode) {
+                return super::SUPERVISOR_FS_SYNC_ACTION_NONE as i32;
+            }
+            let published_resident_file =
+                published_file_object_id != 0 && published_size == source_size;
+            if page_map_newer != 0 || published_resident_file {
+                super::SUPERVISOR_FS_SYNC_ACTION_EXTERNALIZE as i32
+            } else {
+                super::SUPERVISOR_FS_SYNC_ACTION_NONE as i32
+            }
+        }
+        super::SUPERVISOR_FS_DATA_SYNC_KIND_RESTORE => {
+            if published_present == 0
+                || !regular_mode(published_mode)
+                || published_size <= 0
+                || !regular_mode(target_mode)
+                || target_size != published_size
+            {
+                return super::SUPERVISOR_FS_SYNC_ACTION_NONE as i32;
+            }
+            if has_backing_file != 0
+                || has_dirty_resident_pages != 0
+                || published_file_object_id != 0
+            {
+                super::SUPERVISOR_FS_SYNC_ACTION_EXTERNALIZE as i32
+            } else {
+                super::SUPERVISOR_FS_SYNC_ACTION_NONE as i32
+            }
+        }
+        _ => crate::abi::EINVAL as i32,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn metadata_sync_decision(
+    ino: u32,
+    source_present: u32,
+    source_mode: u32,
+    source_size: i64,
+    parent_present: u32,
+    parent_ino: u32,
+    published_present: u32,
+    published_mode: u32,
+    published_size: i64,
+    published_parent_ino: u32,
+    published_name_matches: u32,
+    has_dirty_resident_pages: u32,
+    backing_present: u32,
+) -> i32 {
+    store_metadata_sync_decision(MetadataSyncDecision::empty());
+    if source_present == 0 {
+        return super::SUPERVISOR_FS_METADATA_SYNC_ACTION_REMOVE as i32;
+    }
+    if !valid_ino(ino) || source_size < 0 || published_size < 0 {
+        return crate::abi::EINVAL as i32;
+    }
+    if parent_present == 0 || parent_ino == 0 {
+        return super::SUPERVISOR_FS_METADATA_SYNC_ACTION_NONE as i32;
+    }
+    let file_type_supported = regular_mode(source_mode) || dir_mode(source_mode);
+    if !file_type_supported {
+        return super::SUPERVISOR_FS_METADATA_SYNC_ACTION_NONE as i32;
+    }
+
+    let published_size = if published_present != 0 {
+        published_size as u64
+    } else {
+        0
+    };
+    let size = if regular_mode(source_mode) {
+        if has_dirty_resident_pages != 0 && published_present != 0 {
+            published_size
+        } else {
+            source_size as u64
+        }
+    } else {
+        0
+    };
+    let published_meta_valid =
+        published_present != 0 && (published_size == size || has_dirty_resident_pages != 0);
+    let backing_source = if has_dirty_resident_pages != 0 {
+        if published_meta_valid {
+            super::SUPERVISOR_FS_METADATA_BACKING_PUBLISHED
+        } else {
+            super::SUPERVISOR_FS_METADATA_BACKING_NONE
+        }
+    } else if backing_present != 0 {
+        super::SUPERVISOR_FS_METADATA_BACKING_BACKING
+    } else if published_meta_valid {
+        super::SUPERVISOR_FS_METADATA_BACKING_PUBLISHED
+    } else {
+        super::SUPERVISOR_FS_METADATA_BACKING_NONE
+    };
+    store_metadata_sync_decision(MetadataSyncDecision {
+        size,
+        backing_source,
+    });
+
+    let publish_required = published_present == 0
+        || published_mode != source_mode
+        || published_size != size
+        || published_parent_ino != parent_ino
+        || published_name_matches == 0;
+    if publish_required {
+        super::SUPERVISOR_FS_METADATA_SYNC_ACTION_PUBLISH_ENSURE as i32
+    } else {
+        super::SUPERVISOR_FS_METADATA_SYNC_ACTION_ENSURE as i32
+    }
+}
+
+pub fn metadata_sync_size() -> u64 {
+    latest_metadata_sync_decision().size
+}
+
+pub fn metadata_sync_backing_source() -> u32 {
+    latest_metadata_sync_decision().backing_source
 }
 
 #[allow(clippy::too_many_arguments)]

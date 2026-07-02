@@ -166,6 +166,17 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_fs_dirty_prepare_publish_none(), 0);
     assert_eq!(supervisor_fs_dirty_prepare_publish_missing(), 1);
     assert_eq!(supervisor_fs_dirty_prepare_publish_size_update(), 2);
+    assert_eq!(supervisor_fs_data_sync_kind_export(), 1);
+    assert_eq!(supervisor_fs_data_sync_kind_restore(), 2);
+    assert_eq!(supervisor_fs_sync_action_none(), 0);
+    assert_eq!(supervisor_fs_sync_action_externalize(), 1);
+    assert_eq!(supervisor_fs_metadata_sync_action_none(), 0);
+    assert_eq!(supervisor_fs_metadata_sync_action_remove(), 1);
+    assert_eq!(supervisor_fs_metadata_sync_action_ensure(), 2);
+    assert_eq!(supervisor_fs_metadata_sync_action_publish_ensure(), 3);
+    assert_eq!(supervisor_fs_metadata_backing_none(), 0);
+    assert_eq!(supervisor_fs_metadata_backing_published(), 1);
+    assert_eq!(supervisor_fs_metadata_backing_backing(), 2);
     assert_eq!(supervisor_fs_backing_fill_mode_resident(), 0);
     assert_eq!(supervisor_fs_backing_fill_mode_direct(), 1);
     assert_eq!(supervisor_fs_backing_source_range_none(), 0);
@@ -367,6 +378,128 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
             0,
         ),
         EINVAL as i32
+    );
+    assert_eq!(
+        supervisor_fs_data_sync_decision(
+            supervisor_fs_data_sync_kind_export(),
+            2,
+            tidemark_kernel::fs::memfs::S_IFREG | 0o644,
+            128,
+            tidemark_kernel::fs::memfs::S_IFREG | 0o644,
+            128,
+            1,
+            tidemark_kernel::fs::memfs::S_IFREG | 0o644,
+            128,
+            2,
+            0,
+            0,
+            0,
+        ),
+        supervisor_fs_sync_action_externalize() as i32
+    );
+    assert_eq!(
+        supervisor_fs_data_sync_decision(
+            supervisor_fs_data_sync_kind_export(),
+            2,
+            tidemark_kernel::fs::memfs::S_IFREG | 0o644,
+            128,
+            tidemark_kernel::fs::memfs::S_IFREG | 0o644,
+            128,
+            1,
+            tidemark_kernel::fs::memfs::S_IFREG | 0o644,
+            64,
+            0,
+            0,
+            0,
+            0,
+        ),
+        supervisor_fs_sync_action_none() as i32
+    );
+    assert_eq!(
+        supervisor_fs_data_sync_decision(
+            supervisor_fs_data_sync_kind_restore(),
+            2,
+            0,
+            0,
+            tidemark_kernel::fs::memfs::S_IFREG | 0o644,
+            64,
+            1,
+            tidemark_kernel::fs::memfs::S_IFREG | 0o644,
+            64,
+            0,
+            1,
+            0,
+            0,
+        ),
+        supervisor_fs_sync_action_externalize() as i32
+    );
+    assert_eq!(
+        supervisor_fs_data_sync_decision(
+            99,
+            2,
+            tidemark_kernel::fs::memfs::S_IFREG | 0o644,
+            128,
+            tidemark_kernel::fs::memfs::S_IFREG | 0o644,
+            128,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        EINVAL as i32
+    );
+    assert_eq!(
+        supervisor_fs_metadata_sync_decision(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+        supervisor_fs_metadata_sync_action_remove() as i32
+    );
+    assert_eq!(
+        supervisor_fs_metadata_sync_decision(
+            2,
+            1,
+            tidemark_kernel::fs::memfs::S_IFREG | 0o644,
+            0,
+            1,
+            1,
+            1,
+            tidemark_kernel::fs::memfs::S_IFREG | 0o644,
+            4096,
+            1,
+            0,
+            1,
+            1,
+        ),
+        supervisor_fs_metadata_sync_action_publish_ensure() as i32
+    );
+    assert_eq!(supervisor_fs_metadata_sync_size(), 4096);
+    assert_eq!(
+        supervisor_fs_metadata_sync_backing_source(),
+        supervisor_fs_metadata_backing_published()
+    );
+    assert_eq!(
+        supervisor_fs_metadata_sync_decision(
+            2,
+            1,
+            tidemark_kernel::fs::memfs::S_IFREG | 0o644,
+            256,
+            1,
+            1,
+            1,
+            tidemark_kernel::fs::memfs::S_IFREG | 0o644,
+            256,
+            1,
+            1,
+            0,
+            1,
+        ),
+        supervisor_fs_metadata_sync_action_ensure() as i32
+    );
+    assert_eq!(supervisor_fs_metadata_sync_size(), 256);
+    assert_eq!(
+        supervisor_fs_metadata_sync_backing_source(),
+        supervisor_fs_metadata_backing_backing()
     );
     assert_eq!(
         supervisor_fs_page_table_source_decision(2, 0, 2, 3, 128, 2, 3, 128),
