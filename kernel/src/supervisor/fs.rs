@@ -413,6 +413,35 @@ pub fn dirty_page_decision_flags() -> u32 {
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn page_table_source_decision(
+    ino: u32,
+    has_dirty_pages: u32,
+    published_file_object_id: u64,
+    published_generation: u64,
+    published_size: u64,
+    backing_file_object_id: u64,
+    backing_generation: u64,
+    backing_size: u64,
+) -> i32 {
+    if !valid_ino(ino) {
+        return crate::abi::EINVAL as i32;
+    }
+    if has_dirty_pages != 0 {
+        return super::SUPERVISOR_FS_PAGE_TABLE_SOURCE_RESIDENT as i32;
+    }
+    if published_file_object_id == 0 || backing_file_object_id == 0 {
+        return super::SUPERVISOR_FS_PAGE_TABLE_SOURCE_BACKING as i32;
+    }
+    if published_file_object_id != backing_file_object_id
+        || published_generation != backing_generation
+        || published_size != backing_size
+    {
+        return super::SUPERVISOR_FS_PAGE_TABLE_SOURCE_RESIDENT as i32;
+    }
+    super::SUPERVISOR_FS_PAGE_TABLE_SOURCE_BACKING as i32
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn completion_decision(
     _vm_ptr: u32,
     opcode: u32,

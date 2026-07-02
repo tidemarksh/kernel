@@ -163,6 +163,8 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_fs_dirty_page_flag_update_inode(), 1);
     assert_eq!(supervisor_fs_dirty_page_flag_publish_dirty(), 2);
     assert_eq!(supervisor_fs_dirty_page_flag_writeback_required(), 4);
+    assert_eq!(supervisor_fs_page_table_source_backing(), 0);
+    assert_eq!(supervisor_fs_page_table_source_resident(), 1);
     assert_eq!(supervisor_fs_pending_ring_request(0), 0);
     assert_eq!(supervisor_fs_pending_regular_file_fd(0), -1);
     assert_eq!(supervisor_fs_pending_regular_file_ofd(0), 0);
@@ -263,6 +265,30 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_fs_dirty_page_decision_flags(),
         supervisor_fs_dirty_page_flag_writeback_required()
+    );
+    assert_eq!(
+        supervisor_fs_page_table_source_decision(2, 0, 2, 3, 128, 2, 3, 128),
+        supervisor_fs_page_table_source_backing() as i32
+    );
+    assert_eq!(
+        supervisor_fs_page_table_source_decision(2, 1, 2, 3, 128, 2, 3, 128),
+        supervisor_fs_page_table_source_resident() as i32
+    );
+    assert_eq!(
+        supervisor_fs_page_table_source_decision(2, 0, 2, 4, 128, 2, 3, 128),
+        supervisor_fs_page_table_source_resident() as i32
+    );
+    assert_eq!(
+        supervisor_fs_page_table_source_decision(2, 0, 4, 3, 128, 2, 3, 128),
+        supervisor_fs_page_table_source_resident() as i32
+    );
+    assert_eq!(
+        supervisor_fs_page_table_source_decision(2, 0, 0, 0, 0, 2, 3, 128),
+        supervisor_fs_page_table_source_backing() as i32
+    );
+    assert_eq!(
+        supervisor_fs_page_table_source_decision(0, 0, 2, 3, 128, 2, 3, 128),
+        EINVAL as i32
     );
     assert_eq!(supervisor_shadow_fs_control_count(), 3);
     supervisor_reset_shadow_log();

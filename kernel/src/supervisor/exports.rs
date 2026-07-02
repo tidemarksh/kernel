@@ -317,6 +317,14 @@ export_u32_const!(
     super::SUPERVISOR_FS_DIRTY_PAGE_FLAG_WRITEBACK_REQUIRED
 );
 export_u32_const!(
+    supervisor_fs_page_table_source_backing,
+    super::SUPERVISOR_FS_PAGE_TABLE_SOURCE_BACKING
+);
+export_u32_const!(
+    supervisor_fs_page_table_source_resident,
+    super::SUPERVISOR_FS_PAGE_TABLE_SOURCE_RESIDENT
+);
+export_u32_const!(
     supervisor_signal_control_record_bytes,
     super::SUPERVISOR_SIGNAL_CONTROL_RECORD_BYTES
 );
@@ -905,6 +913,29 @@ pub extern "C" fn supervisor_fs_dirty_page_decision_generation() -> u64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fs_dirty_page_decision_flags() -> u32 {
     super::fs::dirty_page_decision_flags()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_page_table_source_decision(
+    ino: u32,
+    has_dirty_pages: u32,
+    published_file_object_id: u64,
+    published_generation: u64,
+    published_size: u64,
+    backing_file_object_id: u64,
+    backing_generation: u64,
+    backing_size: u64,
+) -> i32 {
+    super::fs::page_table_source_decision(
+        ino,
+        has_dirty_pages,
+        published_file_object_id,
+        published_generation,
+        published_size,
+        backing_file_object_id,
+        backing_generation,
+        backing_size,
+    )
 }
 
 #[unsafe(no_mangle)]
