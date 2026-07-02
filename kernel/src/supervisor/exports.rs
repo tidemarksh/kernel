@@ -552,6 +552,16 @@ pub extern "C" fn supervisor_process_host_op(vm_ptr: u32, out_ptr: u32, out_len:
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_memory_host_op(
+    vm_ptr: u32,
+    index: u32,
+    out_ptr: u32,
+    out_len: u32,
+) -> i32 {
+    super::process_memory::write_record(vm_ptr, index, out_ptr, out_len)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_next_resume(out_ptr: u32, out_len: u32) -> i32 {
     super::resume::write_record(out_ptr, out_len)
 }

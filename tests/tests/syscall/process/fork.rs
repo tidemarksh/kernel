@@ -68,6 +68,48 @@ fn supervisor_process_host_op_records_fork_spawn_handoff() {
     assert_eq!(read_u64_le(&record, 64), 0);
     assert_eq!(read_u64_le(&record, 72), 0);
     assert_eq!(read_u64_le(&record, 80), 0);
+
+    let mut memory_record = vec![0u8; supervisor_host_op_record_bytes() as usize];
+    assert_eq!(
+        supervisor_process_memory_host_op(
+            vm_ptr,
+            0,
+            memory_record.as_mut_ptr() as u32,
+            memory_record.len() as u32
+        ),
+        supervisor_host_op_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&memory_record, 0), 0x4f48_5354);
+    assert_eq!(read_u32_le(&memory_record, 4), supervisor_abi_version());
+    assert_eq!(
+        read_u32_le(&memory_record, 12),
+        supervisor_host_op_kind_create_process_memory()
+    );
+    assert_eq!(read_u32_le(&memory_record, 24), vm_ptr);
+    assert_eq!(read_u32_le(&memory_record, 32), ret as u32);
+    assert_eq!(read_u32_le(&memory_record, 36), t.vm.process_ptr);
+    assert_eq!(read_u32_le(&memory_record, 40), STATUS_EXECVE_SPAWN as u32);
+    assert!(read_u64_le(&memory_record, 48) >= t.base as u64);
+    assert_eq!(read_u64_le(&memory_record, 56), 96);
+
+    let mut copy_record = vec![0u8; supervisor_host_op_record_bytes() as usize];
+    assert_eq!(
+        supervisor_process_memory_host_op(
+            vm_ptr,
+            1,
+            copy_record.as_mut_ptr() as u32,
+            copy_record.len() as u32
+        ),
+        supervisor_host_op_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&copy_record, 12),
+        supervisor_host_op_kind_copy_memory_ranges()
+    );
+    assert_eq!(read_u32_le(&copy_record, 24), vm_ptr);
+    assert_eq!(read_u32_le(&copy_record, 32), ret as u32);
+    assert_eq!(read_u32_le(&copy_record, 40), SPAWN_KIND_FORK);
+    assert!(read_u64_le(&copy_record, 56) > read_u64_le(&copy_record, 48));
 }
 
 #[test]

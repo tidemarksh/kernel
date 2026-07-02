@@ -20,6 +20,7 @@ mod log;
 mod process;
 pub mod process_fork;
 pub mod process_lifecycle;
+mod process_memory;
 pub mod process_vfork;
 pub mod process_wait;
 mod records;
