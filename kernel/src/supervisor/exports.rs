@@ -277,6 +277,22 @@ export_u32_const!(
     super::SUPERVISOR_FS_CONTROL_KIND_DIRTY_PAGE_FLUSHED
 );
 export_u32_const!(
+    supervisor_fs_completion_flag_memfs_dirty,
+    super::SUPERVISOR_FS_COMPLETION_FLAG_MEMFS_DIRTY
+);
+export_u32_const!(
+    supervisor_fs_completion_flag_memfs_publish_ready,
+    super::SUPERVISOR_FS_COMPLETION_FLAG_MEMFS_PUBLISH_READY
+);
+export_u32_const!(
+    supervisor_fs_completion_flag_ofd_state_changed,
+    super::SUPERVISOR_FS_COMPLETION_FLAG_OFD_STATE_CHANGED
+);
+export_u32_const!(
+    supervisor_fs_completion_flag_regular_file_request,
+    super::SUPERVISOR_FS_COMPLETION_FLAG_REGULAR_FILE_REQUEST
+);
+export_u32_const!(
     supervisor_signal_control_record_bytes,
     super::SUPERVISOR_SIGNAL_CONTROL_RECORD_BYTES
 );
@@ -766,6 +782,44 @@ pub extern "C" fn supervisor_socket_bridge_active_fd(
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fs_control_record(out_ptr: u32, out_len: u32) -> i32 {
     super::fs::write_record(out_ptr, out_len)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_pending_ring_request(vm_ptr: u32) -> u32 {
+    super::fs::pending_ring_request(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_pending_regular_file_fd(vm_ptr: u32) -> i32 {
+    super::fs::pending_regular_file_fd(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_pending_regular_file_ofd(vm_ptr: u32) -> u32 {
+    super::fs::pending_regular_file_ofd(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_completion_decision(
+    vm_ptr: u32,
+    opcode: u32,
+    effects: u32,
+    result: i64,
+    host_memfs_mutated: u32,
+    host_ofd_state_changed: u32,
+    pending_ring_request: u32,
+    regular_file_request: u32,
+) -> u32 {
+    super::fs::completion_decision(
+        vm_ptr,
+        opcode,
+        effects,
+        result,
+        host_memfs_mutated,
+        host_ofd_state_changed,
+        pending_ring_request,
+        regular_file_request,
+    )
 }
 
 #[unsafe(no_mangle)]

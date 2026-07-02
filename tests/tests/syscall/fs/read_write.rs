@@ -206,6 +206,36 @@ fn syscall_dispatch_reads_external_partial_page_hit_via_fs_ring() {
     assert_eq!(t.vm.status, STATUS_FS);
     assert_eq!(fd_table::get_offset(t.base, &t.vm, fd as u64), 0);
     assert_eq!(supervisor_shadow_fs_control_count(), 1);
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    assert_eq!(supervisor_fs_pending_ring_request(vm_ptr), 1);
+    assert_eq!(i64::from(supervisor_fs_pending_regular_file_fd(vm_ptr)), fd);
+    assert_ne!(supervisor_fs_pending_regular_file_ofd(vm_ptr), 0);
+    let completion_decision = supervisor_fs_completion_decision(
+        vm_ptr,
+        thread_pending_fs_opcode(vm_ptr),
+        thread_pending_fs_effects(vm_ptr),
+        8192,
+        0,
+        0,
+        supervisor_fs_pending_ring_request(vm_ptr),
+        1,
+    );
+    assert_ne!(
+        completion_decision & supervisor_fs_completion_flag_memfs_dirty(),
+        0
+    );
+    assert_eq!(
+        completion_decision & supervisor_fs_completion_flag_memfs_publish_ready(),
+        0
+    );
+    assert_ne!(
+        completion_decision & supervisor_fs_completion_flag_ofd_state_changed(),
+        0
+    );
+    assert_ne!(
+        completion_decision & supervisor_fs_completion_flag_regular_file_request(),
+        0
+    );
 
     let mut record = vec![0u8; supervisor_fs_control_record_bytes() as usize];
     assert_eq!(

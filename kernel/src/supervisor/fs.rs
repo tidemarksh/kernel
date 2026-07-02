@@ -1,5 +1,9 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
+use crate::abi::{FD_TYPE_FILE, MAX_FDS};
+use crate::fs::{fd_table, ring_buffer};
+use crate::types::ThreadState;
+
 static FS_CONTROL_COUNT: AtomicU64 = AtomicU64::new(0);
 static FS_CONTROL_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_FS_CONTROL: super::SupervisorFsControlRecord =
@@ -14,6 +18,89 @@ pub(super) fn init() {
 
 pub fn fs_control_count() -> u64 {
     FS_CONTROL_COUNT.load(Ordering::Relaxed)
+}
+
+fn pending_fs_request(vm_ptr: u32) -> Option<(&'static ThreadState, ring_buffer::FsRequestInfo)> {
+    let vm = super::thread::state_from_ptr(vm_ptr)?;
+    let ps = super::fd::process_state_from_vm_ptr(vm_ptr)?;
+    if !ring_buffer::ring_backed(ps.fs_ring_base) {
+        return None;
+    }
+    ring_buffer::peek_request_info_for_vm(ps.fs_ring_base, vm_ptr).map(|request| (vm, request))
+}
+
+pub fn pending_ring_request(vm_ptr: u32) -> u32 {
+    pending_fs_request(vm_ptr).is_some() as u32
+}
+
+fn pending_regular_file_request(vm_ptr: u32) -> Option<(i32, u32)> {
+    let (vm, request) = pending_fs_request(vm_ptr)?;
+    match request.opcode {
+        ring_buffer::FS_OP_READ
+        | ring_buffer::FS_OP_WRITE
+        | ring_buffer::FS_OP_FSTAT
+        | ring_buffer::FS_OP_LSEEK
+        | ring_buffer::FS_OP_MMAP => {}
+        _ => return None,
+    }
+    if request.fd < 0 || request.fd as usize >= MAX_FDS {
+        return None;
+    }
+    let entry = fd_table::load_process_fd_entry(vm.guest_base, vm.process_ptr, request.fd as usize);
+    if entry.ofd_id == 0 || entry.ofd_id as usize >= MAX_FDS {
+        return None;
+    }
+    let ofd = fd_table::get_ofd(vm.guest_base, vm, request.fd as u64)?;
+    (ofd.fd_type == FD_TYPE_FILE).then_some((request.fd, entry.ofd_id))
+}
+
+pub fn pending_regular_file_fd(vm_ptr: u32) -> i32 {
+    pending_regular_file_request(vm_ptr).map_or(-1, |(fd, _)| fd)
+}
+
+pub fn pending_regular_file_ofd(vm_ptr: u32) -> u32 {
+    pending_regular_file_request(vm_ptr).map_or(0, |(_, ofd_id)| ofd_id)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn completion_decision(
+    _vm_ptr: u32,
+    opcode: u32,
+    effects: u32,
+    result: i64,
+    host_memfs_mutated: u32,
+    host_ofd_state_changed: u32,
+    pending_ring_request: u32,
+    regular_file_request: u32,
+) -> u32 {
+    let fs_succeeded = result >= 0;
+    let memfs_state_may_change = (effects
+        & (crate::syscall::fs::FS_EFFECT_MEMFS_MUTATION
+            | crate::syscall::fs::FS_EFFECT_MEMFS_FILE_DATA))
+        != 0;
+    let memfs_publish_may_be_ready = (effects & crate::syscall::fs::FS_EFFECT_MEMFS_MUTATION) != 0
+        || ((effects & crate::syscall::fs::FS_EFFECT_MEMFS_FILE_DATA) != 0
+            && opcode == ring_buffer::FS_OP_WRITE);
+    let ofd_state_may_change = (effects & crate::syscall::fs::FS_EFFECT_SHARED_OFD_STATE) != 0;
+
+    let mut flags = 0u32;
+    if host_memfs_mutated != 0
+        || (fs_succeeded && (memfs_state_may_change || pending_ring_request != 0))
+    {
+        flags |= super::SUPERVISOR_FS_COMPLETION_FLAG_MEMFS_DIRTY;
+    }
+    if fs_succeeded && memfs_publish_may_be_ready {
+        flags |= super::SUPERVISOR_FS_COMPLETION_FLAG_MEMFS_PUBLISH_READY;
+    }
+    if host_ofd_state_changed != 0
+        || (fs_succeeded && (ofd_state_may_change || pending_ring_request != 0))
+    {
+        flags |= super::SUPERVISOR_FS_COMPLETION_FLAG_OFD_STATE_CHANGED;
+    }
+    if regular_file_request != 0 {
+        flags |= super::SUPERVISOR_FS_COMPLETION_FLAG_REGULAR_FILE_REQUEST;
+    }
+    flags
 }
 
 #[allow(clippy::too_many_arguments)]

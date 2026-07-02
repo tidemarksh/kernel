@@ -153,6 +153,26 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_fs_control_kind_page_cache_fill(), 2);
     assert_eq!(supervisor_fs_control_kind_dirty_page_published(), 3);
     assert_eq!(supervisor_fs_control_kind_dirty_page_flushed(), 4);
+    assert_eq!(supervisor_fs_completion_flag_memfs_dirty(), 1);
+    assert_eq!(supervisor_fs_completion_flag_memfs_publish_ready(), 2);
+    assert_eq!(supervisor_fs_completion_flag_ofd_state_changed(), 4);
+    assert_eq!(supervisor_fs_completion_flag_regular_file_request(), 8);
+    assert_eq!(supervisor_fs_pending_ring_request(0), 0);
+    assert_eq!(supervisor_fs_pending_regular_file_fd(0), -1);
+    assert_eq!(supervisor_fs_pending_regular_file_ofd(0), 0);
+    assert_eq!(
+        supervisor_fs_completion_decision(
+            0,
+            tidemark_kernel::fs::ring_buffer::FS_OP_WRITE,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+        0
+    );
     assert_eq!(supervisor_signal_control_record_bytes(), 120);
     assert_eq!(supervisor_signal_control_record(0, 0), 120);
     assert_eq!(supervisor_signal_control_kind_boundary_check(), 1);
