@@ -739,8 +739,13 @@ pub use crate::exports::kernel::*;
 pub use crate::exports::memfs::*;
 pub use crate::exports::thread::*;
 pub use crate::supervisor::{
-    supervisor_abi_version, supervisor_complete_futex_wait, supervisor_complete_host_op,
-    supervisor_debug_snapshot, supervisor_debug_snapshot_bytes,
+    supervisor_abi_version, supervisor_blocked_wait_retry_delay_ms,
+    supervisor_blocked_wait_retry_reason_active_child,
+    supervisor_blocked_wait_retry_reason_default, supervisor_blocked_wait_retry_reason_immediate,
+    supervisor_blocked_wait_retry_reason_passive_wait,
+    supervisor_blocked_wait_retry_reason_process_gate,
+    supervisor_blocked_wait_retry_reason_standard_defer, supervisor_complete_futex_wait,
+    supervisor_complete_host_op, supervisor_debug_snapshot, supervisor_debug_snapshot_bytes,
     supervisor_enqueue_blocked_wait_timer, supervisor_fault_exit_decision,
     supervisor_fault_exit_decision_bytes, supervisor_fault_exit_kind_process_exit,
     supervisor_fault_exit_kind_thread_exit, supervisor_fd_control_kind_epoll_created,

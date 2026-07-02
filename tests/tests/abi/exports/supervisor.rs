@@ -114,6 +114,16 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_signal_control_kind_blocked_wait_interrupted(), 3);
     assert_eq!(supervisor_resume_kind_runnable_thread(), 2);
     assert_eq!(supervisor_resume_blocked_syscall(0, 0), -(EFAULT as i64));
+    assert_eq!(supervisor_blocked_wait_retry_reason_default(), 0);
+    assert_eq!(supervisor_blocked_wait_retry_reason_immediate(), 1);
+    assert_eq!(supervisor_blocked_wait_retry_reason_standard_defer(), 2);
+    assert_eq!(supervisor_blocked_wait_retry_reason_active_child(), 3);
+    assert_eq!(supervisor_blocked_wait_retry_reason_passive_wait(), 4);
+    assert_eq!(supervisor_blocked_wait_retry_reason_process_gate(), 5);
+    assert_eq!(
+        supervisor_blocked_wait_retry_delay_ms(0, supervisor_blocked_wait_retry_reason_default()),
+        -(EFAULT as i32)
+    );
     assert_eq!(supervisor_enqueue_blocked_wait_timer(0), EFAULT as i32);
 
     let empty_hash = supervisor_shadow_thread_event_log_hash();
@@ -133,6 +143,58 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     t.vm.guest_memory_policy_limit = 5 * 1024 * 1024;
     t.vm.process_max_memory_pages = 96;
     let vm_ptr = &mut t.vm as *mut _ as u32;
+    assert_eq!(
+        supervisor_blocked_wait_retry_delay_ms(
+            vm_ptr,
+            supervisor_blocked_wait_retry_reason_immediate()
+        ),
+        0
+    );
+    assert_eq!(
+        supervisor_blocked_wait_retry_delay_ms(
+            vm_ptr,
+            supervisor_blocked_wait_retry_reason_standard_defer()
+        ),
+        10
+    );
+    assert_eq!(
+        supervisor_blocked_wait_retry_delay_ms(
+            vm_ptr,
+            supervisor_blocked_wait_retry_reason_active_child()
+        ),
+        5
+    );
+    assert_eq!(
+        supervisor_blocked_wait_retry_delay_ms(
+            vm_ptr,
+            supervisor_blocked_wait_retry_reason_passive_wait()
+        ),
+        25
+    );
+    assert_eq!(
+        supervisor_blocked_wait_retry_delay_ms(
+            vm_ptr,
+            supervisor_blocked_wait_retry_reason_process_gate()
+        ),
+        50
+    );
+    assert_eq!(
+        supervisor_blocked_wait_retry_delay_ms(
+            vm_ptr,
+            supervisor_blocked_wait_retry_reason_default()
+        ),
+        1
+    );
+    let initial_status = t.vm.status;
+    t.vm.status = STATUS_WAIT4;
+    assert_eq!(
+        supervisor_blocked_wait_retry_delay_ms(
+            vm_ptr,
+            supervisor_blocked_wait_retry_reason_default()
+        ),
+        10
+    );
+    t.vm.status = initial_status;
     let child_pid = tidemark_kernel::syscall::process::sys_fork(&mut t.vm, t.base, 0, 0, 0, 0, 0);
     assert!(child_pid > 0);
     assert_eq!(t.vm.status, STATUS_EXECVE_SPAWN);
