@@ -233,7 +233,31 @@ fn pending_request_file_context(
     None
 }
 
+fn pending_execve_backing_fill_request(vm_ptr: u32) -> Option<PendingBackingFillRequest> {
+    super::thread::state_from_ptr(vm_ptr)?;
+    let len = crate::syscall::process::execve_backing_miss_len(vm_ptr);
+    if len == 0 {
+        return None;
+    }
+    let ino = crate::syscall::process::execve_backing_miss_ino(vm_ptr);
+    let expected_size = crate::syscall::process::execve_backing_miss_expected_size(vm_ptr);
+    if ino == 0 || expected_size == 0 {
+        return None;
+    }
+    Some(PendingBackingFillRequest {
+        ino,
+        offset: crate::syscall::process::execve_backing_miss_offset(vm_ptr),
+        length: len as u64,
+        expected_size: expected_size as u64,
+        opcode: ring_buffer::FS_OP_EXECVE,
+    })
+}
+
 fn pending_backing_fill_request(vm_ptr: u32) -> Option<PendingBackingFillRequest> {
+    if let Some(request) = pending_execve_backing_fill_request(vm_ptr) {
+        return Some(request);
+    }
+
     let (vm, request) = pending_fs_request(vm_ptr)?;
     match request.opcode {
         ring_buffer::FS_OP_READ
@@ -317,6 +341,43 @@ pub fn pending_backing_fill_expected_size(vm_ptr: u32) -> u64 {
 
 pub fn pending_backing_fill_opcode(vm_ptr: u32) -> u32 {
     pending_backing_fill_request(vm_ptr).map_or(0, |request| request.opcode)
+}
+
+pub fn clear_pending_backing_fill(vm_ptr: u32) -> i32 {
+    if pending_execve_backing_fill_request(vm_ptr).is_none() {
+        return 0;
+    }
+    crate::syscall::process::clear_execve_backing_miss(vm_ptr);
+    1
+}
+
+pub fn backing_retry_limit(_opcode: u32, offset: u64, length: u64, expected_size: u64) -> u32 {
+    if length == 0 || expected_size == 0 {
+        return 0;
+    }
+    let page_size = crate::abi::PAGE_SIZE;
+    let aligned_offset = offset / page_size * page_size;
+    let requested_end = offset.saturating_add(length);
+    let aligned_end = core::cmp::min(
+        expected_size,
+        requested_end
+            .saturating_add(page_size - 1)
+            .saturating_div(page_size)
+            .saturating_mul(page_size),
+    );
+    let aligned_length = core::cmp::max(page_size, aligned_end.saturating_sub(aligned_offset));
+    let source_chunks = expected_size
+        .saturating_add(aligned_length - 1)
+        .saturating_div(aligned_length);
+    let attempts =
+        source_chunks.saturating_add(super::SUPERVISOR_FS_BACKING_RETRY_FINAL_SCAN_ATTEMPTS as u64);
+    core::cmp::min(
+        super::SUPERVISOR_FS_BACKING_RETRY_MAX_ATTEMPTS,
+        core::cmp::max(
+            super::SUPERVISOR_FS_BACKING_RETRY_MIN_ATTEMPTS,
+            core::cmp::min(attempts, u32::MAX as u64) as u32,
+        ),
+    )
 }
 
 fn pending_mmap_guest_write_request(vm_ptr: u32) -> Option<(u64, u64)> {

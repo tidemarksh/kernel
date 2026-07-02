@@ -182,6 +182,9 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_fs_backing_object_op_replace(), 3);
     assert_eq!(supervisor_fs_backing_object_op_flush_write(), 4);
     assert_eq!(supervisor_fs_backing_object_op_flush_truncate(), 5);
+    assert_eq!(supervisor_fs_backing_retry_min_attempts(), 256);
+    assert_eq!(supervisor_fs_backing_retry_max_attempts(), 16 * 1024);
+    assert_eq!(supervisor_fs_backing_retry_final_scan_attempts(), 2);
     assert_eq!(supervisor_fs_backing_fill_mode_resident(), 0);
     assert_eq!(supervisor_fs_backing_fill_mode_direct(), 1);
     assert_eq!(supervisor_fs_backing_source_range_none(), 0);
@@ -200,6 +203,34 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_fs_pending_backing_fill_length(0), 0);
     assert_eq!(supervisor_fs_pending_backing_fill_expected_size(0), 0);
     assert_eq!(supervisor_fs_pending_backing_fill_opcode(0), 0);
+    assert_eq!(supervisor_fs_clear_pending_backing_fill(0), 0);
+    assert_eq!(
+        supervisor_fs_backing_retry_limit(
+            tidemark_kernel::fs::ring_buffer::FS_OP_EXECVE,
+            0,
+            4096,
+            4096 * 260,
+        ),
+        262
+    );
+    assert_eq!(
+        supervisor_fs_backing_retry_limit(
+            tidemark_kernel::fs::ring_buffer::FS_OP_EXECVE,
+            128,
+            16,
+            8192,
+        ),
+        supervisor_fs_backing_retry_min_attempts()
+    );
+    assert_eq!(
+        supervisor_fs_backing_retry_limit(
+            tidemark_kernel::fs::ring_buffer::FS_OP_EXECVE,
+            0,
+            0,
+            8192,
+        ),
+        0
+    );
     assert_eq!(supervisor_fs_pending_mmap_guest_write_ptr(0), 0);
     assert_eq!(supervisor_fs_pending_mmap_guest_write_len(0), 0);
     assert_eq!(

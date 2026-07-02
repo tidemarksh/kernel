@@ -393,6 +393,18 @@ export_u32_const!(
     super::SUPERVISOR_FS_BACKING_OBJECT_OP_FLUSH_TRUNCATE
 );
 export_u32_const!(
+    supervisor_fs_backing_retry_min_attempts,
+    super::SUPERVISOR_FS_BACKING_RETRY_MIN_ATTEMPTS
+);
+export_u32_const!(
+    supervisor_fs_backing_retry_max_attempts,
+    super::SUPERVISOR_FS_BACKING_RETRY_MAX_ATTEMPTS
+);
+export_u32_const!(
+    supervisor_fs_backing_retry_final_scan_attempts,
+    super::SUPERVISOR_FS_BACKING_RETRY_FINAL_SCAN_ATTEMPTS
+);
+export_u32_const!(
     supervisor_fs_backing_fill_mode_resident,
     super::SUPERVISOR_FS_BACKING_FILL_MODE_RESIDENT
 );
@@ -962,6 +974,21 @@ pub extern "C" fn supervisor_fs_pending_backing_fill_expected_size(vm_ptr: u32) 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fs_pending_backing_fill_opcode(vm_ptr: u32) -> u32 {
     super::fs::pending_backing_fill_opcode(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_clear_pending_backing_fill(vm_ptr: u32) -> i32 {
+    super::fs::clear_pending_backing_fill(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_backing_retry_limit(
+    opcode: u32,
+    offset: u64,
+    length: u64,
+    expected_size: u64,
+) -> u32 {
+    super::fs::backing_retry_limit(opcode, offset, length, expected_size)
 }
 
 #[unsafe(no_mangle)]
