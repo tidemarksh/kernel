@@ -10,6 +10,9 @@ static mut LAST_FS_CONTROL: super::SupervisorFsControlRecord =
     super::SupervisorFsControlRecord::empty();
 static DIRTY_PAGE_DECISION_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_DIRTY_PAGE_DECISION: DirtyPageDecision = DirtyPageDecision::empty();
+static BACKING_SOURCE_RANGE_DECISION_LOCK: AtomicU32 = AtomicU32::new(0);
+static mut LAST_BACKING_SOURCE_RANGE_DECISION: BackingSourceRangeDecision =
+    BackingSourceRangeDecision::empty();
 const MAX_SUPERVISOR_FS_INODES: u32 = 65_536;
 const DIRECT_BACKING_MMAP_MIN_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -34,6 +37,23 @@ impl DirtyPageDecision {
     }
 }
 
+#[derive(Clone, Copy)]
+struct BackingSourceRangeDecision {
+    source_byte_length: u64,
+    source_offset: u64,
+    read_length: u64,
+}
+
+impl BackingSourceRangeDecision {
+    const fn empty() -> Self {
+        Self {
+            source_byte_length: 0,
+            source_offset: 0,
+            read_length: 0,
+        }
+    }
+}
+
 pub(super) fn init() {
     FS_CONTROL_COUNT.store(0, Ordering::Relaxed);
     super::lock::with_spin_lock(&FS_CONTROL_LOCK, || unsafe {
@@ -41,6 +61,9 @@ pub(super) fn init() {
     });
     super::lock::with_spin_lock(&DIRTY_PAGE_DECISION_LOCK, || unsafe {
         LAST_DIRTY_PAGE_DECISION = DirtyPageDecision::empty();
+    });
+    super::lock::with_spin_lock(&BACKING_SOURCE_RANGE_DECISION_LOCK, || unsafe {
+        LAST_BACKING_SOURCE_RANGE_DECISION = BackingSourceRangeDecision::empty();
     });
 }
 
@@ -240,6 +263,18 @@ fn store_dirty_page_decision(decision: DirtyPageDecision) {
 fn latest_dirty_page_decision() -> DirtyPageDecision {
     super::lock::with_spin_lock(&DIRTY_PAGE_DECISION_LOCK, || unsafe {
         LAST_DIRTY_PAGE_DECISION
+    })
+}
+
+fn store_backing_source_range_decision(decision: BackingSourceRangeDecision) {
+    super::lock::with_spin_lock(&BACKING_SOURCE_RANGE_DECISION_LOCK, || unsafe {
+        LAST_BACKING_SOURCE_RANGE_DECISION = decision;
+    });
+}
+
+fn latest_backing_source_range_decision() -> BackingSourceRangeDecision {
+    super::lock::with_spin_lock(&BACKING_SOURCE_RANGE_DECISION_LOCK, || unsafe {
+        LAST_BACKING_SOURCE_RANGE_DECISION
     })
 }
 
@@ -466,6 +501,70 @@ pub fn backing_fill_mode_decision(
         return super::SUPERVISOR_FS_BACKING_FILL_MODE_DIRECT as i32;
     }
     super::SUPERVISOR_FS_BACKING_FILL_MODE_RESIDENT as i32
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn backing_source_range_decision(
+    ino: u32,
+    file_offset: i64,
+    length: i64,
+    expected_size: i64,
+    extent_offset: i64,
+    extent_length: i64,
+    source_byte_length: i64,
+    require_source_bounds: u32,
+) -> i32 {
+    let mut decision = BackingSourceRangeDecision::empty();
+    let mode = if !valid_ino(ino)
+        || file_offset < 0
+        || length <= 0
+        || expected_size < 0
+        || extent_offset < 0
+        || extent_length < 0
+        || file_offset >= expected_size
+        || extent_length != expected_size
+    {
+        super::SUPERVISOR_FS_BACKING_SOURCE_RANGE_NONE as i32
+    } else {
+        let extent_offset = extent_offset as u64;
+        let extent_length = extent_length as u64;
+        let file_offset = file_offset as u64;
+        let length = length as u64;
+        let expected_size = expected_size as u64;
+        if let (Some(source_end), Some(source_offset)) = (
+            extent_offset.checked_add(extent_length),
+            extent_offset.checked_add(file_offset),
+        ) {
+            if require_source_bounds != 0
+                && (source_byte_length < 0 || source_end > source_byte_length as u64)
+            {
+                super::SUPERVISOR_FS_BACKING_SOURCE_RANGE_NONE as i32
+            } else {
+                decision = BackingSourceRangeDecision {
+                    source_byte_length: source_end,
+                    source_offset,
+                    read_length: core::cmp::min(length, expected_size - file_offset),
+                };
+                super::SUPERVISOR_FS_BACKING_SOURCE_RANGE_READ as i32
+            }
+        } else {
+            super::SUPERVISOR_FS_BACKING_SOURCE_RANGE_NONE as i32
+        }
+    };
+    store_backing_source_range_decision(decision);
+    mode
+}
+
+pub fn backing_source_range_source_byte_length() -> u64 {
+    latest_backing_source_range_decision().source_byte_length
+}
+
+pub fn backing_source_range_source_offset() -> u64 {
+    latest_backing_source_range_decision().source_offset
+}
+
+pub fn backing_source_range_read_length() -> u64 {
+    latest_backing_source_range_decision().read_length
 }
 
 #[allow(clippy::too_many_arguments)]

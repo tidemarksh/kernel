@@ -165,6 +165,8 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_fs_dirty_page_flag_writeback_required(), 4);
     assert_eq!(supervisor_fs_backing_fill_mode_resident(), 0);
     assert_eq!(supervisor_fs_backing_fill_mode_direct(), 1);
+    assert_eq!(supervisor_fs_backing_source_range_none(), 0);
+    assert_eq!(supervisor_fs_backing_source_range_read(), 1);
     assert_eq!(supervisor_fs_page_table_source_backing(), 0);
     assert_eq!(supervisor_fs_page_table_source_resident(), 1);
     assert_eq!(supervisor_fs_pending_ring_request(0), 0);
@@ -343,6 +345,33 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
             1,
         ),
         supervisor_fs_backing_fill_mode_resident() as i32
+    );
+    assert_eq!(
+        supervisor_fs_backing_source_range_decision(2, 3, 5, 14, 7, 14, 21, 1),
+        supervisor_fs_backing_source_range_read() as i32
+    );
+    assert_eq!(supervisor_fs_backing_source_range_source_byte_length(), 21);
+    assert_eq!(supervisor_fs_backing_source_range_source_offset(), 10);
+    assert_eq!(supervisor_fs_backing_source_range_read_length(), 5);
+    assert_eq!(
+        supervisor_fs_backing_source_range_decision(2, 9, 10, 14, 7, 14, 21, 1),
+        supervisor_fs_backing_source_range_read() as i32
+    );
+    assert_eq!(supervisor_fs_backing_source_range_source_offset(), 16);
+    assert_eq!(supervisor_fs_backing_source_range_read_length(), 5);
+    assert_eq!(
+        supervisor_fs_backing_source_range_decision(2, 3, 5, 14, 7, 14, 20, 1),
+        supervisor_fs_backing_source_range_none() as i32
+    );
+    assert_eq!(supervisor_fs_backing_source_range_source_offset(), 0);
+    assert_eq!(supervisor_fs_backing_source_range_read_length(), 0);
+    assert_eq!(
+        supervisor_fs_backing_source_range_decision(2, 3, 5, 14, 7, 13, 20, 1),
+        supervisor_fs_backing_source_range_none() as i32
+    );
+    assert_eq!(
+        supervisor_fs_backing_source_range_decision(0, 3, 5, 14, 7, 14, 21, 1),
+        supervisor_fs_backing_source_range_none() as i32
     );
     assert_eq!(supervisor_shadow_fs_control_count(), 3);
     supervisor_reset_shadow_log();

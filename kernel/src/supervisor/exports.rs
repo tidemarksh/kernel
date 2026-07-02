@@ -325,6 +325,14 @@ export_u32_const!(
     super::SUPERVISOR_FS_BACKING_FILL_MODE_DIRECT
 );
 export_u32_const!(
+    supervisor_fs_backing_source_range_none,
+    super::SUPERVISOR_FS_BACKING_SOURCE_RANGE_NONE
+);
+export_u32_const!(
+    supervisor_fs_backing_source_range_read,
+    super::SUPERVISOR_FS_BACKING_SOURCE_RANGE_READ
+);
+export_u32_const!(
     supervisor_fs_page_table_source_backing,
     super::SUPERVISOR_FS_PAGE_TABLE_SOURCE_BACKING
 );
@@ -964,6 +972,44 @@ pub extern "C" fn supervisor_fs_backing_fill_mode_decision(
         head_probe_readable,
         tail_probe_readable,
     )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_backing_source_range_decision(
+    ino: u32,
+    file_offset: i64,
+    length: i64,
+    expected_size: i64,
+    extent_offset: i64,
+    extent_length: i64,
+    source_byte_length: i64,
+    require_source_bounds: u32,
+) -> i32 {
+    super::fs::backing_source_range_decision(
+        ino,
+        file_offset,
+        length,
+        expected_size,
+        extent_offset,
+        extent_length,
+        source_byte_length,
+        require_source_bounds,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_backing_source_range_source_byte_length() -> u64 {
+    super::fs::backing_source_range_source_byte_length()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_backing_source_range_source_offset() -> u64 {
+    super::fs::backing_source_range_source_offset()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_backing_source_range_read_length() -> u64 {
+    super::fs::backing_source_range_read_length()
 }
 
 #[unsafe(no_mangle)]
