@@ -379,7 +379,7 @@ pub fn discard_other_threads_for_exec(vm: &ThreadState, base: u32) -> u32 {
 /// then futex-wake that address. Returns the caller's TID.
 /// https://man7.org/linux/man-pages/man2/set_tid_address.2.html
 pub fn sys_set_tid_address(vm: &mut ThreadState, tidptr: u64) -> i64 {
-    vm.clear_child_tid = tidptr;
+    crate::supervisor::set_thread_clear_child_tid(vm, vm.guest_base, tidptr);
     vm.tid as i64
 }
 

@@ -37,8 +37,8 @@ pub(super) use records::*;
 pub use signal::{record_signal_control, signal_control_count};
 pub use thread::{
     discard_other_threads_for_exec, init_main_thread, last_clone_spawn, last_clone_spawn_details,
-    process_thread_count, register_clone_thread, reset_thread_clone_registry, spawn_from_clone,
-    thread_record_blocked_addr,
+    process_thread_count, register_clone_thread, reset_thread_clone_registry,
+    set_thread_clear_child_tid, spawn_from_clone, thread_record_blocked_addr,
 };
 pub use thread_exit::{
     cleanup_thread_robust_futexes, clear_tid_and_wake, complete_thread_exit,

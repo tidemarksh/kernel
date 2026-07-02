@@ -356,6 +356,23 @@ pub fn discard_other_threads_for_exec(vm: &ThreadState, base: u32) -> u32 {
     }
 }
 
+pub fn set_thread_clear_child_tid(vm: &mut ThreadState, base: u32, tidptr: u64) {
+    vm.clear_child_tid = tidptr;
+
+    unsafe {
+        let Some(record_ptr) = thread_record_ptr(base, vm.process_ptr, vm.tid) else {
+            return;
+        };
+        let mut record = read_thread_record(record_ptr);
+        if record.state == THREAD_NONE || record.state == THREAD_DEAD {
+            return;
+        }
+
+        record.clear_child_tid = tidptr;
+        write_thread_record(record_ptr, record);
+    }
+}
+
 pub fn register_clone_thread(
     vm: &mut ThreadState,
     base: u32,

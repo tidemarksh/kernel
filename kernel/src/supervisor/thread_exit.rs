@@ -267,7 +267,13 @@ pub fn complete_thread_group_exit(
             };
             let _ = cleanup_robust_futexes(process_ptr, base, record.tid as u32, robust_head);
 
-            let clear_child_tid = record.clear_child_tid;
+            let clear_child_tid = if record.tid == vm.tid {
+                vm.clear_child_tid
+            } else if let Some(thread_vm) = thread_vm_ptr {
+                (*thread_vm).clear_child_tid
+            } else {
+                record.clear_child_tid
+            };
             if record.tid == vm.tid {
                 vm.exit_code = exit_code;
                 vm.term_signal = term_signal;

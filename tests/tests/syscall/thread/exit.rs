@@ -164,6 +164,74 @@ fn contract_exit_group_terminates_sibling_thread_state_and_blocks_future_steps()
 }
 
 #[test]
+fn contract_set_tid_address_updates_supervisor_thread_record() {
+    let mut t = TestVm::new();
+    let clear_child_tid = t.scratch + 0x480;
+
+    assert_eq!(
+        thread_impl::sys_set_tid_address(&mut t.vm, clear_child_tid),
+        t.vm.tid as i64
+    );
+    assert_eq!(t.vm.clear_child_tid, clear_child_tid);
+
+    let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+    assert_eq!(
+        ps.threads[(t.vm.tid - 1) as usize].clear_child_tid,
+        clear_child_tid
+    );
+}
+
+#[test]
+fn contract_exit_group_clears_updated_sibling_clear_child_tid() {
+    let mut t = TestVm::new();
+    let child_ptr = unsafe {
+        tidemark_kernel::alloc::alloc_zeroed(
+            core::mem::size_of::<ThreadState>() as u32,
+            core::mem::align_of::<ThreadState>() as u32,
+        )
+    };
+    assert_ne!(child_ptr, 0);
+    let child = unsafe { &mut *(child_ptr as *mut ThreadState) };
+    child.tid = 2;
+    child.guest_base = t.base;
+    child.guest_memory_policy_limit = t.vm.guest_memory_policy_limit;
+    child.process_ptr = t.vm.process_ptr;
+    child.pc = t.vm.pc;
+    child.x[2] = t.vm.x[2];
+
+    let stale_clear_child_tid = t.scratch + 0x500;
+    let updated_clear_child_tid = t.scratch + 0x504;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, stale_clear_child_tid, child.tid as u32);
+        tidemark_kernel::guest_mem::write_u32(t.base, updated_clear_child_tid, child.tid as u32);
+    }
+
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    ps.thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
+    ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, child_ptr, stale_clear_child_tid, 0);
+
+    assert_eq!(
+        thread_impl::sys_set_tid_address(child, updated_clear_child_tid),
+        child.tid as i64
+    );
+    assert_eq!(child.clear_child_tid, updated_clear_child_tid);
+    assert_eq!(ps.threads[1].clear_child_tid, updated_clear_child_tid);
+
+    let status = thread_impl::sys_exit_group(&mut t.vm, t.base, 9);
+    assert_eq!(status, STATUS_FAULT);
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, updated_clear_child_tid) },
+        0
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, stale_clear_child_tid) },
+        child.tid as u32
+    );
+    assert_eq!(child.clear_child_tid, 0);
+}
+
+#[test]
 fn contract_init_main_thread_records_running_slot() {
     let mut t = TestVm::new();
     let vm_ptr = &mut t.vm as *mut ThreadState as u32;
