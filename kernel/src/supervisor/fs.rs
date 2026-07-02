@@ -8,11 +8,38 @@ static FS_CONTROL_COUNT: AtomicU64 = AtomicU64::new(0);
 static FS_CONTROL_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_FS_CONTROL: super::SupervisorFsControlRecord =
     super::SupervisorFsControlRecord::empty();
+static DIRTY_PAGE_DECISION_LOCK: AtomicU32 = AtomicU32::new(0);
+static mut LAST_DIRTY_PAGE_DECISION: DirtyPageDecision = DirtyPageDecision::empty();
+const MAX_SUPERVISOR_FS_INODES: u32 = 65_536;
+
+#[derive(Clone, Copy)]
+struct DirtyPageDecision {
+    result: i64,
+    next_size: u64,
+    file_object_id: u64,
+    generation: u64,
+    flags: u32,
+}
+
+impl DirtyPageDecision {
+    const fn empty() -> Self {
+        Self {
+            result: 0,
+            next_size: 0,
+            file_object_id: 0,
+            generation: 0,
+            flags: 0,
+        }
+    }
+}
 
 pub(super) fn init() {
     FS_CONTROL_COUNT.store(0, Ordering::Relaxed);
     super::lock::with_spin_lock(&FS_CONTROL_LOCK, || unsafe {
         LAST_FS_CONTROL = super::SupervisorFsControlRecord::empty();
+    });
+    super::lock::with_spin_lock(&DIRTY_PAGE_DECISION_LOCK, || unsafe {
+        LAST_DIRTY_PAGE_DECISION = DirtyPageDecision::empty();
     });
 }
 
@@ -201,6 +228,188 @@ pub fn pending_mmap_guest_write_ptr(vm_ptr: u32) -> u64 {
 
 pub fn pending_mmap_guest_write_len(vm_ptr: u32) -> u64 {
     pending_mmap_guest_write_request(vm_ptr).map_or(0, |(_, len)| len)
+}
+
+fn store_dirty_page_decision(decision: DirtyPageDecision) {
+    super::lock::with_spin_lock(&DIRTY_PAGE_DECISION_LOCK, || unsafe {
+        LAST_DIRTY_PAGE_DECISION = decision;
+    });
+}
+
+fn latest_dirty_page_decision() -> DirtyPageDecision {
+    super::lock::with_spin_lock(&DIRTY_PAGE_DECISION_LOCK, || unsafe {
+        LAST_DIRTY_PAGE_DECISION
+    })
+}
+
+fn invalid_dirty_page_decision() -> DirtyPageDecision {
+    DirtyPageDecision {
+        result: crate::abi::EINVAL,
+        ..DirtyPageDecision::empty()
+    }
+}
+
+fn enospc_dirty_page_decision() -> DirtyPageDecision {
+    DirtyPageDecision {
+        result: crate::abi::ENOSPC,
+        ..DirtyPageDecision::empty()
+    }
+}
+
+fn valid_ino(ino: u32) -> bool {
+    ino > 0 && ino < MAX_SUPERVISOR_FS_INODES
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn dirty_page_decision(
+    op: u32,
+    ino: u32,
+    offset: u64,
+    length_or_size: u64,
+    current_size: u64,
+    current_file_object_id: u64,
+    current_generation: u64,
+    existing_dirty_pages: u32,
+    delta_dirty_pages: u32,
+    resident_page_capacity: u32,
+    page_map_newer: u32,
+) -> i64 {
+    let decision = match op {
+        super::SUPERVISOR_FS_DIRTY_PAGE_OP_WRITE => {
+            if !valid_ino(ino) || length_or_size == 0 {
+                invalid_dirty_page_decision()
+            } else if let Some(end) = offset.checked_add(length_or_size) {
+                if end > u32::MAX as u64
+                    || existing_dirty_pages.saturating_add(delta_dirty_pages)
+                        > resident_page_capacity
+                {
+                    enospc_dirty_page_decision()
+                } else {
+                    let next_size = core::cmp::max(current_size, end);
+                    let file_object_id = if current_file_object_id == 0 {
+                        ino as u64
+                    } else {
+                        current_file_object_id
+                    };
+                    let generation = if current_file_object_id == 0 {
+                        current_generation.saturating_add(1)
+                    } else {
+                        current_generation
+                    };
+                    DirtyPageDecision {
+                        result: length_or_size as i64,
+                        next_size,
+                        file_object_id,
+                        generation,
+                        flags: super::SUPERVISOR_FS_DIRTY_PAGE_FLAG_UPDATE_INODE
+                            | super::SUPERVISOR_FS_DIRTY_PAGE_FLAG_PUBLISH_DIRTY,
+                    }
+                }
+            } else {
+                enospc_dirty_page_decision()
+            }
+        }
+        super::SUPERVISOR_FS_DIRTY_PAGE_OP_TRUNCATE => {
+            if !valid_ino(ino) || length_or_size > u32::MAX as u64 {
+                invalid_dirty_page_decision()
+            } else if delta_dirty_pages > resident_page_capacity {
+                enospc_dirty_page_decision()
+            } else {
+                DirtyPageDecision {
+                    result: 0,
+                    next_size: length_or_size,
+                    file_object_id: if current_file_object_id == 0 {
+                        ino as u64
+                    } else {
+                        current_file_object_id
+                    },
+                    generation: current_generation.saturating_add(1),
+                    flags: super::SUPERVISOR_FS_DIRTY_PAGE_FLAG_UPDATE_INODE
+                        | super::SUPERVISOR_FS_DIRTY_PAGE_FLAG_PUBLISH_DIRTY,
+                }
+            }
+        }
+        super::SUPERVISOR_FS_DIRTY_PAGE_OP_FLUSH => {
+            if !valid_ino(ino) {
+                invalid_dirty_page_decision()
+            } else {
+                let writeback_required = delta_dirty_pages != 0 || page_map_newer != 0;
+                DirtyPageDecision {
+                    result: 0,
+                    next_size: current_size,
+                    file_object_id: current_file_object_id,
+                    generation: current_generation,
+                    flags: if writeback_required {
+                        super::SUPERVISOR_FS_DIRTY_PAGE_FLAG_WRITEBACK_REQUIRED
+                    } else {
+                        0
+                    },
+                }
+            }
+        }
+        _ => invalid_dirty_page_decision(),
+    };
+
+    store_dirty_page_decision(decision);
+    if decision.result >= 0
+        && (op == super::SUPERVISOR_FS_DIRTY_PAGE_OP_WRITE
+            || op == super::SUPERVISOR_FS_DIRTY_PAGE_OP_TRUNCATE)
+    {
+        record_fs_control(
+            super::SUPERVISOR_FS_CONTROL_KIND_DIRTY_PAGE_PUBLISHED,
+            0,
+            0,
+            0,
+            0,
+            ino,
+            op,
+            decision.file_object_id,
+            0,
+            offset,
+            length_or_size,
+            decision.result,
+            decision.flags as u64,
+            decision.next_size,
+            decision.generation,
+        );
+    } else if op == super::SUPERVISOR_FS_DIRTY_PAGE_OP_FLUSH
+        && (decision.flags & super::SUPERVISOR_FS_DIRTY_PAGE_FLAG_WRITEBACK_REQUIRED) != 0
+    {
+        record_fs_control(
+            super::SUPERVISOR_FS_CONTROL_KIND_DIRTY_PAGE_FLUSHED,
+            0,
+            0,
+            0,
+            0,
+            ino,
+            op,
+            current_file_object_id,
+            0,
+            offset,
+            length_or_size,
+            decision.result,
+            decision.flags as u64,
+            delta_dirty_pages as u64,
+            current_generation,
+        );
+    }
+    decision.result
+}
+
+pub fn dirty_page_decision_next_size() -> u64 {
+    latest_dirty_page_decision().next_size
+}
+
+pub fn dirty_page_decision_file_object_id() -> u64 {
+    latest_dirty_page_decision().file_object_id
+}
+
+pub fn dirty_page_decision_generation() -> u64 {
+    latest_dirty_page_decision().generation
+}
+
+pub fn dirty_page_decision_flags() -> u32 {
+    latest_dirty_page_decision().flags
 }
 
 #[allow(clippy::too_many_arguments)]

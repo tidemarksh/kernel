@@ -293,6 +293,30 @@ export_u32_const!(
     super::SUPERVISOR_FS_COMPLETION_FLAG_REGULAR_FILE_REQUEST
 );
 export_u32_const!(
+    supervisor_fs_dirty_page_op_write,
+    super::SUPERVISOR_FS_DIRTY_PAGE_OP_WRITE
+);
+export_u32_const!(
+    supervisor_fs_dirty_page_op_truncate,
+    super::SUPERVISOR_FS_DIRTY_PAGE_OP_TRUNCATE
+);
+export_u32_const!(
+    supervisor_fs_dirty_page_op_flush,
+    super::SUPERVISOR_FS_DIRTY_PAGE_OP_FLUSH
+);
+export_u32_const!(
+    supervisor_fs_dirty_page_flag_update_inode,
+    super::SUPERVISOR_FS_DIRTY_PAGE_FLAG_UPDATE_INODE
+);
+export_u32_const!(
+    supervisor_fs_dirty_page_flag_publish_dirty,
+    super::SUPERVISOR_FS_DIRTY_PAGE_FLAG_PUBLISH_DIRTY
+);
+export_u32_const!(
+    supervisor_fs_dirty_page_flag_writeback_required,
+    super::SUPERVISOR_FS_DIRTY_PAGE_FLAG_WRITEBACK_REQUIRED
+);
+export_u32_const!(
     supervisor_signal_control_record_bytes,
     super::SUPERVISOR_SIGNAL_CONTROL_RECORD_BYTES
 );
@@ -832,6 +856,55 @@ pub extern "C" fn supervisor_fs_pending_mmap_guest_write_ptr(vm_ptr: u32) -> u64
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fs_pending_mmap_guest_write_len(vm_ptr: u32) -> u64 {
     super::fs::pending_mmap_guest_write_len(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_dirty_page_decision(
+    op: u32,
+    ino: u32,
+    offset: u64,
+    length_or_size: u64,
+    current_size: u64,
+    current_file_object_id: u64,
+    current_generation: u64,
+    existing_dirty_pages: u32,
+    delta_dirty_pages: u32,
+    resident_page_capacity: u32,
+    page_map_newer: u32,
+) -> i64 {
+    super::fs::dirty_page_decision(
+        op,
+        ino,
+        offset,
+        length_or_size,
+        current_size,
+        current_file_object_id,
+        current_generation,
+        existing_dirty_pages,
+        delta_dirty_pages,
+        resident_page_capacity,
+        page_map_newer,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_dirty_page_decision_next_size() -> u64 {
+    super::fs::dirty_page_decision_next_size()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_dirty_page_decision_file_object_id() -> u64 {
+    super::fs::dirty_page_decision_file_object_id()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_dirty_page_decision_generation() -> u64 {
+    super::fs::dirty_page_decision_generation()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_dirty_page_decision_flags() -> u32 {
+    super::fs::dirty_page_decision_flags()
 }
 
 #[unsafe(no_mangle)]
