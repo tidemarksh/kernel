@@ -9,7 +9,9 @@ use tidemark_kernel::supervisor::{
     supervisor_process_held_ofd_refcount, supervisor_process_held_pipe_slot_mask,
     supervisor_process_pipe_read_open_count, supervisor_process_pipe_slot_mode,
     supervisor_process_pipe_used_mask, supervisor_process_pipe_write_open_count,
-    supervisor_reset_shadow_log, supervisor_shadow_fd_control_count,
+    supervisor_process_private_pipe_slot_mask, supervisor_process_private_pipe_source_mode,
+    supervisor_process_private_pipe_target_mode, supervisor_reset_shadow_log,
+    supervisor_shadow_fd_control_count,
 };
 use tidemark_kernel::syscall::pipe::{self, PipeCloseOutcome};
 use tidemark_kernel::syscall::{poll, pty};
@@ -143,6 +145,64 @@ fn supervisor_blocked_pipe_resume_action_reports_defer_and_direct() {
     assert_eq!(
         supervisor_blocked_pipe_resume_action(eof_vm_ptr),
         supervisor_blocked_pipe_resume_action_direct() as i32
+    );
+}
+
+#[test]
+fn supervisor_pipe_open_counts_include_private_stdio_peers() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    assert_eq!(process_use_pipe_stdio(vm_ptr), 0);
+
+    let stdin_pipe = process_stdin_pipe(vm_ptr);
+    let stdout_pipe = process_stdout_pipe(vm_ptr);
+    let stderr_pipe = process_stderr_pipe(vm_ptr);
+    assert!(stdin_pipe > 0);
+    assert!(stdout_pipe > 0);
+    assert!(stderr_pipe > 0);
+    assert_ne!(stdin_pipe, stdout_pipe);
+    assert_ne!(stdout_pipe, stderr_pipe);
+
+    let private_mask = supervisor_process_private_pipe_slot_mask(vm_ptr);
+    for pipe_slot in [stdin_pipe, stdout_pipe, stderr_pipe] {
+        assert_ne!(private_mask & (1u64 << pipe_slot), 0);
+        assert_ne!(
+            supervisor_process_pipe_used_mask(vm_ptr) & (1u64 << pipe_slot),
+            0
+        );
+        assert_eq!(
+            supervisor_process_private_pipe_source_mode(vm_ptr, pipe_slot),
+            supervisor_pipe_slot_mode_read() | supervisor_pipe_slot_mode_write()
+        );
+        assert_eq!(
+            supervisor_process_private_pipe_target_mode(vm_ptr, pipe_slot),
+            supervisor_pipe_slot_mode_read()
+        );
+    }
+
+    assert_eq!(
+        supervisor_process_pipe_read_open_count(vm_ptr, stdin_pipe),
+        1
+    );
+    assert_eq!(
+        supervisor_process_pipe_write_open_count(vm_ptr, stdin_pipe),
+        1
+    );
+    assert_eq!(
+        supervisor_process_pipe_read_open_count(vm_ptr, stdout_pipe),
+        1
+    );
+    assert_eq!(
+        supervisor_process_pipe_write_open_count(vm_ptr, stdout_pipe),
+        1
+    );
+    assert_eq!(
+        supervisor_process_pipe_read_open_count(vm_ptr, stderr_pipe),
+        1
+    );
+    assert_eq!(
+        supervisor_process_pipe_write_open_count(vm_ptr, stderr_pipe),
+        1
     );
 }
 

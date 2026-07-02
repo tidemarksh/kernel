@@ -135,6 +135,25 @@ fn process_pipe_open_count(vm_ptr: u32, pipe_slot: u32, requested_mode: u32) -> 
     if !valid_pipe_slot(pipe_slot) {
         return 0;
     }
+    let private_count = super::fd::process_state_from_vm_ptr(vm_ptr).map_or(0, |ps| {
+        let mut count = 0i32;
+        if ps.stdin_pipe_slot == pipe_slot
+            && (requested_mode & super::SUPERVISOR_PIPE_SLOT_MODE_WRITE) != 0
+        {
+            count += 1;
+        }
+        if ps.stdout_pipe_slot == pipe_slot
+            && (requested_mode & super::SUPERVISOR_PIPE_SLOT_MODE_READ) != 0
+        {
+            count += 1;
+        }
+        if ps.stderr_pipe_slot == pipe_slot
+            && (requested_mode & super::SUPERVISOR_PIPE_SLOT_MODE_READ) != 0
+        {
+            count += 1;
+        }
+        count
+    });
     let mut seen = [false; MAX_FDS];
     super::fd::for_each_process_held_ofd(vm_ptr, |ofd_id, ofd| {
         if ofd_id as usize >= MAX_FDS || seen[ofd_id as usize] {
@@ -150,7 +169,7 @@ fn process_pipe_open_count(vm_ptr: u32, pipe_slot: u32, requested_mode: u32) -> 
             seen[ofd_id as usize] = true;
         }
     });
-    seen.iter().filter(|held| **held).count() as i32
+    private_count + seen.iter().filter(|held| **held).count() as i32
 }
 
 pub fn process_pipe_read_open_count(vm_ptr: u32, pipe_slot: u32) -> i32 {
