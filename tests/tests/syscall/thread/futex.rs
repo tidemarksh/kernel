@@ -193,6 +193,15 @@ fn supervisor_next_resume_publishes_kernel_selected_futex_wake() {
     );
     assert_eq!(wake, 1);
     assert_eq!(supervisor_shadow_resume_enqueue_count(), 1);
+    assert_eq!(supervisor_next_resume(0, 0), 0);
+
+    let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    assert_eq!(
+        supervisor_complete_futex_wait(vm_ptr, supervisor_futex_wait_completion_woken()),
+        STATUS_OK
+    );
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(thread_impl::thread_record_blocked_addr(&t.vm, t.base), 0);
     assert_eq!(
         supervisor_next_resume(0, 0),
         supervisor_resume_record_bytes() as i32
@@ -217,10 +226,7 @@ fn supervisor_next_resume_publishes_kernel_selected_futex_wake() {
         supervisor_resume_kind_futex_wake()
     );
     assert_eq!(read_u64_le(&record, 16), 1);
-    assert_eq!(
-        read_u32_le(&record, 24),
-        (&mut t.vm as *mut ThreadState) as u32
-    );
+    assert_eq!(read_u32_le(&record, 24), vm_ptr);
     assert_eq!(read_u32_le(&record, 28), t.vm.tid as u32);
     assert_eq!(read_u32_le(&record, 32), t.vm.process_ptr);
     assert_eq!(read_u32_le(&record, 36), STATUS_OK as u32);

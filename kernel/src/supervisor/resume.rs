@@ -124,6 +124,34 @@ fn pop_record() -> Option<super::SupervisorResumeRecord> {
     })
 }
 
+fn thread_status_from_record(record: super::SupervisorResumeRecord) -> Option<i32> {
+    if record.vm_ptr == 0 {
+        return None;
+    }
+    let align = core::mem::align_of::<crate::types::ThreadState>();
+    let absolute = record.vm_ptr as usize;
+    if (absolute & (align - 1)) != 0 {
+        return None;
+    }
+    let end = absolute.checked_add(core::mem::size_of::<crate::types::ThreadState>())?;
+    if end as u64 > crate::wasm::memory_size_bytes() {
+        return None;
+    }
+    let vm = unsafe { &*(record.vm_ptr as *const crate::types::ThreadState) };
+    Some(vm.status)
+}
+
+fn futex_resume_record_ready(record: super::SupervisorResumeRecord) -> bool {
+    thread_status_from_record(record) != Some(crate::abi::STATUS_FUTEX_WAIT)
+}
+
+fn record_ready(record: super::SupervisorResumeRecord) -> bool {
+    match record.kind {
+        super::SUPERVISOR_RESUME_KIND_FUTEX_WAKE => futex_resume_record_ready(record),
+        _ => true,
+    }
+}
+
 fn write_encoded_record(record: super::SupervisorResumeRecord, out_ptr: u32) -> i32 {
     let mut encoded = [0u8; super::SUPERVISOR_RESUME_RECORD_BYTES as usize];
     super::write_u32(&mut encoded, 0, super::SUPERVISOR_RESUME_RECORD_MAGIC);
@@ -159,12 +187,14 @@ fn validate_output(out_ptr: u32, out_len: u32) -> Result<(), i32> {
 
 pub(super) fn write_record(out_ptr: u32, out_len: u32) -> i32 {
     POLL_COUNT.fetch_add(1, Ordering::Relaxed);
+    let Some(peeked) = peek_record() else {
+        return 0;
+    };
+    if !record_ready(peeked) {
+        return 0;
+    }
     if out_len == 0 {
-        return if peek_record().is_some() {
-            super::SUPERVISOR_RESUME_RECORD_BYTES as i32
-        } else {
-            0
-        };
+        return super::SUPERVISOR_RESUME_RECORD_BYTES as i32;
     }
     if let Err(errno) = validate_output(out_ptr, out_len) {
         return errno;
