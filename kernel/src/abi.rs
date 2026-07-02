@@ -1435,6 +1435,13 @@ pub extern "C" fn process_record_child_exit_for_parent(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn process_has_active_child(parent_pid: i32) -> i32 {
+    i32::from(crate::supervisor::process_lifecycle::has_active_child(
+        parent_pid,
+    ))
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn process_current_pid(vm_ptr: u32) -> i32 {
     unsafe {
         let vm = &*(vm_ptr as *const crate::types::ThreadState);

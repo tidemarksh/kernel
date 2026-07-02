@@ -181,6 +181,18 @@ fn pid_in_use(pid: i32) -> bool {
     process_entry(pid).is_some() || children().iter().any(|child| child.pid == pid)
 }
 
+pub fn has_active_child(parent_pid: i32) -> bool {
+    if parent_pid <= 0 {
+        return false;
+    }
+    children().iter().any(|child| {
+        child.pid > 0
+            && child.parent_pid == parent_pid
+            && !child.exited
+            && process_entry(child.pid).is_some()
+    })
+}
+
 fn pid_conflicts_with_live_thread(vm: &ThreadState, base: u32, pid: i32) -> bool {
     let Some(ps) = current_process_state_mut(vm, base) else {
         return false;

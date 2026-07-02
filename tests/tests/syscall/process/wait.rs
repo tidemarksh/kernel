@@ -117,6 +117,29 @@ fn semantics_wait4_accepts_common_waitpid_flags_when_reaping_exited_child() {
 }
 
 #[test]
+fn supervisor_process_has_active_child_tracks_kernel_child_table() {
+    let mut t = TestVm::new();
+    let parent_pid = process_impl::current_process_pid(&t.vm, t.base);
+
+    assert_eq!(
+        tidemark_kernel::abi::process_has_active_child(parent_pid),
+        0
+    );
+    let child = process_impl::sys_fork(&mut t.vm, t.base, 0, 0, 0, 0, 0) as i32;
+    assert!(child > 0);
+    assert_eq!(
+        tidemark_kernel::abi::process_has_active_child(parent_pid),
+        1
+    );
+
+    process_impl::record_child_exit(child, 7 << 8);
+    assert_eq!(
+        tidemark_kernel::abi::process_has_active_child(parent_pid),
+        0
+    );
+}
+
+#[test]
 fn supervisor_process_lifecycle_records_child_exit_before_wait4_completion() {
     supervisor_reset_shadow_log();
 
