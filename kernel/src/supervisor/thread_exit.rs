@@ -1,9 +1,48 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
+use crate::abi::*;
+use crate::guest_mem;
+use crate::types::ThreadState;
+
+const ROBUST_LIST_HEAD_LEN: u64 = 24;
+const FUTEX_WAITERS: u32 = 0x8000_0000;
+const FUTEX_OWNER_DIED: u32 = 0x4000_0000;
+const FUTEX_TID_MASK: u32 = 0x3fff_ffff;
+const ROBUST_LIST_LIMIT: u32 = 2048;
+
 static THREAD_EXIT_CLEANUP_COUNT: AtomicU64 = AtomicU64::new(0);
 static THREAD_EXIT_CLEANUP_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_THREAD_EXIT_CLEANUP: super::SupervisorThreadExitCleanupRecord =
     super::SupervisorThreadExitCleanupRecord::empty();
+
+#[derive(Clone, Copy)]
+struct RobustCleanupStats {
+    head: u64,
+    pending: u64,
+    marked: u32,
+    woken: u32,
+    first_futex_addr: u64,
+}
+
+impl RobustCleanupStats {
+    const fn empty(head: u64) -> Self {
+        Self {
+            head,
+            pending: 0,
+            marked: 0,
+            woken: 0,
+            first_futex_addr: 0,
+        }
+    }
+
+    fn record_marked(&mut self, futex_addr: u64, woken: u32) {
+        self.marked = self.marked.saturating_add(1);
+        self.woken = self.woken.saturating_add(woken);
+        if self.first_futex_addr == 0 {
+            self.first_futex_addr = futex_addr;
+        }
+    }
+}
 
 pub(super) fn init() {
     THREAD_EXIT_CLEANUP_COUNT.store(0, Ordering::Relaxed);
@@ -14,6 +53,164 @@ pub(super) fn init() {
 
 pub fn thread_exit_cleanup_count() -> u64 {
     THREAD_EXIT_CLEANUP_COUNT.load(Ordering::Relaxed)
+}
+
+pub fn clear_tid_and_wake(process_ptr: u32, base: u32, addr: u64) -> u32 {
+    if addr == 0 {
+        return 0;
+    }
+    unsafe {
+        guest_mem::write_u32(base, addr, 0);
+    }
+    crate::syscall::thread::supervisor_wake_futex_waiters_by_process_ptr(
+        process_ptr,
+        base,
+        addr,
+        u32::MAX,
+        FUTEX_BITSET_MATCH_ANY,
+    )
+}
+
+fn mark_robust_futex_owner_died(
+    process_ptr: u32,
+    base: u32,
+    owner_tid: u32,
+    entry_addr: u64,
+    futex_offset: i64,
+) -> Option<(u64, u32)> {
+    let futex_addr = if futex_offset >= 0 {
+        entry_addr.checked_add(futex_offset as u64)?
+    } else {
+        entry_addr.checked_sub((-futex_offset) as u64)?
+    };
+
+    if !crate::syscall::memory::guest_range_accessible(base, futex_addr, 4) {
+        return None;
+    }
+    let owner = unsafe { guest_mem::read_u32(base, futex_addr) };
+    if owner & FUTEX_TID_MASK != owner_tid {
+        return None;
+    }
+
+    let updated = (owner & FUTEX_WAITERS) | FUTEX_OWNER_DIED;
+    unsafe {
+        guest_mem::write_u32(base, futex_addr, updated);
+    }
+    let woken = crate::syscall::thread::supervisor_wake_futex_waiters_by_process_ptr(
+        process_ptr,
+        base,
+        futex_addr,
+        u32::MAX,
+        FUTEX_BITSET_MATCH_ANY,
+    );
+    Some((futex_addr, woken))
+}
+
+fn cleanup_robust_futexes(
+    process_ptr: u32,
+    base: u32,
+    owner_tid: u32,
+    robust_head: u64,
+) -> RobustCleanupStats {
+    let mut stats = RobustCleanupStats::empty(robust_head);
+    if process_ptr == 0 || owner_tid == 0 || robust_head == 0 {
+        return stats;
+    }
+    if !crate::syscall::memory::guest_range_accessible(base, robust_head, ROBUST_LIST_HEAD_LEN) {
+        return stats;
+    }
+
+    let first = unsafe { guest_mem::read_u64(base, robust_head) };
+    let futex_offset = unsafe { guest_mem::read_u64(base, robust_head + 8) as i64 };
+    let pending = unsafe { guest_mem::read_u64(base, robust_head + 16) };
+    stats.pending = pending;
+
+    let mut entry = first;
+    let mut walked = 0;
+    while entry != 0 && entry != robust_head && walked < ROBUST_LIST_LIMIT {
+        if !crate::syscall::memory::guest_range_accessible(base, entry, 8) {
+            break;
+        }
+        if let Some((futex_addr, woken)) =
+            mark_robust_futex_owner_died(process_ptr, base, owner_tid, entry, futex_offset)
+        {
+            stats.record_marked(futex_addr, woken);
+        }
+        entry = unsafe { guest_mem::read_u64(base, entry) };
+        walked += 1;
+    }
+
+    if pending != 0 && pending != robust_head {
+        if let Some((futex_addr, woken)) =
+            mark_robust_futex_owner_died(process_ptr, base, owner_tid, pending, futex_offset)
+        {
+            stats.record_marked(futex_addr, woken);
+        }
+    }
+    stats
+}
+
+pub fn cleanup_thread_robust_futexes(
+    process_ptr: u32,
+    base: u32,
+    owner_tid: u32,
+    robust_head: u64,
+) {
+    let _ = cleanup_robust_futexes(process_ptr, base, owner_tid, robust_head);
+}
+
+pub fn complete_thread_exit(vm: &mut ThreadState, base: u32) -> u32 {
+    crate::syscall::thread::supervisor_mark_current_thread_exiting(vm, base);
+
+    let robust_order = if vm.robust_list_head != 0 { 1 } else { 0 };
+    let robust_stats =
+        cleanup_robust_futexes(vm.process_ptr, base, vm.tid as u32, vm.robust_list_head);
+    vm.robust_list_head = 0;
+    vm.robust_list_len = 0;
+
+    let remaining_threads = crate::syscall::thread::supervisor_decrement_thread_count(vm, base);
+
+    let clear_child_tid = vm.clear_child_tid;
+    let clear_child_tid_order = if clear_child_tid != 0 {
+        if robust_order == 0 {
+            1
+        } else {
+            robust_order + 1
+        }
+    } else {
+        0
+    };
+    let clear_child_tid_woken = if clear_child_tid != 0 {
+        let woken = clear_tid_and_wake(vm.process_ptr, base, clear_child_tid);
+        vm.clear_child_tid = 0;
+        woken
+    } else {
+        0
+    };
+
+    if remaining_threads == 0 {
+        crate::syscall::thread::supervisor_clear_next_tid_hint(base, vm.process_ptr);
+    }
+
+    crate::syscall::thread::supervisor_mark_current_thread_dead(vm, base);
+    vm.status = STATUS_FAULT;
+    record_thread_exit_cleanup(
+        super::SUPERVISOR_THREAD_EXIT_CLEANUP_KIND_THREAD_EXIT,
+        vm as *const ThreadState as u32,
+        vm.tid as u32,
+        vm.process_ptr,
+        vm.status as u32,
+        robust_stats.marked,
+        robust_stats.woken,
+        clear_child_tid_woken,
+        robust_order,
+        clear_child_tid_order,
+        clear_child_tid,
+        robust_stats.head,
+        robust_stats.pending,
+        robust_stats.first_futex_addr,
+    );
+    remaining_threads
 }
 
 #[allow(clippy::too_many_arguments)]
