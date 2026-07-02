@@ -93,6 +93,23 @@ fn peek_request() -> Option<super::SupervisorHostOpRequest> {
     })
 }
 
+fn has_request_kind(kind: u32) -> bool {
+    with_queue_lock(|| unsafe {
+        let head = QUEUE_HEAD.load(Ordering::Relaxed);
+        let tail = QUEUE_TAIL.load(Ordering::Relaxed);
+        let queue_ptr = core::ptr::addr_of!(QUEUE) as *const super::SupervisorHostOpRequest;
+        let mut cursor = head;
+        while cursor != tail {
+            let record = core::ptr::read(queue_ptr.add(cursor as usize));
+            if record.kind == kind {
+                return true;
+            }
+            cursor = (cursor + 1) % QUEUE_CAP as u32;
+        }
+        false
+    })
+}
+
 fn pop_request() -> Option<super::SupervisorHostOpRequest> {
     with_queue_lock(|| unsafe {
         let head = QUEUE_HEAD.load(Ordering::Relaxed);
@@ -105,6 +122,37 @@ fn pop_request() -> Option<super::SupervisorHostOpRequest> {
         core::ptr::write(queue_ptr.add(head as usize), QUEUE_EMPTY);
         QUEUE_HEAD.store((head + 1) % QUEUE_CAP as u32, Ordering::Relaxed);
         Some(record)
+    })
+}
+
+fn pop_request_kind(kind: u32) -> Option<super::SupervisorHostOpRequest> {
+    with_queue_lock(|| unsafe {
+        let head = QUEUE_HEAD.load(Ordering::Relaxed);
+        let tail = QUEUE_TAIL.load(Ordering::Relaxed);
+        let queue_ptr = core::ptr::addr_of_mut!(QUEUE) as *mut super::SupervisorHostOpRequest;
+        let mut read = head;
+        let mut write = head;
+        let mut matched = None;
+        while read != tail {
+            let current = read;
+            let record = core::ptr::read(queue_ptr.add(current as usize));
+            read = (read + 1) % QUEUE_CAP as u32;
+            if matched.is_none() && record.kind == kind {
+                matched = Some(record);
+                continue;
+            }
+            core::ptr::write(queue_ptr.add(write as usize), record);
+            write = (write + 1) % QUEUE_CAP as u32;
+        }
+        if matched.is_some() {
+            let mut clear = write;
+            while clear != tail {
+                core::ptr::write(queue_ptr.add(clear as usize), QUEUE_EMPTY);
+                clear = (clear + 1) % QUEUE_CAP as u32;
+            }
+            QUEUE_TAIL.store(write, Ordering::Relaxed);
+        }
+        matched
     })
 }
 
@@ -183,24 +231,7 @@ pub(super) fn complete_host_op(bytes: &[u8]) -> i32 {
     super::timer::complete_arm_host_timer(parent_vm_ptr, deadline_ticks)
 }
 
-pub(super) fn write_record(out_ptr: u32, out_len: u32) -> i32 {
-    POLL_COUNT.fetch_add(1, Ordering::Relaxed);
-    if out_len == 0 {
-        return if peek_request().is_some() {
-            super::SUPERVISOR_HOST_OP_RECORD_BYTES as i32
-        } else {
-            0
-        };
-    }
-    if out_ptr == 0 {
-        return crate::abi::EFAULT as i32;
-    }
-    if out_len < super::SUPERVISOR_HOST_OP_RECORD_BYTES {
-        return crate::abi::ENOSPC as i32;
-    }
-    let Some(request) = pop_request() else {
-        return 0;
-    };
+fn encode_request(request: super::SupervisorHostOpRequest, out_ptr: u32) -> i32 {
     let seq = next_emit_seq();
     let record = match request.kind {
         super::SUPERVISOR_HOST_OP_KIND_SPAWN_THREAD_WORKER => {
@@ -262,6 +293,48 @@ pub(super) fn write_record(out_ptr: u32, out_len: u32) -> i32 {
     };
     out.copy_from_slice(&encoded);
     super::SUPERVISOR_HOST_OP_RECORD_BYTES as i32
+}
+
+fn write_selected_record(
+    out_ptr: u32,
+    out_len: u32,
+    has_pending: impl FnOnce() -> bool,
+    pop: impl FnOnce() -> Option<super::SupervisorHostOpRequest>,
+) -> i32 {
+    POLL_COUNT.fetch_add(1, Ordering::Relaxed);
+    if out_len == 0 {
+        return if has_pending() {
+            super::SUPERVISOR_HOST_OP_RECORD_BYTES as i32
+        } else {
+            0
+        };
+    }
+    if out_ptr == 0 {
+        return crate::abi::EFAULT as i32;
+    }
+    if out_len < super::SUPERVISOR_HOST_OP_RECORD_BYTES {
+        return crate::abi::ENOSPC as i32;
+    }
+    let Some(request) = pop() else {
+        return 0;
+    };
+    encode_request(request, out_ptr)
+}
+
+pub(super) fn write_record(out_ptr: u32, out_len: u32) -> i32 {
+    write_selected_record(out_ptr, out_len, || peek_request().is_some(), pop_request)
+}
+
+pub(super) fn write_record_kind(kind: u32, out_ptr: u32, out_len: u32) -> i32 {
+    if kind == 0 {
+        return crate::abi::EINVAL as i32;
+    }
+    write_selected_record(
+        out_ptr,
+        out_len,
+        || has_request_kind(kind),
+        || pop_request_kind(kind),
+    )
 }
 
 fn process_op_pending(vm_ptr: u32) -> Result<bool, i32> {

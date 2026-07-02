@@ -542,6 +542,11 @@ pub extern "C" fn supervisor_next_host_op(out_ptr: u32, out_len: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_next_host_op_kind(kind: u32, out_ptr: u32, out_len: u32) -> i32 {
+    super::host_op::write_record_kind(kind, out_ptr, out_len)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_process_host_op(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i32 {
     super::host_op::write_process_record(vm_ptr, out_ptr, out_len)
 }

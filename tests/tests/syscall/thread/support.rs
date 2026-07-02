@@ -1,5 +1,6 @@
 pub(super) use tidemark_kernel::abi::*;
 pub(super) use tidemark_kernel::harness::TestVm;
+pub(super) use tidemark_kernel::supervisor::supervisor_next_host_op_kind;
 pub(super) use tidemark_kernel::syscall::signal;
 pub(super) use tidemark_kernel::syscall::thread as thread_impl;
 pub(super) use tidemark_kernel::types::{

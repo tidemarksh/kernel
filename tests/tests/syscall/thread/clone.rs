@@ -126,6 +126,100 @@ fn contract_supervisor_host_op_spawns_clone_thread_state() {
 }
 
 #[test]
+fn contract_supervisor_host_op_kind_filter_preserves_mixed_queue() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    t.vm.pc = 0x4567_89ab;
+    let parent_vm_ptr = &mut t.vm as *mut ThreadState as u32;
+
+    t.vm.status = STATUS_EPOLL_WAIT;
+    t.vm.epoll_timeout_ms = 25;
+    assert_eq!(supervisor_enqueue_blocked_wait_timer(parent_vm_ptr), 1);
+    t.vm.status = STATUS_OK;
+
+    let flags = (CLONE_VM | CLONE_THREAD | CLONE_SIGHAND | CLONE_FS) as u64;
+    let ret = thread_impl::sys_clone(&mut t.vm, t.base, flags, 0x88000, 0, 0, 0);
+    assert!(ret > 0);
+
+    let mut clone_record = [0u8; 64];
+    assert_eq!(
+        supervisor_next_host_op_kind(
+            supervisor_host_op_kind_spawn_thread_worker(),
+            clone_record.as_mut_ptr() as u32,
+            clone_record.len() as u32
+        ),
+        supervisor_host_op_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&clone_record, 12),
+        supervisor_host_op_kind_spawn_thread_worker()
+    );
+    assert_eq!(read_u32_le(&clone_record, 24), parent_vm_ptr);
+
+    let mut timer_record = [0u8; 64];
+    assert_eq!(
+        supervisor_next_host_op_kind(
+            supervisor_host_op_kind_arm_host_timer(),
+            timer_record.as_mut_ptr() as u32,
+            timer_record.len() as u32
+        ),
+        supervisor_host_op_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&timer_record, 12),
+        supervisor_host_op_kind_arm_host_timer()
+    );
+    assert_eq!(read_u32_le(&timer_record, 24), parent_vm_ptr);
+    assert_eq!(supervisor_next_host_op(0, 0), 0);
+
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    let parent_vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    let ret = thread_impl::sys_clone(&mut t.vm, t.base, flags, 0x89000, 0, 0, 0);
+    assert!(ret > 0);
+    t.vm.status = STATUS_EPOLL_WAIT;
+    t.vm.epoll_timeout_ms = 25;
+    assert_eq!(t.vm.status, STATUS_EPOLL_WAIT);
+    assert_eq!(t.vm.epoll_timeout_ms, 25);
+    assert_eq!(supervisor_enqueue_blocked_wait_timer(parent_vm_ptr), 1);
+    t.vm.status = STATUS_CLONE_SPAWN;
+    assert_eq!(t.vm.status, STATUS_CLONE_SPAWN);
+
+    let mut timer_record = [0u8; 64];
+    assert_eq!(
+        supervisor_next_host_op_kind(
+            supervisor_host_op_kind_arm_host_timer(),
+            timer_record.as_mut_ptr() as u32,
+            timer_record.len() as u32
+        ),
+        supervisor_host_op_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&timer_record, 12),
+        supervisor_host_op_kind_arm_host_timer()
+    );
+
+    let mut clone_record = [0u8; 64];
+    assert_eq!(
+        supervisor_next_host_op_kind(
+            supervisor_host_op_kind_spawn_thread_worker(),
+            clone_record.as_mut_ptr() as u32,
+            clone_record.len() as u32
+        ),
+        supervisor_host_op_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&clone_record, 12),
+        supervisor_host_op_kind_spawn_thread_worker()
+    );
+    assert_eq!(supervisor_next_host_op(0, 0), 0);
+}
+
+#[test]
 fn contract_spawn_from_clone_initializes_child_thread_state() {
     let mut t = TestVm::new();
     t.vm.tid = 1;
