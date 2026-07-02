@@ -237,6 +237,18 @@ export_u32_const!(
     super::SUPERVISOR_FD_CONTROL_KIND_SOCKET_ACCEPTED
 );
 export_u32_const!(
+    supervisor_pipe_slot_mode_read,
+    super::SUPERVISOR_PIPE_SLOT_MODE_READ
+);
+export_u32_const!(
+    supervisor_pipe_slot_mode_write,
+    super::SUPERVISOR_PIPE_SLOT_MODE_WRITE
+);
+export_u32_const!(
+    supervisor_pipe_slot_mode_control,
+    super::SUPERVISOR_PIPE_SLOT_MODE_CONTROL
+);
+export_u32_const!(
     supervisor_fs_control_record_bytes,
     super::SUPERVISOR_FS_CONTROL_RECORD_BYTES
 );
@@ -608,6 +620,61 @@ pub extern "C" fn supervisor_vfork_execve_rollback(vm_ptr: u32, child_pid: i32) 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fd_control_record(out_ptr: u32, out_len: u32) -> i32 {
     super::fd::write_record(out_ptr, out_len)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_held_ofd_refcount(vm_ptr: u32, ofd_id: u32) -> i32 {
+    super::fd::process_held_ofd_refcount(vm_ptr, ofd_id)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_private_pipe_slot_mask(vm_ptr: u32) -> u64 {
+    super::pipe::process_private_pipe_slot_mask(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_private_pipe_source_mode(vm_ptr: u32, pipe_slot: u32) -> u32 {
+    super::pipe::process_private_pipe_source_mode(vm_ptr, pipe_slot)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_private_pipe_target_mode(vm_ptr: u32, pipe_slot: u32) -> u32 {
+    super::pipe::process_private_pipe_target_mode(vm_ptr, pipe_slot)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_held_pipe_slot_mask(vm_ptr: u32) -> u64 {
+    super::pipe::process_held_pipe_slot_mask(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_pipe_used_mask(vm_ptr: u32) -> u64 {
+    super::pipe::process_pipe_used_mask(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_pipe_slot_mode(vm_ptr: u32, pipe_slot: u32) -> u32 {
+    super::pipe::process_pipe_slot_mode(vm_ptr, pipe_slot)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_pipe_read_open_count(vm_ptr: u32, pipe_slot: u32) -> i32 {
+    super::pipe::process_pipe_read_open_count(vm_ptr, pipe_slot)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_pipe_write_open_count(vm_ptr: u32, pipe_slot: u32) -> i32 {
+    super::pipe::process_pipe_write_open_count(vm_ptr, pipe_slot)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_epoll_held_ofd(vm_ptr: u32, index: u32) -> u32 {
+    super::epoll::process_epoll_held_ofd(vm_ptr, index)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_socket_held_ofd(vm_ptr: u32, index: u32) -> u32 {
+    super::socket::process_socket_held_ofd(vm_ptr, index)
 }
 
 #[unsafe(no_mangle)]

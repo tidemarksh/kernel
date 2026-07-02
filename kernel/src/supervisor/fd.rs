@@ -1,5 +1,9 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
+use crate::abi::MAX_FDS;
+use crate::fs::fd_table;
+use crate::types::{OpenFileDesc, ProcessState};
+
 static FD_CONTROL_COUNT: AtomicU64 = AtomicU64::new(0);
 static FD_CONTROL_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_FD_CONTROL: super::SupervisorFdControlRecord =
@@ -14,6 +18,67 @@ pub(super) fn init() {
 
 pub fn fd_control_count() -> u64 {
     FD_CONTROL_COUNT.load(Ordering::Relaxed)
+}
+
+pub(super) fn process_state_from_vm_ptr(vm_ptr: u32) -> Option<&'static ProcessState> {
+    let vm = super::thread::state_from_ptr(vm_ptr)?;
+    if vm.process_ptr == 0 {
+        return None;
+    }
+    let ps = (vm.guest_base as u64 + vm.process_ptr as u64) as *const ProcessState;
+    if ps.is_null() {
+        return None;
+    }
+    Some(unsafe { &*ps })
+}
+
+pub(super) fn for_each_process_held_ofd<F>(vm_ptr: u32, mut f: F)
+where
+    F: FnMut(u32, OpenFileDesc),
+{
+    let Some(vm) = super::thread::state_from_ptr(vm_ptr) else {
+        return;
+    };
+    let Some(ps) = process_state_from_vm_ptr(vm_ptr) else {
+        return;
+    };
+
+    for fd in 0..MAX_FDS {
+        let entry = fd_table::load_process_fd_entry(vm.guest_base, vm.process_ptr, fd);
+        let ofd_id = entry.ofd_id;
+        if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+            continue;
+        }
+        if let Some(ofd) = fd_table::get_ofd_by_id(ofd_id) {
+            f(ofd_id, ofd);
+        }
+    }
+
+    for thread in ps.threads.iter() {
+        let Some(thread_vm) = super::thread::state_from_ptr(thread.thread_ptr) else {
+            continue;
+        };
+        let ofd_id = thread_vm.blocked_ofd_id;
+        if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+            continue;
+        }
+        if let Some(ofd) = fd_table::get_ofd_by_id(ofd_id) {
+            f(ofd_id, ofd);
+        }
+    }
+}
+
+pub fn process_held_ofd_refcount(vm_ptr: u32, ofd_id: u32) -> i32 {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return 0;
+    }
+    let mut refcount = 0i32;
+    for_each_process_held_ofd(vm_ptr, |held_ofd_id, _| {
+        if held_ofd_id == ofd_id {
+            refcount = refcount.saturating_add(1);
+        }
+    });
+    refcount
 }
 
 #[allow(clippy::too_many_arguments)]

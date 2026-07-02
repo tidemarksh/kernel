@@ -167,6 +167,21 @@ fn supervisor_fd_control_records_epoll_create_and_ctl() {
 }
 
 #[test]
+fn supervisor_process_epoll_query_reports_unique_held_ofds() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    let epfd = epoll::sys_epoll_create1(&mut t.vm, t.base, 0);
+    assert!(epfd >= 3);
+    let dup_epfd = t.sys_dup(epfd as u64);
+    assert!(dup_epfd >= 0);
+    let epoll_ofd =
+        fd_table::get_ofd_id(t.base, &t.vm, epfd as u64).expect("epoll OFD should exist");
+
+    assert_eq!(supervisor_process_epoll_held_ofd(vm_ptr, 0), epoll_ofd);
+    assert_eq!(supervisor_process_epoll_held_ofd(vm_ptr, 1), 0);
+}
+
+#[test]
 fn epoll_pwait_reports_ready_pipe() {
     let mut t = TestVm::new();
     let pipefd_addr = t.scratch + 0x1000;

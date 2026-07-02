@@ -107,6 +107,20 @@ fn supervisor_fd_control_records_socket_create_and_socketpair() {
 }
 
 #[test]
+fn supervisor_process_socket_query_reports_unique_held_ofds() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    let fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
+    assert!(fd >= 3);
+    let dup_fd = t.sys_dup(fd as u64);
+    assert!(dup_fd >= 0);
+    let ofd_id = fd_table::get_ofd_id(t.base, &t.vm, fd as u64).expect("socket OFD should exist");
+
+    assert_eq!(supervisor_process_socket_held_ofd(vm_ptr, 0), ofd_id);
+    assert_eq!(supervisor_process_socket_held_ofd(vm_ptr, 1), 0);
+}
+
+#[test]
 fn socketpair_unix_stream_roundtrip() {
     let mut t = TestVm::new();
     let sv_addr = t.scratch + 0x80;

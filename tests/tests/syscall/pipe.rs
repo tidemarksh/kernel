@@ -3,7 +3,11 @@ use tidemark_kernel::harness::TestVm;
 use tidemark_kernel::supervisor::{
     supervisor_abi_version, supervisor_fd_control_kind_fd_closed,
     supervisor_fd_control_kind_pipe_created, supervisor_fd_control_record,
-    supervisor_fd_control_record_bytes, supervisor_reset_shadow_log,
+    supervisor_fd_control_record_bytes, supervisor_pipe_slot_mode_read,
+    supervisor_pipe_slot_mode_write, supervisor_process_held_ofd_refcount,
+    supervisor_process_held_pipe_slot_mask, supervisor_process_pipe_read_open_count,
+    supervisor_process_pipe_slot_mode, supervisor_process_pipe_used_mask,
+    supervisor_process_pipe_write_open_count, supervisor_reset_shadow_log,
     supervisor_shadow_fd_control_count,
 };
 use tidemark_kernel::syscall::pipe::{self, PipeCloseOutcome};
@@ -525,6 +529,45 @@ fn supervisor_fd_control_records_pipe_create_and_close() {
     assert_eq!(read_u64_le(&record, 72), (O_WRONLY | O_NONBLOCK) as u64);
     assert_eq!(read_u64_le(&record, 80), 1);
     assert_eq!(read_u64_le(&record, 88), 0);
+}
+
+#[test]
+fn supervisor_process_pipe_queries_dedupe_aliases_by_ofd() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    let pipefd_addr = t.scratch + 0x1480;
+
+    assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) };
+    let write_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr + 4) };
+    let dup_read_fd = t.sys_dup(read_fd as u64);
+    assert!(dup_read_fd >= 0);
+
+    let read_ofd = tidemark_kernel::fs::fd_table::get_ofd_id(t.base, &t.vm, read_fd as u64)
+        .expect("pipe read fd should have OFD");
+    let write_ofd = tidemark_kernel::fs::fd_table::get_ofd_id(t.base, &t.vm, write_fd as u64)
+        .expect("pipe write fd should have OFD");
+    let pipe_slot = tidemark_kernel::fs::fd_table::get_ofd_by_id(read_ofd)
+        .expect("pipe read OFD should exist")
+        .ino;
+    let pipe_bit = 1u64 << pipe_slot;
+
+    assert_eq!(supervisor_process_held_ofd_refcount(vm_ptr, read_ofd), 2);
+    assert_eq!(supervisor_process_held_ofd_refcount(vm_ptr, write_ofd), 1);
+    assert_ne!(supervisor_process_held_pipe_slot_mask(vm_ptr) & pipe_bit, 0);
+    assert_ne!(supervisor_process_pipe_used_mask(vm_ptr) & pipe_bit, 0);
+    assert_eq!(
+        supervisor_process_pipe_slot_mode(vm_ptr, pipe_slot),
+        supervisor_pipe_slot_mode_read() | supervisor_pipe_slot_mode_write()
+    );
+    assert_eq!(
+        supervisor_process_pipe_read_open_count(vm_ptr, pipe_slot),
+        1
+    );
+    assert_eq!(
+        supervisor_process_pipe_write_open_count(vm_ptr, pipe_slot),
+        1
+    );
 }
 
 #[test]
