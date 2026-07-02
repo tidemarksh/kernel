@@ -160,6 +160,13 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_fs_pending_ring_request(0), 0);
     assert_eq!(supervisor_fs_pending_regular_file_fd(0), -1);
     assert_eq!(supervisor_fs_pending_regular_file_ofd(0), 0);
+    assert_eq!(supervisor_fs_pending_backing_fill_ino(0), 0);
+    assert_eq!(supervisor_fs_pending_backing_fill_offset(0), 0);
+    assert_eq!(supervisor_fs_pending_backing_fill_length(0), 0);
+    assert_eq!(supervisor_fs_pending_backing_fill_expected_size(0), 0);
+    assert_eq!(supervisor_fs_pending_backing_fill_opcode(0), 0);
+    assert_eq!(supervisor_fs_pending_mmap_guest_write_ptr(0), 0);
+    assert_eq!(supervisor_fs_pending_mmap_guest_write_len(0), 0);
     assert_eq!(
         supervisor_fs_completion_decision(
             0,

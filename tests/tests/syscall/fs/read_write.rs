@@ -210,6 +210,19 @@ fn syscall_dispatch_reads_external_partial_page_hit_via_fs_ring() {
     assert_eq!(supervisor_fs_pending_ring_request(vm_ptr), 1);
     assert_eq!(i64::from(supervisor_fs_pending_regular_file_fd(vm_ptr)), fd);
     assert_ne!(supervisor_fs_pending_regular_file_ofd(vm_ptr), 0);
+    assert_eq!(supervisor_fs_pending_backing_fill_ino(vm_ptr), ino);
+    assert_eq!(supervisor_fs_pending_backing_fill_offset(vm_ptr), 0);
+    assert_eq!(supervisor_fs_pending_backing_fill_length(vm_ptr), 8192);
+    assert_eq!(
+        supervisor_fs_pending_backing_fill_expected_size(vm_ptr),
+        8192
+    );
+    assert_eq!(
+        supervisor_fs_pending_backing_fill_opcode(vm_ptr),
+        tidemark_kernel::fs::ring_buffer::FS_OP_READ
+    );
+    assert_eq!(supervisor_fs_pending_mmap_guest_write_ptr(vm_ptr), 0);
+    assert_eq!(supervisor_fs_pending_mmap_guest_write_len(vm_ptr), 0);
     let completion_decision = supervisor_fs_completion_decision(
         vm_ptr,
         thread_pending_fs_opcode(vm_ptr),

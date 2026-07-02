@@ -800,6 +800,41 @@ pub extern "C" fn supervisor_fs_pending_regular_file_ofd(vm_ptr: u32) -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_pending_backing_fill_ino(vm_ptr: u32) -> u32 {
+    super::fs::pending_backing_fill_ino(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_pending_backing_fill_offset(vm_ptr: u32) -> u64 {
+    super::fs::pending_backing_fill_offset(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_pending_backing_fill_length(vm_ptr: u32) -> u64 {
+    super::fs::pending_backing_fill_length(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_pending_backing_fill_expected_size(vm_ptr: u32) -> u64 {
+    super::fs::pending_backing_fill_expected_size(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_pending_backing_fill_opcode(vm_ptr: u32) -> u32 {
+    super::fs::pending_backing_fill_opcode(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_pending_mmap_guest_write_ptr(vm_ptr: u32) -> u64 {
+    super::fs::pending_mmap_guest_write_ptr(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_pending_mmap_guest_write_len(vm_ptr: u32) -> u64 {
+    super::fs::pending_mmap_guest_write_len(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fs_completion_decision(
     vm_ptr: u32,
     opcode: u32,

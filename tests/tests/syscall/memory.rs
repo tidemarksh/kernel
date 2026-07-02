@@ -858,6 +858,19 @@ fn syscall_dispatch_routes_file_backed_mmap_through_fs_ring() {
     );
 
     let vm_ptr = &mut t.vm as *mut _ as u32;
+    assert_eq!(supervisor_fs_pending_backing_fill_ino(vm_ptr), ino);
+    assert_eq!(supervisor_fs_pending_backing_fill_offset(vm_ptr), offset);
+    assert_eq!(supervisor_fs_pending_backing_fill_length(vm_ptr), len);
+    assert_eq!(
+        supervisor_fs_pending_backing_fill_expected_size(vm_ptr),
+        data.len() as u64
+    );
+    assert_eq!(
+        supervisor_fs_pending_backing_fill_opcode(vm_ptr),
+        tidemark_kernel::fs::ring_buffer::FS_OP_MMAP
+    );
+    assert_eq!(supervisor_fs_pending_mmap_guest_write_ptr(vm_ptr), 0);
+    assert_eq!(supervisor_fs_pending_mmap_guest_write_len(vm_ptr), len);
     fs::process_pending_requests(vm_ptr, t.base);
     let mapped = fs::resume_from_fs(vm_ptr, t.base);
 

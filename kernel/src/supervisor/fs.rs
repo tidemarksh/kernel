@@ -1,7 +1,7 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crate::abi::{FD_TYPE_FILE, MAX_FDS};
-use crate::fs::{fd_table, ring_buffer};
+use crate::fs::{fd_table, memfs, ring_buffer};
 use crate::types::ThreadState;
 
 static FS_CONTROL_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -60,6 +60,147 @@ pub fn pending_regular_file_fd(vm_ptr: u32) -> i32 {
 
 pub fn pending_regular_file_ofd(vm_ptr: u32) -> u32 {
     pending_regular_file_request(vm_ptr).map_or(0, |(_, ofd_id)| ofd_id)
+}
+
+#[derive(Clone, Copy)]
+struct PendingBackingFillRequest {
+    ino: u32,
+    offset: u64,
+    length: u64,
+    expected_size: u64,
+    opcode: u32,
+}
+
+fn pending_request_file_context(
+    vm: &ThreadState,
+    vm_ptr: u32,
+    request: &ring_buffer::FsRequestInfo,
+) -> Option<(u32, u32)> {
+    if request.opcode == ring_buffer::FS_OP_TRUNCATE && request.path_ptr != 0 {
+        let ino = crate::syscall::fs::pending_request_target_ino(vm_ptr, vm.guest_base);
+        return (ino > 0).then_some((0, ino));
+    }
+
+    if request.fd >= 0 && (request.fd as usize) < MAX_FDS {
+        let entry =
+            fd_table::load_process_fd_entry(vm.guest_base, vm.process_ptr, request.fd as usize);
+        if entry.ofd_id != 0 && (entry.ofd_id as usize) < MAX_FDS {
+            if let Some(ofd) = fd_table::get_ofd(vm.guest_base, vm, request.fd as u64) {
+                if ofd.fd_type == FD_TYPE_FILE && ofd.ino > 0 {
+                    return Some((entry.ofd_id, ofd.ino));
+                }
+            }
+        }
+    }
+
+    if request.opcode == ring_buffer::FS_OP_TRUNCATE {
+        let ino = crate::syscall::fs::pending_request_target_ino(vm_ptr, vm.guest_base);
+        return (ino > 0).then_some((0, ino));
+    }
+
+    None
+}
+
+fn pending_backing_fill_request(vm_ptr: u32) -> Option<PendingBackingFillRequest> {
+    let (vm, request) = pending_fs_request(vm_ptr)?;
+    match request.opcode {
+        ring_buffer::FS_OP_READ
+        | ring_buffer::FS_OP_WRITE
+        | ring_buffer::FS_OP_MMAP
+        | ring_buffer::FS_OP_TRUNCATE => {}
+        _ => return None,
+    }
+
+    if request.opcode != ring_buffer::FS_OP_TRUNCATE && request.len == 0 {
+        return None;
+    }
+
+    let (ofd_id, ino) = pending_request_file_context(vm, vm_ptr, &request)?;
+    let expected_size = memfs::stat(ino)?.size;
+    if expected_size == 0 {
+        return None;
+    }
+
+    if request.opcode == ring_buffer::FS_OP_TRUNCATE {
+        let truncate_size = request.offset;
+        if truncate_size == 0 {
+            return None;
+        }
+        let surviving_last_byte = core::cmp::min(truncate_size, expected_size).checked_sub(1)?;
+        return Some(PendingBackingFillRequest {
+            ino,
+            offset: surviving_last_byte,
+            length: 1,
+            expected_size,
+            opcode: request.opcode,
+        });
+    }
+
+    let offset = if request.opcode == ring_buffer::FS_OP_MMAP
+        || (request.flags & ring_buffer::FS_REQ_FLAG_PWRITE) != 0
+    {
+        request.offset
+    } else {
+        fd_table::get_offset_by_id(ofd_id)
+    };
+
+    if request.opcode == ring_buffer::FS_OP_WRITE && offset >= expected_size {
+        return Some(PendingBackingFillRequest {
+            ino,
+            offset: expected_size - 1,
+            length: 1,
+            expected_size,
+            opcode: request.opcode,
+        });
+    }
+
+    if offset >= expected_size {
+        return None;
+    }
+
+    Some(PendingBackingFillRequest {
+        ino,
+        offset,
+        length: core::cmp::min(request.len, expected_size - offset),
+        expected_size,
+        opcode: request.opcode,
+    })
+}
+
+pub fn pending_backing_fill_ino(vm_ptr: u32) -> u32 {
+    pending_backing_fill_request(vm_ptr).map_or(0, |request| request.ino)
+}
+
+pub fn pending_backing_fill_offset(vm_ptr: u32) -> u64 {
+    pending_backing_fill_request(vm_ptr).map_or(0, |request| request.offset)
+}
+
+pub fn pending_backing_fill_length(vm_ptr: u32) -> u64 {
+    pending_backing_fill_request(vm_ptr).map_or(0, |request| request.length)
+}
+
+pub fn pending_backing_fill_expected_size(vm_ptr: u32) -> u64 {
+    pending_backing_fill_request(vm_ptr).map_or(0, |request| request.expected_size)
+}
+
+pub fn pending_backing_fill_opcode(vm_ptr: u32) -> u32 {
+    pending_backing_fill_request(vm_ptr).map_or(0, |request| request.opcode)
+}
+
+fn pending_mmap_guest_write_request(vm_ptr: u32) -> Option<(u64, u64)> {
+    let (_, request) = pending_fs_request(vm_ptr)?;
+    if request.opcode != ring_buffer::FS_OP_MMAP || request.len == 0 {
+        return None;
+    }
+    Some((request.buf_ptr, request.len))
+}
+
+pub fn pending_mmap_guest_write_ptr(vm_ptr: u32) -> u64 {
+    pending_mmap_guest_write_request(vm_ptr).map_or(0, |(ptr, _)| ptr)
+}
+
+pub fn pending_mmap_guest_write_len(vm_ptr: u32) -> u64 {
+    pending_mmap_guest_write_request(vm_ptr).map_or(0, |(_, len)| len)
 }
 
 #[allow(clippy::too_many_arguments)]
