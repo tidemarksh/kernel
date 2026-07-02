@@ -502,6 +502,11 @@ pub extern "C" fn supervisor_enqueue_blocked_wait_timer(vm_ptr: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_wait_timer_required(vm_ptr: u32) -> i32 {
+    super::timer::blocked_wait_timer_required_for_vm(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_next_host_op(out_ptr: u32, out_len: u32) -> i32 {
     super::host_op::write_record(out_ptr, out_len)
 }

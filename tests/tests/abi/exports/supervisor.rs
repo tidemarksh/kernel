@@ -138,6 +138,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         -(EFAULT as i32)
     );
     assert_eq!(supervisor_enqueue_blocked_wait_timer(0), EFAULT as i32);
+    assert_eq!(supervisor_blocked_wait_timer_required(0), EFAULT as i32);
 
     let empty_hash = supervisor_shadow_thread_event_log_hash();
     assert_eq!(supervisor_shadow_thread_event_count(), 0);
@@ -204,6 +205,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_blocked_resume_delegation_direct() as i32
     );
     t.vm.status = STATUS_WAIT4;
+    assert_eq!(supervisor_blocked_wait_timer_required(vm_ptr), 0);
     assert_eq!(
         supervisor_blocked_wait_retry_delay_ms(
             vm_ptr,
@@ -223,6 +225,10 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_blocked_resume_delegation_wait4_kernel_worker() as i32
     );
     t.vm.status = STATUS_PIPE_WAIT;
+    t.vm.epoll_timeout_ms = -1;
+    assert_eq!(supervisor_blocked_wait_timer_required(vm_ptr), 0);
+    t.vm.epoll_timeout_ms = 1;
+    assert_eq!(supervisor_blocked_wait_timer_required(vm_ptr), 1);
     assert_eq!(
         supervisor_blocked_resume_delegation(
             vm_ptr,
@@ -231,6 +237,10 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_blocked_resume_delegation_kernel_worker() as i32
     );
     t.vm.status = STATUS_SOCKET_RECV;
+    t.vm.socket_timeout_ms = -1;
+    assert_eq!(supervisor_blocked_wait_timer_required(vm_ptr), 0);
+    t.vm.socket_timeout_ms = 1;
+    assert_eq!(supervisor_blocked_wait_timer_required(vm_ptr), 1);
     assert_eq!(
         supervisor_blocked_resume_delegation(
             vm_ptr,
@@ -247,6 +257,10 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_blocked_resume_delegation_kernel_worker() as i32
     );
     t.vm.status = STATUS_EPOLL_WAIT;
+    t.vm.epoll_timeout_ms = -1;
+    assert_eq!(supervisor_blocked_wait_timer_required(vm_ptr), 0);
+    t.vm.epoll_timeout_ms = 1;
+    assert_eq!(supervisor_blocked_wait_timer_required(vm_ptr), 1);
     assert_eq!(
         supervisor_blocked_resume_delegation(vm_ptr, 0),
         supervisor_blocked_resume_delegation_epoll_direct() as i32
@@ -258,6 +272,8 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         ),
         supervisor_blocked_resume_delegation_unsupported() as i32
     );
+    t.vm.epoll_timeout_ms = -1;
+    t.vm.socket_timeout_ms = -1;
     t.vm.status = initial_status;
     let child_pid = tidemark_kernel::syscall::process::sys_fork(&mut t.vm, t.base, 0, 0, 0, 0, 0);
     assert!(child_pid > 0);

@@ -131,6 +131,29 @@ pub(super) fn enqueue_blocked_wait_timer_for_vm(vm_ptr: u32) -> i32 {
     }
 }
 
+pub(super) fn blocked_wait_timer_required_for_vm(vm_ptr: u32) -> i32 {
+    if vm_ptr == 0 {
+        return crate::abi::EFAULT as i32;
+    }
+    let vm = unsafe { &*(vm_ptr as *const crate::types::ThreadState) };
+    if blocked_wait_timer_required(vm) {
+        1
+    } else {
+        0
+    }
+}
+
+fn blocked_wait_timer_required(vm: &crate::types::ThreadState) -> bool {
+    match vm.status {
+        crate::abi::STATUS_EPOLL_WAIT => epoll_wait_timer_required(vm),
+        crate::abi::STATUS_PIPE_WAIT => poll_wait_timer_required(vm),
+        crate::abi::STATUS_CONNECT
+        | crate::abi::STATUS_SOCKET_RECV
+        | crate::abi::STATUS_SOCKET_SEND => socket_wait_timer_required(vm),
+        _ => false,
+    }
+}
+
 fn enqueue_epoll_wait_timer(vm: &crate::types::ThreadState) -> bool {
     if vm.epoll_timeout_ms >= 0 {
         return enqueue_timer_request(vm, vm.epoll_timeout_ms as u64, 0);
@@ -145,19 +168,26 @@ fn enqueue_epoll_wait_timer(vm: &crate::types::ThreadState) -> bool {
     enqueue_timer_request(vm, delay_ms, deadline_ticks)
 }
 
+fn epoll_wait_timer_required(vm: &crate::types::ThreadState) -> bool {
+    vm.epoll_timeout_ms >= 0
+        || crate::syscall::epoll::timerfd_deadline_ticks(vm, vm.guest_base) != 0
+}
+
 fn enqueue_poll_wait_timer(vm: &crate::types::ThreadState) -> bool {
-    if vm.epoll_timeout_ms < 0 {
-        return false;
-    }
-    if crate::syscall::poll::wait_set_ready_count(vm, vm.guest_base) > 0 {
+    if !poll_wait_timer_required(vm) {
         return false;
     }
     enqueue_timer_request(vm, vm.epoll_timeout_ms as u64, 0)
 }
 
+fn poll_wait_timer_required(vm: &crate::types::ThreadState) -> bool {
+    vm.epoll_timeout_ms >= 0 && crate::syscall::poll::wait_set_ready_count(vm, vm.guest_base) <= 0
+}
+
 fn enqueue_socket_wait_timer(vm: &crate::types::ThreadState) -> bool {
-    if vm.socket_timeout_ms < 0 {
-        return false;
-    }
-    enqueue_timer_request(vm, vm.socket_timeout_ms as u64, 0)
+    socket_wait_timer_required(vm) && enqueue_timer_request(vm, vm.socket_timeout_ms as u64, 0)
+}
+
+fn socket_wait_timer_required(vm: &crate::types::ThreadState) -> bool {
+    vm.socket_timeout_ms >= 0
 }
