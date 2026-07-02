@@ -121,6 +121,33 @@ fn supervisor_process_socket_query_reports_unique_held_ofds() {
 }
 
 #[test]
+fn supervisor_socket_bridge_active_fd_resolves_expected_ofd_alias() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    let fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
+    assert!(fd >= 3);
+    let dup_fd = t.sys_dup(fd as u64);
+    assert!(dup_fd >= 0);
+    let ofd_id = fd_table::get_ofd_id(t.base, &t.vm, fd as u64).expect("socket OFD should exist");
+
+    assert_eq!(
+        supervisor_socket_bridge_active_fd(vm_ptr, fd as u32, ofd_id, 0),
+        fd as i32
+    );
+
+    let resolved = supervisor_socket_bridge_active_fd(vm_ptr, abi_max_fds() as u32 - 1, ofd_id, 0);
+    assert!(resolved == fd as i32 || resolved == dup_fd as i32);
+    assert_eq!(
+        fd_table::get_ofd_id(t.base, &t.vm, resolved as u64),
+        Some(ofd_id)
+    );
+    assert_eq!(
+        supervisor_socket_bridge_active_fd(vm_ptr, fd as u32, 0, 1),
+        ENOENT as i32
+    );
+}
+
+#[test]
 fn socketpair_unix_stream_roundtrip() {
     let mut t = TestVm::new();
     let sv_addr = t.scratch + 0x80;

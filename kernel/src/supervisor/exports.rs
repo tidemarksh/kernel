@@ -249,6 +249,14 @@ export_u32_const!(
     super::SUPERVISOR_PIPE_SLOT_MODE_CONTROL
 );
 export_u32_const!(
+    supervisor_blocked_pipe_resume_action_defer,
+    super::SUPERVISOR_BLOCKED_PIPE_RESUME_ACTION_DEFER
+);
+export_u32_const!(
+    supervisor_blocked_pipe_resume_action_direct,
+    super::SUPERVISOR_BLOCKED_PIPE_RESUME_ACTION_DIRECT
+);
+export_u32_const!(
     supervisor_fs_control_record_bytes,
     super::SUPERVISOR_FS_CONTROL_RECORD_BYTES
 );
@@ -668,6 +676,11 @@ pub extern "C" fn supervisor_process_pipe_write_open_count(vm_ptr: u32, pipe_slo
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_pipe_resume_action(vm_ptr: u32) -> i32 {
+    super::pipe::blocked_pipe_resume_action(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_process_epoll_held_ofd(vm_ptr: u32, index: u32) -> u32 {
     super::epoll::process_epoll_held_ofd(vm_ptr, index)
 }
@@ -690,6 +703,64 @@ pub extern "C" fn supervisor_blocked_epoll_watches_pipe(vm_ptr: u32) -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_process_socket_held_ofd(vm_ptr: u32, index: u32) -> u32 {
     super::socket::process_socket_held_ofd(vm_ptr, index)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_socket_connect_fd(vm_ptr: u32) -> i32 {
+    super::socket::connect_fd(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_socket_connect_peer_addr(
+    vm_ptr: u32,
+    dst_ptr: u32,
+    dst_len: u32,
+) -> i32 {
+    super::socket::connect_peer_addr(vm_ptr, dst_ptr, dst_len)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_socket_connect_peer_addr_for_fd(
+    vm_ptr: u32,
+    fd: u32,
+    dst_ptr: u32,
+    dst_len: u32,
+) -> i32 {
+    super::socket::connect_peer_addr_for_fd(vm_ptr, fd, dst_ptr, dst_len)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_socket_prepare_external_peer(vm_ptr: u32, fd: u32) -> i32 {
+    super::socket::prepare_external_peer(vm_ptr, fd)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_socket_commit_external_connect_result(
+    vm_ptr: u32,
+    fd: u32,
+    result: i64,
+) -> i32 {
+    super::socket::commit_external_connect_result(vm_ptr, fd, result)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_socket_close_external_peer(vm_ptr: u32, fd: u32) -> i32 {
+    super::socket::close_external_peer(vm_ptr, fd)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_socket_force_shutdown(vm_ptr: u32, fd: u32) -> i32 {
+    super::socket::force_shutdown(vm_ptr, fd)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_socket_bridge_active_fd(
+    vm_ptr: u32,
+    preferred_fd: u32,
+    expected_ofd: u32,
+    pending_connect: u32,
+) -> i32 {
+    super::socket::bridge_active_fd(vm_ptr, preferred_fd, expected_ofd, pending_connect)
 }
 
 #[unsafe(no_mangle)]

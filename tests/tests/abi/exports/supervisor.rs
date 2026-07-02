@@ -104,6 +104,8 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_pipe_slot_mode_read(), 1);
     assert_eq!(supervisor_pipe_slot_mode_write(), 2);
     assert_eq!(supervisor_pipe_slot_mode_control(), 4);
+    assert_eq!(supervisor_blocked_pipe_resume_action_defer(), 0);
+    assert_eq!(supervisor_blocked_pipe_resume_action_direct(), 1);
     assert_eq!(supervisor_process_held_ofd_refcount(0, 1), 0);
     assert_eq!(supervisor_process_private_pipe_slot_mask(0), 0);
     assert_eq!(supervisor_process_private_pipe_source_mode(0, 1), 0);
@@ -113,11 +115,38 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_process_pipe_slot_mode(0, 1), 0);
     assert_eq!(supervisor_process_pipe_read_open_count(0, 1), 0);
     assert_eq!(supervisor_process_pipe_write_open_count(0, 1), 0);
+    assert_eq!(supervisor_blocked_pipe_resume_action(0), -(EFAULT as i32));
     assert_eq!(supervisor_process_epoll_held_ofd(0, 0), 0);
     assert_eq!(supervisor_process_epoll_dependent_ofd(0, 0), 0);
     assert_eq!(supervisor_blocked_epoll_watched_ofd(0, 0), 0);
     assert_eq!(supervisor_blocked_epoll_watches_pipe(0), 0);
     assert_eq!(supervisor_process_socket_held_ofd(0, 0), 0);
+    assert_eq!(supervisor_socket_connect_fd(0), -(EFAULT as i32));
+    assert_eq!(
+        supervisor_socket_connect_peer_addr(0, 0, 0),
+        -(EFAULT as i32)
+    );
+    assert_eq!(
+        supervisor_socket_connect_peer_addr_for_fd(0, 0, 0, 0),
+        -(EFAULT as i32)
+    );
+    assert_eq!(
+        supervisor_socket_prepare_external_peer(0, 0),
+        -(EFAULT as i32)
+    );
+    assert_eq!(
+        supervisor_socket_commit_external_connect_result(0, 0, 0),
+        -(EFAULT as i32)
+    );
+    assert_eq!(
+        supervisor_socket_close_external_peer(0, 0),
+        -(EFAULT as i32)
+    );
+    assert_eq!(supervisor_socket_force_shutdown(0, 0), -(EFAULT as i32));
+    assert_eq!(
+        supervisor_socket_bridge_active_fd(0, 0, 0, 0),
+        -(EFAULT as i32)
+    );
     assert_eq!(supervisor_fs_control_record_bytes(), 112);
     assert_eq!(supervisor_fs_control_record(0, 0), 112);
     assert_eq!(supervisor_fs_control_kind_page_cache_miss(), 1);

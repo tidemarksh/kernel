@@ -1,8 +1,9 @@
 use crate::abi::{
     FD_TYPE_PIPE, FD_TYPE_PTY_MASTER, FD_TYPE_PTY_SLAVE, MAX_FDS, MAX_PIPES, O_RDONLY, O_WRONLY,
+    STATUS_PIPE_WAIT, SYS_READ,
 };
 use crate::fs::fd_table;
-use crate::types::{OpenFileDesc, ProcessState};
+use crate::types::{OpenFileDesc, ProcessState, ThreadState};
 
 fn valid_pipe_slot(pipe_slot: u32) -> bool {
     pipe_slot > 0 && (pipe_slot as usize) < MAX_PIPES && pipe_slot < 64
@@ -158,4 +159,63 @@ pub fn process_pipe_read_open_count(vm_ptr: u32, pipe_slot: u32) -> i32 {
 
 pub fn process_pipe_write_open_count(vm_ptr: u32, pipe_slot: u32) -> i32 {
     process_pipe_open_count(vm_ptr, pipe_slot, super::SUPERVISOR_PIPE_SLOT_MODE_WRITE)
+}
+
+fn blocked_pipe_fd(vm: &ThreadState) -> u64 {
+    if vm.blocked_ofd_id != 0 {
+        vm.blocked_fd as u64
+    } else if vm.blocked_syscall_nr != 0 {
+        vm.blocked_syscall_args[0]
+    } else {
+        vm.x[10]
+    }
+}
+
+fn blocked_pipe_ofd(vm: &ThreadState) -> Option<OpenFileDesc> {
+    if vm.blocked_ofd_id != 0 {
+        return fd_table::get_ofd_by_id(vm.blocked_ofd_id);
+    }
+    fd_table::get_ofd(vm.guest_base, vm, blocked_pipe_fd(vm))
+}
+
+fn blocked_pipe_read_syscall(vm: &ThreadState) -> bool {
+    vm.blocked_syscall_nr == SYS_READ || (vm.blocked_syscall_nr == 0 && vm.x[17] == SYS_READ)
+}
+
+fn blocked_pipe_directly_ready(vm_ptr: u32, vm: &ThreadState) -> bool {
+    if crate::syscall::poll::wait_set_ready_count(vm, vm.guest_base) > 0 {
+        return true;
+    }
+    if crate::exports::thread::thread_blocked_pipe_read_ready(vm_ptr) == 1
+        || crate::exports::thread::thread_blocked_pipe_write_ready(vm_ptr) == 1
+    {
+        return true;
+    }
+    if !blocked_pipe_read_syscall(vm) {
+        return false;
+    }
+    let Some(ofd) = blocked_pipe_ofd(vm) else {
+        return false;
+    };
+    if ofd.fd_type != FD_TYPE_PIPE || !fd_table::is_pipe_read(&ofd) {
+        return false;
+    }
+    crate::syscall::pipe::pipe_buffered_len(ofd.ino) > 0
+        || crate::syscall::pipe::debug_write_open(ofd.ino) <= 0
+}
+
+pub fn blocked_pipe_resume_action(vm_ptr: u32) -> i32 {
+    let Some(vm) = super::thread::state_from_ptr(vm_ptr) else {
+        return -(crate::abi::EFAULT as i32);
+    };
+    if vm.status != STATUS_PIPE_WAIT {
+        return super::SUPERVISOR_BLOCKED_PIPE_RESUME_ACTION_DEFER as i32;
+    }
+    if super::blocked::blocked_wait_active_child_pid(vm_ptr) > 0 {
+        return super::SUPERVISOR_BLOCKED_PIPE_RESUME_ACTION_DEFER as i32;
+    }
+    if blocked_pipe_directly_ready(vm_ptr, vm) {
+        return super::SUPERVISOR_BLOCKED_PIPE_RESUME_ACTION_DIRECT as i32;
+    }
+    super::SUPERVISOR_BLOCKED_PIPE_RESUME_ACTION_DEFER as i32
 }

@@ -1,14 +1,15 @@
 use tidemark_kernel::abi::*;
 use tidemark_kernel::harness::TestVm;
 use tidemark_kernel::supervisor::{
-    supervisor_abi_version, supervisor_fd_control_kind_fd_closed,
-    supervisor_fd_control_kind_pipe_created, supervisor_fd_control_record,
-    supervisor_fd_control_record_bytes, supervisor_pipe_slot_mode_read,
-    supervisor_pipe_slot_mode_write, supervisor_process_held_ofd_refcount,
-    supervisor_process_held_pipe_slot_mask, supervisor_process_pipe_read_open_count,
-    supervisor_process_pipe_slot_mode, supervisor_process_pipe_used_mask,
-    supervisor_process_pipe_write_open_count, supervisor_reset_shadow_log,
-    supervisor_shadow_fd_control_count,
+    supervisor_abi_version, supervisor_blocked_pipe_resume_action,
+    supervisor_blocked_pipe_resume_action_defer, supervisor_blocked_pipe_resume_action_direct,
+    supervisor_fd_control_kind_fd_closed, supervisor_fd_control_kind_pipe_created,
+    supervisor_fd_control_record, supervisor_fd_control_record_bytes,
+    supervisor_pipe_slot_mode_read, supervisor_pipe_slot_mode_write,
+    supervisor_process_held_ofd_refcount, supervisor_process_held_pipe_slot_mask,
+    supervisor_process_pipe_read_open_count, supervisor_process_pipe_slot_mode,
+    supervisor_process_pipe_used_mask, supervisor_process_pipe_write_open_count,
+    supervisor_reset_shadow_log, supervisor_shadow_fd_control_count,
 };
 use tidemark_kernel::syscall::pipe::{self, PipeCloseOutcome};
 use tidemark_kernel::syscall::{poll, pty};
@@ -96,6 +97,53 @@ fn blocked_read_resumes_eof_after_writer_close() {
     assert_eq!(thread_resume_blocked_syscall(vm_ptr), 0);
     assert_eq!(t.vm.x[10], 0);
     assert_eq!(t.vm.status, STATUS_OK);
+}
+
+#[test]
+fn supervisor_blocked_pipe_resume_action_reports_defer_and_direct() {
+    let mut blocked = TestVm::new();
+    let pipefd_addr = blocked.scratch + 0x1000;
+    assert_eq!(
+        pipe::sys_pipe2(&mut blocked.vm, blocked.base, pipefd_addr, 0),
+        0
+    );
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(blocked.base, pipefd_addr) };
+    let buf_addr = blocked.scratch + 0x1100;
+
+    blocked.vm.x[17] = SYS_READ;
+    blocked.vm.x[10] = read_fd as u64;
+    blocked.vm.x[11] = buf_addr;
+    blocked.vm.x[12] = 16;
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut blocked.vm, blocked.base),
+        STATUS_PIPE_WAIT
+    );
+    let blocked_vm_ptr = &mut blocked.vm as *mut _ as u32;
+    assert_eq!(
+        supervisor_blocked_pipe_resume_action(blocked_vm_ptr),
+        supervisor_blocked_pipe_resume_action_defer() as i32
+    );
+
+    let mut eof = TestVm::new();
+    let pipefd_addr = eof.scratch + 0x1200;
+    assert_eq!(pipe::sys_pipe2(&mut eof.vm, eof.base, pipefd_addr, 0), 0);
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(eof.base, pipefd_addr) };
+    let write_fd = unsafe { tidemark_kernel::guest_mem::read_u32(eof.base, pipefd_addr + 4) };
+    assert_eq!(eof.sys_close(write_fd as i64), 0);
+
+    eof.vm.x[17] = SYS_READ;
+    eof.vm.x[10] = read_fd as u64;
+    eof.vm.x[11] = eof.scratch + 0x1300;
+    eof.vm.x[12] = 16;
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut eof.vm, eof.base),
+        STATUS_PIPE_WAIT
+    );
+    let eof_vm_ptr = &mut eof.vm as *mut _ as u32;
+    assert_eq!(
+        supervisor_blocked_pipe_resume_action(eof_vm_ptr),
+        supervisor_blocked_pipe_resume_action_direct() as i32
+    );
 }
 
 #[test]

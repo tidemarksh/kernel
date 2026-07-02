@@ -253,6 +253,29 @@ fn supervisor_fd_control_records_socket_connect_start_and_failure() {
         0
     );
     assert_eq!(t.vm.status, STATUS_CONNECT);
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    let mut supervisor_peer = [0u8; 28];
+    assert_eq!(supervisor_socket_connect_fd(vm_ptr), fd as i32);
+    assert_eq!(
+        supervisor_socket_connect_peer_addr(
+            vm_ptr,
+            supervisor_peer.as_mut_ptr() as u32,
+            supervisor_peer.len() as u32
+        ),
+        16
+    );
+    assert_eq!(&supervisor_peer[..16], &sockaddr);
+    supervisor_peer.fill(0);
+    assert_eq!(
+        supervisor_socket_connect_peer_addr_for_fd(
+            vm_ptr,
+            fd as u32,
+            supervisor_peer.as_mut_ptr() as u32,
+            supervisor_peer.len() as u32
+        ),
+        16
+    );
+    assert_eq!(&supervisor_peer[..16], &sockaddr);
     assert_eq!(supervisor_shadow_fd_control_count(), 1);
     let record = read_record();
     assert_eq!(
