@@ -133,6 +133,12 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_blocked_wait_retry_reason_active_child(), 3);
     assert_eq!(supervisor_blocked_wait_retry_reason_passive_wait(), 4);
     assert_eq!(supervisor_blocked_wait_retry_reason_process_gate(), 5);
+    assert_eq!(supervisor_blocked_wait_retry_flag_host_progress(), 1);
+    assert_eq!(supervisor_blocked_wait_retry_flag_active_child(), 2);
+    assert_eq!(supervisor_blocked_wait_retry_flag_passive_wait(), 4);
+    assert_eq!(supervisor_blocked_wait_retry_flag_process_gate(), 8);
+    assert_eq!(supervisor_blocked_wait_retry_flag_thread_init_pending(), 16);
+    assert_eq!(supervisor_blocked_wait_retry_reason(0, 0), -(EFAULT as i32));
     assert_eq!(
         supervisor_blocked_wait_retry_delay_ms(0, supervisor_blocked_wait_retry_reason_default()),
         -(EFAULT as i32)
@@ -157,6 +163,45 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     t.vm.guest_memory_policy_limit = 5 * 1024 * 1024;
     t.vm.process_max_memory_pages = 96;
     let vm_ptr = &mut t.vm as *mut _ as u32;
+    assert_eq!(
+        supervisor_blocked_wait_retry_reason(vm_ptr, 0),
+        supervisor_blocked_wait_retry_reason_default() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_wait_retry_reason(
+            vm_ptr,
+            supervisor_blocked_wait_retry_flag_host_progress()
+        ),
+        supervisor_blocked_wait_retry_reason_immediate() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_wait_retry_reason(
+            vm_ptr,
+            supervisor_blocked_wait_retry_flag_active_child()
+        ),
+        supervisor_blocked_wait_retry_reason_active_child() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_wait_retry_reason(
+            vm_ptr,
+            supervisor_blocked_wait_retry_flag_passive_wait()
+        ),
+        supervisor_blocked_wait_retry_reason_passive_wait() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_wait_retry_reason(
+            vm_ptr,
+            supervisor_blocked_wait_retry_flag_process_gate()
+        ),
+        supervisor_blocked_wait_retry_reason_process_gate() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_wait_retry_reason(
+            vm_ptr,
+            supervisor_blocked_wait_retry_flag_thread_init_pending()
+        ),
+        supervisor_blocked_wait_retry_reason_standard_defer() as i32
+    );
     assert_eq!(
         supervisor_blocked_wait_retry_delay_ms(
             vm_ptr,

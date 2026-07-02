@@ -432,6 +432,11 @@ pub extern "C" fn supervisor_blocked_wait_retry_delay_ms(vm_ptr: u32, reason: u3
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_wait_retry_reason(vm_ptr: u32, flags: u32) -> i32 {
+    super::blocked::retry_reason(vm_ptr, flags)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_resume_delegation(vm_ptr: u32, flags: u32) -> i32 {
     super::blocked::resume_delegation(vm_ptr, flags)
 }
@@ -494,6 +499,31 @@ pub extern "C" fn supervisor_blocked_wait_retry_reason_passive_wait() -> u32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_wait_retry_reason_process_gate() -> u32 {
     super::blocked::retry_reason_process_gate()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_wait_retry_flag_host_progress() -> u32 {
+    super::blocked::retry_flag_host_progress()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_wait_retry_flag_active_child() -> u32 {
+    super::blocked::retry_flag_active_child()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_wait_retry_flag_passive_wait() -> u32 {
+    super::blocked::retry_flag_passive_wait()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_wait_retry_flag_process_gate() -> u32 {
+    super::blocked::retry_flag_process_gate()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_wait_retry_flag_thread_init_pending() -> u32 {
+    super::blocked::retry_flag_thread_init_pending()
 }
 
 #[unsafe(no_mangle)]
