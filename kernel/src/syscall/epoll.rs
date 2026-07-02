@@ -133,6 +133,21 @@ pub fn epoll_slot_allocated(epoll_idx: u32) -> bool {
     !epoll_ptr(epoll_idx as usize).is_null()
 }
 
+pub fn for_each_watched_ofd<F>(epoll_idx: u32, mut f: F)
+where
+    F: FnMut(u32),
+{
+    if epoll_idx as usize >= MAX_EPOLL_ENTRIES {
+        return;
+    }
+    let Some(inst) = validated_epoll_instance(epoll_idx as usize) else {
+        return;
+    };
+    for i in 0..inst.count as usize {
+        f(inst.entries[i].ofd_id);
+    }
+}
+
 fn remove_entry(inst: &mut EpollInstance, idx: usize) {
     let last = inst.count as usize - 1;
     inst.entries[idx] = inst.entries[last];

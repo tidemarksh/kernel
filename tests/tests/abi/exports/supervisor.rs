@@ -114,6 +114,9 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_process_pipe_read_open_count(0, 1), 0);
     assert_eq!(supervisor_process_pipe_write_open_count(0, 1), 0);
     assert_eq!(supervisor_process_epoll_held_ofd(0, 0), 0);
+    assert_eq!(supervisor_process_epoll_dependent_ofd(0, 0), 0);
+    assert_eq!(supervisor_blocked_epoll_watched_ofd(0, 0), 0);
+    assert_eq!(supervisor_blocked_epoll_watches_pipe(0), 0);
     assert_eq!(supervisor_process_socket_held_ofd(0, 0), 0);
     assert_eq!(supervisor_fs_control_record_bytes(), 112);
     assert_eq!(supervisor_fs_control_record(0, 0), 112);

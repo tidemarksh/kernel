@@ -739,7 +739,8 @@ pub use crate::exports::kernel::*;
 pub use crate::exports::memfs::*;
 pub use crate::exports::thread::*;
 pub use crate::supervisor::{
-    supervisor_abi_version, supervisor_blocked_resume_delegation,
+    supervisor_abi_version, supervisor_blocked_epoll_watched_ofd,
+    supervisor_blocked_epoll_watches_pipe, supervisor_blocked_resume_delegation,
     supervisor_blocked_resume_delegation_direct, supervisor_blocked_resume_delegation_epoll_direct,
     supervisor_blocked_resume_delegation_flag_kernel_worker_available,
     supervisor_blocked_resume_delegation_kernel_worker,
@@ -786,9 +787,10 @@ pub use crate::supervisor::{
     supervisor_host_op_kind_terminate_worker, supervisor_host_op_record_bytes,
     supervisor_next_host_op, supervisor_next_resume, supervisor_pipe_slot_mode_control,
     supervisor_pipe_slot_mode_read, supervisor_pipe_slot_mode_write,
-    supervisor_process_epoll_held_ofd, supervisor_process_held_ofd_refcount,
-    supervisor_process_held_pipe_slot_mask, supervisor_process_host_op,
-    supervisor_process_host_op_kind_spawn_process_worker, supervisor_process_host_op_record_bytes,
+    supervisor_process_epoll_dependent_ofd, supervisor_process_epoll_held_ofd,
+    supervisor_process_held_ofd_refcount, supervisor_process_held_pipe_slot_mask,
+    supervisor_process_host_op, supervisor_process_host_op_kind_spawn_process_worker,
+    supervisor_process_host_op_record_bytes,
     supervisor_process_lifecycle_kind_child_exit_published,
     supervisor_process_lifecycle_kind_wait4_completed, supervisor_process_lifecycle_record,
     supervisor_process_lifecycle_record_bytes, supervisor_process_memory_host_op,

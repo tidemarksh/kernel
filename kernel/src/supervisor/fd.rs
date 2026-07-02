@@ -25,11 +25,17 @@ pub(super) fn process_state_from_vm_ptr(vm_ptr: u32) -> Option<&'static ProcessS
     if vm.process_ptr == 0 {
         return None;
     }
-    let ps = (vm.guest_base as u64 + vm.process_ptr as u64) as *const ProcessState;
-    if ps.is_null() {
+    let absolute = (vm.guest_base as u64).checked_add(vm.process_ptr as u64)?;
+    let align = core::mem::align_of::<ProcessState>() as u64;
+    if (absolute & (align - 1)) != 0 {
         return None;
     }
-    Some(unsafe { &*ps })
+    let end = absolute.checked_add(core::mem::size_of::<ProcessState>() as u64)?;
+    let memory_size = crate::wasm::memory_size_bytes();
+    if memory_size == 0 || end > memory_size {
+        return None;
+    }
+    Some(unsafe { &*(absolute as *const ProcessState) })
 }
 
 pub(super) fn for_each_process_held_ofd<F>(vm_ptr: u32, mut f: F)
@@ -58,6 +64,12 @@ where
         let Some(thread_vm) = super::thread::state_from_ptr(thread.thread_ptr) else {
             continue;
         };
+        if thread_vm.guest_base != vm.guest_base
+            || thread_vm.process_ptr != vm.process_ptr
+            || thread_vm.tid != thread.tid
+        {
+            continue;
+        }
         let ofd_id = thread_vm.blocked_ofd_id;
         if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
             continue;
