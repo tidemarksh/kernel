@@ -1491,6 +1491,24 @@ pub extern "C" fn process_rewrite_child_pid(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn process_canonicalize_child_pid(
+    vm_ptr: u32,
+    provisional_child_pid: i32,
+    next_pid_floor: i32,
+) -> i32 {
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut crate::types::ThreadState);
+        let (child_pid, _) = crate::supervisor::process_lifecycle::canonicalize_child_pid(
+            vm,
+            vm.guest_base,
+            provisional_child_pid,
+            next_pid_floor,
+        );
+        child_pid
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn process_reset_lifecycle(
     vm_ptr: u32,
     pid: i32,
