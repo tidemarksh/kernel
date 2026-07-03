@@ -50,6 +50,13 @@ pub(super) fn status_is_wait4(status: i32) -> i32 {
     i32::from(status == crate::abi::STATUS_WAIT4)
 }
 
+pub(super) fn status_is_socket_wait(status: i32) -> i32 {
+    i32::from(matches!(
+        status,
+        crate::abi::STATUS_SOCKET_RECV | crate::abi::STATUS_SOCKET_SEND
+    ))
+}
+
 pub(super) fn status_needs_network_sidecar_restore(status: i32) -> i32 {
     i32::from(matches!(
         status,

@@ -239,3 +239,28 @@ pub(super) fn wake_mask_for_sync(source: u32) -> i32 {
         _ => -(crate::abi::EINVAL as i32),
     }
 }
+
+fn wake_target_for_status(status: i32) -> u32 {
+    match status {
+        crate::abi::STATUS_PIPE_WAIT => WAKE_TARGET_PIPE_WAIT,
+        crate::abi::STATUS_EPOLL_WAIT => WAKE_TARGET_EPOLL_WAIT,
+        crate::abi::STATUS_SOCKET_RECV => WAKE_TARGET_SOCKET_RECV,
+        crate::abi::STATUS_SOCKET_SEND => WAKE_TARGET_SOCKET_SEND,
+        _ => 0,
+    }
+}
+
+pub(super) fn status_matches_wake_source(status: i32, source: u32) -> i32 {
+    if !matches!(
+        source,
+        WAKE_SOURCE_PIPE_SYNC
+            | WAKE_SOURCE_EPOLL_SYNC
+            | WAKE_SOURCE_SOCKET_SYNC
+            | WAKE_SOURCE_PIPE_AND_EPOLL_SYNC
+    ) {
+        return -(crate::abi::EINVAL as i32);
+    }
+    let mask = wake_mask_for_sync(source);
+    let target = wake_target_for_status(status);
+    i32::from(target != 0 && ((mask as u32) & target) != 0)
+}

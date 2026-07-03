@@ -850,6 +850,11 @@ pub extern "C" fn supervisor_blocked_status_is_wait4(status: i32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_status_is_socket_wait(status: i32) -> i32 {
+    super::blocked::status_is_socket_wait(status)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_status_needs_network_sidecar_restore(status: i32) -> i32 {
     super::blocked::status_needs_network_sidecar_restore(status)
 }
@@ -1017,6 +1022,14 @@ pub extern "C" fn supervisor_blocked_epoll_wait_timeout_ms(vm_ptr: u32) -> i64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_wait_wake_mask_for_sync(source: u32) -> i32 {
     super::state_sync::wake_mask_for_sync(source)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_wait_status_matches_wake_source(
+    status: i32,
+    source: u32,
+) -> i32 {
+    super::state_sync::status_matches_wake_source(status, source)
 }
 
 #[unsafe(no_mangle)]

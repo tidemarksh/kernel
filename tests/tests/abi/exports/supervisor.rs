@@ -210,6 +210,45 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         -(EINVAL as i32)
     );
     assert_eq!(
+        supervisor_blocked_wait_status_matches_wake_source(
+            STATUS_PIPE_WAIT,
+            supervisor_blocked_wait_wake_source_pipe_sync()
+        ),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_wait_status_matches_wake_source(
+            STATUS_EPOLL_WAIT,
+            supervisor_blocked_wait_wake_source_pipe_sync()
+        ),
+        0
+    );
+    assert_eq!(
+        supervisor_blocked_wait_status_matches_wake_source(
+            STATUS_EPOLL_WAIT,
+            supervisor_blocked_wait_wake_source_epoll_sync()
+        ),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_wait_status_matches_wake_source(
+            STATUS_SOCKET_RECV,
+            supervisor_blocked_wait_wake_source_socket_sync()
+        ),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_wait_status_matches_wake_source(
+            STATUS_SOCKET_SEND,
+            supervisor_blocked_wait_wake_source_socket_sync()
+        ),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_wait_status_matches_wake_source(STATUS_OK, 0),
+        -(EINVAL as i32)
+    );
+    assert_eq!(
         supervisor_state_sync_request(0, supervisor_state_sync_kind_pipe(), 0),
         -(EFAULT as i32)
     );
@@ -1168,6 +1207,18 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_blocked_status_is_pipe_wait(STATUS_WAIT4), 0);
     assert_eq!(supervisor_blocked_status_is_wait4(STATUS_WAIT4), 1);
     assert_eq!(supervisor_blocked_status_is_wait4(STATUS_PIPE_WAIT), 0);
+    assert_eq!(
+        supervisor_blocked_status_is_socket_wait(STATUS_SOCKET_RECV),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_status_is_socket_wait(STATUS_SOCKET_SEND),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_status_is_socket_wait(STATUS_PIPE_WAIT),
+        0
+    );
     assert_eq!(
         supervisor_blocked_status_needs_network_sidecar_restore(STATUS_CONNECT),
         1
