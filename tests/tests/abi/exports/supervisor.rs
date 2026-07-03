@@ -1154,6 +1154,76 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         1
     );
     assert_eq!(supervisor_blocked_status_is_host_wait(STATUS_FLOCK_WAIT), 1);
+    assert_eq!(supervisor_blocked_status_is_connect_wait(STATUS_CONNECT), 1);
+    assert_eq!(
+        supervisor_blocked_status_is_connect_wait(STATUS_SOCKET_RECV),
+        0
+    );
+    assert_eq!(
+        supervisor_blocked_status_is_epoll_wait(STATUS_EPOLL_WAIT),
+        1
+    );
+    assert_eq!(supervisor_blocked_status_is_epoll_wait(STATUS_PIPE_WAIT), 0);
+    assert_eq!(
+        supervisor_blocked_status_needs_network_sidecar_restore(STATUS_CONNECT),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_status_needs_network_sidecar_restore(STATUS_SOCKET_RECV),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_status_needs_network_sidecar_restore(STATUS_SOCKET_SEND),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_status_needs_network_sidecar_restore(STATUS_PIPE_WAIT),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_status_needs_network_sidecar_restore(STATUS_EPOLL_WAIT),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_status_needs_network_sidecar_restore(STATUS_WAIT4),
+        0
+    );
+    assert_eq!(
+        supervisor_blocked_status_syncs_socket_after_resume(STATUS_CONNECT),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_status_syncs_socket_after_resume(STATUS_SOCKET_RECV),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_status_syncs_socket_after_resume(STATUS_SOCKET_SEND),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_status_syncs_socket_after_resume(STATUS_PIPE_WAIT),
+        0
+    );
+    assert_eq!(
+        supervisor_blocked_status_uses_fork_shared_state_sync(STATUS_PIPE_WAIT),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_status_uses_fork_shared_state_sync(STATUS_SOCKET_RECV),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_status_uses_fork_shared_state_sync(STATUS_SOCKET_SEND),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_status_uses_fork_shared_state_sync(STATUS_FLOCK_WAIT),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_status_uses_fork_shared_state_sync(STATUS_CONNECT),
+        0
+    );
     assert_eq!(supervisor_blocked_poll_wait_timeout_ms(0), -(EFAULT as i64));
     assert_eq!(supervisor_blocked_poll_wait_has_socket(0), -(EFAULT as i32));
     assert_eq!(

@@ -34,6 +34,44 @@ pub(super) fn status_is_host_wait(status: i32) -> i32 {
     ))
 }
 
+pub(super) fn status_is_connect_wait(status: i32) -> i32 {
+    i32::from(status == crate::abi::STATUS_CONNECT)
+}
+
+pub(super) fn status_is_epoll_wait(status: i32) -> i32 {
+    i32::from(status == crate::abi::STATUS_EPOLL_WAIT)
+}
+
+pub(super) fn status_needs_network_sidecar_restore(status: i32) -> i32 {
+    i32::from(matches!(
+        status,
+        crate::abi::STATUS_CONNECT
+            | crate::abi::STATUS_SOCKET_RECV
+            | crate::abi::STATUS_SOCKET_SEND
+            | crate::abi::STATUS_PIPE_WAIT
+            | crate::abi::STATUS_EPOLL_WAIT
+    ))
+}
+
+pub(super) fn status_syncs_socket_after_resume(status: i32) -> i32 {
+    i32::from(matches!(
+        status,
+        crate::abi::STATUS_CONNECT
+            | crate::abi::STATUS_SOCKET_RECV
+            | crate::abi::STATUS_SOCKET_SEND
+    ))
+}
+
+pub(super) fn status_uses_fork_shared_state_sync(status: i32) -> i32 {
+    i32::from(matches!(
+        status,
+        crate::abi::STATUS_PIPE_WAIT
+            | crate::abi::STATUS_SOCKET_RECV
+            | crate::abi::STATUS_SOCKET_SEND
+            | crate::abi::STATUS_FLOCK_WAIT
+    ))
+}
+
 fn status(vm_ptr: u32) -> i32 {
     unsafe { (*(vm_ptr as *const crate::types::ThreadState)).status }
 }

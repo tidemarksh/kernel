@@ -830,6 +830,31 @@ pub extern "C" fn supervisor_blocked_status_is_host_wait(status: i32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_status_is_connect_wait(status: i32) -> i32 {
+    super::blocked::status_is_connect_wait(status)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_status_is_epoll_wait(status: i32) -> i32 {
+    super::blocked::status_is_epoll_wait(status)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_status_needs_network_sidecar_restore(status: i32) -> i32 {
+    super::blocked::status_needs_network_sidecar_restore(status)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_status_syncs_socket_after_resume(status: i32) -> i32 {
+    super::blocked::status_syncs_socket_after_resume(status)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_status_uses_fork_shared_state_sync(status: i32) -> i32 {
+    super::blocked::status_uses_fork_shared_state_sync(status)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_poll_wait_timeout_ms(vm_ptr: u32) -> i64 {
     super::blocked::poll_wait_timeout_ms(vm_ptr)
 }
