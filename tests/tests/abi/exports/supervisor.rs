@@ -169,6 +169,10 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_fs_response_flag_store_pending_kernel_state(), 64);
     assert_eq!(supervisor_fs_response_flag_resolved_to_execve_spawn(), 128);
     assert_eq!(supervisor_fs_response_flag_process_owner_matches(), 256);
+    assert_eq!(supervisor_fs_local_metadata_action_none(), 0);
+    assert_eq!(supervisor_fs_local_metadata_action_tombstone_primary(), 1);
+    assert_eq!(supervisor_fs_local_metadata_action_forget_primary(), 2);
+    assert_eq!(supervisor_fs_local_metadata_action_forget_secondary(), 4);
     assert_eq!(supervisor_fs_resident_page_evict_not_found(), 0);
     assert_eq!(supervisor_fs_resident_page_evict_dirty_pinned(), 1);
     assert_eq!(supervisor_fs_resident_page_evict_evicted(), 2);
@@ -300,6 +304,46 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
             0,
         ) & supervisor_fs_response_flag_fd_response_may_clear_live_fds(),
         0
+    );
+    assert_eq!(
+        supervisor_fs_local_metadata_action(
+            tidemark_kernel::fs::ring_buffer::FS_OP_UNLINK,
+            tidemark_kernel::syscall::fs::FS_EFFECT_MEMFS_MUTATION,
+            0,
+            1,
+            0,
+        ),
+        supervisor_fs_local_metadata_action_tombstone_primary()
+    );
+    assert_eq!(
+        supervisor_fs_local_metadata_action(
+            tidemark_kernel::fs::ring_buffer::FS_OP_OPENAT,
+            tidemark_kernel::syscall::fs::FS_EFFECT_MEMFS_MUTATION,
+            0,
+            1,
+            0,
+        ),
+        supervisor_fs_local_metadata_action_forget_primary()
+    );
+    assert_eq!(
+        supervisor_fs_local_metadata_action(
+            tidemark_kernel::fs::ring_buffer::FS_OP_RENAME,
+            tidemark_kernel::syscall::fs::FS_EFFECT_MEMFS_MUTATION,
+            0,
+            1,
+            1,
+        ),
+        supervisor_fs_local_metadata_action_forget_secondary()
+    );
+    assert_eq!(
+        supervisor_fs_local_metadata_action(
+            tidemark_kernel::fs::ring_buffer::FS_OP_UNLINK,
+            tidemark_kernel::syscall::fs::FS_EFFECT_MEMFS_MUTATION,
+            -1,
+            1,
+            0,
+        ),
+        supervisor_fs_local_metadata_action_none()
     );
     assert_eq!(supervisor_fs_resident_page_slot_decision(4, 5, 6), 4);
     assert_eq!(supervisor_fs_resident_page_slot_decision(-1, 5, 6), 5);

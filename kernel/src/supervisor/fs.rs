@@ -1352,6 +1352,31 @@ pub fn response_disposition(
     flags
 }
 
+pub fn local_metadata_action(
+    opcode: u32,
+    effects: u32,
+    result: i64,
+    has_primary_path: u32,
+    has_secondary_path: u32,
+) -> u32 {
+    if result < 0
+        || has_primary_path == 0
+        || (effects & crate::syscall::fs::FS_EFFECT_MEMFS_MUTATION) == 0
+    {
+        return super::SUPERVISOR_FS_LOCAL_METADATA_ACTION_NONE;
+    }
+    match opcode {
+        ring_buffer::FS_OP_UNLINK => super::SUPERVISOR_FS_LOCAL_METADATA_ACTION_TOMBSTONE_PRIMARY,
+        ring_buffer::FS_OP_OPENAT | ring_buffer::FS_OP_MKDIR => {
+            super::SUPERVISOR_FS_LOCAL_METADATA_ACTION_FORGET_PRIMARY
+        }
+        ring_buffer::FS_OP_RENAME if has_secondary_path != 0 => {
+            super::SUPERVISOR_FS_LOCAL_METADATA_ACTION_FORGET_SECONDARY
+        }
+        _ => super::SUPERVISOR_FS_LOCAL_METADATA_ACTION_NONE,
+    }
+}
+
 pub fn resident_page_slot_decision(
     existing_slot: i32,
     empty_slot: i32,

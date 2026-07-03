@@ -329,6 +329,22 @@ export_u32_const!(
     super::SUPERVISOR_FS_RESPONSE_FLAG_PROCESS_OWNER_MATCHES
 );
 export_u32_const!(
+    supervisor_fs_local_metadata_action_none,
+    super::SUPERVISOR_FS_LOCAL_METADATA_ACTION_NONE
+);
+export_u32_const!(
+    supervisor_fs_local_metadata_action_tombstone_primary,
+    super::SUPERVISOR_FS_LOCAL_METADATA_ACTION_TOMBSTONE_PRIMARY
+);
+export_u32_const!(
+    supervisor_fs_local_metadata_action_forget_primary,
+    super::SUPERVISOR_FS_LOCAL_METADATA_ACTION_FORGET_PRIMARY
+);
+export_u32_const!(
+    supervisor_fs_local_metadata_action_forget_secondary,
+    super::SUPERVISOR_FS_LOCAL_METADATA_ACTION_FORGET_SECONDARY
+);
+export_u32_const!(
     supervisor_fs_resident_page_evict_not_found,
     super::SUPERVISOR_FS_RESIDENT_PAGE_EVICT_NOT_FOUND
 );
@@ -1427,6 +1443,23 @@ pub extern "C" fn supervisor_fs_response_disposition(
         result,
         owner_async_status,
         last_status,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_local_metadata_action(
+    opcode: u32,
+    effects: u32,
+    result: i64,
+    has_primary_path: u32,
+    has_secondary_path: u32,
+) -> u32 {
+    super::fs::local_metadata_action(
+        opcode,
+        effects,
+        result,
+        has_primary_path,
+        has_secondary_path,
     )
 }
 
