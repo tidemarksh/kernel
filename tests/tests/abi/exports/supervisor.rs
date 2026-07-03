@@ -32,6 +32,13 @@ fn fold_log_hash(previous: u64, entry_hash: u64, entry_len: u32) -> u64 {
     next
 }
 
+fn write_pollfd(t: &mut TestVm, addr: u64, fd: i32, events: u16) {
+    let mut bytes = [0u8; 8];
+    bytes[0..4].copy_from_slice(&fd.to_le_bytes());
+    bytes[4..6].copy_from_slice(&events.to_le_bytes());
+    t.write_mem(addr, &bytes);
+}
+
 #[test]
 fn supervisor_shadow_exports_are_additive_and_deterministic() {
     supervisor_reset_shadow_log();
@@ -1129,6 +1136,19 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_enqueue_blocked_retry_timer(0, 0), EFAULT as i32);
     assert_eq!(supervisor_blocked_wait_timer_required(0), EFAULT as i32);
     assert_eq!(supervisor_blocked_poll_wait_timeout_ms(0), -(EFAULT as i64));
+    assert_eq!(supervisor_blocked_poll_wait_has_socket(0), -(EFAULT as i32));
+    assert_eq!(
+        supervisor_blocked_pipe_wait_has_ready_events(0),
+        -(EFAULT as i32)
+    );
+    assert_eq!(
+        supervisor_blocked_wait_may_depend_on_network(0),
+        -(EFAULT as i32)
+    );
+    assert_eq!(
+        supervisor_blocked_wait_should_pump_network(0),
+        -(EFAULT as i32)
+    );
 
     let empty_hash = supervisor_shadow_thread_event_log_hash();
     assert_eq!(supervisor_shadow_thread_event_count(), 0);
@@ -1147,6 +1167,10 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     t.vm.guest_memory_policy_limit = 5 * 1024 * 1024;
     t.vm.process_max_memory_pages = 96;
     let vm_ptr = &mut t.vm as *mut _ as u32;
+    assert_eq!(supervisor_blocked_poll_wait_has_socket(vm_ptr), 0);
+    assert_eq!(supervisor_blocked_pipe_wait_has_ready_events(vm_ptr), 0);
+    assert_eq!(supervisor_blocked_wait_may_depend_on_network(vm_ptr), 0);
+    assert_eq!(supervisor_blocked_wait_should_pump_network(vm_ptr), 0);
     assert_eq!(
         supervisor_blocked_wait_retry_reason(vm_ptr, 0),
         supervisor_blocked_wait_retry_reason_default() as i32
@@ -1257,15 +1281,35 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     t.vm.epoll_timeout_ms = -1;
     set_blocked_resume_syscall(&mut t.vm, SYS_READ, [3, 0x1000, 1, 0, 0, 0]);
     assert_eq!(supervisor_blocked_poll_wait_timeout_ms(vm_ptr), -1);
+    assert_eq!(supervisor_blocked_poll_wait_has_socket(vm_ptr), 0);
+    assert_eq!(supervisor_blocked_pipe_wait_has_ready_events(vm_ptr), 0);
+    assert_eq!(supervisor_blocked_wait_may_depend_on_network(vm_ptr), 0);
+    assert_eq!(supervisor_blocked_wait_should_pump_network(vm_ptr), 1);
     set_blocked_resume_syscall(&mut t.vm, SYS_PPOLL, [0x1000, 2, 0, 0, 0, 0]);
     assert_eq!(supervisor_blocked_poll_wait_timeout_ms(vm_ptr), -1);
     assert_eq!(supervisor_blocked_wait_timer_required(vm_ptr), 0);
     t.vm.epoll_timeout_ms = 1;
     assert_eq!(supervisor_blocked_poll_wait_timeout_ms(vm_ptr), 1);
+    assert_eq!(supervisor_blocked_poll_wait_has_socket(vm_ptr), 0);
     set_blocked_resume_syscall(&mut t.vm, SYS_PSELECT6, [8, 0x2000, 0, 0, 0, 0]);
     t.vm.epoll_timeout_ms = 25;
     assert_eq!(supervisor_blocked_poll_wait_timeout_ms(vm_ptr), 25);
     assert_eq!(supervisor_blocked_wait_timer_required(vm_ptr), 1);
+    let socket_fd = tidemark_kernel::syscall::socket::sys_socket(
+        &mut t.vm,
+        t.base,
+        AF_INET as u64,
+        SOCK_STREAM as u64,
+        0,
+    );
+    assert!(socket_fd >= 0);
+    let pollfd = t.scratch + 0x980;
+    write_pollfd(&mut t, pollfd, socket_fd as i32, 0x001);
+    set_blocked_resume_syscall(&mut t.vm, SYS_PPOLL, [pollfd, 1, 0, 0, 0, 0]);
+    assert_eq!(supervisor_blocked_poll_wait_timeout_ms(vm_ptr), 25);
+    assert_eq!(supervisor_blocked_poll_wait_has_socket(vm_ptr), 1);
+    assert_eq!(supervisor_blocked_wait_may_depend_on_network(vm_ptr), 1);
+    assert_eq!(supervisor_blocked_wait_should_pump_network(vm_ptr), 1);
     assert_eq!(
         supervisor_blocked_resume_delegation(
             vm_ptr,
@@ -1275,6 +1319,10 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     );
     t.vm.status = STATUS_SOCKET_RECV;
     t.vm.socket_timeout_ms = -1;
+    assert_eq!(supervisor_blocked_poll_wait_has_socket(vm_ptr), 0);
+    assert_eq!(supervisor_blocked_pipe_wait_has_ready_events(vm_ptr), 0);
+    assert_eq!(supervisor_blocked_wait_may_depend_on_network(vm_ptr), 1);
+    assert_eq!(supervisor_blocked_wait_should_pump_network(vm_ptr), 1);
     assert_eq!(supervisor_blocked_wait_timer_required(vm_ptr), 0);
     t.vm.socket_timeout_ms = 1;
     assert_eq!(supervisor_blocked_wait_timer_required(vm_ptr), 1);

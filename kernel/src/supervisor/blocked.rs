@@ -65,6 +65,11 @@ fn blocked_or_current_syscall_arg(vm: &ThreadState, index: usize) -> u64 {
     }
 }
 
+fn poll_like_syscall(vm: &ThreadState) -> bool {
+    let syscall = blocked_or_current_syscall_nr(vm);
+    syscall == crate::abi::SYS_PPOLL || syscall == crate::abi::SYS_PSELECT6
+}
+
 fn positive_resume_len(resume_result: i64) -> Option<u64> {
     if resume_result > 0 {
         Some(resume_result as u64)
@@ -192,23 +197,92 @@ pub(super) fn poll_wait_timeout_ms(vm_ptr: u32) -> i64 {
         Ok(vm) => vm,
         Err(errno) => return -(errno as i64),
     };
-    if vm.status != crate::abi::STATUS_PIPE_WAIT {
-        return -1;
-    }
-    let syscall = blocked_or_current_syscall_nr(vm);
-    if syscall != crate::abi::SYS_PPOLL && syscall != crate::abi::SYS_PSELECT6 {
+    poll_wait_timeout_ms_for_vm(vm)
+}
+
+fn poll_wait_timeout_ms_for_vm(vm: &ThreadState) -> i64 {
+    if vm.status != crate::abi::STATUS_PIPE_WAIT || !poll_like_syscall(vm) {
         return -1;
     }
     vm.epoll_timeout_ms
+}
+
+fn poll_wait_has_socket_for_vm(vm: &ThreadState) -> bool {
+    vm.status == crate::abi::STATUS_PIPE_WAIT
+        && poll_like_syscall(vm)
+        && crate::syscall::poll::wait_set_has_socket(vm, vm.guest_base)
+}
+
+fn pipe_wait_ready_count_for_vm(vm: &ThreadState) -> i32 {
+    if vm.status != crate::abi::STATUS_PIPE_WAIT {
+        return 0;
+    }
+    crate::syscall::poll::wait_set_ready_count(vm, vm.guest_base)
+}
+
+fn blocked_wait_may_depend_on_network_for_vm(vm: &ThreadState) -> bool {
+    match vm.status {
+        crate::abi::STATUS_PIPE_WAIT => {
+            if poll_wait_timeout_ms_for_vm(vm) >= 0 && poll_wait_has_socket_for_vm(vm) {
+                return true;
+            }
+            if pipe_wait_ready_count_for_vm(vm) > 0 {
+                return false;
+            }
+            false
+        }
+        crate::abi::STATUS_SOCKET_RECV
+        | crate::abi::STATUS_SOCKET_SEND
+        | crate::abi::STATUS_CONNECT => true,
+        _ => false,
+    }
+}
+
+fn blocked_wait_should_pump_network_for_vm(vm: &ThreadState) -> bool {
+    match vm.status {
+        crate::abi::STATUS_PIPE_WAIT => {
+            blocked_wait_may_depend_on_network_for_vm(vm) || pipe_wait_ready_count_for_vm(vm) <= 0
+        }
+        crate::abi::STATUS_SOCKET_RECV
+        | crate::abi::STATUS_SOCKET_SEND
+        | crate::abi::STATUS_CONNECT => true,
+        _ => false,
+    }
+}
+
+pub(super) fn poll_wait_has_socket(vm_ptr: u32) -> i32 {
+    match state(vm_ptr) {
+        Ok(vm) => i32::from(poll_wait_has_socket_for_vm(vm)),
+        Err(errno) => -errno,
+    }
+}
+
+pub(super) fn pipe_wait_has_ready_events(vm_ptr: u32) -> i32 {
+    match state(vm_ptr) {
+        Ok(vm) => i32::from(pipe_wait_ready_count_for_vm(vm) > 0),
+        Err(errno) => -errno,
+    }
+}
+
+pub(super) fn blocked_wait_may_depend_on_network(vm_ptr: u32) -> i32 {
+    match state(vm_ptr) {
+        Ok(vm) => i32::from(blocked_wait_may_depend_on_network_for_vm(vm)),
+        Err(errno) => -errno,
+    }
+}
+
+pub(super) fn blocked_wait_should_pump_network(vm_ptr: u32) -> i32 {
+    match state(vm_ptr) {
+        Ok(vm) => i32::from(blocked_wait_should_pump_network_for_vm(vm)),
+        Err(errno) => -errno,
+    }
 }
 
 fn pipe_wait_should_remain_passive(vm_ptr: u32, vm: &ThreadState) -> bool {
     if vm.status != crate::abi::STATUS_PIPE_WAIT {
         return false;
     }
-    let syscall = blocked_or_current_syscall_nr(vm);
-    let poll_like = syscall == crate::abi::SYS_PPOLL || syscall == crate::abi::SYS_PSELECT6;
-    if !poll_like {
+    if !poll_like_syscall(vm) {
         return false;
     }
     if vm.epoll_timeout_ms >= 0 {

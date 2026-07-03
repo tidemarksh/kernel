@@ -830,6 +830,26 @@ pub extern "C" fn supervisor_blocked_poll_wait_timeout_ms(vm_ptr: u32) -> i64 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_poll_wait_has_socket(vm_ptr: u32) -> i32 {
+    super::blocked::poll_wait_has_socket(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_pipe_wait_has_ready_events(vm_ptr: u32) -> i32 {
+    super::blocked::pipe_wait_has_ready_events(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_wait_may_depend_on_network(vm_ptr: u32) -> i32 {
+    super::blocked::blocked_wait_may_depend_on_network(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_wait_should_pump_network(vm_ptr: u32) -> i32 {
+    super::blocked::blocked_wait_should_pump_network(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_wait_retry_delay_ms(vm_ptr: u32, reason: u32) -> i32 {
     super::blocked::retry_delay_ms(vm_ptr, reason)
 }
