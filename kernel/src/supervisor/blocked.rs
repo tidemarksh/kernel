@@ -16,6 +16,14 @@ pub(super) const RESUME_DELEGATION_KERNEL_WORKER: u32 = 1;
 pub(super) const RESUME_DELEGATION_WAIT4_KERNEL_WORKER: u32 = 2;
 pub(super) const RESUME_DELEGATION_UNSUPPORTED: u32 = 3;
 pub(super) const RESUME_DELEGATION_EPOLL_DIRECT: u32 = 4;
+pub(super) const STATUS_TRANSITION_ACTION_BLOCK: u32 = 0;
+pub(super) const STATUS_TRANSITION_ACTION_SYNC_SOCKET: u32 = 1;
+pub(super) const STATUS_TRANSITION_ACTION_SYNC_PIPE: u32 = 2;
+pub(super) const STATUS_TRANSITION_ACTION_SYNC_FORK_SHARED: u32 = 3;
+pub(super) const STATUS_TRANSITION_ACTION_SYNC_PIPE_AND_FORK_SHARED: u32 = 4;
+pub(super) const STATUS_TRANSITION_ACTION_SYNC_SOCKET_AND_FORK_SHARED: u32 = 5;
+pub(super) const STATUS_TRANSITION_FLAG_KERNEL_WORKER_AVAILABLE: u32 = 1;
+pub(super) const STATUS_TRANSITION_FLAG_NETWORK_CONNECTIONS_AVAILABLE: u32 = 1 << 1;
 
 use crate::types::ThreadState;
 
@@ -85,6 +93,38 @@ pub(super) fn status_uses_fork_shared_state_sync(status: i32) -> i32 {
             | crate::abi::STATUS_SOCKET_SEND
             | crate::abi::STATUS_FLOCK_WAIT
     ))
+}
+
+pub(super) fn status_transition_action_block() -> u32 {
+    STATUS_TRANSITION_ACTION_BLOCK
+}
+
+pub(super) fn status_transition_action_sync_socket() -> u32 {
+    STATUS_TRANSITION_ACTION_SYNC_SOCKET
+}
+
+pub(super) fn status_transition_action_sync_pipe() -> u32 {
+    STATUS_TRANSITION_ACTION_SYNC_PIPE
+}
+
+pub(super) fn status_transition_action_sync_fork_shared() -> u32 {
+    STATUS_TRANSITION_ACTION_SYNC_FORK_SHARED
+}
+
+pub(super) fn status_transition_action_sync_pipe_and_fork_shared() -> u32 {
+    STATUS_TRANSITION_ACTION_SYNC_PIPE_AND_FORK_SHARED
+}
+
+pub(super) fn status_transition_action_sync_socket_and_fork_shared() -> u32 {
+    STATUS_TRANSITION_ACTION_SYNC_SOCKET_AND_FORK_SHARED
+}
+
+pub(super) fn status_transition_flag_kernel_worker_available() -> u32 {
+    STATUS_TRANSITION_FLAG_KERNEL_WORKER_AVAILABLE
+}
+
+pub(super) fn status_transition_flag_network_connections_available() -> u32 {
+    STATUS_TRANSITION_FLAG_NETWORK_CONNECTIONS_AVAILABLE
 }
 
 fn status(vm_ptr: u32) -> i32 {
@@ -341,6 +381,43 @@ pub(super) fn blocked_wait_should_pump_network(vm_ptr: u32) -> i32 {
     match state(vm_ptr) {
         Ok(vm) => i32::from(blocked_wait_should_pump_network_for_vm(vm)),
         Err(errno) => -errno,
+    }
+}
+
+pub(super) fn status_transition_action(vm_ptr: u32, status: i32, flags: u32) -> i32 {
+    let vm = match state(vm_ptr) {
+        Ok(vm) => vm,
+        Err(errno) => return -errno,
+    };
+    let kernel_worker_available = (flags & STATUS_TRANSITION_FLAG_KERNEL_WORKER_AVAILABLE) != 0;
+    if !kernel_worker_available {
+        return STATUS_TRANSITION_ACTION_BLOCK as i32;
+    }
+
+    let pipe_wait_status = status == crate::abi::STATUS_PIPE_WAIT;
+    let network_connections_available =
+        (flags & STATUS_TRANSITION_FLAG_NETWORK_CONNECTIONS_AVAILABLE) != 0;
+    let pipe_wait_has_socket =
+        pipe_wait_status && network_connections_available && poll_wait_has_socket_for_vm(vm);
+    if pipe_wait_has_socket {
+        return STATUS_TRANSITION_ACTION_SYNC_SOCKET as i32;
+    }
+
+    if status == crate::abi::STATUS_WAIT4 {
+        return STATUS_TRANSITION_ACTION_SYNC_PIPE as i32;
+    }
+
+    let finite_poll_timeout = pipe_wait_status && poll_wait_timeout_ms_for_vm(vm) >= 0;
+    if status_uses_fork_shared_state_sync(status) == 0 || finite_poll_timeout {
+        return STATUS_TRANSITION_ACTION_BLOCK as i32;
+    }
+
+    match status {
+        crate::abi::STATUS_PIPE_WAIT => STATUS_TRANSITION_ACTION_SYNC_PIPE_AND_FORK_SHARED as i32,
+        crate::abi::STATUS_SOCKET_RECV | crate::abi::STATUS_SOCKET_SEND => {
+            STATUS_TRANSITION_ACTION_SYNC_SOCKET_AND_FORK_SHARED as i32
+        }
+        _ => STATUS_TRANSITION_ACTION_SYNC_FORK_SHARED as i32,
     }
 }
 

@@ -1462,6 +1462,33 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         1
     );
     let initial_status = t.vm.status;
+    let status_transition_kernel_worker =
+        supervisor_blocked_status_transition_flag_kernel_worker_available();
+    let status_transition_network =
+        supervisor_blocked_status_transition_flag_network_connections_available();
+    assert_eq!(supervisor_blocked_status_transition_action_block(), 0);
+    assert_eq!(supervisor_blocked_status_transition_action_sync_socket(), 1);
+    assert_eq!(supervisor_blocked_status_transition_action_sync_pipe(), 2);
+    assert_eq!(
+        supervisor_blocked_status_transition_action_sync_fork_shared(),
+        3
+    );
+    assert_eq!(
+        supervisor_blocked_status_transition_action_sync_pipe_and_fork_shared(),
+        4
+    );
+    assert_eq!(
+        supervisor_blocked_status_transition_action_sync_socket_and_fork_shared(),
+        5
+    );
+    assert_eq!(
+        supervisor_blocked_status_transition_action(
+            0,
+            STATUS_PIPE_WAIT,
+            status_transition_kernel_worker
+        ),
+        -(EFAULT as i32)
+    );
     assert_eq!(
         supervisor_blocked_resume_delegation(vm_ptr, 0),
         supervisor_blocked_resume_delegation_direct() as i32
@@ -1486,6 +1513,14 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         ),
         supervisor_blocked_resume_delegation_wait4_kernel_worker() as i32
     );
+    assert_eq!(
+        supervisor_blocked_status_transition_action(
+            vm_ptr,
+            STATUS_WAIT4,
+            status_transition_kernel_worker
+        ),
+        supervisor_blocked_status_transition_action_sync_pipe() as i32
+    );
     t.vm.status = STATUS_PIPE_WAIT;
     t.vm.epoll_timeout_ms = -1;
     set_blocked_resume_syscall(&mut t.vm, SYS_READ, [3, 0x1000, 1, 0, 0, 0]);
@@ -1495,6 +1530,18 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_blocked_pipe_wait_has_ready_events(vm_ptr), 0);
     assert_eq!(supervisor_blocked_wait_may_depend_on_network(vm_ptr), 0);
     assert_eq!(supervisor_blocked_wait_should_pump_network(vm_ptr), 1);
+    assert_eq!(
+        supervisor_blocked_status_transition_action(vm_ptr, STATUS_PIPE_WAIT, 0),
+        supervisor_blocked_status_transition_action_block() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_status_transition_action(
+            vm_ptr,
+            STATUS_PIPE_WAIT,
+            status_transition_kernel_worker
+        ),
+        supervisor_blocked_status_transition_action_sync_pipe_and_fork_shared() as i32
+    );
     set_blocked_resume_syscall(&mut t.vm, SYS_PPOLL, [0x1000, 2, 0, 0, 0, 0]);
     assert_eq!(supervisor_blocked_poll_wait_timeout_ms(vm_ptr), -1);
     assert_eq!(supervisor_blocked_wait_timer_required(vm_ptr), 0);
@@ -1521,6 +1568,22 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_blocked_wait_may_depend_on_network(vm_ptr), 1);
     assert_eq!(supervisor_blocked_wait_should_pump_network(vm_ptr), 1);
     assert_eq!(
+        supervisor_blocked_status_transition_action(
+            vm_ptr,
+            STATUS_PIPE_WAIT,
+            status_transition_kernel_worker
+        ),
+        supervisor_blocked_status_transition_action_block() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_status_transition_action(
+            vm_ptr,
+            STATUS_PIPE_WAIT,
+            status_transition_kernel_worker | status_transition_network
+        ),
+        supervisor_blocked_status_transition_action_sync_socket() as i32
+    );
+    assert_eq!(
         supervisor_blocked_resume_delegation(
             vm_ptr,
             supervisor_blocked_resume_delegation_flag_kernel_worker_available()
@@ -1534,6 +1597,14 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_blocked_wait_may_depend_on_network(vm_ptr), 1);
     assert_eq!(supervisor_blocked_wait_should_pump_network(vm_ptr), 1);
     assert_eq!(supervisor_blocked_wait_timer_required(vm_ptr), 0);
+    assert_eq!(
+        supervisor_blocked_status_transition_action(
+            vm_ptr,
+            STATUS_SOCKET_RECV,
+            status_transition_kernel_worker
+        ),
+        supervisor_blocked_status_transition_action_sync_socket_and_fork_shared() as i32
+    );
     t.vm.socket_timeout_ms = 1;
     assert_eq!(supervisor_blocked_wait_timer_required(vm_ptr), 1);
     assert_eq!(
@@ -1555,6 +1626,14 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     t.vm.epoll_timeout_ms = -1;
     assert_eq!(supervisor_blocked_epoll_wait_timeout_ms(vm_ptr), -1);
     assert_eq!(supervisor_blocked_wait_timer_required(vm_ptr), 0);
+    assert_eq!(
+        supervisor_blocked_status_transition_action(
+            vm_ptr,
+            STATUS_EPOLL_WAIT,
+            status_transition_kernel_worker
+        ),
+        supervisor_blocked_status_transition_action_block() as i32
+    );
     t.vm.epoll_timeout_ms = 1;
     assert_eq!(supervisor_blocked_epoll_wait_timeout_ms(vm_ptr), 1);
     assert_eq!(supervisor_blocked_wait_timer_required(vm_ptr), 1);

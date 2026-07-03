@@ -901,6 +901,55 @@ pub extern "C" fn supervisor_blocked_status_uses_fork_shared_state_sync(status: 
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_status_transition_action_block() -> u32 {
+    super::blocked::status_transition_action_block()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_status_transition_action_sync_socket() -> u32 {
+    super::blocked::status_transition_action_sync_socket()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_status_transition_action_sync_pipe() -> u32 {
+    super::blocked::status_transition_action_sync_pipe()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_status_transition_action_sync_fork_shared() -> u32 {
+    super::blocked::status_transition_action_sync_fork_shared()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_status_transition_action_sync_pipe_and_fork_shared() -> u32 {
+    super::blocked::status_transition_action_sync_pipe_and_fork_shared()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_status_transition_action_sync_socket_and_fork_shared() -> u32 {
+    super::blocked::status_transition_action_sync_socket_and_fork_shared()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_status_transition_flag_kernel_worker_available() -> u32 {
+    super::blocked::status_transition_flag_kernel_worker_available()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_status_transition_flag_network_connections_available() -> u32 {
+    super::blocked::status_transition_flag_network_connections_available()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_status_transition_action(
+    vm_ptr: u32,
+    status: i32,
+    flags: u32,
+) -> i32 {
+    super::blocked::status_transition_action(vm_ptr, status, flags)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_poll_wait_timeout_ms(vm_ptr: u32) -> i64 {
     super::blocked::poll_wait_timeout_ms(vm_ptr)
 }
