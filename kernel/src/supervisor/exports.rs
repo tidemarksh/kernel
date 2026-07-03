@@ -172,6 +172,17 @@ export_u32_const!(
     supervisor_process_lifecycle_kind_wait4_completed,
     super::SUPERVISOR_PROCESS_LIFECYCLE_KIND_WAIT4_COMPLETED
 );
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_status_is_lifecycle_handoff(status: i32) -> i32 {
+    super::process::status_is_lifecycle_handoff(status)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_status_allows_pid_mismatch(status: i32) -> i32 {
+    super::process::status_allows_pid_mismatch(status)
+}
+
 export_u32_const!(
     supervisor_fd_control_record_bytes,
     super::SUPERVISOR_FD_CONTROL_RECORD_BYTES

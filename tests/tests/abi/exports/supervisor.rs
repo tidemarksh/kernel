@@ -1170,6 +1170,32 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_vfork_execve_handoff_failure_wait_status(),
         127 << 8
     );
+    assert_eq!(supervisor_process_status_is_lifecycle_handoff(STATUS_OK), 0);
+    assert_eq!(
+        supervisor_process_status_is_lifecycle_handoff(STATUS_VFORK_WAIT),
+        1
+    );
+    assert_eq!(
+        supervisor_process_status_is_lifecycle_handoff(STATUS_EXECVE_SPAWN),
+        1
+    );
+    assert_eq!(
+        supervisor_process_status_is_lifecycle_handoff(STATUS_CLONE_SPAWN),
+        1
+    );
+    assert_eq!(supervisor_process_status_allows_pid_mismatch(STATUS_OK), 0);
+    assert_eq!(
+        supervisor_process_status_allows_pid_mismatch(STATUS_VFORK_WAIT),
+        1
+    );
+    assert_eq!(
+        supervisor_process_status_allows_pid_mismatch(STATUS_EXECVE_SPAWN),
+        1
+    );
+    assert_eq!(
+        supervisor_process_status_allows_pid_mismatch(STATUS_CLONE_SPAWN),
+        0
+    );
     assert_eq!(supervisor_vfork_execve_rollback(0, 1), -(EFAULT as i32));
     assert_eq!(supervisor_enqueue_blocked_wait_timer(0), EFAULT as i32);
     assert_eq!(supervisor_enqueue_blocked_retry_timer(0, 0), EFAULT as i32);

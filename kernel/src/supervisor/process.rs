@@ -16,6 +16,22 @@ pub fn process_lifecycle_count() -> u64 {
     PROCESS_LIFECYCLE_COUNT.load(Ordering::Relaxed)
 }
 
+pub(super) fn status_is_lifecycle_handoff(status: i32) -> i32 {
+    i32::from(matches!(
+        status,
+        crate::abi::STATUS_VFORK_WAIT
+            | crate::abi::STATUS_EXECVE_SPAWN
+            | crate::abi::STATUS_CLONE_SPAWN
+    ))
+}
+
+pub(super) fn status_allows_pid_mismatch(status: i32) -> i32 {
+    i32::from(matches!(
+        status,
+        crate::abi::STATUS_VFORK_WAIT | crate::abi::STATUS_EXECVE_SPAWN
+    ))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn record_process_lifecycle(
     kind: u32,
