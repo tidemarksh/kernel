@@ -362,6 +362,9 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     );
     assert_eq!(supervisor_process_epoll_held_ofd(0, 0), 0);
     assert_eq!(supervisor_process_epoll_dependent_ofd(0, 0), 0);
+    assert_eq!(supervisor_process_sync_dependent_ofd(0, 0), 0);
+    assert_eq!(supervisor_process_epoll_dependent_sync_ofd(0, 0), 0);
+    assert_eq!(supervisor_process_epoll_depends_on_ofd(0, 1), 0);
     assert_eq!(supervisor_blocked_epoll_watched_ofd(0, 0), 0);
     assert_eq!(supervisor_blocked_epoll_dependent_sync_ofd(0, 0), 0);
     assert_eq!(supervisor_blocked_epoll_watches_pipe(0), 0);

@@ -42,6 +42,37 @@ where
 }
 
 pub fn process_epoll_dependent_ofd(vm_ptr: u32, index: u32) -> u32 {
+    process_epoll_dependent_ofd_matching(vm_ptr, index, |_| true)
+}
+
+fn is_sync_dependent_fd_type(fd_type: i32) -> bool {
+    fd_type == FD_TYPE_EVENTFD || fd_type == FD_TYPE_TIMERFD
+}
+
+pub fn process_sync_dependent_ofd(vm_ptr: u32, index: u32) -> u32 {
+    let mut seen = [false; MAX_FDS];
+    let mut cursor = 0u32;
+    let mut result = 0u32;
+    super::fd::for_each_process_held_ofd(vm_ptr, |ofd_id, ofd| {
+        if result != 0 || ofd_id as usize >= MAX_FDS || seen[ofd_id as usize] {
+            return;
+        }
+        seen[ofd_id as usize] = true;
+        if !is_sync_dependent_fd_type(ofd.fd_type) {
+            return;
+        }
+        if cursor == index {
+            result = ofd_id;
+        }
+        cursor = cursor.saturating_add(1);
+    });
+    result
+}
+
+fn process_epoll_dependent_ofd_matching<F>(vm_ptr: u32, index: u32, mut matches: F) -> u32
+where
+    F: FnMut(u32) -> bool,
+{
     let mut seen_epoll = [false; MAX_FDS];
     let mut seen_dependent = [false; MAX_FDS];
     let mut cursor = 0u32;
@@ -58,6 +89,9 @@ pub fn process_epoll_dependent_ofd(vm_ptr: u32, index: u32) -> u32 {
             if result != 0 {
                 return;
             }
+            if !matches(watched_ofd_id) {
+                return;
+            }
             if cursor == index {
                 result = watched_ofd_id;
             }
@@ -65,6 +99,37 @@ pub fn process_epoll_dependent_ofd(vm_ptr: u32, index: u32) -> u32 {
         });
     });
     result
+}
+
+pub fn process_epoll_dependent_sync_ofd(vm_ptr: u32, index: u32) -> u32 {
+    process_epoll_dependent_ofd_matching(vm_ptr, index, |watched_ofd_id| {
+        fd_table::get_ofd_by_id(watched_ofd_id)
+            .is_some_and(|ofd| is_sync_dependent_fd_type(ofd.fd_type))
+    })
+}
+
+pub fn process_epoll_depends_on_ofd(vm_ptr: u32, target_ofd_id: u32) -> u32 {
+    if target_ofd_id == 0 || target_ofd_id as usize >= MAX_FDS {
+        return 0;
+    }
+    let mut found = false;
+    let mut seen_epoll = [false; MAX_FDS];
+    let mut seen_dependent = [false; MAX_FDS];
+    super::fd::for_each_process_held_ofd(vm_ptr, |epoll_ofd_id, epoll_ofd| {
+        if found || epoll_ofd_id as usize >= MAX_FDS || seen_epoll[epoll_ofd_id as usize] {
+            return;
+        }
+        seen_epoll[epoll_ofd_id as usize] = true;
+        if epoll_ofd.fd_type != FD_TYPE_EPOLL {
+            return;
+        }
+        for_each_unique_watched_ofd(epoll_ofd, &mut seen_dependent, |watched_ofd_id| {
+            if watched_ofd_id == target_ofd_id {
+                found = true;
+            }
+        });
+    });
+    found as u32
 }
 
 fn blocked_epoll_ofd(vm_ptr: u32) -> Option<OpenFileDesc> {
@@ -115,7 +180,7 @@ pub fn blocked_epoll_dependent_sync_ofd(vm_ptr: u32, index: u32) -> u32 {
         let Some(ofd) = fd_table::get_ofd_by_id(watched_ofd_id) else {
             return;
         };
-        if ofd.fd_type != FD_TYPE_EVENTFD && ofd.fd_type != FD_TYPE_TIMERFD {
+        if !is_sync_dependent_fd_type(ofd.fd_type) {
             return;
         }
         if cursor == index {

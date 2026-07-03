@@ -183,9 +183,20 @@ fn supervisor_process_epoll_query_reports_unique_held_ofds() {
     assert!(dup_epfd >= 0);
     let epoll_ofd =
         fd_table::get_ofd_id(t.base, &t.vm, epfd as u64).expect("epoll OFD should exist");
+    let event_fd = pipe::sys_eventfd2(&mut t.vm, t.base, 0, O_NONBLOCK as u64);
+    assert!(event_fd >= 3);
+    let event_ofd =
+        fd_table::get_ofd_id(t.base, &t.vm, event_fd as u64).expect("eventfd OFD should exist");
+    let timer_fd = time::sys_timerfd_create(&mut t.vm, t.base, 1, O_NONBLOCK as u64);
+    assert!(timer_fd >= 3);
+    let timer_ofd =
+        fd_table::get_ofd_id(t.base, &t.vm, timer_fd as u64).expect("timerfd OFD should exist");
 
     assert_eq!(supervisor_process_epoll_held_ofd(vm_ptr, 0), epoll_ofd);
     assert_eq!(supervisor_process_epoll_held_ofd(vm_ptr, 1), 0);
+    assert_eq!(supervisor_process_sync_dependent_ofd(vm_ptr, 0), event_ofd);
+    assert_eq!(supervisor_process_sync_dependent_ofd(vm_ptr, 1), timer_ofd);
+    assert_eq!(supervisor_process_sync_dependent_ofd(vm_ptr, 2), 0);
 
     unsafe {
         tidemark_kernel::guest_mem::write_u32(t.base, event_addr, EPOLLIN);
@@ -202,9 +213,58 @@ fn supervisor_process_epoll_query_reports_unique_held_ofds() {
         ),
         0
     );
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, event_addr + 8, 0xbeef);
+    }
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            event_fd as u64,
+            event_addr,
+        ),
+        0
+    );
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, event_addr + 8, 0xcafe);
+    }
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            timer_fd as u64,
+            event_addr,
+        ),
+        0
+    );
 
     assert_eq!(supervisor_process_epoll_dependent_ofd(vm_ptr, 0), read_ofd);
-    assert_eq!(supervisor_process_epoll_dependent_ofd(vm_ptr, 1), 0);
+    assert_eq!(supervisor_process_epoll_dependent_ofd(vm_ptr, 1), event_ofd);
+    assert_eq!(supervisor_process_epoll_dependent_ofd(vm_ptr, 2), timer_ofd);
+    assert_eq!(supervisor_process_epoll_dependent_ofd(vm_ptr, 3), 0);
+    assert_eq!(
+        supervisor_process_epoll_dependent_sync_ofd(vm_ptr, 0),
+        event_ofd
+    );
+    assert_eq!(
+        supervisor_process_epoll_dependent_sync_ofd(vm_ptr, 1),
+        timer_ofd
+    );
+    assert_eq!(supervisor_process_epoll_dependent_sync_ofd(vm_ptr, 2), 0);
+    assert_eq!(supervisor_process_epoll_depends_on_ofd(vm_ptr, read_ofd), 1);
+    assert_eq!(
+        supervisor_process_epoll_depends_on_ofd(vm_ptr, event_ofd),
+        1
+    );
+    assert_eq!(
+        supervisor_process_epoll_depends_on_ofd(vm_ptr, timer_ofd),
+        1
+    );
+    assert_eq!(supervisor_process_epoll_depends_on_ofd(vm_ptr, 31), 0);
     assert_eq!(
         epoll::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, output_addr, 1, -1, 0),
         0
@@ -212,7 +272,18 @@ fn supervisor_process_epoll_query_reports_unique_held_ofds() {
     assert_eq!(t.vm.status, STATUS_EPOLL_WAIT);
     assert_eq!(supervisor_blocked_epoll_watches_pipe(vm_ptr), 1);
     assert_eq!(supervisor_blocked_epoll_watched_ofd(vm_ptr, 0), read_ofd);
-    assert_eq!(supervisor_blocked_epoll_watched_ofd(vm_ptr, 1), 0);
+    assert_eq!(supervisor_blocked_epoll_watched_ofd(vm_ptr, 1), event_ofd);
+    assert_eq!(supervisor_blocked_epoll_watched_ofd(vm_ptr, 2), timer_ofd);
+    assert_eq!(supervisor_blocked_epoll_watched_ofd(vm_ptr, 3), 0);
+    assert_eq!(
+        supervisor_blocked_epoll_dependent_sync_ofd(vm_ptr, 0),
+        event_ofd
+    );
+    assert_eq!(
+        supervisor_blocked_epoll_dependent_sync_ofd(vm_ptr, 1),
+        timer_ofd
+    );
+    assert_eq!(supervisor_blocked_epoll_dependent_sync_ofd(vm_ptr, 2), 0);
 }
 
 #[test]
