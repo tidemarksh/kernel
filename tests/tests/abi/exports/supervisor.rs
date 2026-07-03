@@ -49,6 +49,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_debug_snapshot_bytes(), 112);
     assert_eq!(supervisor_debug_snapshot(0, 0), 112);
     assert_eq!(supervisor_thread_event_record_bytes(), 80);
+    assert_eq!(supervisor_thread_event_record_magic(), 0x5645_5354);
     assert_eq!(supervisor_thread_event_kind_blocked(), 1);
     assert_eq!(supervisor_thread_event_kind_ready(), 2);
     assert_eq!(supervisor_thread_event_kind_faulted(), 3);
@@ -61,11 +62,14 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_thread_state_snapshot_bytes(),
         32 + abi_max_threads() as u32 * 32
     );
+    assert_eq!(supervisor_thread_state_snapshot_magic(), 0x4854_5354);
     assert_eq!(
         supervisor_thread_state_snapshot(0, 0, 0),
         supervisor_thread_state_snapshot_bytes() as i32
     );
+    assert_eq!(supervisor_resume_record_magic(), 0x5255_5354);
     assert_eq!(supervisor_host_op_record_bytes(), 64);
+    assert_eq!(supervisor_host_op_record_magic(), 0x4f48_5354);
     assert_eq!(supervisor_host_op_kind_spawn_thread_worker(), 1);
     assert_eq!(supervisor_host_op_kind_spawn_process_worker(), 2);
     assert_eq!(supervisor_host_op_kind_create_process_memory(), 3);
@@ -82,19 +86,25 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_host_op_kind_terminate_worker(), 14);
     assert_eq!(supervisor_host_op_kind_retry_blocked_worker(), 15);
     assert_eq!(supervisor_host_completion_record_bytes(), 64);
+    assert_eq!(supervisor_host_completion_record_magic(), 0x4348_5354);
     assert_eq!(supervisor_host_completion_outcome_success(), 1);
     assert_eq!(supervisor_host_completion_outcome_failure(), 2);
     assert_eq!(supervisor_process_host_op_record_bytes(), 96);
+    assert_eq!(supervisor_process_host_op_record_magic(), 0x4850_5354);
     assert_eq!(supervisor_process_host_op_kind_spawn_process_worker(), 1);
     assert_eq!(supervisor_fault_exit_decision_bytes(), 88);
+    assert_eq!(supervisor_fault_exit_decision_magic(), 0x5846_5354);
     assert_eq!(supervisor_fault_exit_kind_thread_exit(), 1);
     assert_eq!(supervisor_fault_exit_kind_process_exit(), 2);
     assert_eq!(supervisor_thread_exit_cleanup_record_bytes(), 96);
+    assert_eq!(supervisor_thread_exit_cleanup_record_magic(), 0x4358_5354);
     assert_eq!(supervisor_thread_exit_cleanup_kind_thread_exit(), 1);
     assert_eq!(supervisor_process_lifecycle_record_bytes(), 96);
+    assert_eq!(supervisor_process_lifecycle_record_magic(), 0x4350_5354);
     assert_eq!(supervisor_process_lifecycle_kind_child_exit_published(), 1);
     assert_eq!(supervisor_process_lifecycle_kind_wait4_completed(), 2);
     assert_eq!(supervisor_fd_control_record_bytes(), 96);
+    assert_eq!(supervisor_fd_control_record_magic(), 0x4446_5354);
     assert_eq!(supervisor_fd_control_kind_pipe_created(), 1);
     assert_eq!(supervisor_fd_control_kind_fd_closed(), 2);
     assert_eq!(supervisor_fd_control_kind_fd_duplicated(), 3);
@@ -398,6 +408,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         -(EFAULT as i32)
     );
     assert_eq!(supervisor_fs_control_record_bytes(), 112);
+    assert_eq!(supervisor_fs_control_record_magic(), 0x5346_5354);
     assert_eq!(supervisor_fs_control_record(0, 0), 112);
     assert_eq!(supervisor_fs_control_kind_page_cache_miss(), 1);
     assert_eq!(supervisor_fs_control_kind_page_cache_fill(), 2);
@@ -1215,6 +1226,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_shadow_fs_control_count(), 3);
     supervisor_reset_shadow_log();
     assert_eq!(supervisor_signal_control_record_bytes(), 120);
+    assert_eq!(supervisor_signal_control_record_magic(), 0x4753_5354);
     assert_eq!(supervisor_signal_control_record(0, 0), 120);
     assert_eq!(supervisor_signal_control_kind_boundary_check(), 1);
     assert_eq!(supervisor_signal_control_kind_signal_delivered(), 2);

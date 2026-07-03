@@ -17,6 +17,10 @@ export_u32_const!(
     super::SUPERVISOR_THREAD_EVENT_RECORD_BYTES
 );
 export_u32_const!(
+    supervisor_thread_event_record_magic,
+    super::SUPERVISOR_THREAD_EVENT_RECORD_MAGIC
+);
+export_u32_const!(
     supervisor_thread_event_kind_blocked,
     super::SUPERVISOR_THREAD_EVENT_KIND_BLOCKED
 );
@@ -53,12 +57,24 @@ export_u32_const!(
     super::SUPERVISOR_THREAD_STATE_SNAPSHOT_BYTES
 );
 export_u32_const!(
+    supervisor_thread_state_snapshot_magic,
+    super::SUPERVISOR_THREAD_STATE_SNAPSHOT_MAGIC
+);
+export_u32_const!(
     supervisor_resume_record_bytes,
     super::SUPERVISOR_RESUME_RECORD_BYTES
 );
 export_u32_const!(
+    supervisor_resume_record_magic,
+    super::SUPERVISOR_RESUME_RECORD_MAGIC
+);
+export_u32_const!(
     supervisor_host_completion_record_bytes,
     super::SUPERVISOR_HOST_COMPLETION_RECORD_BYTES
+);
+export_u32_const!(
+    supervisor_host_completion_record_magic,
+    super::SUPERVISOR_HOST_COMPLETION_RECORD_MAGIC
 );
 export_u32_const!(
     supervisor_host_completion_outcome_success,
@@ -71,6 +87,10 @@ export_u32_const!(
 export_u32_const!(
     supervisor_host_op_record_bytes,
     super::SUPERVISOR_HOST_OP_RECORD_BYTES
+);
+export_u32_const!(
+    supervisor_host_op_record_magic,
+    super::SUPERVISOR_HOST_OP_RECORD_MAGIC
 );
 export_u32_const!(
     supervisor_host_op_kind_spawn_thread_worker,
@@ -137,12 +157,20 @@ export_u32_const!(
     super::SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES
 );
 export_u32_const!(
+    supervisor_process_host_op_record_magic,
+    super::SUPERVISOR_PROCESS_HOST_OP_RECORD_MAGIC
+);
+export_u32_const!(
     supervisor_process_host_op_kind_spawn_process_worker,
     super::SUPERVISOR_PROCESS_HOST_OP_KIND_SPAWN_PROCESS_WORKER
 );
 export_u32_const!(
     supervisor_fault_exit_decision_bytes,
     super::SUPERVISOR_FAULT_EXIT_DECISION_BYTES
+);
+export_u32_const!(
+    supervisor_fault_exit_decision_magic,
+    super::SUPERVISOR_FAULT_EXIT_DECISION_MAGIC
 );
 export_u32_const!(
     supervisor_fault_exit_kind_thread_exit,
@@ -157,12 +185,20 @@ export_u32_const!(
     super::SUPERVISOR_THREAD_EXIT_CLEANUP_BYTES
 );
 export_u32_const!(
+    supervisor_thread_exit_cleanup_record_magic,
+    super::SUPERVISOR_THREAD_EXIT_CLEANUP_MAGIC
+);
+export_u32_const!(
     supervisor_thread_exit_cleanup_kind_thread_exit,
     super::SUPERVISOR_THREAD_EXIT_CLEANUP_KIND_THREAD_EXIT
 );
 export_u32_const!(
     supervisor_process_lifecycle_record_bytes,
     super::SUPERVISOR_PROCESS_LIFECYCLE_BYTES
+);
+export_u32_const!(
+    supervisor_process_lifecycle_record_magic,
+    super::SUPERVISOR_PROCESS_LIFECYCLE_MAGIC
 );
 export_u32_const!(
     supervisor_process_lifecycle_kind_child_exit_published,
@@ -206,6 +242,10 @@ pub extern "C" fn supervisor_process_status_defers_kernel_state_adoption(status:
 export_u32_const!(
     supervisor_fd_control_record_bytes,
     super::SUPERVISOR_FD_CONTROL_RECORD_BYTES
+);
+export_u32_const!(
+    supervisor_fd_control_record_magic,
+    super::SUPERVISOR_FD_CONTROL_RECORD_MAGIC
 );
 export_u32_const!(
     supervisor_fd_control_kind_pipe_created,
@@ -398,6 +438,10 @@ export_u32_const!(
 export_u32_const!(
     supervisor_fs_control_record_bytes,
     super::SUPERVISOR_FS_CONTROL_RECORD_BYTES
+);
+export_u32_const!(
+    supervisor_fs_control_record_magic,
+    super::SUPERVISOR_FS_CONTROL_RECORD_MAGIC
 );
 export_u32_const!(
     supervisor_fs_control_kind_page_cache_miss,
@@ -670,6 +714,10 @@ export_u32_const!(
 export_u32_const!(
     supervisor_signal_control_record_bytes,
     super::SUPERVISOR_SIGNAL_CONTROL_RECORD_BYTES
+);
+export_u32_const!(
+    supervisor_signal_control_record_magic,
+    super::SUPERVISOR_SIGNAL_CONTROL_RECORD_MAGIC
 );
 export_u32_const!(
     supervisor_signal_control_kind_boundary_check,
