@@ -129,6 +129,10 @@ export_u32_const!(
     super::SUPERVISOR_HOST_OP_KIND_TERMINATE_WORKER
 );
 export_u32_const!(
+    supervisor_host_op_kind_retry_blocked_worker,
+    super::SUPERVISOR_HOST_OP_KIND_RETRY_BLOCKED_WORKER
+);
+export_u32_const!(
     supervisor_process_host_op_record_bytes,
     super::SUPERVISOR_PROCESS_HOST_OP_RECORD_BYTES
 );
@@ -807,6 +811,11 @@ pub extern "C" fn supervisor_blocked_wait_retry_flag_thread_init_pending() -> u3
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_enqueue_blocked_wait_timer(vm_ptr: u32) -> i32 {
     super::enqueue_blocked_wait_timer_for_vm(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_enqueue_blocked_retry_timer(vm_ptr: u32, flags: u32) -> i32 {
+    super::timer::enqueue_blocked_retry_timer_for_vm(vm_ptr, flags)
 }
 
 #[unsafe(no_mangle)]

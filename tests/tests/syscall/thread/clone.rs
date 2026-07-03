@@ -137,6 +137,8 @@ fn contract_supervisor_host_op_kind_filter_preserves_mixed_queue() {
     t.vm.status = STATUS_EPOLL_WAIT;
     t.vm.epoll_timeout_ms = 25;
     assert_eq!(supervisor_enqueue_blocked_wait_timer(parent_vm_ptr), 1);
+    t.vm.status = STATUS_WAIT4;
+    assert_eq!(supervisor_enqueue_blocked_retry_timer(parent_vm_ptr, 0), 1);
     t.vm.status = STATUS_OK;
 
     let flags = (CLONE_VM | CLONE_THREAD | CLONE_SIGHAND | CLONE_FS) as u64;
@@ -157,6 +159,26 @@ fn contract_supervisor_host_op_kind_filter_preserves_mixed_queue() {
         supervisor_host_op_kind_spawn_thread_worker()
     );
     assert_eq!(read_u32_le(&clone_record, 24), parent_vm_ptr);
+
+    let mut retry_record = [0u8; 64];
+    assert_eq!(
+        supervisor_next_host_op_kind(
+            supervisor_host_op_kind_retry_blocked_worker(),
+            retry_record.as_mut_ptr() as u32,
+            retry_record.len() as u32
+        ),
+        supervisor_host_op_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&retry_record, 12),
+        supervisor_host_op_kind_retry_blocked_worker()
+    );
+    assert_eq!(read_u32_le(&retry_record, 24), parent_vm_ptr);
+    assert_eq!(read_u64_le(&retry_record, 48), 10);
+    assert_eq!(
+        read_u64_le(&retry_record, 56),
+        supervisor_blocked_wait_retry_reason_default() as u64
+    );
 
     let mut timer_record = [0u8; 64];
     assert_eq!(

@@ -131,6 +131,39 @@ pub(super) fn enqueue_blocked_wait_timer_for_vm(vm_ptr: u32) -> i32 {
     }
 }
 
+pub(super) fn enqueue_blocked_retry_timer_for_vm(vm_ptr: u32, flags: u32) -> i32 {
+    if vm_ptr == 0 {
+        return crate::abi::EFAULT as i32;
+    }
+    let reason = super::blocked::retry_reason(vm_ptr, flags);
+    if reason < 0 {
+        return reason;
+    }
+    let delay_ms = super::blocked::retry_delay_ms(vm_ptr, reason as u32);
+    if delay_ms < 0 {
+        return delay_ms;
+    }
+    let vm = unsafe { &*(vm_ptr as *const crate::types::ThreadState) };
+    if enqueue_retry_request(vm, delay_ms as u64, reason as u64) {
+        1
+    } else {
+        0
+    }
+}
+
+fn enqueue_retry_request(vm: &crate::types::ThreadState, delay_ms: u64, reason: u64) -> bool {
+    super::host_op::push_request(super::SupervisorHostOpRequest {
+        kind: super::SUPERVISOR_HOST_OP_KIND_RETRY_BLOCKED_WORKER,
+        parent_vm_ptr: vm as *const crate::types::ThreadState as u32,
+        child_vm_ptr: 0,
+        tid: vm.tid as u32,
+        process_ptr: vm.process_ptr,
+        status: vm.status as u32,
+        detail0: delay_ms,
+        detail1: reason,
+    })
+}
+
 pub(super) fn blocked_wait_timer_required_for_vm(vm_ptr: u32) -> i32 {
     if vm_ptr == 0 {
         return crate::abi::EFAULT as i32;

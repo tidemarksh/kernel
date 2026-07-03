@@ -71,6 +71,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_host_op_kind_arm_host_timer(), 12);
     assert_eq!(supervisor_host_op_kind_resume_thread(), 13);
     assert_eq!(supervisor_host_op_kind_terminate_worker(), 14);
+    assert_eq!(supervisor_host_op_kind_retry_blocked_worker(), 15);
     assert_eq!(supervisor_host_completion_record_bytes(), 64);
     assert_eq!(supervisor_host_completion_outcome_success(), 1);
     assert_eq!(supervisor_host_completion_outcome_failure(), 2);
@@ -956,6 +957,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     );
     assert_eq!(supervisor_vfork_execve_rollback(0, 1), -(EFAULT as i32));
     assert_eq!(supervisor_enqueue_blocked_wait_timer(0), EFAULT as i32);
+    assert_eq!(supervisor_enqueue_blocked_retry_timer(0, 0), EFAULT as i32);
     assert_eq!(supervisor_blocked_wait_timer_required(0), EFAULT as i32);
 
     let empty_hash = supervisor_shadow_thread_event_log_hash();

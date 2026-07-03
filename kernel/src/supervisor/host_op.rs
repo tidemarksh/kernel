@@ -268,6 +268,17 @@ fn encode_request(request: super::SupervisorHostOpRequest, out_ptr: u32) -> i32 
             flags: request.detail0,
             child_tidptr: request.detail1,
         },
+        super::SUPERVISOR_HOST_OP_KIND_RETRY_BLOCKED_WORKER => super::SupervisorHostOpRecord {
+            kind: request.kind,
+            seq,
+            parent_vm_ptr: request.parent_vm_ptr,
+            child_vm_ptr: request.child_vm_ptr,
+            tid: request.tid,
+            process_ptr: request.process_ptr,
+            status: request.status,
+            flags: request.detail0,
+            child_tidptr: request.detail1,
+        },
         _ => return crate::abi::EINVAL as i32,
     };
     let mut encoded = [0u8; super::SUPERVISOR_HOST_OP_RECORD_BYTES as usize];
