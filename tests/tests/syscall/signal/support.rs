@@ -4,6 +4,7 @@ pub(super) use tidemark_kernel::abi::{
     SYS_RT_SIGRETURN, SYS_SIGNALFD4, SYS_TGKILL, supervisor_complete_futex_wait,
     supervisor_futex_wait_completion_signal_check, supervisor_reset_shadow_log,
     supervisor_shadow_signal_control_count, supervisor_signal_boundary_check,
+    supervisor_signal_boundary_fault, supervisor_signal_boundary_step,
     supervisor_signal_control_kind_blocked_wait_interrupted,
     supervisor_signal_control_kind_signal_delivered, supervisor_signal_control_record,
     supervisor_signal_control_record_bytes, supervisor_signal_pending_for_blocked_wait,

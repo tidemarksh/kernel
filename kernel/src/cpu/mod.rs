@@ -167,7 +167,11 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
             vm.f = *f;
             vm.pc = *pc;
             vm.fcsr = *fcsr;
-            if crate::syscall::signal::check_pending(vm, base) {
+            if crate::syscall::signal::check_pending_at_boundary(
+                vm,
+                base,
+                crate::supervisor::SUPERVISOR_SIGNAL_BOUNDARY_STEP,
+            ) {
                 *x = vm.x;
                 normalize_x0(x);
                 *f = vm.f;
@@ -275,7 +279,11 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
                 vm.pc = *pc;
                 vm.fcsr = *fcsr;
                 crate::syscall::signal::queue_sigill(vm, *pc, raw16 as u32);
-                crate::syscall::signal::check_pending(vm, base);
+                crate::syscall::signal::check_pending_at_boundary(
+                    vm,
+                    base,
+                    crate::supervisor::SUPERVISOR_SIGNAL_BOUNDARY_FAULT,
+                );
                 *x = vm.x;
                 normalize_x0(x);
                 *f = vm.f;

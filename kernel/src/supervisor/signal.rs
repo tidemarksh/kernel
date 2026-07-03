@@ -28,7 +28,11 @@ pub(super) fn boundary_check(vm_ptr: u32) -> i32 {
     if vm.status != crate::abi::STATUS_OK && vm.status != crate::abi::STATUS_VFORK_WAIT {
         return 0;
     }
-    i32::from(crate::syscall::signal::check_pending(vm, base))
+    i32::from(crate::syscall::signal::check_pending_at_boundary(
+        vm,
+        base,
+        super::SUPERVISOR_SIGNAL_BOUNDARY_STEP,
+    ))
 }
 
 pub(super) fn first_signal_from_bits(bits: u64) -> u32 {

@@ -38,7 +38,8 @@ pub use actions::{
     sys_rt_sigaction,
 };
 pub use delivery::{
-    check_pending, pending_signal_interrupts_blocked_syscall, pending_signal_snapshot,
+    check_pending, check_pending_at_boundary, pending_signal_interrupts_blocked_syscall,
+    pending_signal_snapshot,
 };
 pub(crate) use frame::SS_DISABLE;
 pub use frame::{is_current_sigreturn_trampoline, patch_current_signal_frame_a0, sys_sigaltstack};

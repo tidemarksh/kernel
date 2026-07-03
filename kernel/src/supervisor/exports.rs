@@ -533,6 +533,14 @@ export_u32_const!(
     super::SUPERVISOR_SIGNAL_CONTROL_KIND_BLOCKED_WAIT_INTERRUPTED
 );
 export_u32_const!(
+    supervisor_signal_boundary_step,
+    super::SUPERVISOR_SIGNAL_BOUNDARY_STEP
+);
+export_u32_const!(
+    supervisor_signal_boundary_fault,
+    super::SUPERVISOR_SIGNAL_BOUNDARY_FAULT
+);
+export_u32_const!(
     supervisor_resume_kind_futex_wake,
     super::SUPERVISOR_RESUME_KIND_FUTEX_WAKE
 );

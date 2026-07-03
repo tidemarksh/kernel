@@ -171,7 +171,11 @@ pub(super) unsafe fn handle_illegal_instruction(
     vm.pc = *pc;
     vm.fcsr = *fcsr;
     crate::syscall::signal::queue_sigill(vm, *pc, raw);
-    crate::syscall::signal::check_pending(vm, base);
+    crate::syscall::signal::check_pending_at_boundary(
+        vm,
+        base,
+        crate::supervisor::SUPERVISOR_SIGNAL_BOUNDARY_FAULT,
+    );
     *x = vm.x;
     super::normalize_x0(x);
     *f = vm.f;

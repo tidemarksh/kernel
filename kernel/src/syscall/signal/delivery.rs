@@ -81,6 +81,15 @@ pub fn pending_signal_interrupts_blocked_syscall(vm: &ThreadState, base: u32) ->
 /// Check and deliver pending signals at syscall return boundary.
 /// Called after each syscall returns. Returns true if a signal was delivered.
 pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
+    check_pending_at_boundary(
+        vm,
+        base,
+        crate::supervisor::SUPERVISOR_SIGNAL_BOUNDARY_SYSCALL_RETURN,
+    )
+}
+
+/// Check and deliver pending signals at the supervisor-described boundary.
+pub fn check_pending_at_boundary(vm: &mut ThreadState, base: u32, boundary: u32) -> bool {
     let pid = pid_from_vm(vm, base);
     let process_pending_bits = process_pending_bits_for_vm(vm, base);
     let thread_pending_before = vm.sig_pending;
@@ -112,7 +121,7 @@ pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
         vm,
         base,
         sig as u32,
-        crate::supervisor::SUPERVISOR_SIGNAL_BOUNDARY_SYSCALL_RETURN,
+        boundary,
         thread_pending_before,
         process_pending_bits,
         record_pending_bits,
@@ -158,7 +167,7 @@ pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
         vm,
         base,
         sig as u32,
-        crate::supervisor::SUPERVISOR_SIGNAL_BOUNDARY_SYSCALL_RETURN,
+        boundary,
         thread_pending_before,
         process_pending_bits,
         record_pending_bits,

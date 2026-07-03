@@ -92,7 +92,11 @@ pub(super) unsafe fn deliver_sync_sigsegv(
     vm.fcsr = *fcsr;
     crate::tracepoints::record_sync_signal_trace(vm, *pc, x[1], x[2], x[27], x[10], addr);
     crate::syscall::signal::queue_sigsegv(vm, *pc, addr, accerr);
-    crate::syscall::signal::check_pending(vm, base);
+    crate::syscall::signal::check_pending_at_boundary(
+        vm,
+        base,
+        crate::supervisor::SUPERVISOR_SIGNAL_BOUNDARY_FAULT,
+    );
     crate::tracepoints::record_fault_dispatch_trace(vm, 2, vm.pc, vm.x[1], vm.x[2], vm.x[27], addr);
     *x = vm.x;
     super::normalize_x0(x);
