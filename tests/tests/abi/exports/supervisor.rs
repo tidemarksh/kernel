@@ -1075,6 +1075,18 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_signal_boundary_check(0), EFAULT as i32);
     assert_eq!(supervisor_resume_kind_runnable_thread(), 2);
     assert_eq!(supervisor_resume_blocked_syscall(0, 0), -(EFAULT as i64));
+    assert_eq!(
+        supervisor_blocked_resume_writeback_count(0, abi_status_pipe_wait(), 1),
+        -(EFAULT as i32)
+    );
+    assert_eq!(
+        supervisor_blocked_resume_writeback_ptr(0, abi_status_pipe_wait(), 1, 0),
+        0
+    );
+    assert_eq!(
+        supervisor_blocked_resume_writeback_len(0, abi_status_pipe_wait(), 1, 0),
+        0
+    );
     assert_eq!(supervisor_blocked_resume_delegation_direct(), 0);
     assert_eq!(supervisor_blocked_resume_delegation_kernel_worker(), 1);
     assert_eq!(
@@ -1423,6 +1435,103 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_debug_snapshot(too_small.as_mut_ptr() as u32, too_small.len() as u32),
         ENOSPC as i32
+    );
+}
+
+fn set_blocked_resume_syscall(
+    vm: &mut tidemark_kernel::types::ThreadState,
+    syscall_nr: u64,
+    args: [u64; 6],
+) {
+    vm.blocked_syscall_nr = syscall_nr;
+    vm.blocked_syscall_args = args;
+}
+
+#[test]
+fn supervisor_blocked_resume_writeback_ranges_follow_blocked_syscall() {
+    let mut vm: tidemark_kernel::types::ThreadState = unsafe { core::mem::zeroed() };
+    let vm_ptr = &mut vm as *mut tidemark_kernel::types::ThreadState as u32;
+
+    set_blocked_resume_syscall(&mut vm, SYS_PPOLL, [0x1000, 4, 0, 0, 0, 0]);
+    assert_eq!(
+        supervisor_blocked_resume_writeback_count(vm_ptr, abi_status_pipe_wait(), 1),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_resume_writeback_ptr(vm_ptr, abi_status_pipe_wait(), 1, 0),
+        0x1000
+    );
+    assert_eq!(
+        supervisor_blocked_resume_writeback_len(vm_ptr, abi_status_pipe_wait(), 1, 0),
+        32
+    );
+    assert_eq!(
+        supervisor_blocked_resume_writeback_ptr(vm_ptr, abi_status_pipe_wait(), 1, 1),
+        0
+    );
+
+    set_blocked_resume_syscall(&mut vm, SYS_PSELECT6, [130, 0x2000, 0x3000, 0x4000, 0, 0]);
+    assert_eq!(
+        supervisor_blocked_resume_writeback_count(vm_ptr, abi_status_pipe_wait(), 1),
+        3
+    );
+    assert_eq!(
+        supervisor_blocked_resume_writeback_ptr(vm_ptr, abi_status_pipe_wait(), 1, 0),
+        0x2000
+    );
+    assert_eq!(
+        supervisor_blocked_resume_writeback_ptr(vm_ptr, abi_status_pipe_wait(), 1, 1),
+        0x3000
+    );
+    assert_eq!(
+        supervisor_blocked_resume_writeback_ptr(vm_ptr, abi_status_pipe_wait(), 1, 2),
+        0x4000
+    );
+    assert_eq!(
+        supervisor_blocked_resume_writeback_len(vm_ptr, abi_status_pipe_wait(), 1, 2),
+        24
+    );
+
+    set_blocked_resume_syscall(&mut vm, SYS_PSELECT6, [130, 0x2000, 0, 0, 0, 0]);
+    assert_eq!(
+        supervisor_blocked_resume_writeback_count(vm_ptr, abi_status_pipe_wait(), 1),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_resume_writeback_ptr(vm_ptr, abi_status_pipe_wait(), 1, 0),
+        0x2000
+    );
+
+    set_blocked_resume_syscall(&mut vm, SYS_READ, [3, 0x5000, 99, 0, 0, 0]);
+    assert_eq!(
+        supervisor_blocked_resume_writeback_count(vm_ptr, abi_status_pipe_wait(), 7),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_resume_writeback_ptr(vm_ptr, abi_status_pipe_wait(), 7, 0),
+        0x5000
+    );
+    assert_eq!(
+        supervisor_blocked_resume_writeback_len(vm_ptr, abi_status_pipe_wait(), 7, 0),
+        7
+    );
+
+    set_blocked_resume_syscall(&mut vm, SYS_RECVFROM, [4, 0x6000, 64, 0, 0, 0]);
+    assert_eq!(
+        supervisor_blocked_resume_writeback_count(vm_ptr, abi_status_socket_recv(), 9),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_resume_writeback_ptr(vm_ptr, abi_status_socket_recv(), 9, 0),
+        0x6000
+    );
+    assert_eq!(
+        supervisor_blocked_resume_writeback_len(vm_ptr, abi_status_socket_recv(), 9, 0),
+        9
+    );
+    assert_eq!(
+        supervisor_blocked_resume_writeback_count(vm_ptr, abi_status_socket_recv(), 0),
+        0
     );
 }
 

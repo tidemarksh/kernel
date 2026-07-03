@@ -19,6 +19,8 @@ pub(super) const RESUME_DELEGATION_EPOLL_DIRECT: u32 = 4;
 
 use crate::types::ThreadState;
 
+const POLLFD_SIZE: u64 = 8;
+
 fn status(vm_ptr: u32) -> i32 {
     unsafe { (*(vm_ptr as *const crate::types::ThreadState)).status }
 }
@@ -52,6 +54,136 @@ fn blocked_or_current_syscall_nr(vm: &ThreadState) -> u64 {
         vm.blocked_syscall_nr
     } else {
         vm.x[17]
+    }
+}
+
+fn blocked_or_current_syscall_arg(vm: &ThreadState, index: usize) -> u64 {
+    if vm.blocked_syscall_nr != 0 {
+        vm.blocked_syscall_args[index]
+    } else {
+        vm.x[10 + index]
+    }
+}
+
+fn positive_resume_len(resume_result: i64) -> Option<u64> {
+    if resume_result > 0 {
+        Some(resume_result as u64)
+    } else {
+        None
+    }
+}
+
+fn capped_nfds(value: u64) -> u64 {
+    value.min(crate::abi::MAX_FDS as u64)
+}
+
+fn pselect_set_bytes(nfds: u64) -> u64 {
+    ((nfds + 63) / 64) * 8
+}
+
+fn raw_blocked_resume_writeback_range(
+    vm: &ThreadState,
+    blocked_status: i32,
+    resume_result: i64,
+    index: u32,
+) -> Option<(u64, u64)> {
+    let resume_len = positive_resume_len(resume_result)?;
+    let syscall = blocked_or_current_syscall_nr(vm);
+    match (blocked_status, syscall, index) {
+        (crate::abi::STATUS_PIPE_WAIT, crate::abi::SYS_PPOLL, 0) => {
+            let nfds = capped_nfds(blocked_or_current_syscall_arg(vm, 1));
+            (nfds > 0).then(|| {
+                (
+                    blocked_or_current_syscall_arg(vm, 0),
+                    nfds.saturating_mul(POLLFD_SIZE),
+                )
+            })
+        }
+        (crate::abi::STATUS_PIPE_WAIT, crate::abi::SYS_PSELECT6, 0..=2) => {
+            let nfds = capped_nfds(blocked_or_current_syscall_arg(vm, 0));
+            (nfds > 0).then(|| {
+                (
+                    blocked_or_current_syscall_arg(vm, (index + 1) as usize),
+                    pselect_set_bytes(nfds),
+                )
+            })
+        }
+        (crate::abi::STATUS_PIPE_WAIT, crate::abi::SYS_READ, 0)
+        | (crate::abi::STATUS_SOCKET_RECV, crate::abi::SYS_READ, 0)
+        | (crate::abi::STATUS_SOCKET_RECV, crate::abi::SYS_RECVFROM, 0) => {
+            Some((blocked_or_current_syscall_arg(vm, 1), resume_len))
+        }
+        _ => None,
+    }
+}
+
+fn valid_blocked_resume_writeback_range(
+    vm: &ThreadState,
+    blocked_status: i32,
+    resume_result: i64,
+    candidate_index: u32,
+) -> Option<(u64, u64)> {
+    let (ptr, len) =
+        raw_blocked_resume_writeback_range(vm, blocked_status, resume_result, candidate_index)?;
+    (ptr > 0 && len > 0).then_some((ptr, len))
+}
+
+fn blocked_resume_writeback_range(
+    vm: &ThreadState,
+    blocked_status: i32,
+    resume_result: i64,
+    index: u32,
+) -> Option<(u64, u64)> {
+    (0..3)
+        .filter_map(|candidate_index| {
+            valid_blocked_resume_writeback_range(vm, blocked_status, resume_result, candidate_index)
+        })
+        .nth(index as usize)
+}
+
+pub(super) fn resume_writeback_count(vm_ptr: u32, blocked_status: i32, resume_result: i64) -> i32 {
+    let vm = match state(vm_ptr) {
+        Ok(vm) => vm,
+        Err(errno) => return -errno,
+    };
+    (0..3)
+        .filter(|candidate_index| {
+            valid_blocked_resume_writeback_range(
+                vm,
+                blocked_status,
+                resume_result,
+                *candidate_index,
+            )
+            .is_some()
+        })
+        .count() as i32
+}
+
+pub(super) fn resume_writeback_ptr(
+    vm_ptr: u32,
+    blocked_status: i32,
+    resume_result: i64,
+    index: u32,
+) -> u64 {
+    match state(vm_ptr) {
+        Ok(vm) => blocked_resume_writeback_range(vm, blocked_status, resume_result, index)
+            .map(|(ptr, _)| ptr)
+            .unwrap_or(0),
+        Err(_) => 0,
+    }
+}
+
+pub(super) fn resume_writeback_len(
+    vm_ptr: u32,
+    blocked_status: i32,
+    resume_result: i64,
+    index: u32,
+) -> u64 {
+    match state(vm_ptr) {
+        Ok(vm) => blocked_resume_writeback_range(vm, blocked_status, resume_result, index)
+            .map(|(_, len)| len)
+            .unwrap_or(0),
+        Err(_) => 0,
     }
 }
 

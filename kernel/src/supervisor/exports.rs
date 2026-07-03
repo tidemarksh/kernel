@@ -796,6 +796,35 @@ pub extern "C" fn supervisor_resume_blocked_syscall(vm_ptr: u32, flags: u32) -> 
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_resume_writeback_count(
+    vm_ptr: u32,
+    blocked_status: i32,
+    resume_result: i64,
+) -> i32 {
+    super::blocked::resume_writeback_count(vm_ptr, blocked_status, resume_result)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_resume_writeback_ptr(
+    vm_ptr: u32,
+    blocked_status: i32,
+    resume_result: i64,
+    index: u32,
+) -> u64 {
+    super::blocked::resume_writeback_ptr(vm_ptr, blocked_status, resume_result, index)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_resume_writeback_len(
+    vm_ptr: u32,
+    blocked_status: i32,
+    resume_result: i64,
+    index: u32,
+) -> u64 {
+    super::blocked::resume_writeback_len(vm_ptr, blocked_status, resume_result, index)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_wait_retry_delay_ms(vm_ptr: u32, reason: u32) -> i32 {
     super::blocked::retry_delay_ms(vm_ptr, reason)
 }
