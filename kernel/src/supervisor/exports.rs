@@ -464,6 +464,18 @@ export_u32_const!(
     super::SUPERVISOR_FS_RESPONSE_FLAG_PROCESS_OWNER_MATCHES
 );
 export_u32_const!(
+    supervisor_fs_pipe_refresh_action_none,
+    super::SUPERVISOR_FS_PIPE_REFRESH_ACTION_NONE
+);
+export_u32_const!(
+    supervisor_fs_pipe_refresh_action_request_sync,
+    super::SUPERVISOR_FS_PIPE_REFRESH_ACTION_REQUEST_SYNC
+);
+export_u32_const!(
+    supervisor_fs_pipe_refresh_flag_kernel_worker_available,
+    super::SUPERVISOR_FS_PIPE_REFRESH_FLAG_KERNEL_WORKER_AVAILABLE
+);
+export_u32_const!(
     supervisor_fs_local_metadata_action_none,
     super::SUPERVISOR_FS_LOCAL_METADATA_ACTION_NONE
 );
@@ -1409,6 +1421,11 @@ pub extern "C" fn supervisor_fs_pending_regular_file_fd(vm_ptr: u32) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fs_pending_regular_file_ofd(vm_ptr: u32) -> u32 {
     super::fs::pending_regular_file_ofd(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_pipe_refresh_before_resume_action(vm_ptr: u32, flags: u32) -> i32 {
+    super::fs::pipe_refresh_before_resume_action(vm_ptr, flags)
 }
 
 #[unsafe(no_mangle)]

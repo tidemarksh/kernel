@@ -1,6 +1,6 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use crate::abi::{FD_TYPE_FILE, MAX_FDS};
+use crate::abi::{EFAULT, FD_TYPE_FILE, FD_TYPE_PIPE, MAX_FDS};
 use crate::fs::{fd_table, memfs, ring_buffer};
 use crate::types::ThreadState;
 
@@ -216,6 +216,37 @@ pub fn pending_regular_file_fd(vm_ptr: u32) -> i32 {
 
 pub fn pending_regular_file_ofd(vm_ptr: u32) -> u32 {
     pending_regular_file_request(vm_ptr).map_or(0, |(_, ofd_id)| ofd_id)
+}
+
+fn process_has_pipe_fd(vm: &ThreadState) -> bool {
+    for fd in 0..MAX_FDS {
+        let entry = fd_table::load_process_fd_entry(vm.guest_base, vm.process_ptr, fd);
+        let ofd_id = entry.ofd_id;
+        if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+            continue;
+        }
+        if fd_table::get_ofd_by_id(ofd_id).is_some_and(|ofd| ofd.fd_type == FD_TYPE_PIPE) {
+            return true;
+        }
+    }
+    false
+}
+
+pub fn pipe_refresh_before_resume_action(vm_ptr: u32, flags: u32) -> i32 {
+    let Some(vm) = super::thread::state_from_ptr(vm_ptr) else {
+        return -(EFAULT as i32);
+    };
+
+    if (flags & super::SUPERVISOR_FS_PIPE_REFRESH_FLAG_KERNEL_WORKER_AVAILABLE) == 0
+        || super::thread::process_thread_count(vm_ptr, vm.guest_base) <= 1
+        || pending_fs_request(vm_ptr).is_none()
+        || pending_regular_file_request(vm_ptr).is_some()
+        || !process_has_pipe_fd(vm)
+    {
+        return super::SUPERVISOR_FS_PIPE_REFRESH_ACTION_NONE as i32;
+    }
+
+    super::SUPERVISOR_FS_PIPE_REFRESH_ACTION_REQUEST_SYNC as i32
 }
 
 #[derive(Clone, Copy)]

@@ -1,5 +1,7 @@
 use super::support::*;
 
+use core::sync::atomic::Ordering;
+
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
@@ -461,6 +463,16 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_fs_pending_ring_request(0), 0);
     assert_eq!(supervisor_fs_pending_regular_file_fd(0), -1);
     assert_eq!(supervisor_fs_pending_regular_file_ofd(0), 0);
+    assert_eq!(supervisor_fs_pipe_refresh_action_none(), 0);
+    assert_eq!(supervisor_fs_pipe_refresh_action_request_sync(), 1);
+    assert_eq!(supervisor_fs_pipe_refresh_flag_kernel_worker_available(), 1);
+    assert_eq!(
+        supervisor_fs_pipe_refresh_before_resume_action(
+            0,
+            supervisor_fs_pipe_refresh_flag_kernel_worker_available(),
+        ),
+        -(EFAULT as i32)
+    );
     assert_eq!(supervisor_fs_pending_backing_fill_ino(0), 0);
     assert_eq!(supervisor_fs_pending_backing_fill_offset(0), 0);
     assert_eq!(supervisor_fs_pending_backing_fill_length(0), 0);
@@ -627,6 +639,53 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_fs_resident_page_evict_status(1, 0),
         supervisor_fs_resident_page_evict_evicted()
     );
+    {
+        let mut t = TestVm::new();
+        let vm_ptr = &mut t.vm as *mut _ as u32;
+        let flags = supervisor_fs_pipe_refresh_flag_kernel_worker_available();
+        assert_eq!(
+            supervisor_fs_pipe_refresh_before_resume_action(vm_ptr, flags),
+            supervisor_fs_pipe_refresh_action_none() as i32
+        );
+
+        let pipefd_addr = t.scratch + 0x1380;
+        assert_eq!(
+            tidemark_kernel::syscall::pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0),
+            0
+        );
+        let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) };
+        let ps = unsafe {
+            &*((t.base as u64 + t.vm.process_ptr as u64)
+                as *const tidemark_kernel::types::ProcessState)
+        };
+        let idx = tidemark_kernel::fs::ring_buffer::submit_request(
+            ps.fs_ring_base,
+            tidemark_kernel::fs::ring_buffer::FS_OP_CLOSE,
+            read_fd as i32,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            vm_ptr,
+        );
+        assert!(idx >= 0);
+        assert_eq!(
+            supervisor_fs_pipe_refresh_before_resume_action(vm_ptr, flags),
+            supervisor_fs_pipe_refresh_action_none() as i32
+        );
+
+        ps.thread_count.store(2, Ordering::Release);
+        assert_eq!(
+            supervisor_fs_pipe_refresh_before_resume_action(vm_ptr, 0),
+            supervisor_fs_pipe_refresh_action_none() as i32
+        );
+        assert_eq!(
+            supervisor_fs_pipe_refresh_before_resume_action(vm_ptr, flags),
+            supervisor_fs_pipe_refresh_action_request_sync() as i32
+        );
+    }
     assert_eq!(
         supervisor_fs_completion_decision(
             0,
