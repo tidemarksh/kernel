@@ -276,6 +276,30 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_fs_backing_fill_span_offset(), 4096);
     assert_eq!(supervisor_fs_backing_fill_span_end(), 8200);
     assert_eq!(supervisor_fs_backing_fill_span_length(), 4104);
+    assert_eq!(
+        supervisor_fs_backing_fill_span_decision(
+            tidemark_kernel::fs::ring_buffer::FS_OP_READ,
+            128,
+            16,
+            2 * 1024 * 1024,
+        ),
+        0
+    );
+    assert_eq!(supervisor_fs_backing_fill_span_offset(), 0);
+    assert_eq!(supervisor_fs_backing_fill_span_end(), 1024 * 1024);
+    assert_eq!(supervisor_fs_backing_fill_span_length(), 1024 * 1024);
+    assert_eq!(
+        supervisor_fs_backing_fill_span_decision(
+            tidemark_kernel::fs::ring_buffer::FS_OP_READ,
+            8191,
+            16,
+            8200,
+        ),
+        0
+    );
+    assert_eq!(supervisor_fs_backing_fill_span_offset(), 4096);
+    assert_eq!(supervisor_fs_backing_fill_span_end(), 8200);
+    assert_eq!(supervisor_fs_backing_fill_span_length(), 4104);
     assert_eq!(supervisor_fs_pending_mmap_guest_write_ptr(0), 0);
     assert_eq!(supervisor_fs_pending_mmap_guest_write_len(0), 0);
     assert_eq!(supervisor_fs_pending_mmap_guest_write_snapshot_len(0), 0);

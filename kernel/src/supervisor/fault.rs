@@ -36,9 +36,12 @@ fn select_decision(vm_ptr: u32) -> Result<super::SupervisorFaultExitDecision, i3
     let mut selected = vm;
     let mut selected_priority = exit_priority(vm);
     for record in ps.threads.iter() {
+        let state = super::event::thread_state_override(record.thread_ptr, record.tid as u32)
+            .map(|event| event.state as i32)
+            .unwrap_or(record.state);
         if matches!(
-            record.state,
-            crate::types::THREAD_NONE | crate::types::THREAD_DEAD
+            state,
+            crate::types::THREAD_NONE | crate::types::THREAD_DEAD | crate::types::THREAD_EXITING
         ) || record.thread_ptr == 0
         {
             continue;

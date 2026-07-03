@@ -10,6 +10,31 @@ fn read_i32_le(bytes: &[u8], offset: usize) -> i32 {
     read_u32_le(bytes, offset) as i32
 }
 
+fn write_u32_le(bytes: &mut [u8], offset: usize, value: u32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_u64_le(bytes: &mut [u8], offset: usize, value: u64) {
+    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+fn submit_faulted_thread_event(vm_ptr: u32, pid: u32, tid: u32, status: u32) {
+    let mut event = [0u8; 80];
+    write_u32_le(&mut event, 0, 0x5645_5354);
+    write_u32_le(&mut event, 4, supervisor_abi_version());
+    write_u32_le(&mut event, 8, supervisor_thread_event_record_bytes());
+    write_u32_le(&mut event, 12, supervisor_thread_event_kind_faulted());
+    write_u64_le(&mut event, 16, 1);
+    write_u64_le(&mut event, 24, vm_ptr as u64);
+    write_u32_le(&mut event, 32, pid);
+    write_u32_le(&mut event, 36, tid);
+    write_u32_le(&mut event, 40, status);
+    assert_eq!(
+        supervisor_submit_thread_event(event.as_ptr() as u32, event.len() as u32),
+        0
+    );
+}
+
 #[test]
 fn contract_exit_decrements_thread_count() {
     let mut t = TestVm::new();
@@ -106,6 +131,39 @@ fn supervisor_fault_exit_decision_reports_process_exit_when_no_threads_remain() 
     assert_eq!(read_u32_le(&record, 40), 0);
     assert_eq!(read_u32_le(&record, 44), 0);
     assert_eq!(read_i32_le(&record, 48), 7);
+}
+
+#[test]
+fn supervisor_fault_exit_decision_reports_process_exit_when_tidless_runtime_fault_event_is_only_live_thread()
+ {
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+    t.vm.status = STATUS_FAULT;
+    t.vm.exit_code = 0;
+    t.vm.term_signal = 0;
+    let current_vm_ptr = &mut t.vm as *mut ThreadState as u32;
+
+    submit_faulted_thread_event(current_vm_ptr, 1, 0, STATUS_FAULT as u32);
+
+    let mut record = [0u8; 88];
+    assert_eq!(
+        supervisor_fault_exit_decision(
+            current_vm_ptr,
+            record.as_mut_ptr() as u32,
+            record.len() as u32,
+        ),
+        supervisor_fault_exit_decision_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_fault_exit_kind_process_exit()
+    );
+    assert_eq!(read_u32_le(&record, 24), current_vm_ptr);
+    assert_eq!(read_u32_le(&record, 28), current_vm_ptr);
+    assert_eq!(read_u32_le(&record, 40), 1);
+    assert_eq!(read_u32_le(&record, 44), 0);
+    assert_eq!(read_i32_le(&record, 48), 0);
 }
 
 #[test]

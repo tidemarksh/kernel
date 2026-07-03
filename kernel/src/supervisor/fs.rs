@@ -27,6 +27,7 @@ static BACKING_OBJECT_DECISION_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_BACKING_OBJECT_DECISION: BackingObjectDecision = BackingObjectDecision::empty();
 const MAX_SUPERVISOR_FS_INODES: u32 = 65_536;
 const DIRECT_BACKING_MMAP_MIN_BYTES: u64 = 16 * 1024 * 1024;
+const READ_BACKING_FILL_PREFETCH_BYTES: u64 = 1024 * 1024;
 
 #[derive(Clone, Copy)]
 struct DirtyPageDecision {
@@ -404,7 +405,7 @@ pub fn backing_retry_limit(_opcode: u32, offset: u64, length: u64, expected_size
 }
 
 pub fn backing_fill_span_decision(
-    _opcode: u32,
+    opcode: u32,
     offset: i64,
     length: i64,
     expected_size: i64,
@@ -421,9 +422,17 @@ pub fn backing_fill_span_decision(
             crate::abi::EINVAL as i32
         } else if let Some(requested_end) = offset.checked_add(length) {
             let aligned_offset = offset / page_size * page_size;
+            let fill_end = if opcode == ring_buffer::FS_OP_READ {
+                core::cmp::max(
+                    requested_end,
+                    aligned_offset.saturating_add(READ_BACKING_FILL_PREFETCH_BYTES),
+                )
+            } else {
+                requested_end
+            };
             let aligned_end = core::cmp::min(
                 expected_size,
-                requested_end
+                fill_end
                     .saturating_add(page_size - 1)
                     .saturating_div(page_size)
                     .saturating_mul(page_size),

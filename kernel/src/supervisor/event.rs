@@ -141,7 +141,7 @@ fn find_event(vm_ptr: u32, tid: u32) -> Option<ThreadEventState> {
         let table = core::ptr::addr_of!(THREAD_EVENT_STATE) as *const ThreadEventState;
         for idx in 0..THREAD_EVENT_STATE_CAP {
             let current = core::ptr::read(table.add(idx));
-            if current.vm_ptr == vm_ptr && (tid == 0 || current.tid == tid) {
+            if current.vm_ptr == vm_ptr && (tid == 0 || current.tid == 0 || current.tid == tid) {
                 return Some(current);
             }
         }
@@ -158,7 +158,11 @@ fn event_state_override(event: ThreadEventState) -> Option<ThreadEventOverride> 
                 crate::types::THREAD_BLOCKED_POLL as u32
             }
         }
-        super::SUPERVISOR_THREAD_EVENT_KIND_READY => crate::types::THREAD_RUNNING as u32,
+        super::SUPERVISOR_THREAD_EVENT_KIND_READY
+        | super::SUPERVISOR_THREAD_EVENT_KIND_HOST_COMPLETION_ARRIVED
+        | super::SUPERVISOR_THREAD_EVENT_KIND_BACKING_STORE_READY => {
+            crate::types::THREAD_RUNNING as u32
+        }
         super::SUPERVISOR_THREAD_EVENT_KIND_FAULTED => crate::types::THREAD_EXITING as u32,
         super::SUPERVISOR_THREAD_EVENT_KIND_EXITED => crate::types::THREAD_DEAD as u32,
         _ => return None,
@@ -187,6 +191,8 @@ pub(super) fn runnable_override(vm_ptr: u32, tid: u32) -> Option<bool> {
     );
     match event.event_kind {
         super::SUPERVISOR_THREAD_EVENT_KIND_READY => Some(true),
+        super::SUPERVISOR_THREAD_EVENT_KIND_HOST_COMPLETION_ARRIVED
+        | super::SUPERVISOR_THREAD_EVENT_KIND_BACKING_STORE_READY => Some(true),
         super::SUPERVISOR_THREAD_EVENT_KIND_BLOCKED
         | super::SUPERVISOR_THREAD_EVENT_KIND_FAULTED
         | super::SUPERVISOR_THREAD_EVENT_KIND_EXITED => Some(false),
