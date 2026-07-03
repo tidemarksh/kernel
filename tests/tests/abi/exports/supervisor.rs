@@ -1135,6 +1135,10 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_enqueue_blocked_wait_timer(0), EFAULT as i32);
     assert_eq!(supervisor_enqueue_blocked_retry_timer(0, 0), EFAULT as i32);
     assert_eq!(supervisor_blocked_wait_timer_required(0), EFAULT as i32);
+    assert_eq!(
+        supervisor_blocked_epoll_wait_timeout_ms(0),
+        -(EFAULT as i64)
+    );
     assert_eq!(supervisor_blocked_poll_wait_timeout_ms(0), -(EFAULT as i64));
     assert_eq!(supervisor_blocked_poll_wait_has_socket(0), -(EFAULT as i32));
     assert_eq!(
@@ -1280,6 +1284,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     t.vm.status = STATUS_PIPE_WAIT;
     t.vm.epoll_timeout_ms = -1;
     set_blocked_resume_syscall(&mut t.vm, SYS_READ, [3, 0x1000, 1, 0, 0, 0]);
+    assert_eq!(supervisor_blocked_epoll_wait_timeout_ms(vm_ptr), -1);
     assert_eq!(supervisor_blocked_poll_wait_timeout_ms(vm_ptr), -1);
     assert_eq!(supervisor_blocked_poll_wait_has_socket(vm_ptr), 0);
     assert_eq!(supervisor_blocked_pipe_wait_has_ready_events(vm_ptr), 0);
@@ -1343,8 +1348,10 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     );
     t.vm.status = STATUS_EPOLL_WAIT;
     t.vm.epoll_timeout_ms = -1;
+    assert_eq!(supervisor_blocked_epoll_wait_timeout_ms(vm_ptr), -1);
     assert_eq!(supervisor_blocked_wait_timer_required(vm_ptr), 0);
     t.vm.epoll_timeout_ms = 1;
+    assert_eq!(supervisor_blocked_epoll_wait_timeout_ms(vm_ptr), 1);
     assert_eq!(supervisor_blocked_wait_timer_required(vm_ptr), 1);
     assert_eq!(
         supervisor_blocked_resume_delegation(vm_ptr, 0),

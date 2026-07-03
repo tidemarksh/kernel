@@ -176,6 +176,17 @@ pub(super) fn blocked_wait_timer_required_for_vm(vm_ptr: u32) -> i32 {
     }
 }
 
+pub(super) fn epoll_wait_timeout_ms_for_vm(vm_ptr: u32) -> i64 {
+    if vm_ptr == 0 {
+        return -(crate::abi::EFAULT as i64);
+    }
+    let vm = unsafe { &*(vm_ptr as *const crate::types::ThreadState) };
+    if vm.status != crate::abi::STATUS_EPOLL_WAIT {
+        return -1;
+    }
+    vm.epoll_timeout_ms
+}
+
 fn blocked_wait_timer_required(vm: &crate::types::ThreadState) -> bool {
     match vm.status {
         crate::abi::STATUS_EPOLL_WAIT => epoll_wait_timer_required(vm),

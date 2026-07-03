@@ -970,6 +970,11 @@ pub extern "C" fn supervisor_blocked_wait_timer_required(vm_ptr: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_epoll_wait_timeout_ms(vm_ptr: u32) -> i64 {
+    super::timer::epoll_wait_timeout_ms_for_vm(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_wait_wake_mask_for_sync(source: u32) -> i32 {
     super::state_sync::wake_mask_for_sync(source)
 }
