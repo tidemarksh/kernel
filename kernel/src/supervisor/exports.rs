@@ -7,15 +7,6 @@ macro_rules! export_u32_const {
     };
 }
 
-macro_rules! export_u64_const {
-    ($name:ident, $value:expr) => {
-        #[unsafe(no_mangle)]
-        pub extern "C" fn $name() -> u64 {
-            $value
-        }
-    };
-}
-
 export_u32_const!(supervisor_abi_version, super::SUPERVISOR_ABI_VERSION);
 export_u32_const!(
     supervisor_debug_snapshot_bytes,
@@ -279,26 +270,6 @@ export_u32_const!(
 export_u32_const!(
     supervisor_fd_control_kind_socket_accepted,
     super::SUPERVISOR_FD_CONTROL_KIND_SOCKET_ACCEPTED
-);
-export_u64_const!(
-    supervisor_fd_syscall_nr_current,
-    super::fd::fd_syscall_nr_current()
-);
-export_u64_const!(
-    supervisor_fd_trace_arg_unknown,
-    super::fd::fd_trace_arg_unknown()
-);
-export_u32_const!(
-    supervisor_fd_trace_topology_action_unresolved,
-    super::fd::fd_trace_topology_action_unresolved()
-);
-export_u32_const!(
-    supervisor_fd_trace_topology_action_rules_out,
-    super::fd::fd_trace_topology_action_rules_out()
-);
-export_u32_const!(
-    supervisor_fd_trace_topology_action_needs_peer_check,
-    super::fd::fd_trace_topology_action_needs_peer_check()
 );
 export_u32_const!(
     supervisor_pipe_slot_mode_read,
@@ -1292,68 +1263,6 @@ pub extern "C" fn supervisor_fd_control_record(out_ptr: u32, out_len: u32) -> i3
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_process_held_ofd_refcount(vm_ptr: u32, ofd_id: u32) -> i32 {
     super::fd::process_held_ofd_refcount(vm_ptr, ofd_id)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn supervisor_fd_syscall_may_change_fork_shared_ofd_topology(
-    vm_ptr: u32,
-    syscall_nr: u64,
-) -> i32 {
-    super::fd::syscall_may_change_fork_shared_ofd_topology(vm_ptr, syscall_nr)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn supervisor_fd_explicit_fork_shared_effect_may_require_sync(
-    vm_ptr: u32,
-    syscall_nr: u64,
-) -> i32 {
-    super::fd::explicit_fork_shared_effect_may_require_sync(vm_ptr, syscall_nr)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn supervisor_fd_syscall_only_regular_file_offset_sync_when_peer_shared(
-    vm_ptr: u32,
-    syscall_nr: u64,
-) -> i32 {
-    super::fd::syscall_only_regular_file_offset_sync_when_peer_shared(vm_ptr, syscall_nr)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn supervisor_fd_trace_fork_shared_topology_action(
-    vm_ptr: u32,
-    nr: u64,
-    arg1: u64,
-    result: i64,
-    result_known: u32,
-) -> u32 {
-    super::fd::fd_trace_fork_shared_topology_action(vm_ptr, nr, arg1, result, result_known)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn supervisor_fd_trace_data_plane_io_uses_socket_or_pipe(
-    nr: u64,
-    arg0_ofd_id: u32,
-    arg0_ofd_type: i32,
-    result: i64,
-    result_known: u32,
-) -> i32 {
-    super::fd::fd_trace_data_plane_io_uses_socket_or_pipe(
-        nr,
-        arg0_ofd_id,
-        arg0_ofd_type,
-        result,
-        result_known,
-    )
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn supervisor_fd_trace_regular_file_write_mutated_memfs(
-    nr: u64,
-    arg0_ofd_type: i32,
-    result: i64,
-    result_known: u32,
-) -> i32 {
-    super::fd::fd_trace_regular_file_write_mutated_memfs(nr, arg0_ofd_type, result, result_known)
 }
 
 #[unsafe(no_mangle)]

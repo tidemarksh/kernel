@@ -111,11 +111,6 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_fd_control_kind_socket_connected(), 14);
     assert_eq!(supervisor_fd_control_kind_socket_connect_failed(), 15);
     assert_eq!(supervisor_fd_control_kind_socket_accepted(), 16);
-    assert_eq!(supervisor_fd_syscall_nr_current(), u64::MAX);
-    assert_eq!(supervisor_fd_trace_arg_unknown(), u64::MAX);
-    assert_eq!(supervisor_fd_trace_topology_action_unresolved(), 0);
-    assert_eq!(supervisor_fd_trace_topology_action_rules_out(), 1);
-    assert_eq!(supervisor_fd_trace_topology_action_needs_peer_check(), 2);
     assert_eq!(supervisor_thread_take_completed_sync_effects(0, 0), 0);
     assert_eq!(supervisor_pipe_slot_mode_read(), 1);
     assert_eq!(supervisor_pipe_slot_mode_write(), 2);
@@ -367,59 +362,6 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_blocked_wait_network_pump_action_pump() as i32
     );
     assert_eq!(supervisor_process_epoll_held_ofd(0, 0), 0);
-    assert_eq!(
-        supervisor_fd_syscall_may_change_fork_shared_ofd_topology(0, abi_sys_openat()),
-        1
-    );
-    assert_eq!(
-        supervisor_fd_syscall_may_change_fork_shared_ofd_topology(0, abi_sys_read()),
-        0
-    );
-    assert_eq!(
-        supervisor_fd_explicit_fork_shared_effect_may_require_sync(0, abi_sys_fcntl()),
-        1
-    );
-    assert_eq!(
-        supervisor_fd_syscall_only_regular_file_offset_sync_when_peer_shared(0, abi_sys_read()),
-        0
-    );
-    assert_eq!(
-        supervisor_fd_trace_fork_shared_topology_action(0, abi_sys_close(), 0, 0, 1),
-        supervisor_fd_trace_topology_action_needs_peer_check()
-    );
-    assert_eq!(
-        supervisor_fd_trace_fork_shared_topology_action(0, abi_sys_fcntl(), 0, 0, 1),
-        supervisor_fd_trace_topology_action_rules_out()
-    );
-    assert_eq!(
-        supervisor_fd_trace_fork_shared_topology_action(
-            0,
-            abi_sys_ioctl(),
-            supervisor_fd_trace_arg_unknown(),
-            0,
-            1,
-        ),
-        supervisor_fd_trace_topology_action_needs_peer_check()
-    );
-    assert_eq!(
-        supervisor_fd_trace_data_plane_io_uses_socket_or_pipe(
-            abi_sys_recvfrom(),
-            0,
-            abi_fd_type_socket(),
-            1,
-            1,
-        ),
-        1
-    );
-    assert_eq!(
-        supervisor_fd_trace_regular_file_write_mutated_memfs(
-            abi_sys_write(),
-            abi_fd_type_file(),
-            1,
-            1,
-        ),
-        1
-    );
     assert_eq!(supervisor_process_epoll_dependent_ofd(0, 0), 0);
     assert_eq!(supervisor_process_sync_dependent_ofd(0, 0), 0);
     assert_eq!(supervisor_process_epoll_dependent_sync_ofd(0, 0), 0);
