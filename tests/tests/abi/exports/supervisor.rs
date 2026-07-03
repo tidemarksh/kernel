@@ -1256,6 +1256,10 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_blocked_wait_retry_flag_thread_init_pending(), 16);
     assert_eq!(supervisor_blocked_wait_retry_reason(0, 0), -(EFAULT as i32));
     assert_eq!(
+        supervisor_blocked_epoll_wait_retry_required(0),
+        -(EFAULT as i32)
+    );
+    assert_eq!(
         supervisor_blocked_wait_active_child_pid(0),
         -(EFAULT as i32)
     );
@@ -1477,6 +1481,18 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_blocked_pipe_wait_has_ready_events(vm_ptr), 0);
     assert_eq!(supervisor_blocked_wait_may_depend_on_network(vm_ptr), 0);
     assert_eq!(supervisor_blocked_wait_should_pump_network(vm_ptr), 0);
+    assert_eq!(supervisor_blocked_epoll_wait_retry_required(vm_ptr), 0);
+    t.vm.status = STATUS_EPOLL_WAIT;
+    assert_eq!(supervisor_blocked_epoll_wait_retry_required(vm_ptr), 0);
+    let process_state = unsafe {
+        &*((u64::from(t.base) + u64::from(t.vm.process_ptr))
+            as *const tidemark_kernel::types::ProcessState)
+    };
+    process_state.thread_count.store(2, Ordering::Release);
+    assert_eq!(supervisor_blocked_epoll_wait_retry_required(vm_ptr), 1);
+    t.vm.status = STATUS_PIPE_WAIT;
+    assert_eq!(supervisor_blocked_epoll_wait_retry_required(vm_ptr), 0);
+    t.vm.status = STATUS_OK;
     assert_eq!(
         supervisor_blocked_wait_retry_reason(vm_ptr, 0),
         supervisor_blocked_wait_retry_reason_default() as i32

@@ -578,6 +578,17 @@ pub(super) fn retry_reason(vm_ptr: u32, flags: u32) -> i32 {
     }
 }
 
+pub(super) fn epoll_wait_retry_required(vm_ptr: u32) -> i32 {
+    let vm = match state(vm_ptr) {
+        Ok(vm) => vm,
+        Err(errno) => return -errno,
+    };
+    i32::from(
+        vm.status == crate::abi::STATUS_EPOLL_WAIT
+            && super::thread::process_thread_count(vm_ptr, vm.guest_base) > 1,
+    )
+}
+
 pub(super) fn retry_delay_ms(vm_ptr: u32, reason: u32) -> i32 {
     if vm_ptr == 0 {
         return -(crate::abi::EFAULT as i32);

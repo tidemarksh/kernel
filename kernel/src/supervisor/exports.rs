@@ -891,6 +891,11 @@ pub extern "C" fn supervisor_blocked_status_is_epoll_wait(status: i32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_epoll_wait_retry_required(vm_ptr: u32) -> i32 {
+    super::blocked::epoll_wait_retry_required(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_status_is_pipe_wait(status: i32) -> i32 {
     super::blocked::status_is_pipe_wait(status)
 }

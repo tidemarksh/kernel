@@ -739,10 +739,11 @@ pub use crate::exports::kernel::*;
 pub use crate::exports::memfs::*;
 pub use crate::exports::thread::*;
 pub use crate::supervisor::{
-    supervisor_abi_version, supervisor_blocked_epoll_wait_timeout_ms,
-    supervisor_blocked_epoll_watched_ofd, supervisor_blocked_epoll_watches_pipe,
-    supervisor_blocked_pipe_resume_action, supervisor_blocked_pipe_resume_action_defer,
-    supervisor_blocked_pipe_resume_action_direct, supervisor_blocked_pipe_sync_before_retry_action,
+    supervisor_abi_version, supervisor_blocked_epoll_wait_retry_required,
+    supervisor_blocked_epoll_wait_timeout_ms, supervisor_blocked_epoll_watched_ofd,
+    supervisor_blocked_epoll_watches_pipe, supervisor_blocked_pipe_resume_action,
+    supervisor_blocked_pipe_resume_action_defer, supervisor_blocked_pipe_resume_action_direct,
+    supervisor_blocked_pipe_sync_before_retry_action,
     supervisor_blocked_pipe_sync_before_retry_action_none,
     supervisor_blocked_pipe_sync_before_retry_action_request_sync,
     supervisor_blocked_pipe_sync_before_retry_action_request_sync_and_drain_output,
