@@ -1040,6 +1040,31 @@ pub extern "C" fn supervisor_fs_backing_retry_limit(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_backing_fill_span_decision(
+    opcode: u32,
+    offset: i64,
+    length: i64,
+    expected_size: i64,
+) -> i32 {
+    super::fs::backing_fill_span_decision(opcode, offset, length, expected_size)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_backing_fill_span_offset() -> u64 {
+    super::fs::backing_fill_span_offset()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_backing_fill_span_end() -> u64 {
+    super::fs::backing_fill_span_end()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_backing_fill_span_length() -> u64 {
+    super::fs::backing_fill_span_length()
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fs_pending_mmap_guest_write_ptr(vm_ptr: u32) -> u64 {
     super::fs::pending_mmap_guest_write_ptr(vm_ptr)
 }
@@ -1047,6 +1072,11 @@ pub extern "C" fn supervisor_fs_pending_mmap_guest_write_ptr(vm_ptr: u32) -> u64
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fs_pending_mmap_guest_write_len(vm_ptr: u32) -> u64 {
     super::fs::pending_mmap_guest_write_len(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_pending_mmap_guest_write_snapshot_len(vm_ptr: u32) -> u64 {
+    super::fs::pending_mmap_guest_write_snapshot_len(vm_ptr)
 }
 
 #[unsafe(no_mangle)]

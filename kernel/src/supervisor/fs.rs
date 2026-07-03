@@ -10,6 +10,9 @@ static mut LAST_FS_CONTROL: super::SupervisorFsControlRecord =
     super::SupervisorFsControlRecord::empty();
 static DIRTY_PAGE_DECISION_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_DIRTY_PAGE_DECISION: DirtyPageDecision = DirtyPageDecision::empty();
+static BACKING_FILL_SPAN_DECISION_LOCK: AtomicU32 = AtomicU32::new(0);
+static mut LAST_BACKING_FILL_SPAN_DECISION: BackingFillSpanDecision =
+    BackingFillSpanDecision::empty();
 static BACKING_SOURCE_RANGE_DECISION_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_BACKING_SOURCE_RANGE_DECISION: BackingSourceRangeDecision =
     BackingSourceRangeDecision::empty();
@@ -42,6 +45,23 @@ impl DirtyPageDecision {
             file_object_id: 0,
             generation: 0,
             flags: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct BackingFillSpanDecision {
+    offset: u64,
+    end: u64,
+    length: u64,
+}
+
+impl BackingFillSpanDecision {
+    const fn empty() -> Self {
+        Self {
+            offset: 0,
+            end: 0,
+            length: 0,
         }
     }
 }
@@ -130,6 +150,9 @@ pub(super) fn init() {
     });
     super::lock::with_spin_lock(&DIRTY_PAGE_DECISION_LOCK, || unsafe {
         LAST_DIRTY_PAGE_DECISION = DirtyPageDecision::empty();
+    });
+    super::lock::with_spin_lock(&BACKING_FILL_SPAN_DECISION_LOCK, || unsafe {
+        LAST_BACKING_FILL_SPAN_DECISION = BackingFillSpanDecision::empty();
     });
     super::lock::with_spin_lock(&BACKING_SOURCE_RANGE_DECISION_LOCK, || unsafe {
         LAST_BACKING_SOURCE_RANGE_DECISION = BackingSourceRangeDecision::empty();
@@ -380,6 +403,61 @@ pub fn backing_retry_limit(_opcode: u32, offset: u64, length: u64, expected_size
     )
 }
 
+pub fn backing_fill_span_decision(
+    _opcode: u32,
+    offset: i64,
+    length: i64,
+    expected_size: i64,
+) -> i32 {
+    let mut decision = BackingFillSpanDecision::empty();
+    let result = if offset < 0 || length <= 0 || expected_size <= 0 {
+        crate::abi::EINVAL as i32
+    } else {
+        let page_size = crate::abi::PAGE_SIZE;
+        let offset = offset as u64;
+        let length = length as u64;
+        let expected_size = expected_size as u64;
+        if offset >= expected_size {
+            crate::abi::EINVAL as i32
+        } else if let Some(requested_end) = offset.checked_add(length) {
+            let aligned_offset = offset / page_size * page_size;
+            let aligned_end = core::cmp::min(
+                expected_size,
+                requested_end
+                    .saturating_add(page_size - 1)
+                    .saturating_div(page_size)
+                    .saturating_mul(page_size),
+            );
+            if aligned_end <= aligned_offset {
+                crate::abi::EINVAL as i32
+            } else {
+                decision = BackingFillSpanDecision {
+                    offset: aligned_offset,
+                    end: aligned_end,
+                    length: aligned_end - aligned_offset,
+                };
+                0
+            }
+        } else {
+            crate::abi::EINVAL as i32
+        }
+    };
+    store_backing_fill_span_decision(decision);
+    result
+}
+
+pub fn backing_fill_span_offset() -> u64 {
+    latest_backing_fill_span_decision().offset
+}
+
+pub fn backing_fill_span_end() -> u64 {
+    latest_backing_fill_span_decision().end
+}
+
+pub fn backing_fill_span_length() -> u64 {
+    latest_backing_fill_span_decision().length
+}
+
 fn pending_mmap_guest_write_request(vm_ptr: u32) -> Option<(u64, u64)> {
     let (_, request) = pending_fs_request(vm_ptr)?;
     if request.opcode != ring_buffer::FS_OP_MMAP || request.len == 0 {
@@ -396,6 +474,17 @@ pub fn pending_mmap_guest_write_len(vm_ptr: u32) -> u64 {
     pending_mmap_guest_write_request(vm_ptr).map_or(0, |(_, len)| len)
 }
 
+pub fn pending_mmap_guest_write_snapshot_len(vm_ptr: u32) -> u64 {
+    pending_mmap_guest_write_request(vm_ptr)
+        .and_then(|(_, len)| page_aligned_len(len))
+        .unwrap_or(0)
+}
+
+fn page_aligned_len(len: u64) -> Option<u64> {
+    len.checked_add(crate::abi::PAGE_SIZE - 1)
+        .map(|value| value & !(crate::abi::PAGE_SIZE - 1))
+}
+
 fn store_dirty_page_decision(decision: DirtyPageDecision) {
     super::lock::with_spin_lock(&DIRTY_PAGE_DECISION_LOCK, || unsafe {
         LAST_DIRTY_PAGE_DECISION = decision;
@@ -405,6 +494,18 @@ fn store_dirty_page_decision(decision: DirtyPageDecision) {
 fn latest_dirty_page_decision() -> DirtyPageDecision {
     super::lock::with_spin_lock(&DIRTY_PAGE_DECISION_LOCK, || unsafe {
         LAST_DIRTY_PAGE_DECISION
+    })
+}
+
+fn store_backing_fill_span_decision(decision: BackingFillSpanDecision) {
+    super::lock::with_spin_lock(&BACKING_FILL_SPAN_DECISION_LOCK, || unsafe {
+        LAST_BACKING_FILL_SPAN_DECISION = decision;
+    });
+}
+
+fn latest_backing_fill_span_decision() -> BackingFillSpanDecision {
+    super::lock::with_spin_lock(&BACKING_FILL_SPAN_DECISION_LOCK, || unsafe {
+        LAST_BACKING_FILL_SPAN_DECISION
     })
 }
 
