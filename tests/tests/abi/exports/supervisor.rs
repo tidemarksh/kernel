@@ -1164,6 +1164,10 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         1
     );
     assert_eq!(supervisor_blocked_status_is_epoll_wait(STATUS_PIPE_WAIT), 0);
+    assert_eq!(supervisor_blocked_status_is_pipe_wait(STATUS_PIPE_WAIT), 1);
+    assert_eq!(supervisor_blocked_status_is_pipe_wait(STATUS_WAIT4), 0);
+    assert_eq!(supervisor_blocked_status_is_wait4(STATUS_WAIT4), 1);
+    assert_eq!(supervisor_blocked_status_is_wait4(STATUS_PIPE_WAIT), 0);
     assert_eq!(
         supervisor_blocked_status_needs_network_sidecar_restore(STATUS_CONNECT),
         1

@@ -42,6 +42,14 @@ pub(super) fn status_is_epoll_wait(status: i32) -> i32 {
     i32::from(status == crate::abi::STATUS_EPOLL_WAIT)
 }
 
+pub(super) fn status_is_pipe_wait(status: i32) -> i32 {
+    i32::from(status == crate::abi::STATUS_PIPE_WAIT)
+}
+
+pub(super) fn status_is_wait4(status: i32) -> i32 {
+    i32::from(status == crate::abi::STATUS_WAIT4)
+}
+
 pub(super) fn status_needs_network_sidecar_restore(status: i32) -> i32 {
     i32::from(matches!(
         status,

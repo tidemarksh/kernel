@@ -840,6 +840,16 @@ pub extern "C" fn supervisor_blocked_status_is_epoll_wait(status: i32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_status_is_pipe_wait(status: i32) -> i32 {
+    super::blocked::status_is_pipe_wait(status)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_status_is_wait4(status: i32) -> i32 {
+    super::blocked::status_is_wait4(status)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_status_needs_network_sidecar_restore(status: i32) -> i32 {
     super::blocked::status_needs_network_sidecar_restore(status)
 }
