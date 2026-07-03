@@ -3,7 +3,15 @@ use tidemark_kernel::harness::TestVm;
 use tidemark_kernel::supervisor::{
     supervisor_abi_version, supervisor_blocked_pipe_resume_action,
     supervisor_blocked_pipe_resume_action_defer, supervisor_blocked_pipe_resume_action_direct,
-    supervisor_blocked_wait_retry_reason, supervisor_blocked_wait_retry_reason_default,
+    supervisor_blocked_pipe_sync_before_retry_action,
+    supervisor_blocked_pipe_sync_before_retry_action_none,
+    supervisor_blocked_pipe_sync_before_retry_action_request_sync,
+    supervisor_blocked_pipe_sync_before_retry_action_request_sync_and_drain_output,
+    supervisor_blocked_pipe_sync_before_retry_action_schedule_retry,
+    supervisor_blocked_pipe_sync_before_retry_clear,
+    supervisor_blocked_pipe_sync_before_retry_flag_kernel_worker_available,
+    supervisor_blocked_pipe_sync_before_retry_requested, supervisor_blocked_wait_retry_reason,
+    supervisor_blocked_wait_retry_reason_default,
     supervisor_blocked_wait_retry_reason_passive_wait, supervisor_fd_control_kind_fd_closed,
     supervisor_fd_control_kind_pipe_created, supervisor_fd_control_record,
     supervisor_fd_control_record_bytes, supervisor_pipe_slot_mode_read,
@@ -148,6 +156,91 @@ fn supervisor_blocked_pipe_resume_action_reports_defer_and_direct() {
     assert_eq!(
         supervisor_blocked_pipe_resume_action(eof_vm_ptr),
         supervisor_blocked_pipe_resume_action_direct() as i32
+    );
+}
+
+#[test]
+fn supervisor_blocked_pipe_sync_before_retry_tracks_request_by_wait_signature() {
+    let mut t = TestVm::new();
+    let pipefd_addr = t.scratch + 0x1000;
+    assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) };
+    let buf_addr = t.scratch + 0x1100;
+
+    t.vm.x[17] = SYS_READ;
+    t.vm.x[10] = read_fd as u64;
+    t.vm.x[11] = buf_addr;
+    t.vm.x[12] = 16;
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        STATUS_PIPE_WAIT
+    );
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_requested(vm_ptr),
+        0
+    );
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_action(
+            vm_ptr,
+            supervisor_blocked_pipe_sync_before_retry_flag_kernel_worker_available()
+        ),
+        supervisor_blocked_pipe_sync_before_retry_action_request_sync() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_requested(vm_ptr),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_action(
+            vm_ptr,
+            supervisor_blocked_pipe_sync_before_retry_flag_kernel_worker_available()
+        ),
+        supervisor_blocked_pipe_sync_before_retry_action_schedule_retry() as i32
+    );
+    assert_eq!(supervisor_blocked_pipe_sync_before_retry_clear(vm_ptr), 0);
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_requested(vm_ptr),
+        0
+    );
+}
+
+#[test]
+fn supervisor_blocked_pipe_sync_before_retry_requests_drain_for_passive_poll_wait() {
+    let mut t = TestVm::new();
+    let readfds = t.scratch + 0x1100;
+
+    t.vm.x[17] = SYS_PSELECT6;
+    t.vm.x[10] = 8;
+    t.vm.x[11] = readfds;
+    t.vm.x[12] = 0;
+    t.vm.x[13] = 0;
+    t.vm.x[14] = 0;
+    t.vm.x[15] = 0;
+    assert_eq!(
+        poll::sys_pselect6(&mut t.vm, t.base, 8, readfds, 0, 0, 0, 0),
+        0
+    );
+    assert_eq!(t.vm.status, STATUS_PIPE_WAIT);
+
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_action(
+            vm_ptr,
+            supervisor_blocked_pipe_sync_before_retry_flag_kernel_worker_available()
+        ),
+        supervisor_blocked_pipe_sync_before_retry_action_request_sync_and_drain_output() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_action(
+            vm_ptr,
+            supervisor_blocked_pipe_sync_before_retry_flag_kernel_worker_available()
+        ),
+        supervisor_blocked_pipe_sync_before_retry_action_none() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_wait_retry_reason(vm_ptr, 0),
+        supervisor_blocked_wait_retry_reason_passive_wait() as i32
     );
 }
 

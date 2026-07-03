@@ -68,6 +68,7 @@ pub fn init() {
     runnable::init();
     resume::init();
     host_op::init();
+    pipe::init();
 }
 
 pub fn thread_event_count() -> u64 {

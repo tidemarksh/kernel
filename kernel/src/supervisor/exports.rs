@@ -261,6 +261,26 @@ export_u32_const!(
     super::SUPERVISOR_BLOCKED_PIPE_RESUME_ACTION_DIRECT
 );
 export_u32_const!(
+    supervisor_blocked_pipe_sync_before_retry_action_none,
+    super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_ACTION_NONE
+);
+export_u32_const!(
+    supervisor_blocked_pipe_sync_before_retry_action_request_sync,
+    super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_ACTION_REQUEST_SYNC
+);
+export_u32_const!(
+    supervisor_blocked_pipe_sync_before_retry_action_request_sync_and_drain_output,
+    super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_ACTION_REQUEST_SYNC_AND_DRAIN_OUTPUT
+);
+export_u32_const!(
+    supervisor_blocked_pipe_sync_before_retry_action_schedule_retry,
+    super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_ACTION_SCHEDULE_RETRY
+);
+export_u32_const!(
+    supervisor_blocked_pipe_sync_before_retry_flag_kernel_worker_available,
+    super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_FLAG_KERNEL_WORKER_AVAILABLE
+);
+export_u32_const!(
     supervisor_blocked_wait_wake_source_pipe_sync,
     super::state_sync::wake_source_pipe_sync()
 );
@@ -1012,6 +1032,21 @@ pub extern "C" fn supervisor_process_pipe_write_open_count(vm_ptr: u32, pipe_slo
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_pipe_resume_action(vm_ptr: u32) -> i32 {
     super::pipe::blocked_pipe_resume_action(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_pipe_sync_before_retry_action(vm_ptr: u32, flags: u32) -> i32 {
+    super::pipe::blocked_pipe_sync_before_retry_action(vm_ptr, flags)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_pipe_sync_before_retry_requested(vm_ptr: u32) -> i32 {
+    super::pipe::blocked_pipe_sync_before_retry_requested(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_pipe_sync_before_retry_clear(vm_ptr: u32) -> i32 {
+    super::pipe::blocked_pipe_sync_before_retry_clear(vm_ptr)
 }
 
 #[unsafe(no_mangle)]

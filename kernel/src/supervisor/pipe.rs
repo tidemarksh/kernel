@@ -1,9 +1,151 @@
+use core::sync::atomic::{AtomicU32, Ordering};
+
 use crate::abi::{
     FD_TYPE_PIPE, FD_TYPE_PTY_MASTER, FD_TYPE_PTY_SLAVE, MAX_FDS, MAX_PIPES, O_RDONLY, O_WRONLY,
     STATUS_PIPE_WAIT, SYS_READ,
 };
 use crate::fs::fd_table;
 use crate::types::{OpenFileDesc, ProcessState, ThreadState};
+
+const PIPE_SYNC_BEFORE_RETRY_CAP: usize = 256;
+
+#[derive(Clone, Copy)]
+struct PipeSyncBeforeRetryState {
+    vm_ptr: u32,
+    status: i32,
+    syscall_nr: u64,
+    args: [u64; 6],
+    timeout_ms: i64,
+    fault_addr: u64,
+    sync_requested: u32,
+}
+
+impl PipeSyncBeforeRetryState {
+    const fn empty() -> Self {
+        Self {
+            vm_ptr: 0,
+            status: 0,
+            syscall_nr: 0,
+            args: [0; 6],
+            timeout_ms: 0,
+            fault_addr: 0,
+            sync_requested: 0,
+        }
+    }
+
+    fn matches(&self, other: &Self) -> bool {
+        self.vm_ptr == other.vm_ptr
+            && self.status == other.status
+            && self.syscall_nr == other.syscall_nr
+            && self.args == other.args
+            && self.timeout_ms == other.timeout_ms
+            && self.fault_addr == other.fault_addr
+    }
+}
+
+static PIPE_SYNC_BEFORE_RETRY_LOCK: AtomicU32 = AtomicU32::new(0);
+static PIPE_SYNC_BEFORE_RETRY_CURSOR: AtomicU32 = AtomicU32::new(0);
+static mut PIPE_SYNC_BEFORE_RETRY_STATE: [PipeSyncBeforeRetryState; PIPE_SYNC_BEFORE_RETRY_CAP] =
+    [PipeSyncBeforeRetryState::empty(); PIPE_SYNC_BEFORE_RETRY_CAP];
+
+fn with_pipe_sync_before_retry_lock<T>(
+    f: impl FnOnce(&mut [PipeSyncBeforeRetryState; PIPE_SYNC_BEFORE_RETRY_CAP]) -> T,
+) -> T {
+    loop {
+        if PIPE_SYNC_BEFORE_RETRY_LOCK
+            .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    let state_ptr = core::ptr::addr_of_mut!(PIPE_SYNC_BEFORE_RETRY_STATE);
+    let result = unsafe { f(&mut *state_ptr) };
+    PIPE_SYNC_BEFORE_RETRY_LOCK.store(0, Ordering::Release);
+    result
+}
+
+pub(super) fn init() {
+    with_pipe_sync_before_retry_lock(|states| {
+        PIPE_SYNC_BEFORE_RETRY_CURSOR.store(0, Ordering::Relaxed);
+        for state in states.iter_mut() {
+            *state = PipeSyncBeforeRetryState::empty();
+        }
+    });
+}
+
+fn blocked_or_current_syscall_nr(vm: &ThreadState) -> u64 {
+    if vm.blocked_syscall_nr != 0 {
+        vm.blocked_syscall_nr
+    } else {
+        vm.x[17]
+    }
+}
+
+fn blocked_or_current_syscall_args(vm: &ThreadState) -> [u64; 6] {
+    if vm.blocked_syscall_nr != 0 {
+        vm.blocked_syscall_args
+    } else {
+        [vm.x[10], vm.x[11], vm.x[12], vm.x[13], vm.x[14], vm.x[15]]
+    }
+}
+
+fn pipe_sync_before_retry_signature(vm_ptr: u32, vm: &ThreadState) -> PipeSyncBeforeRetryState {
+    PipeSyncBeforeRetryState {
+        vm_ptr,
+        status: vm.status,
+        syscall_nr: blocked_or_current_syscall_nr(vm),
+        args: blocked_or_current_syscall_args(vm),
+        timeout_ms: vm.epoll_timeout_ms,
+        fault_addr: vm.fault_addr,
+        sync_requested: 0,
+    }
+}
+
+fn pipe_sync_before_retry_slot(
+    states: &mut [PipeSyncBeforeRetryState; PIPE_SYNC_BEFORE_RETRY_CAP],
+    signature: PipeSyncBeforeRetryState,
+) -> usize {
+    for (idx, state) in states.iter().enumerate() {
+        if state.matches(&signature) {
+            return idx;
+        }
+    }
+    for (idx, state) in states.iter_mut().enumerate() {
+        if state.vm_ptr == 0 {
+            *state = signature;
+            return idx;
+        }
+    }
+    let idx = PIPE_SYNC_BEFORE_RETRY_CURSOR.fetch_add(1, Ordering::Relaxed) as usize
+        % PIPE_SYNC_BEFORE_RETRY_CAP;
+    states[idx] = signature;
+    idx
+}
+
+fn pipe_sync_before_retry_requested_for_signature(signature: PipeSyncBeforeRetryState) -> bool {
+    with_pipe_sync_before_retry_lock(|states| {
+        states
+            .iter()
+            .any(|state| state.matches(&signature) && state.sync_requested != 0)
+    })
+}
+
+fn pipe_sync_before_retry_clear_for_vm(vm_ptr: u32) {
+    with_pipe_sync_before_retry_lock(|states| {
+        for state in states.iter_mut() {
+            if state.vm_ptr == vm_ptr {
+                *state = PipeSyncBeforeRetryState::empty();
+            }
+        }
+    });
+}
+
+fn pipe_sync_before_retry_readiness_sync_pending(vm: &ThreadState) -> bool {
+    vm.fault_addr == crate::syscall::fs::PIPE_READ_EOF_SYNC_RETRY_MARKER
+        || crate::syscall::poll::poll_hup_sync_pending(vm)
+}
 
 fn valid_pipe_slot(pipe_slot: u32) -> bool {
     pipe_slot > 0 && (pipe_slot as usize) < MAX_PIPES && pipe_slot < 64
@@ -237,4 +379,65 @@ pub fn blocked_pipe_resume_action(vm_ptr: u32) -> i32 {
         return super::SUPERVISOR_BLOCKED_PIPE_RESUME_ACTION_DIRECT as i32;
     }
     super::SUPERVISOR_BLOCKED_PIPE_RESUME_ACTION_DEFER as i32
+}
+
+pub fn blocked_pipe_sync_before_retry_action(vm_ptr: u32, flags: u32) -> i32 {
+    let Some(vm) = super::thread::state_from_ptr(vm_ptr) else {
+        return -(crate::abi::EFAULT as i32);
+    };
+    if vm.status != STATUS_PIPE_WAIT {
+        pipe_sync_before_retry_clear_for_vm(vm_ptr);
+        return super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_ACTION_NONE as i32;
+    }
+
+    let signature = pipe_sync_before_retry_signature(vm_ptr, vm);
+    let sync_requested = with_pipe_sync_before_retry_lock(|states| {
+        let idx = pipe_sync_before_retry_slot(states, signature);
+        states[idx].sync_requested != 0
+    });
+    let kernel_worker_available = (flags
+        & super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_FLAG_KERNEL_WORKER_AVAILABLE)
+        != 0;
+    let ready_count = crate::syscall::poll::wait_set_ready_count(vm, vm.guest_base);
+    let timed_no_ready_without_pending_sync = vm.epoll_timeout_ms >= 0
+        && ready_count <= 0
+        && !pipe_sync_before_retry_readiness_sync_pending(vm);
+
+    if !sync_requested && kernel_worker_available {
+        let action = if timed_no_ready_without_pending_sync {
+            super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_ACTION_REQUEST_SYNC
+        } else {
+            super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_ACTION_REQUEST_SYNC_AND_DRAIN_OUTPUT
+        };
+        with_pipe_sync_before_retry_lock(|states| {
+            let idx = pipe_sync_before_retry_slot(states, signature);
+            states[idx].sync_requested = 1;
+        });
+        return action as i32;
+    }
+
+    if timed_no_ready_without_pending_sync {
+        return super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_ACTION_SCHEDULE_RETRY as i32;
+    }
+
+    super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_ACTION_NONE as i32
+}
+
+pub fn blocked_pipe_sync_before_retry_requested(vm_ptr: u32) -> i32 {
+    let Some(vm) = super::thread::state_from_ptr(vm_ptr) else {
+        return -(crate::abi::EFAULT as i32);
+    };
+    if vm.status != STATUS_PIPE_WAIT {
+        return 0;
+    }
+    let signature = pipe_sync_before_retry_signature(vm_ptr, vm);
+    i32::from(pipe_sync_before_retry_requested_for_signature(signature))
+}
+
+pub fn blocked_pipe_sync_before_retry_clear(vm_ptr: u32) -> i32 {
+    let Some(_vm) = super::thread::state_from_ptr(vm_ptr) else {
+        return -(crate::abi::EFAULT as i32);
+    };
+    pipe_sync_before_retry_clear_for_vm(vm_ptr);
+    0
 }

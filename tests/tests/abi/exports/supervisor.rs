@@ -107,6 +107,23 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_pipe_slot_mode_control(), 4);
     assert_eq!(supervisor_blocked_pipe_resume_action_defer(), 0);
     assert_eq!(supervisor_blocked_pipe_resume_action_direct(), 1);
+    assert_eq!(supervisor_blocked_pipe_sync_before_retry_action_none(), 0);
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_action_request_sync(),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_action_request_sync_and_drain_output(),
+        2
+    );
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_action_schedule_retry(),
+        3
+    );
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_flag_kernel_worker_available(),
+        1
+    );
     assert_eq!(supervisor_blocked_wait_wake_source_pipe_sync(), 1);
     assert_eq!(supervisor_blocked_wait_wake_source_epoll_sync(), 2);
     assert_eq!(supervisor_blocked_wait_wake_source_socket_sync(), 3);
@@ -189,6 +206,18 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_process_pipe_read_open_count(0, 1), 0);
     assert_eq!(supervisor_process_pipe_write_open_count(0, 1), 0);
     assert_eq!(supervisor_blocked_pipe_resume_action(0), -(EFAULT as i32));
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_action(0, 0),
+        -(EFAULT as i32)
+    );
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_requested(0),
+        -(EFAULT as i32)
+    );
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_clear(0),
+        -(EFAULT as i32)
+    );
     assert_eq!(supervisor_process_epoll_held_ofd(0, 0), 0);
     assert_eq!(supervisor_process_epoll_dependent_ofd(0, 0), 0);
     assert_eq!(supervisor_blocked_epoll_watched_ofd(0, 0), 0);
