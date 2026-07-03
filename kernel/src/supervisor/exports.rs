@@ -1341,6 +1341,11 @@ pub extern "C" fn supervisor_blocked_epoll_watched_ofd(vm_ptr: u32, index: u32) 
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_epoll_dependent_sync_ofd(vm_ptr: u32, index: u32) -> u32 {
+    super::epoll::blocked_epoll_dependent_sync_ofd(vm_ptr, index)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_epoll_watches_pipe(vm_ptr: u32) -> u32 {
     super::epoll::blocked_epoll_watches_pipe(vm_ptr)
 }

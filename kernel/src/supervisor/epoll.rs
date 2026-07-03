@@ -1,4 +1,4 @@
-use crate::abi::{FD_TYPE_EPOLL, MAX_FDS};
+use crate::abi::{FD_TYPE_EPOLL, FD_TYPE_EVENTFD, FD_TYPE_TIMERFD, MAX_FDS};
 use crate::fs::fd_table;
 use crate::types::OpenFileDesc;
 
@@ -91,6 +91,31 @@ pub fn blocked_epoll_watched_ofd(vm_ptr: u32, index: u32) -> u32 {
     let mut result = 0u32;
     for_each_unique_watched_ofd(epoll_ofd, &mut seen, |watched_ofd_id| {
         if result != 0 {
+            return;
+        }
+        if cursor == index {
+            result = watched_ofd_id;
+        }
+        cursor = cursor.saturating_add(1);
+    });
+    result
+}
+
+pub fn blocked_epoll_dependent_sync_ofd(vm_ptr: u32, index: u32) -> u32 {
+    let Some(epoll_ofd) = blocked_epoll_ofd(vm_ptr) else {
+        return 0;
+    };
+    let mut seen = [false; MAX_FDS];
+    let mut cursor = 0u32;
+    let mut result = 0u32;
+    for_each_unique_watched_ofd(epoll_ofd, &mut seen, |watched_ofd_id| {
+        if result != 0 {
+            return;
+        }
+        let Some(ofd) = fd_table::get_ofd_by_id(watched_ofd_id) else {
+            return;
+        };
+        if ofd.fd_type != FD_TYPE_EVENTFD && ofd.fd_type != FD_TYPE_TIMERFD {
             return;
         }
         if cursor == index {
