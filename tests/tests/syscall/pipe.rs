@@ -13,6 +13,8 @@ use tidemark_kernel::supervisor::{
     supervisor_process_pipe_write_open_count, supervisor_process_private_pipe_slot_mask,
     supervisor_process_private_pipe_source_mode, supervisor_process_private_pipe_target_mode,
     supervisor_reset_shadow_log, supervisor_shadow_fd_control_count,
+    supervisor_stdio_pipe_read_progress_action, supervisor_stdio_pipe_read_progress_action_none,
+    supervisor_stdio_pipe_read_progress_action_snapshot,
 };
 use tidemark_kernel::syscall::pipe::{self, PipeCloseOutcome};
 use tidemark_kernel::syscall::{poll, pty};
@@ -204,6 +206,18 @@ fn supervisor_pipe_open_counts_include_private_stdio_peers() {
     assert_eq!(
         supervisor_process_pipe_write_open_count(vm_ptr, stderr_pipe),
         1
+    );
+    assert_eq!(
+        supervisor_stdio_pipe_read_progress_action(vm_ptr, stdout_pipe, 0),
+        supervisor_stdio_pipe_read_progress_action_none() as i32
+    );
+    assert_eq!(
+        supervisor_stdio_pipe_read_progress_action(vm_ptr, stdout_pipe, 1),
+        supervisor_stdio_pipe_read_progress_action_snapshot() as i32
+    );
+    assert_eq!(
+        supervisor_stdio_pipe_read_progress_action(vm_ptr, MAX_PIPES as u32, 1),
+        supervisor_stdio_pipe_read_progress_action_none() as i32
     );
 }
 

@@ -32,6 +32,7 @@ mod signal;
 mod socket;
 mod state;
 mod state_sync;
+mod stdio;
 mod thread;
 mod thread_exit;
 mod timer;

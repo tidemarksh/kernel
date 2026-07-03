@@ -115,6 +115,42 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_blocked_wait_wake_target_epoll_wait(), 2);
     assert_eq!(supervisor_blocked_wait_wake_target_socket_recv(), 4);
     assert_eq!(supervisor_blocked_wait_wake_target_socket_send(), 8);
+    assert_eq!(supervisor_stdio_output_settle_kind_visible(), 1);
+    assert_eq!(supervisor_stdio_output_settle_kind_inherited_child(), 2);
+    assert_eq!(supervisor_stdio_pipe_read_progress_action_none(), 0);
+    assert_eq!(supervisor_stdio_pipe_read_progress_action_snapshot(), 1);
+    assert_eq!(
+        supervisor_stdio_output_settle_max_passes(supervisor_stdio_output_settle_kind_visible()),
+        4
+    );
+    assert_eq!(
+        supervisor_stdio_output_settle_max_passes(
+            supervisor_stdio_output_settle_kind_inherited_child()
+        ),
+        6
+    );
+    assert_eq!(
+        supervisor_stdio_output_settle_stable_passes(supervisor_stdio_output_settle_kind_visible()),
+        2
+    );
+    assert_eq!(
+        supervisor_stdio_output_settle_stable_passes(
+            supervisor_stdio_output_settle_kind_inherited_child()
+        ),
+        2
+    );
+    assert_eq!(
+        supervisor_stdio_output_settle_max_passes(0),
+        -(EINVAL as i32)
+    );
+    assert_eq!(
+        supervisor_stdio_output_settle_stable_passes(0),
+        -(EINVAL as i32)
+    );
+    assert_eq!(
+        supervisor_stdio_pipe_read_progress_action(0, 1, 1),
+        -(EFAULT as i32)
+    );
     assert_eq!(
         supervisor_blocked_wait_wake_mask_for_sync(supervisor_blocked_wait_wake_source_pipe_sync()),
         supervisor_blocked_wait_wake_target_pipe_wait() as i32

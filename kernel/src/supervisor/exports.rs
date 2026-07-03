@@ -293,6 +293,22 @@ export_u32_const!(
     super::state_sync::wake_target_socket_send()
 );
 export_u32_const!(
+    supervisor_stdio_output_settle_kind_visible,
+    super::stdio::output_settle_kind_visible()
+);
+export_u32_const!(
+    supervisor_stdio_output_settle_kind_inherited_child,
+    super::stdio::output_settle_kind_inherited_child()
+);
+export_u32_const!(
+    supervisor_stdio_pipe_read_progress_action_none,
+    super::stdio::pipe_read_progress_action_none()
+);
+export_u32_const!(
+    supervisor_stdio_pipe_read_progress_action_snapshot,
+    super::stdio::pipe_read_progress_action_snapshot()
+);
+export_u32_const!(
     supervisor_fs_control_record_bytes,
     super::SUPERVISOR_FS_CONTROL_RECORD_BYTES
 );
@@ -858,6 +874,25 @@ pub extern "C" fn supervisor_blocked_wait_timer_required(vm_ptr: u32) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_wait_wake_mask_for_sync(source: u32) -> i32 {
     super::state_sync::wake_mask_for_sync(source)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_stdio_output_settle_max_passes(kind: u32) -> i32 {
+    super::stdio::output_settle_max_passes(kind)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_stdio_output_settle_stable_passes(kind: u32) -> i32 {
+    super::stdio::output_settle_stable_passes(kind)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_stdio_pipe_read_progress_action(
+    vm_ptr: u32,
+    pipe_slot: u32,
+    drained: u32,
+) -> i32 {
+    super::stdio::pipe_read_progress_action(vm_ptr, pipe_slot, drained)
 }
 
 #[unsafe(no_mangle)]
