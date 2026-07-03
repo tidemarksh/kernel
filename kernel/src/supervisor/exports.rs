@@ -184,6 +184,16 @@ pub extern "C" fn supervisor_process_status_is_execve_spawn(status: i32) -> i32 
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_status_is_clone_spawn(status: i32) -> i32 {
+    super::process::status_is_clone_spawn(status)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_status_is_vfork_wait(status: i32) -> i32 {
+    super::process::status_is_vfork_wait(status)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_process_status_allows_pid_mismatch(status: i32) -> i32 {
     super::process::status_allows_pid_mismatch(status)
 }

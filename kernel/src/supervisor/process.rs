@@ -29,6 +29,14 @@ pub(super) fn status_is_execve_spawn(status: i32) -> i32 {
     i32::from(status == crate::abi::STATUS_EXECVE_SPAWN)
 }
 
+pub(super) fn status_is_clone_spawn(status: i32) -> i32 {
+    i32::from(status == crate::abi::STATUS_CLONE_SPAWN)
+}
+
+pub(super) fn status_is_vfork_wait(status: i32) -> i32 {
+    i32::from(status == crate::abi::STATUS_VFORK_WAIT)
+}
+
 pub(super) fn status_allows_pid_mismatch(status: i32) -> i32 {
     i32::from(matches!(
         status,

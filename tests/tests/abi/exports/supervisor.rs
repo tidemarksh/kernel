@@ -1192,6 +1192,24 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_process_status_is_execve_spawn(STATUS_CLONE_SPAWN),
         0
     );
+    assert_eq!(supervisor_process_status_is_clone_spawn(STATUS_OK), 0);
+    assert_eq!(
+        supervisor_process_status_is_clone_spawn(STATUS_CLONE_SPAWN),
+        1
+    );
+    assert_eq!(
+        supervisor_process_status_is_clone_spawn(STATUS_EXECVE_SPAWN),
+        0
+    );
+    assert_eq!(supervisor_process_status_is_vfork_wait(STATUS_OK), 0);
+    assert_eq!(
+        supervisor_process_status_is_vfork_wait(STATUS_VFORK_WAIT),
+        1
+    );
+    assert_eq!(
+        supervisor_process_status_is_vfork_wait(STATUS_CLONE_SPAWN),
+        0
+    );
     assert_eq!(supervisor_process_status_allows_pid_mismatch(STATUS_OK), 0);
     assert_eq!(
         supervisor_process_status_allows_pid_mismatch(STATUS_VFORK_WAIT),
