@@ -1243,6 +1243,32 @@ pub fn response_disposition(
     flags
 }
 
+pub fn resident_page_slot_decision(
+    existing_slot: i32,
+    empty_slot: i32,
+    clean_evict_slot: i32,
+) -> i32 {
+    if existing_slot >= 0 {
+        existing_slot
+    } else if empty_slot >= 0 {
+        empty_slot
+    } else if clean_evict_slot >= 0 {
+        clean_evict_slot
+    } else {
+        -1
+    }
+}
+
+pub fn resident_page_evict_status(record_found: u32, dirty: u32) -> u32 {
+    if record_found == 0 {
+        super::SUPERVISOR_FS_RESIDENT_PAGE_EVICT_NOT_FOUND
+    } else if dirty != 0 {
+        super::SUPERVISOR_FS_RESIDENT_PAGE_EVICT_DIRTY_PINNED
+    } else {
+        super::SUPERVISOR_FS_RESIDENT_PAGE_EVICT_EVICTED
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn record_fs_control(
     kind: u32,

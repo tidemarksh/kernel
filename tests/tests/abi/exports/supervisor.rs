@@ -169,6 +169,9 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_fs_response_flag_store_pending_kernel_state(), 64);
     assert_eq!(supervisor_fs_response_flag_resolved_to_execve_spawn(), 128);
     assert_eq!(supervisor_fs_response_flag_process_owner_matches(), 256);
+    assert_eq!(supervisor_fs_resident_page_evict_not_found(), 0);
+    assert_eq!(supervisor_fs_resident_page_evict_dirty_pinned(), 1);
+    assert_eq!(supervisor_fs_resident_page_evict_evicted(), 2);
     assert_eq!(supervisor_fs_dirty_page_op_write(), 1);
     assert_eq!(supervisor_fs_dirty_page_op_truncate(), 2);
     assert_eq!(supervisor_fs_dirty_page_op_flush(), 3);
@@ -270,6 +273,22 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
             0,
         ) & supervisor_fs_response_flag_fd_response_may_clear_live_fds(),
         0
+    );
+    assert_eq!(supervisor_fs_resident_page_slot_decision(4, 5, 6), 4);
+    assert_eq!(supervisor_fs_resident_page_slot_decision(-1, 5, 6), 5);
+    assert_eq!(supervisor_fs_resident_page_slot_decision(-1, -1, 6), 6);
+    assert_eq!(supervisor_fs_resident_page_slot_decision(-1, -1, -1), -1);
+    assert_eq!(
+        supervisor_fs_resident_page_evict_status(0, 0),
+        supervisor_fs_resident_page_evict_not_found()
+    );
+    assert_eq!(
+        supervisor_fs_resident_page_evict_status(1, 1),
+        supervisor_fs_resident_page_evict_dirty_pinned()
+    );
+    assert_eq!(
+        supervisor_fs_resident_page_evict_status(1, 0),
+        supervisor_fs_resident_page_evict_evicted()
     );
     assert_eq!(
         supervisor_fs_completion_decision(

@@ -329,6 +329,18 @@ export_u32_const!(
     super::SUPERVISOR_FS_RESPONSE_FLAG_PROCESS_OWNER_MATCHES
 );
 export_u32_const!(
+    supervisor_fs_resident_page_evict_not_found,
+    super::SUPERVISOR_FS_RESIDENT_PAGE_EVICT_NOT_FOUND
+);
+export_u32_const!(
+    supervisor_fs_resident_page_evict_dirty_pinned,
+    super::SUPERVISOR_FS_RESIDENT_PAGE_EVICT_DIRTY_PINNED
+);
+export_u32_const!(
+    supervisor_fs_resident_page_evict_evicted,
+    super::SUPERVISOR_FS_RESIDENT_PAGE_EVICT_EVICTED
+);
+export_u32_const!(
     supervisor_fs_dirty_page_op_write,
     super::SUPERVISOR_FS_DIRTY_PAGE_OP_WRITE
 );
@@ -1370,6 +1382,20 @@ pub extern "C" fn supervisor_fs_response_disposition(
         owner_async_status,
         last_status,
     )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_resident_page_slot_decision(
+    existing_slot: i32,
+    empty_slot: i32,
+    clean_evict_slot: i32,
+) -> i32 {
+    super::fs::resident_page_slot_decision(existing_slot, empty_slot, clean_evict_slot)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_resident_page_evict_status(record_found: u32, dirty: u32) -> u32 {
+    super::fs::resident_page_evict_status(record_found, dirty)
 }
 
 #[unsafe(no_mangle)]
