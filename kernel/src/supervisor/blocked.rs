@@ -187,6 +187,21 @@ pub(super) fn resume_writeback_len(
     }
 }
 
+pub(super) fn poll_wait_timeout_ms(vm_ptr: u32) -> i64 {
+    let vm = match state(vm_ptr) {
+        Ok(vm) => vm,
+        Err(errno) => return -(errno as i64),
+    };
+    if vm.status != crate::abi::STATUS_PIPE_WAIT {
+        return -1;
+    }
+    let syscall = blocked_or_current_syscall_nr(vm);
+    if syscall != crate::abi::SYS_PPOLL && syscall != crate::abi::SYS_PSELECT6 {
+        return -1;
+    }
+    vm.epoll_timeout_ms
+}
+
 fn pipe_wait_should_remain_passive(vm_ptr: u32, vm: &ThreadState) -> bool {
     if vm.status != crate::abi::STATUS_PIPE_WAIT {
         return false;

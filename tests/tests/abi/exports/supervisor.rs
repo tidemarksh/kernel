@@ -1128,6 +1128,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_enqueue_blocked_wait_timer(0), EFAULT as i32);
     assert_eq!(supervisor_enqueue_blocked_retry_timer(0, 0), EFAULT as i32);
     assert_eq!(supervisor_blocked_wait_timer_required(0), EFAULT as i32);
+    assert_eq!(supervisor_blocked_poll_wait_timeout_ms(0), -(EFAULT as i64));
 
     let empty_hash = supervisor_shadow_thread_event_log_hash();
     assert_eq!(supervisor_shadow_thread_event_count(), 0);
@@ -1254,8 +1255,16 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     );
     t.vm.status = STATUS_PIPE_WAIT;
     t.vm.epoll_timeout_ms = -1;
+    set_blocked_resume_syscall(&mut t.vm, SYS_READ, [3, 0x1000, 1, 0, 0, 0]);
+    assert_eq!(supervisor_blocked_poll_wait_timeout_ms(vm_ptr), -1);
+    set_blocked_resume_syscall(&mut t.vm, SYS_PPOLL, [0x1000, 2, 0, 0, 0, 0]);
+    assert_eq!(supervisor_blocked_poll_wait_timeout_ms(vm_ptr), -1);
     assert_eq!(supervisor_blocked_wait_timer_required(vm_ptr), 0);
     t.vm.epoll_timeout_ms = 1;
+    assert_eq!(supervisor_blocked_poll_wait_timeout_ms(vm_ptr), 1);
+    set_blocked_resume_syscall(&mut t.vm, SYS_PSELECT6, [8, 0x2000, 0, 0, 0, 0]);
+    t.vm.epoll_timeout_ms = 25;
+    assert_eq!(supervisor_blocked_poll_wait_timeout_ms(vm_ptr), 25);
     assert_eq!(supervisor_blocked_wait_timer_required(vm_ptr), 1);
     assert_eq!(
         supervisor_blocked_resume_delegation(
