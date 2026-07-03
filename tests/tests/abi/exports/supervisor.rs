@@ -116,6 +116,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_fd_trace_topology_action_unresolved(), 0);
     assert_eq!(supervisor_fd_trace_topology_action_rules_out(), 1);
     assert_eq!(supervisor_fd_trace_topology_action_needs_peer_check(), 2);
+    assert_eq!(supervisor_thread_take_completed_sync_effects(0, 0), 0);
     assert_eq!(supervisor_pipe_slot_mode_read(), 1);
     assert_eq!(supervisor_pipe_slot_mode_write(), 2);
     assert_eq!(supervisor_pipe_slot_mode_control(), 4);

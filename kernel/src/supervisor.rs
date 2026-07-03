@@ -34,6 +34,7 @@ mod socket;
 mod state;
 mod state_sync;
 mod stdio;
+mod sync_effects;
 mod thread;
 mod thread_exit;
 mod timer;

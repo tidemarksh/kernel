@@ -1357,6 +1357,11 @@ pub extern "C" fn supervisor_fd_trace_regular_file_write_mutated_memfs(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_thread_take_completed_sync_effects(vm_ptr: u32, status: i32) -> u32 {
+    super::sync_effects::take_completed_sync_effects(vm_ptr, status)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_process_private_pipe_slot_mask(vm_ptr: u32) -> u64 {
     super::pipe::process_private_pipe_slot_mask(vm_ptr)
 }

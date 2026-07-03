@@ -2,8 +2,8 @@ use crate::abi::*;
 use crate::fs::{fd_table, memfs};
 use crate::guest_mem;
 use crate::syscall::sync_effects::{
-    mark_fork_shared_ofd_sync_effect, mark_pipe_sync_effect, mark_process_memfs_sync_effect,
-    mark_socket_sync_effect,
+    mark_epoll_ready_sync_effect, mark_fork_shared_ofd_sync_effect, mark_pipe_sync_effect,
+    mark_process_memfs_sync_effect, mark_socket_sync_effect,
 };
 use crate::syscall::{pipe, signal, socket};
 use crate::types::{OpenFileDesc, ThreadState};
@@ -141,6 +141,7 @@ pub fn sys_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) 
         }
         flush_shared_guest_write(vm, base, buf, 8);
         fd_table::set_offset(base, vm, fd, next);
+        mark_epoll_ready_sync_effect(vm);
         return 8;
     }
 
@@ -909,6 +910,7 @@ pub fn sys_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64,
         }
 
         fd_table::set_offset(base, vm, fd, counter + value);
+        mark_epoll_ready_sync_effect(vm);
         return trace_write_attempt(
             fd,
             nr,
