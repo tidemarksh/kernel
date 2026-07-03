@@ -281,6 +281,30 @@ export_u32_const!(
     super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_FLAG_KERNEL_WORKER_AVAILABLE
 );
 export_u32_const!(
+    supervisor_state_sync_kind_pipe,
+    super::SUPERVISOR_STATE_SYNC_KIND_PIPE
+);
+export_u32_const!(
+    supervisor_state_sync_kind_epoll,
+    super::SUPERVISOR_STATE_SYNC_KIND_EPOLL
+);
+export_u32_const!(
+    supervisor_state_sync_kind_socket,
+    super::SUPERVISOR_STATE_SYNC_KIND_SOCKET
+);
+export_u32_const!(
+    supervisor_state_sync_request_flag_wake_waiters,
+    super::SUPERVISOR_STATE_SYNC_REQUEST_FLAG_WAKE_WAITERS
+);
+export_u32_const!(
+    supervisor_state_sync_run_flag_run,
+    super::SUPERVISOR_STATE_SYNC_RUN_FLAG_RUN
+);
+export_u32_const!(
+    supervisor_state_sync_run_flag_wake_waiters,
+    super::SUPERVISOR_STATE_SYNC_RUN_FLAG_WAKE_WAITERS
+);
+export_u32_const!(
     supervisor_blocked_wait_wake_source_pipe_sync,
     super::state_sync::wake_source_pipe_sync()
 );
@@ -894,6 +918,26 @@ pub extern "C" fn supervisor_blocked_wait_timer_required(vm_ptr: u32) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_wait_wake_mask_for_sync(source: u32) -> i32 {
     super::state_sync::wake_mask_for_sync(source)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_state_sync_request(vm_ptr: u32, kind: u32, flags: u32) -> i32 {
+    super::state_sync::request(vm_ptr, kind, flags)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_state_sync_next_run_flags(vm_ptr: u32, kind: u32) -> i32 {
+    super::state_sync::next_run_flags(vm_ptr, kind)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_state_sync_complete(vm_ptr: u32, kind: u32) -> i32 {
+    super::state_sync::complete(vm_ptr, kind)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_state_sync_clear(vm_ptr: u32, kind: u32) -> i32 {
+    super::state_sync::clear(vm_ptr, kind)
 }
 
 #[unsafe(no_mangle)]

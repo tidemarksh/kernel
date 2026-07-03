@@ -124,6 +124,12 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_blocked_pipe_sync_before_retry_flag_kernel_worker_available(),
         1
     );
+    assert_eq!(supervisor_state_sync_kind_pipe(), 1);
+    assert_eq!(supervisor_state_sync_kind_epoll(), 2);
+    assert_eq!(supervisor_state_sync_kind_socket(), 3);
+    assert_eq!(supervisor_state_sync_request_flag_wake_waiters(), 1);
+    assert_eq!(supervisor_state_sync_run_flag_run(), 1);
+    assert_eq!(supervisor_state_sync_run_flag_wake_waiters(), 2);
     assert_eq!(supervisor_blocked_wait_wake_source_pipe_sync(), 1);
     assert_eq!(supervisor_blocked_wait_wake_source_epoll_sync(), 2);
     assert_eq!(supervisor_blocked_wait_wake_source_socket_sync(), 3);
@@ -195,6 +201,56 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_blocked_wait_wake_mask_for_sync(0),
         -(EINVAL as i32)
+    );
+    assert_eq!(
+        supervisor_state_sync_request(0, supervisor_state_sync_kind_pipe(), 0),
+        -(EFAULT as i32)
+    );
+    assert_eq!(
+        supervisor_state_sync_request(0x1000, 0, 0),
+        -(EINVAL as i32)
+    );
+    assert_eq!(
+        supervisor_state_sync_request(
+            0x1000,
+            supervisor_state_sync_kind_pipe(),
+            supervisor_state_sync_request_flag_wake_waiters()
+        ),
+        1
+    );
+    assert_eq!(
+        supervisor_state_sync_next_run_flags(0x1000, supervisor_state_sync_kind_pipe()),
+        (supervisor_state_sync_run_flag_run() | supervisor_state_sync_run_flag_wake_waiters())
+            as i32
+    );
+    assert_eq!(
+        supervisor_state_sync_complete(0x1000, supervisor_state_sync_kind_pipe()),
+        0
+    );
+    assert_eq!(
+        supervisor_state_sync_request(0x1000, supervisor_state_sync_kind_epoll(), 0),
+        1
+    );
+    assert_eq!(
+        supervisor_state_sync_request(
+            0x1000,
+            supervisor_state_sync_kind_epoll(),
+            supervisor_state_sync_request_flag_wake_waiters()
+        ),
+        0
+    );
+    assert_eq!(
+        supervisor_state_sync_next_run_flags(0x1000, supervisor_state_sync_kind_epoll()),
+        (supervisor_state_sync_run_flag_run() | supervisor_state_sync_run_flag_wake_waiters())
+            as i32
+    );
+    assert_eq!(
+        supervisor_state_sync_clear(0x1000, supervisor_state_sync_kind_epoll()),
+        0
+    );
+    assert_eq!(
+        supervisor_state_sync_next_run_flags(0x1000, supervisor_state_sync_kind_epoll()),
+        0
     );
     assert_eq!(supervisor_process_held_ofd_refcount(0, 1), 0);
     assert_eq!(supervisor_process_private_pipe_slot_mask(0), 0);
