@@ -312,6 +312,10 @@ export_u32_const!(
     super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_FLAG_KERNEL_WORKER_AVAILABLE
 );
 export_u32_const!(
+    supervisor_resume_flag_timeout_expired,
+    super::blocked::resume_flag_timeout_expired()
+);
+export_u32_const!(
     supervisor_blocked_wait_network_pump_action_skip,
     super::network::pump_action_skip()
 );

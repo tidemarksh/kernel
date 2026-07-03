@@ -493,6 +493,10 @@ pub(super) fn resume_blocked_syscall(vm_ptr: u32, flags: u32) -> i64 {
     }
 }
 
+pub(super) fn resume_flag_timeout_expired() -> u32 {
+    RESUME_FLAG_TIMEOUT_EXPIRED
+}
+
 pub(super) fn retry_reason_default() -> u32 {
     RETRY_REASON_DEFAULT
 }

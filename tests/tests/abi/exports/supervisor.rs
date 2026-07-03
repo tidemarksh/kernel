@@ -134,6 +134,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_blocked_pipe_sync_before_retry_flag_kernel_worker_available(),
         1
     );
+    assert_eq!(supervisor_resume_flag_timeout_expired(), 1);
     assert_eq!(supervisor_blocked_wait_network_pump_action_skip(), 0);
     assert_eq!(supervisor_blocked_wait_network_pump_action_pump(), 1);
     assert_eq!(supervisor_state_sync_kind_pipe(), 1);
