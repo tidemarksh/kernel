@@ -261,6 +261,38 @@ export_u32_const!(
     super::SUPERVISOR_BLOCKED_PIPE_RESUME_ACTION_DIRECT
 );
 export_u32_const!(
+    supervisor_blocked_wait_wake_source_pipe_sync,
+    super::state_sync::wake_source_pipe_sync()
+);
+export_u32_const!(
+    supervisor_blocked_wait_wake_source_epoll_sync,
+    super::state_sync::wake_source_epoll_sync()
+);
+export_u32_const!(
+    supervisor_blocked_wait_wake_source_socket_sync,
+    super::state_sync::wake_source_socket_sync()
+);
+export_u32_const!(
+    supervisor_blocked_wait_wake_source_pipe_and_epoll_sync,
+    super::state_sync::wake_source_pipe_and_epoll_sync()
+);
+export_u32_const!(
+    supervisor_blocked_wait_wake_target_pipe_wait,
+    super::state_sync::wake_target_pipe_wait()
+);
+export_u32_const!(
+    supervisor_blocked_wait_wake_target_epoll_wait,
+    super::state_sync::wake_target_epoll_wait()
+);
+export_u32_const!(
+    supervisor_blocked_wait_wake_target_socket_recv,
+    super::state_sync::wake_target_socket_recv()
+);
+export_u32_const!(
+    supervisor_blocked_wait_wake_target_socket_send,
+    super::state_sync::wake_target_socket_send()
+);
+export_u32_const!(
     supervisor_fs_control_record_bytes,
     super::SUPERVISOR_FS_CONTROL_RECORD_BYTES
 );
@@ -821,6 +853,11 @@ pub extern "C" fn supervisor_enqueue_blocked_retry_timer(vm_ptr: u32, flags: u32
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_wait_timer_required(vm_ptr: u32) -> i32 {
     super::timer::blocked_wait_timer_required_for_vm(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_wait_wake_mask_for_sync(source: u32) -> i32 {
+    super::state_sync::wake_mask_for_sync(source)
 }
 
 #[unsafe(no_mangle)]
