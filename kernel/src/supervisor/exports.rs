@@ -179,8 +179,18 @@ pub extern "C" fn supervisor_process_status_is_lifecycle_handoff(status: i32) ->
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_status_is_execve_spawn(status: i32) -> i32 {
+    super::process::status_is_execve_spawn(status)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_process_status_allows_pid_mismatch(status: i32) -> i32 {
     super::process::status_allows_pid_mismatch(status)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_status_defers_kernel_state_adoption(status: i32) -> i32 {
+    super::process::status_defers_kernel_state_adoption(status)
 }
 
 export_u32_const!(

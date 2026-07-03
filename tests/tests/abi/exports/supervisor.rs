@@ -1183,6 +1183,15 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_process_status_is_lifecycle_handoff(STATUS_CLONE_SPAWN),
         1
     );
+    assert_eq!(supervisor_process_status_is_execve_spawn(STATUS_OK), 0);
+    assert_eq!(
+        supervisor_process_status_is_execve_spawn(STATUS_EXECVE_SPAWN),
+        1
+    );
+    assert_eq!(
+        supervisor_process_status_is_execve_spawn(STATUS_CLONE_SPAWN),
+        0
+    );
     assert_eq!(supervisor_process_status_allows_pid_mismatch(STATUS_OK), 0);
     assert_eq!(
         supervisor_process_status_allows_pid_mismatch(STATUS_VFORK_WAIT),
@@ -1194,6 +1203,18 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     );
     assert_eq!(
         supervisor_process_status_allows_pid_mismatch(STATUS_CLONE_SPAWN),
+        0
+    );
+    assert_eq!(
+        supervisor_process_status_defers_kernel_state_adoption(STATUS_OK),
+        0
+    );
+    assert_eq!(
+        supervisor_process_status_defers_kernel_state_adoption(STATUS_CLONE_SPAWN),
+        1
+    );
+    assert_eq!(
+        supervisor_process_status_defers_kernel_state_adoption(STATUS_EXECVE_SPAWN),
         0
     );
     assert_eq!(supervisor_vfork_execve_rollback(0, 1), -(EFAULT as i32));

@@ -25,11 +25,19 @@ pub(super) fn status_is_lifecycle_handoff(status: i32) -> i32 {
     ))
 }
 
+pub(super) fn status_is_execve_spawn(status: i32) -> i32 {
+    i32::from(status == crate::abi::STATUS_EXECVE_SPAWN)
+}
+
 pub(super) fn status_allows_pid_mismatch(status: i32) -> i32 {
     i32::from(matches!(
         status,
         crate::abi::STATUS_VFORK_WAIT | crate::abi::STATUS_EXECVE_SPAWN
     ))
+}
+
+pub(super) fn status_defers_kernel_state_adoption(status: i32) -> i32 {
+    i32::from(status == crate::abi::STATUS_CLONE_SPAWN)
 }
 
 #[allow(clippy::too_many_arguments)]
