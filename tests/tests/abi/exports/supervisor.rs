@@ -157,6 +157,18 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_fs_completion_flag_memfs_publish_ready(), 2);
     assert_eq!(supervisor_fs_completion_flag_ofd_state_changed(), 4);
     assert_eq!(supervisor_fs_completion_flag_regular_file_request(), 8);
+    assert_eq!(supervisor_fs_response_flag_adopt_kernel_state(), 1);
+    assert_eq!(supervisor_fs_response_flag_apply_guest_memory_writes(), 2);
+    assert_eq!(supervisor_fs_response_flag_queue_thread_worker_writes(), 4);
+    assert_eq!(supervisor_fs_response_flag_apply_local_metadata(), 8);
+    assert_eq!(supervisor_fs_response_flag_clear_tombstones(), 16);
+    assert_eq!(
+        supervisor_fs_response_flag_fd_response_may_clear_live_fds(),
+        32
+    );
+    assert_eq!(supervisor_fs_response_flag_store_pending_kernel_state(), 64);
+    assert_eq!(supervisor_fs_response_flag_resolved_to_execve_spawn(), 128);
+    assert_eq!(supervisor_fs_response_flag_process_owner_matches(), 256);
     assert_eq!(supervisor_fs_dirty_page_op_write(), 1);
     assert_eq!(supervisor_fs_dirty_page_op_truncate(), 2);
     assert_eq!(supervisor_fs_dirty_page_op_flush(), 3);
@@ -233,6 +245,32 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     );
     assert_eq!(supervisor_fs_pending_mmap_guest_write_ptr(0), 0);
     assert_eq!(supervisor_fs_pending_mmap_guest_write_len(0), 0);
+    assert_eq!(
+        supervisor_fs_response_disposition(0, 7, 0, 0, 0, 0)
+            & (supervisor_fs_response_flag_adopt_kernel_state()
+                | supervisor_fs_response_flag_apply_guest_memory_writes()
+                | supervisor_fs_response_flag_queue_thread_worker_writes()
+                | supervisor_fs_response_flag_apply_local_metadata()
+                | supervisor_fs_response_flag_clear_tombstones()
+                | supervisor_fs_response_flag_process_owner_matches()),
+        supervisor_fs_response_flag_adopt_kernel_state()
+            | supervisor_fs_response_flag_apply_guest_memory_writes()
+            | supervisor_fs_response_flag_queue_thread_worker_writes()
+            | supervisor_fs_response_flag_apply_local_metadata()
+            | supervisor_fs_response_flag_clear_tombstones()
+            | supervisor_fs_response_flag_process_owner_matches()
+    );
+    assert_ne!(
+        supervisor_fs_response_disposition(
+            0,
+            7,
+            tidemark_kernel::fs::ring_buffer::FS_OP_CLOSE,
+            0,
+            0,
+            0,
+        ) & supervisor_fs_response_flag_fd_response_may_clear_live_fds(),
+        0
+    );
     assert_eq!(
         supervisor_fs_completion_decision(
             0,

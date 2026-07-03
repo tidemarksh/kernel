@@ -293,6 +293,42 @@ export_u32_const!(
     super::SUPERVISOR_FS_COMPLETION_FLAG_REGULAR_FILE_REQUEST
 );
 export_u32_const!(
+    supervisor_fs_response_flag_adopt_kernel_state,
+    super::SUPERVISOR_FS_RESPONSE_FLAG_ADOPT_KERNEL_STATE
+);
+export_u32_const!(
+    supervisor_fs_response_flag_apply_guest_memory_writes,
+    super::SUPERVISOR_FS_RESPONSE_FLAG_APPLY_GUEST_MEMORY_WRITES
+);
+export_u32_const!(
+    supervisor_fs_response_flag_queue_thread_worker_writes,
+    super::SUPERVISOR_FS_RESPONSE_FLAG_QUEUE_THREAD_WORKER_WRITES
+);
+export_u32_const!(
+    supervisor_fs_response_flag_apply_local_metadata,
+    super::SUPERVISOR_FS_RESPONSE_FLAG_APPLY_LOCAL_METADATA
+);
+export_u32_const!(
+    supervisor_fs_response_flag_clear_tombstones,
+    super::SUPERVISOR_FS_RESPONSE_FLAG_CLEAR_TOMBSTONES
+);
+export_u32_const!(
+    supervisor_fs_response_flag_fd_response_may_clear_live_fds,
+    super::SUPERVISOR_FS_RESPONSE_FLAG_FD_RESPONSE_MAY_CLEAR_LIVE_FDS
+);
+export_u32_const!(
+    supervisor_fs_response_flag_store_pending_kernel_state,
+    super::SUPERVISOR_FS_RESPONSE_FLAG_STORE_PENDING_KERNEL_STATE
+);
+export_u32_const!(
+    supervisor_fs_response_flag_resolved_to_execve_spawn,
+    super::SUPERVISOR_FS_RESPONSE_FLAG_RESOLVED_TO_EXECVE_SPAWN
+);
+export_u32_const!(
+    supervisor_fs_response_flag_process_owner_matches,
+    super::SUPERVISOR_FS_RESPONSE_FLAG_PROCESS_OWNER_MATCHES
+);
+export_u32_const!(
     supervisor_fs_dirty_page_op_write,
     super::SUPERVISOR_FS_DIRTY_PAGE_OP_WRITE
 );
@@ -1314,6 +1350,25 @@ pub extern "C" fn supervisor_fs_completion_decision(
         host_ofd_state_changed,
         pending_ring_request,
         regular_file_request,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_response_disposition(
+    vm_ptr: u32,
+    runtime_pid: i32,
+    opcode: u32,
+    result: i64,
+    owner_async_status: i32,
+    last_status: i32,
+) -> u32 {
+    super::fs::response_disposition(
+        vm_ptr,
+        runtime_pid,
+        opcode,
+        result,
+        owner_async_status,
+        last_status,
     )
 }
 

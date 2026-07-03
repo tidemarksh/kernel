@@ -1195,6 +1195,54 @@ pub fn completion_decision(
     flags
 }
 
+pub fn response_disposition(
+    vm_ptr: u32,
+    runtime_pid: i32,
+    opcode: u32,
+    result: i64,
+    owner_async_status: i32,
+    last_status: i32,
+) -> u32 {
+    let fs_succeeded = result >= 0;
+    let current_pid = super::thread::state_from_ptr(vm_ptr)
+        .map(|vm| crate::syscall::process::current_process_pid(vm, vm.guest_base))
+        .unwrap_or(runtime_pid);
+    let process_owner_matches = current_pid <= 0 || runtime_pid <= 0 || current_pid == runtime_pid;
+    let failed_execve_child_owner =
+        opcode == ring_buffer::FS_OP_EXECVE && !fs_succeeded && !process_owner_matches;
+    let resolved_to_execve_spawn = opcode == ring_buffer::FS_OP_EXECVE
+        && (super::thread::state_from_ptr(vm_ptr)
+            .map(|vm| vm.status == crate::abi::STATUS_EXECVE_SPAWN)
+            .unwrap_or(false)
+            || owner_async_status == crate::abi::STATUS_EXECVE_SPAWN
+            || last_status == crate::abi::STATUS_EXECVE_SPAWN);
+
+    let mut flags = 0u32;
+    if process_owner_matches {
+        flags |= super::SUPERVISOR_FS_RESPONSE_FLAG_PROCESS_OWNER_MATCHES;
+    }
+    if failed_execve_child_owner {
+        flags |= super::SUPERVISOR_FS_RESPONSE_FLAG_STORE_PENDING_KERNEL_STATE;
+    } else {
+        flags |= super::SUPERVISOR_FS_RESPONSE_FLAG_ADOPT_KERNEL_STATE;
+        flags |= super::SUPERVISOR_FS_RESPONSE_FLAG_APPLY_GUEST_MEMORY_WRITES;
+        flags |= super::SUPERVISOR_FS_RESPONSE_FLAG_CLEAR_TOMBSTONES;
+    }
+    if !failed_execve_child_owner && process_owner_matches {
+        flags |= super::SUPERVISOR_FS_RESPONSE_FLAG_APPLY_LOCAL_METADATA;
+    }
+    if !failed_execve_child_owner && opcode != ring_buffer::FS_OP_MMAP {
+        flags |= super::SUPERVISOR_FS_RESPONSE_FLAG_QUEUE_THREAD_WORKER_WRITES;
+    }
+    if opcode == ring_buffer::FS_OP_CLOSE || opcode == ring_buffer::FS_OP_EXECVE {
+        flags |= super::SUPERVISOR_FS_RESPONSE_FLAG_FD_RESPONSE_MAY_CLEAR_LIVE_FDS;
+    }
+    if resolved_to_execve_spawn {
+        flags |= super::SUPERVISOR_FS_RESPONSE_FLAG_RESOLVED_TO_EXECVE_SPAWN;
+    }
+    flags
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn record_fs_control(
     kind: u32,
