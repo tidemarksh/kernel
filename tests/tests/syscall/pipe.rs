@@ -3,15 +3,16 @@ use tidemark_kernel::harness::TestVm;
 use tidemark_kernel::supervisor::{
     supervisor_abi_version, supervisor_blocked_pipe_resume_action,
     supervisor_blocked_pipe_resume_action_defer, supervisor_blocked_pipe_resume_action_direct,
-    supervisor_fd_control_kind_fd_closed, supervisor_fd_control_kind_pipe_created,
-    supervisor_fd_control_record, supervisor_fd_control_record_bytes,
-    supervisor_pipe_slot_mode_read, supervisor_pipe_slot_mode_write,
-    supervisor_process_held_ofd_refcount, supervisor_process_held_pipe_slot_mask,
-    supervisor_process_pipe_read_open_count, supervisor_process_pipe_slot_mode,
-    supervisor_process_pipe_used_mask, supervisor_process_pipe_write_open_count,
-    supervisor_process_private_pipe_slot_mask, supervisor_process_private_pipe_source_mode,
-    supervisor_process_private_pipe_target_mode, supervisor_reset_shadow_log,
-    supervisor_shadow_fd_control_count,
+    supervisor_blocked_wait_retry_reason, supervisor_blocked_wait_retry_reason_default,
+    supervisor_blocked_wait_retry_reason_passive_wait, supervisor_fd_control_kind_fd_closed,
+    supervisor_fd_control_kind_pipe_created, supervisor_fd_control_record,
+    supervisor_fd_control_record_bytes, supervisor_pipe_slot_mode_read,
+    supervisor_pipe_slot_mode_write, supervisor_process_held_ofd_refcount,
+    supervisor_process_held_pipe_slot_mask, supervisor_process_pipe_read_open_count,
+    supervisor_process_pipe_slot_mode, supervisor_process_pipe_used_mask,
+    supervisor_process_pipe_write_open_count, supervisor_process_private_pipe_slot_mask,
+    supervisor_process_private_pipe_source_mode, supervisor_process_private_pipe_target_mode,
+    supervisor_reset_shadow_log, supervisor_shadow_fd_control_count,
 };
 use tidemark_kernel::syscall::pipe::{self, PipeCloseOutcome};
 use tidemark_kernel::syscall::{poll, pty};
@@ -422,6 +423,32 @@ fn blocked_read_resume_eof_marker_uses_pinned_ofd_after_fd_close() {
 }
 
 #[test]
+fn supervisor_retry_reason_marks_empty_pselect_pipe_wait_passive() {
+    let mut t = TestVm::new();
+    let readfds = t.scratch + 0x1100;
+
+    t.vm.x[17] = SYS_PSELECT6;
+    t.vm.x[10] = 8;
+    t.vm.x[11] = readfds;
+    t.vm.x[12] = 0;
+    t.vm.x[13] = 0;
+    t.vm.x[14] = 0;
+    t.vm.x[15] = 0;
+    assert_eq!(
+        poll::sys_pselect6(&mut t.vm, t.base, 8, readfds, 0, 0, 0, 0),
+        0
+    );
+    assert_eq!(t.vm.status, STATUS_PIPE_WAIT);
+
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    assert_eq!(thread_poll_wait_ready_count(vm_ptr), 0);
+    assert_eq!(
+        supervisor_blocked_wait_retry_reason(vm_ptr, 0),
+        supervisor_blocked_wait_retry_reason_passive_wait() as i32
+    );
+}
+
+#[test]
 fn pselect_reports_closed_pipe_read_end_as_ready() {
     let mut t = TestVm::new();
     let pipefd_addr = t.scratch + 0x1000;
@@ -497,6 +524,10 @@ fn pselect_pipe_read_ready_ignores_unwatched_readable_pipe() {
     let vm_ptr = &mut t.vm as *mut _ as u32;
     assert_eq!(thread_poll_wait_ready_count(vm_ptr), 0);
     assert_eq!(thread_blocked_pipe_read_ready(vm_ptr), 0);
+    assert_eq!(
+        supervisor_blocked_wait_retry_reason(vm_ptr, 0),
+        supervisor_blocked_wait_retry_reason_default() as i32
+    );
 }
 
 #[test]

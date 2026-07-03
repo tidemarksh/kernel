@@ -17,18 +17,20 @@ pub(super) const RESUME_DELEGATION_WAIT4_KERNEL_WORKER: u32 = 2;
 pub(super) const RESUME_DELEGATION_UNSUPPORTED: u32 = 3;
 pub(super) const RESUME_DELEGATION_EPOLL_DIRECT: u32 = 4;
 
+use crate::types::ThreadState;
+
 fn status(vm_ptr: u32) -> i32 {
     unsafe { (*(vm_ptr as *const crate::types::ThreadState)).status }
 }
 
-fn state(vm_ptr: u32) -> Result<&'static crate::types::ThreadState, i32> {
+fn state(vm_ptr: u32) -> Result<&'static ThreadState, i32> {
     if vm_ptr == 0 {
         return Err(crate::abi::EFAULT as i32);
     }
-    Ok(unsafe { &*(vm_ptr as *const crate::types::ThreadState) })
+    Ok(unsafe { &*(vm_ptr as *const ThreadState) })
 }
 
-fn active_child_pid_for_blocked_wait(vm: &crate::types::ThreadState) -> i32 {
+fn active_child_pid_for_blocked_wait(vm: &ThreadState) -> i32 {
     match vm.status {
         crate::abi::STATUS_PIPE_WAIT
             if vm.epoll_timeout_ms < 0
@@ -43,6 +45,46 @@ fn active_child_pid_for_blocked_wait(vm: &crate::types::ThreadState) -> i32 {
         }
         _ => 0,
     }
+}
+
+fn blocked_or_current_syscall_nr(vm: &ThreadState) -> u64 {
+    if vm.blocked_syscall_nr != 0 {
+        vm.blocked_syscall_nr
+    } else {
+        vm.x[17]
+    }
+}
+
+fn pipe_wait_should_remain_passive(vm_ptr: u32, vm: &ThreadState) -> bool {
+    if vm.status != crate::abi::STATUS_PIPE_WAIT {
+        return false;
+    }
+    let syscall = blocked_or_current_syscall_nr(vm);
+    let poll_like = syscall == crate::abi::SYS_PPOLL || syscall == crate::abi::SYS_PSELECT6;
+    if !poll_like {
+        return false;
+    }
+    if vm.epoll_timeout_ms >= 0 {
+        return false;
+    }
+    if crate::syscall::poll::wait_set_has_socket(vm, vm.guest_base) {
+        return false;
+    }
+    if !crate::syscall::poll::wait_set_has_no_watched_fds(vm, vm.guest_base) {
+        return false;
+    }
+    if crate::syscall::poll::wait_set_ready_count(vm, vm.guest_base) > 0 {
+        return false;
+    }
+    if crate::exports::thread::thread_blocked_pipe_read_ready(vm_ptr) == 1
+        || crate::exports::thread::thread_blocked_pipe_write_ready(vm_ptr) == 1
+    {
+        return false;
+    }
+    if vm.fault_addr == crate::syscall::fs::PIPE_READ_EOF_SYNC_RETRY_MARKER {
+        return false;
+    }
+    !crate::syscall::poll::poll_hup_sync_pending(vm)
 }
 
 pub(super) fn blocked_wait_active_child_pid(vm_ptr: u32) -> i32 {
@@ -153,6 +195,9 @@ pub(super) fn retry_reason(vm_ptr: u32, flags: u32) -> i32 {
     }
     if active_child_pid_for_blocked_wait(vm) > 0 {
         return RETRY_REASON_ACTIVE_CHILD as i32;
+    }
+    if pipe_wait_should_remain_passive(vm_ptr, vm) {
+        return RETRY_REASON_PASSIVE_WAIT as i32;
     }
     match vm.status {
         crate::abi::STATUS_EPOLL_WAIT
