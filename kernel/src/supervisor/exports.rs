@@ -682,6 +682,11 @@ pub extern "C" fn supervisor_signal_pending_for_blocked_wait(vm_ptr: u32) -> i32
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_signal_boundary_check(vm_ptr: u32) -> i32 {
+    super::signal::boundary_check(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_resume_blocked_syscall(vm_ptr: u32, flags: u32) -> i64 {
     super::blocked::resume_blocked_syscall(vm_ptr, flags)
 }

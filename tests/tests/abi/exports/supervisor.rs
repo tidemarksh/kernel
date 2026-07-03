@@ -912,6 +912,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_signal_control_kind_boundary_check(), 1);
     assert_eq!(supervisor_signal_control_kind_signal_delivered(), 2);
     assert_eq!(supervisor_signal_control_kind_blocked_wait_interrupted(), 3);
+    assert_eq!(supervisor_signal_boundary_check(0), EFAULT as i32);
     assert_eq!(supervisor_resume_kind_runnable_thread(), 2);
     assert_eq!(supervisor_resume_blocked_syscall(0, 0), -(EFAULT as i64));
     assert_eq!(supervisor_blocked_resume_delegation_direct(), 0);

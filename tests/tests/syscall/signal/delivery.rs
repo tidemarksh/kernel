@@ -161,6 +161,43 @@ fn supervisor_signal_control_records_delivery_boundary() {
 }
 
 #[test]
+fn supervisor_signal_boundary_check_delivers_pending_signal() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    let handler = 0x92_000;
+    let act_addr = t.scratch;
+    write_sigaction(t.base, act_addr, handler, SA_SIGINFO, 0);
+    assert_eq!(
+        signal::sys_rt_sigaction(&mut t.vm, t.base, SIGUSR1 as u64, act_addr, 0, 8),
+        0
+    );
+    t.vm.pc = 0x78_000;
+    t.vm.x[2] = 0x9fff0;
+    t.vm.status = STATUS_OK;
+    t.vm.sig_mask = 0;
+    signal::send_signal(&mut t.vm, SIGUSR1);
+    let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+
+    assert_eq!(supervisor_signal_boundary_check(vm_ptr), 1);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, handler);
+    assert_eq!(supervisor_shadow_signal_control_count(), 2);
+
+    let bytes_len = supervisor_signal_control_record_bytes() as usize;
+    let mut bytes = vec![0u8; bytes_len];
+    assert_eq!(
+        supervisor_signal_control_record(bytes.as_mut_ptr() as u32, bytes_len as u32),
+        bytes_len as i32
+    );
+    assert_eq!(
+        read_u32_le(&bytes, 12),
+        supervisor_signal_control_kind_signal_delivered()
+    );
+    assert_eq!(read_u32_le(&bytes, 40), SIGUSR1 as u32);
+}
+
+#[test]
 fn tgkill_caught_handler_resumes_blocked_futex_target_thread() {
     let mut t = TestVm::new();
     t.vm.tid = 1;

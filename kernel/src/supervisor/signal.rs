@@ -16,6 +16,21 @@ pub fn signal_control_count() -> u64 {
     SIGNAL_CONTROL_COUNT.load(Ordering::Relaxed)
 }
 
+pub(super) fn boundary_check(vm_ptr: u32) -> i32 {
+    if vm_ptr == 0 {
+        return crate::abi::EFAULT as i32;
+    }
+    let vm = unsafe { &mut *(vm_ptr as *mut crate::types::ThreadState) };
+    let base = vm.guest_base;
+    if !crate::syscall::thread::thread_may_step(vm, base) {
+        return 0;
+    }
+    if vm.status != crate::abi::STATUS_OK && vm.status != crate::abi::STATUS_VFORK_WAIT {
+        return 0;
+    }
+    i32::from(crate::syscall::signal::check_pending(vm, base))
+}
+
 pub(super) fn first_signal_from_bits(bits: u64) -> u32 {
     if bits == 0 {
         0
