@@ -1177,6 +1177,14 @@ pub fn metadata_sync_backing_source() -> u32 {
     latest_metadata_sync_decision().backing_source
 }
 
+pub fn metadata_full_sync_decision(tree_mutated: u32, handled_metadata_mutation: u32) -> i32 {
+    if tree_mutated != 0 && handled_metadata_mutation == 0 {
+        super::SUPERVISOR_FS_METADATA_FULL_SYNC_ACTION_REQUIRED as i32
+    } else {
+        super::SUPERVISOR_FS_METADATA_FULL_SYNC_ACTION_NONE as i32
+    }
+}
+
 pub fn backing_object_decision(
     op: u32,
     ino: u32,

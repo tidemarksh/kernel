@@ -409,6 +409,14 @@ export_u32_const!(
     super::SUPERVISOR_FS_METADATA_SYNC_ACTION_PUBLISH_ENSURE
 );
 export_u32_const!(
+    supervisor_fs_metadata_full_sync_action_none,
+    super::SUPERVISOR_FS_METADATA_FULL_SYNC_ACTION_NONE
+);
+export_u32_const!(
+    supervisor_fs_metadata_full_sync_action_required,
+    super::SUPERVISOR_FS_METADATA_FULL_SYNC_ACTION_REQUIRED
+);
+export_u32_const!(
     supervisor_fs_metadata_backing_none,
     super::SUPERVISOR_FS_METADATA_BACKING_NONE
 );
@@ -1341,6 +1349,14 @@ pub extern "C" fn supervisor_fs_metadata_sync_size() -> u64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fs_metadata_sync_backing_source() -> u32 {
     super::fs::metadata_sync_backing_source()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fs_metadata_full_sync_decision(
+    tree_mutated: u32,
+    handled_metadata_mutation: u32,
+) -> i32 {
+    super::fs::metadata_full_sync_decision(tree_mutated, handled_metadata_mutation)
 }
 
 #[unsafe(no_mangle)]

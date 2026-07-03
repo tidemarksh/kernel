@@ -189,6 +189,8 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_fs_metadata_sync_action_remove(), 1);
     assert_eq!(supervisor_fs_metadata_sync_action_ensure(), 2);
     assert_eq!(supervisor_fs_metadata_sync_action_publish_ensure(), 3);
+    assert_eq!(supervisor_fs_metadata_full_sync_action_none(), 0);
+    assert_eq!(supervisor_fs_metadata_full_sync_action_required(), 1);
     assert_eq!(supervisor_fs_metadata_backing_none(), 0);
     assert_eq!(supervisor_fs_metadata_backing_published(), 1);
     assert_eq!(supervisor_fs_metadata_backing_backing(), 2);
@@ -618,6 +620,18 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_fs_metadata_sync_backing_source(),
         supervisor_fs_metadata_backing_backing()
+    );
+    assert_eq!(
+        supervisor_fs_metadata_full_sync_decision(1, 0),
+        supervisor_fs_metadata_full_sync_action_required() as i32
+    );
+    assert_eq!(
+        supervisor_fs_metadata_full_sync_decision(1, 1),
+        supervisor_fs_metadata_full_sync_action_none() as i32
+    );
+    assert_eq!(
+        supervisor_fs_metadata_full_sync_decision(0, 0),
+        supervisor_fs_metadata_full_sync_action_none() as i32
     );
     assert_eq!(
         supervisor_fs_backing_object_decision(
