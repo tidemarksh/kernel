@@ -21,6 +21,19 @@ use crate::types::ThreadState;
 
 const POLLFD_SIZE: u64 = 8;
 
+pub(super) fn status_is_host_wait(status: i32) -> i32 {
+    i32::from(matches!(
+        status,
+        crate::abi::STATUS_WAIT4
+            | crate::abi::STATUS_PIPE_WAIT
+            | crate::abi::STATUS_EPOLL_WAIT
+            | crate::abi::STATUS_SOCKET_RECV
+            | crate::abi::STATUS_SOCKET_SEND
+            | crate::abi::STATUS_FLOCK_WAIT
+            | crate::abi::STATUS_CONNECT
+    ))
+}
+
 fn status(vm_ptr: u32) -> i32 {
     unsafe { (*(vm_ptr as *const crate::types::ThreadState)).status }
 }

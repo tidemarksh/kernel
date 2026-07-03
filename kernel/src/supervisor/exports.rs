@@ -825,6 +825,11 @@ pub extern "C" fn supervisor_blocked_resume_writeback_len(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_status_is_host_wait(status: i32) -> i32 {
+    super::blocked::status_is_host_wait(status)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_poll_wait_timeout_ms(vm_ptr: u32) -> i64 {
     super::blocked::poll_wait_timeout_ms(vm_ptr)
 }

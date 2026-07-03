@@ -1139,6 +1139,21 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_blocked_epoll_wait_timeout_ms(0),
         -(EFAULT as i64)
     );
+    assert_eq!(supervisor_blocked_status_is_host_wait(STATUS_OK), 0);
+    assert_eq!(supervisor_blocked_status_is_host_wait(STATUS_FS), 0);
+    assert_eq!(supervisor_blocked_status_is_host_wait(STATUS_WAIT4), 1);
+    assert_eq!(supervisor_blocked_status_is_host_wait(STATUS_PIPE_WAIT), 1);
+    assert_eq!(supervisor_blocked_status_is_host_wait(STATUS_EPOLL_WAIT), 1);
+    assert_eq!(supervisor_blocked_status_is_host_wait(STATUS_CONNECT), 1);
+    assert_eq!(
+        supervisor_blocked_status_is_host_wait(STATUS_SOCKET_RECV),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_status_is_host_wait(STATUS_SOCKET_SEND),
+        1
+    );
+    assert_eq!(supervisor_blocked_status_is_host_wait(STATUS_FLOCK_WAIT), 1);
     assert_eq!(supervisor_blocked_poll_wait_timeout_ms(0), -(EFAULT as i64));
     assert_eq!(supervisor_blocked_poll_wait_has_socket(0), -(EFAULT as i32));
     assert_eq!(
