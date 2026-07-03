@@ -131,6 +131,8 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_blocked_pipe_sync_before_retry_flag_kernel_worker_available(),
         1
     );
+    assert_eq!(supervisor_blocked_wait_network_pump_action_skip(), 0);
+    assert_eq!(supervisor_blocked_wait_network_pump_action_pump(), 1);
     assert_eq!(supervisor_state_sync_kind_pipe(), 1);
     assert_eq!(supervisor_state_sync_kind_epoll(), 2);
     assert_eq!(supervisor_state_sync_kind_socket(), 3);
@@ -319,6 +321,42 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_blocked_pipe_sync_before_retry_clear(0),
         -(EFAULT as i32)
+    );
+    assert_eq!(
+        supervisor_blocked_wait_network_pump_action(0),
+        -(EFAULT as i32)
+    );
+    assert_eq!(
+        supervisor_complete_blocked_wait_network_pump(0, 0),
+        -(EFAULT as i32)
+    );
+    assert_eq!(
+        supervisor_clear_blocked_wait_network_pump(0),
+        -(EFAULT as i32)
+    );
+    assert_eq!(
+        supervisor_blocked_wait_network_pump_action(0x2000),
+        supervisor_blocked_wait_network_pump_action_pump() as i32
+    );
+    assert_eq!(supervisor_complete_blocked_wait_network_pump(0x2000, 0), 0);
+    assert_eq!(
+        supervisor_blocked_wait_network_pump_action(0x2000),
+        supervisor_blocked_wait_network_pump_action_skip() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_wait_network_pump_action(0x2000),
+        supervisor_blocked_wait_network_pump_action_pump() as i32
+    );
+    assert_eq!(supervisor_complete_blocked_wait_network_pump(0x2000, 0), 0);
+    assert_eq!(supervisor_clear_blocked_wait_network_pump(0x2000), 0);
+    assert_eq!(
+        supervisor_blocked_wait_network_pump_action(0x2000),
+        supervisor_blocked_wait_network_pump_action_pump() as i32
+    );
+    assert_eq!(supervisor_complete_blocked_wait_network_pump(0x2000, 1), 0);
+    assert_eq!(
+        supervisor_blocked_wait_network_pump_action(0x2000),
+        supervisor_blocked_wait_network_pump_action_pump() as i32
     );
     assert_eq!(supervisor_process_epoll_held_ofd(0, 0), 0);
     assert_eq!(supervisor_process_epoll_dependent_ofd(0, 0), 0);

@@ -312,6 +312,14 @@ export_u32_const!(
     super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_FLAG_KERNEL_WORKER_AVAILABLE
 );
 export_u32_const!(
+    supervisor_blocked_wait_network_pump_action_skip,
+    super::network::pump_action_skip()
+);
+export_u32_const!(
+    supervisor_blocked_wait_network_pump_action_pump,
+    super::network::pump_action_pump()
+);
+export_u32_const!(
     supervisor_state_sync_kind_pipe,
     super::SUPERVISOR_STATE_SYNC_KIND_PIPE
 );
@@ -947,6 +955,21 @@ pub extern "C" fn supervisor_blocked_status_transition_action(
     flags: u32,
 ) -> i32 {
     super::blocked::status_transition_action(vm_ptr, status, flags)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_wait_network_pump_action(vm_ptr: u32) -> i32 {
+    super::network::blocked_wait_pump_action(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_complete_blocked_wait_network_pump(vm_ptr: u32, changed: u32) -> i32 {
+    super::network::complete_blocked_wait_pump(vm_ptr, changed)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_clear_blocked_wait_network_pump(vm_ptr: u32) -> i32 {
+    super::network::clear_blocked_wait_pump(vm_ptr)
 }
 
 #[unsafe(no_mangle)]

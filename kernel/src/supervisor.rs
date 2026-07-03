@@ -18,6 +18,7 @@ mod futex;
 mod host_op;
 mod lock;
 mod log;
+mod network;
 mod pipe;
 mod process;
 pub mod process_fork;
@@ -68,6 +69,7 @@ pub fn init() {
     runnable::init();
     resume::init();
     host_op::init();
+    network::init();
     pipe::init();
     state_sync::init();
 }
