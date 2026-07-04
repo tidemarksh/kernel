@@ -1538,6 +1538,31 @@ pub extern "C" fn supervisor_process_held_ofd_refcount(vm_ptr: u32, ofd_id: u32)
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fork_shared_peer_flag_compatible() -> u32 {
+    super::fd::fork_shared_peer_flag_compatible()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fork_shared_peer_flag_incompatible() -> u32 {
+    super::fd::fork_shared_peer_flag_incompatible()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fork_shared_peer_flag_pipe_peer() -> u32 {
+    super::fd::fork_shared_peer_flag_pipe_peer()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fork_shared_ofd_identity_key(ofd_id: u32) -> u64 {
+    super::fd::fork_shared_ofd_identity_key(ofd_id)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fork_shared_ofd_publish_action(ofd_id: u32, peer_flags: u32) -> i32 {
+    super::fd::fork_shared_ofd_publish_action(ofd_id, peer_flags)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fd_entry_restore_action(
     vm_ptr: u32,
     fd: u32,

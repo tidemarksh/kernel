@@ -1,6 +1,8 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use crate::abi::{FD_TYPE_FILE, MAX_FDS, SYS_CLOSE, SYS_CLOSE_RANGE, SYS_EXECVE};
+use crate::abi::{
+    FD_TYPE_FILE, FD_TYPE_PIPE, FD_TYPE_SOCKET, MAX_FDS, SYS_CLOSE, SYS_CLOSE_RANGE, SYS_EXECVE,
+};
 use crate::fs::fd_table;
 use crate::types::{OpenFileDesc, ProcessState};
 
@@ -8,6 +10,11 @@ static FD_CONTROL_COUNT: AtomicU64 = AtomicU64::new(0);
 static FD_CONTROL_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_FD_CONTROL: super::SupervisorFdControlRecord =
     super::SupervisorFdControlRecord::empty();
+const FORK_SHARED_PEER_FLAG_COMPATIBLE: u32 = 1;
+const FORK_SHARED_PEER_FLAG_INCOMPATIBLE: u32 = 1 << 1;
+const FORK_SHARED_PEER_FLAG_PIPE_PEER: u32 = 1 << 2;
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
 pub(super) fn init() {
     FD_CONTROL_COUNT.store(0, Ordering::Relaxed);
@@ -91,6 +98,73 @@ pub fn process_held_ofd_refcount(vm_ptr: u32, ofd_id: u32) -> i32 {
         }
     });
     refcount
+}
+
+pub fn fork_shared_peer_flag_compatible() -> u32 {
+    FORK_SHARED_PEER_FLAG_COMPATIBLE
+}
+
+pub fn fork_shared_peer_flag_incompatible() -> u32 {
+    FORK_SHARED_PEER_FLAG_INCOMPATIBLE
+}
+
+pub fn fork_shared_peer_flag_pipe_peer() -> u32 {
+    FORK_SHARED_PEER_FLAG_PIPE_PEER
+}
+
+fn fold_identity_part(hash: u64, value: u64) -> u64 {
+    let mut next = hash ^ value;
+    next = next.wrapping_mul(FNV_PRIME);
+    next
+}
+
+pub fn fork_shared_ofd_identity_key(ofd_id: u32) -> u64 {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return 0;
+    }
+    let Some(ofd) = fd_table::get_ofd_by_id(ofd_id) else {
+        return 0;
+    };
+    if ofd.fd_type <= 0 {
+        return 0;
+    }
+    let endpoint_or_host_fd = match ofd.fd_type {
+        FD_TYPE_PIPE => {
+            if ofd.host_fd >= 0 {
+                1
+            } else {
+                2
+            }
+        }
+        FD_TYPE_SOCKET => ofd.host_fd as u64,
+        _ => 0,
+    };
+    let hash = fold_identity_part(FNV_OFFSET, ofd.fd_type as u64);
+    let hash = fold_identity_part(hash, ofd.ino as u64);
+    let hash = fold_identity_part(hash, endpoint_or_host_fd);
+    if hash == 0 { FNV_OFFSET } else { hash }
+}
+
+pub fn fork_shared_ofd_publish_action(ofd_id: u32, peer_flags: u32) -> i32 {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return 0;
+    }
+    let Some(ofd) = fd_table::get_ofd_by_id(ofd_id) else {
+        return 0;
+    };
+    if ofd.fd_type <= 0 {
+        return 0;
+    }
+    if (peer_flags & FORK_SHARED_PEER_FLAG_INCOMPATIBLE) != 0 {
+        return 0;
+    }
+    let compatible_peer = (peer_flags & FORK_SHARED_PEER_FLAG_COMPATIBLE) != 0;
+    let pipe_peer = (peer_flags & FORK_SHARED_PEER_FLAG_PIPE_PEER) != 0;
+    match ofd.fd_type {
+        FD_TYPE_FILE => i32::from(compatible_peer),
+        FD_TYPE_PIPE => i32::from(compatible_peer || pipe_peer),
+        _ => 1,
+    }
 }
 
 fn syscall_may_clear_fd_entries(syscall_nr: u64) -> bool {

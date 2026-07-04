@@ -131,6 +131,9 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_fd_entry_restore_flag_preserve_live_epoll_dependent(),
         2
     );
+    assert_eq!(supervisor_fork_shared_peer_flag_compatible(), 1);
+    assert_eq!(supervisor_fork_shared_peer_flag_incompatible(), 2);
+    assert_eq!(supervisor_fork_shared_peer_flag_pipe_peer(), 4);
     assert_eq!(supervisor_thread_take_completed_sync_effects(0, 0), 0);
     assert_eq!(supervisor_pipe_slot_mode_read(), 1);
     assert_eq!(supervisor_pipe_slot_mode_write(), 2);
@@ -325,6 +328,8 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         0
     );
     assert_eq!(supervisor_process_held_ofd_refcount(0, 1), 0);
+    assert_eq!(supervisor_fork_shared_ofd_identity_key(0), 0);
+    assert_eq!(supervisor_fork_shared_ofd_publish_action(0, 0), 0);
     assert_eq!(supervisor_process_private_pipe_slot_mask(0), 0);
     assert_eq!(supervisor_process_private_pipe_source_mode(0, 1), 0);
     assert_eq!(supervisor_process_private_pipe_target_mode(0, 1), 0);
@@ -2155,5 +2160,66 @@ fn supervisor_fd_entry_restore_action_preserves_live_regular_file_fds() {
             supervisor_fd_entry_restore_flag_preserve_live_regular_file(),
         ),
         supervisor_fd_entry_restore_action_apply() as i32
+    );
+}
+
+#[test]
+fn supervisor_fork_shared_ofd_identity_and_publish_policy_are_kernel_owned() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
+    let file_fd = t.sys_openat(b"/fork-shared-policy", O_CREAT | O_RDWR);
+    assert!(file_fd >= 3);
+    let file_ofd = process_fd_ofd_id(vm_ptr, file_fd as u32);
+    assert_ne!(file_ofd, 0);
+    let file_key = supervisor_fork_shared_ofd_identity_key(file_ofd);
+    assert_ne!(file_key, 0);
+    assert_eq!(supervisor_fork_shared_ofd_publish_action(file_ofd, 0), 0);
+    assert_eq!(
+        supervisor_fork_shared_ofd_publish_action(
+            file_ofd,
+            supervisor_fork_shared_peer_flag_compatible(),
+        ),
+        1
+    );
+    assert_eq!(
+        supervisor_fork_shared_ofd_publish_action(
+            file_ofd,
+            supervisor_fork_shared_peer_flag_compatible()
+                | supervisor_fork_shared_peer_flag_incompatible(),
+        ),
+        0
+    );
+
+    let pipefd_addr = 0x2200;
+    assert_eq!(
+        tidemark_kernel::syscall::pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0),
+        0
+    );
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) };
+    let write_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr + 4) };
+    let read_ofd = process_fd_ofd_id(vm_ptr, read_fd);
+    let write_ofd = process_fd_ofd_id(vm_ptr, write_fd);
+    assert_ne!(read_ofd, 0);
+    assert_ne!(write_ofd, 0);
+    let read_key = supervisor_fork_shared_ofd_identity_key(read_ofd);
+    let write_key = supervisor_fork_shared_ofd_identity_key(write_ofd);
+    assert_ne!(read_key, 0);
+    assert_ne!(write_key, 0);
+    assert_ne!(read_key, write_key);
+    assert_eq!(supervisor_fork_shared_ofd_publish_action(read_ofd, 0), 0);
+    assert_eq!(
+        supervisor_fork_shared_ofd_publish_action(
+            read_ofd,
+            supervisor_fork_shared_peer_flag_pipe_peer(),
+        ),
+        1
+    );
+    assert_eq!(
+        supervisor_fork_shared_ofd_publish_action(
+            read_ofd,
+            supervisor_fork_shared_peer_flag_incompatible()
+                | supervisor_fork_shared_peer_flag_pipe_peer(),
+        ),
+        0
     );
 }
