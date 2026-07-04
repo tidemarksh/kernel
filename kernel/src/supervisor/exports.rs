@@ -1566,6 +1566,36 @@ pub extern "C" fn supervisor_process_fd_is_open(vm_ptr: u32, fd: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_ofd_fd_type(ofd_id: u32) -> i32 {
+    super::fd::ofd_fd_type(ofd_id)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_ofd_host_fd(ofd_id: u32) -> i32 {
+    super::fd::ofd_host_fd(ofd_id)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_ofd_status_flags(ofd_id: u32) -> i32 {
+    super::fd::ofd_status_flags(ofd_id)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_ofd_ino(ofd_id: u32) -> u32 {
+    super::fd::ofd_ino(ofd_id)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_ofd_refcount(ofd_id: u32) -> i32 {
+    super::fd::ofd_refcount(ofd_id)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_ofd_offset(ofd_id: u32) -> i64 {
+    super::fd::ofd_offset(ofd_id)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_ofd_is_regular_file(ofd_id: u32) -> i32 {
     super::fd::ofd_is_regular_file(ofd_id)
 }

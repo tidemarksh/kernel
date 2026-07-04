@@ -179,6 +179,37 @@ pub(super) fn process_fd_ofd(vm_ptr: u32, fd: u32) -> Option<(u32, OpenFileDesc)
     fd_table::get_ofd_by_id(ofd_id).map(|ofd| (ofd_id, ofd))
 }
 
+fn ofd_by_id(ofd_id: u32) -> Option<OpenFileDesc> {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return None;
+    }
+    fd_table::get_ofd_by_id(ofd_id)
+}
+
+pub fn ofd_fd_type(ofd_id: u32) -> i32 {
+    ofd_by_id(ofd_id).map_or(0, |ofd| ofd.fd_type)
+}
+
+pub fn ofd_host_fd(ofd_id: u32) -> i32 {
+    ofd_by_id(ofd_id).map_or(-1, |ofd| ofd.host_fd)
+}
+
+pub fn ofd_status_flags(ofd_id: u32) -> i32 {
+    ofd_by_id(ofd_id).map_or(0, |ofd| ofd.status_flags)
+}
+
+pub fn ofd_ino(ofd_id: u32) -> u32 {
+    ofd_by_id(ofd_id).map_or(0, |ofd| ofd.ino)
+}
+
+pub fn ofd_refcount(ofd_id: u32) -> i32 {
+    ofd_by_id(ofd_id).map_or(0, |ofd| ofd.refcount)
+}
+
+pub fn ofd_offset(ofd_id: u32) -> i64 {
+    ofd_by_id(ofd_id).map_or(0, |ofd| ofd.offset)
+}
+
 pub fn ofd_is_regular_file(ofd_id: u32) -> i32 {
     if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
         return 0;
