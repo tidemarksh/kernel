@@ -1558,6 +1558,26 @@ pub extern "C" fn supervisor_fork_shared_peer_flag_pipe_peer() -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fork_shared_held_ofd_track_flag_shared() -> u32 {
+    super::fd::fork_shared_held_ofd_track_flag_shared()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fork_shared_held_ofd_track_flag_host_stdio_pipe() -> u32 {
+    super::fd::fork_shared_held_ofd_track_flag_host_stdio_pipe()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fork_shared_held_ofd_track_flag_stdio_fd() -> u32 {
+    super::fd::fork_shared_held_ofd_track_flag_stdio_fd()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fork_shared_held_ofd_track_action(ofd_id: u32, flags: u32) -> i32 {
+    super::fd::fork_shared_held_ofd_track_action(ofd_id, flags)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fork_shared_ofd_identity_key(ofd_id: u32) -> u64 {
     super::fd::fork_shared_ofd_identity_key(ofd_id)
 }

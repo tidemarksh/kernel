@@ -13,6 +13,9 @@ static mut LAST_FD_CONTROL: super::SupervisorFdControlRecord =
 const FORK_SHARED_PEER_FLAG_COMPATIBLE: u32 = 1;
 const FORK_SHARED_PEER_FLAG_INCOMPATIBLE: u32 = 1 << 1;
 const FORK_SHARED_PEER_FLAG_PIPE_PEER: u32 = 1 << 2;
+const FORK_SHARED_HELD_OFD_TRACK_FLAG_SHARED: u32 = 1;
+const FORK_SHARED_HELD_OFD_TRACK_FLAG_HOST_STDIO_PIPE: u32 = 1 << 1;
+const FORK_SHARED_HELD_OFD_TRACK_FLAG_STDIO_FD: u32 = 1 << 2;
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
@@ -126,6 +129,39 @@ pub fn fork_shared_peer_flag_incompatible() -> u32 {
 
 pub fn fork_shared_peer_flag_pipe_peer() -> u32 {
     FORK_SHARED_PEER_FLAG_PIPE_PEER
+}
+
+pub fn fork_shared_held_ofd_track_flag_shared() -> u32 {
+    FORK_SHARED_HELD_OFD_TRACK_FLAG_SHARED
+}
+
+pub fn fork_shared_held_ofd_track_flag_host_stdio_pipe() -> u32 {
+    FORK_SHARED_HELD_OFD_TRACK_FLAG_HOST_STDIO_PIPE
+}
+
+pub fn fork_shared_held_ofd_track_flag_stdio_fd() -> u32 {
+    FORK_SHARED_HELD_OFD_TRACK_FLAG_STDIO_FD
+}
+
+pub fn fork_shared_held_ofd_track_action(ofd_id: u32, flags: u32) -> i32 {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return 0;
+    }
+    if (flags & FORK_SHARED_HELD_OFD_TRACK_FLAG_HOST_STDIO_PIPE) != 0 {
+        return 0;
+    }
+    let Some(ofd) = fd_table::get_ofd_by_id(ofd_id) else {
+        return 0;
+    };
+    if (flags & (FORK_SHARED_HELD_OFD_TRACK_FLAG_SHARED | FORK_SHARED_HELD_OFD_TRACK_FLAG_STDIO_FD))
+        != 0
+    {
+        return 1;
+    }
+    if ofd.fd_type == FD_TYPE_FILE {
+        return 0;
+    }
+    1
 }
 
 fn fold_identity_part(hash: u64, value: u64) -> u64 {
