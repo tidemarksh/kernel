@@ -229,6 +229,24 @@ fn supervisor_vfork_child_owner_mismatch_identifies_active_child_owner() {
 }
 
 #[test]
+fn supervisor_process_owner_matches_reports_current_process_owner() {
+    let mut t = TestVm::new();
+    let parent_pid = process_impl::current_process_pid(&t.vm, t.base);
+    assert!(parent_pid > 0);
+    let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    assert_eq!(supervisor_process_owner_matches(vm_ptr, parent_pid), 1);
+    assert_eq!(supervisor_process_owner_matches(vm_ptr, parent_pid + 1), 0);
+
+    process_impl::sys_vfork(&mut t.vm, t.base);
+    let child_pid = process_impl::vfork_child_pid();
+    assert!(child_pid > 0);
+    assert_eq!(supervisor_process_owner_matches(vm_ptr, parent_pid), 0);
+    assert_eq!(supervisor_process_owner_matches(vm_ptr, child_pid), 1);
+
+    process_impl::vfork_parent_resume(&mut t.vm, child_pid);
+}
+
+#[test]
 fn contract_vfork_parent_resume_clears_spawn_handoff() {
     let mut t = TestVm::new();
     let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
