@@ -1538,6 +1538,11 @@ pub extern "C" fn supervisor_process_held_ofd_refcount(vm_ptr: u32, ofd_id: u32)
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_holds_regular_file_ofd(vm_ptr: u32, ofd_id: u32) -> i32 {
+    super::fd::process_holds_regular_file_ofd(vm_ptr, ofd_id)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fork_shared_peer_flag_compatible() -> u32 {
     super::fd::fork_shared_peer_flag_compatible()
 }

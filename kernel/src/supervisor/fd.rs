@@ -100,6 +100,22 @@ pub fn process_held_ofd_refcount(vm_ptr: u32, ofd_id: u32) -> i32 {
     refcount
 }
 
+pub fn process_holds_regular_file_ofd(vm_ptr: u32, ofd_id: u32) -> i32 {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return 0;
+    }
+    if process_held_ofd_refcount(vm_ptr, ofd_id) <= 0 {
+        return 0;
+    }
+    let Some(ofd) = fd_table::get_ofd_by_id(ofd_id) else {
+        return 0;
+    };
+    if ofd.fd_type != FD_TYPE_FILE {
+        return 0;
+    }
+    1
+}
+
 pub fn fork_shared_peer_flag_compatible() -> u32 {
     FORK_SHARED_PEER_FLAG_COMPATIBLE
 }

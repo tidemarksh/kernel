@@ -328,6 +328,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         0
     );
     assert_eq!(supervisor_process_held_ofd_refcount(0, 1), 0);
+    assert_eq!(supervisor_process_holds_regular_file_ofd(0, 1), 0);
     assert_eq!(supervisor_fork_shared_ofd_identity_key(0), 0);
     assert_eq!(supervisor_fork_shared_ofd_publish_action(0, 0), 0);
     assert_eq!(supervisor_fork_shared_effect_sync_action(0, 1, 0, 0), 0);
@@ -2172,6 +2173,10 @@ fn supervisor_fork_shared_ofd_identity_and_publish_policy_are_kernel_owned() {
     assert!(file_fd >= 3);
     let file_ofd = process_fd_ofd_id(vm_ptr, file_fd as u32);
     assert_ne!(file_ofd, 0);
+    assert_eq!(
+        supervisor_process_holds_regular_file_ofd(vm_ptr, file_ofd),
+        1
+    );
     let file_key = supervisor_fork_shared_ofd_identity_key(file_ofd);
     assert_ne!(file_key, 0);
     assert_eq!(supervisor_fork_shared_ofd_publish_action(file_ofd, 0), 0);
@@ -2202,6 +2207,10 @@ fn supervisor_fork_shared_ofd_identity_and_publish_policy_are_kernel_owned() {
     let write_ofd = process_fd_ofd_id(vm_ptr, write_fd);
     assert_ne!(read_ofd, 0);
     assert_ne!(write_ofd, 0);
+    assert_eq!(
+        supervisor_process_holds_regular_file_ofd(vm_ptr, read_ofd),
+        0
+    );
     let read_key = supervisor_fork_shared_ofd_identity_key(read_ofd);
     let write_key = supervisor_fork_shared_ofd_identity_key(write_ofd);
     assert_ne!(read_key, 0);
