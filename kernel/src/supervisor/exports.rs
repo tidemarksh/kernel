@@ -1591,6 +1591,11 @@ pub extern "C" fn supervisor_ofd_refcount(ofd_id: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_ofd_reconcile_refcount(ofd_id: u32, expected_refcount: i32) -> i32 {
+    super::fd::ofd_reconcile_refcount(ofd_id, expected_refcount)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_ofd_offset(ofd_id: u32) -> i64 {
     super::fd::ofd_offset(ofd_id)
 }

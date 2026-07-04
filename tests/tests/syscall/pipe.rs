@@ -17,8 +17,9 @@ use tidemark_kernel::supervisor::{
     supervisor_fd_control_kind_pipe_created, supervisor_fd_control_record,
     supervisor_fd_control_record_bytes, supervisor_ofd_fd_type, supervisor_ofd_host_fd,
     supervisor_ofd_ino, supervisor_ofd_offset, supervisor_ofd_pipe_generation_slot,
-    supervisor_ofd_pipe_slot_mask, supervisor_ofd_pipe_slot_mode, supervisor_ofd_refcount,
-    supervisor_ofd_status_flags, supervisor_pipe_slot_mode_read, supervisor_pipe_slot_mode_write,
+    supervisor_ofd_pipe_slot_mask, supervisor_ofd_pipe_slot_mode,
+    supervisor_ofd_reconcile_refcount, supervisor_ofd_refcount, supervisor_ofd_status_flags,
+    supervisor_pipe_slot_mode_read, supervisor_pipe_slot_mode_write,
     supervisor_process_fd_flags_for_fd, supervisor_process_fd_is_open,
     supervisor_process_held_ofd_refcount, supervisor_process_held_pipe_slot_mask,
     supervisor_process_ofd_for_fd, supervisor_process_pipe_host_fd_for_fd,
@@ -895,6 +896,10 @@ fn supervisor_process_pipe_queries_dedupe_aliases_by_ofd() {
         supervisor_process_pipe_write_open_count(vm_ptr, pipe_slot),
         1
     );
+    assert_eq!(supervisor_ofd_reconcile_refcount(read_ofd, 3), 3);
+    assert_eq!(supervisor_ofd_refcount(read_ofd), 3);
+    assert_eq!(supervisor_ofd_reconcile_refcount(read_ofd, -1), 3);
+    assert_eq!(supervisor_ofd_reconcile_refcount(read_ofd, 2), 2);
 }
 
 #[test]

@@ -206,6 +206,26 @@ pub fn ofd_refcount(ofd_id: u32) -> i32 {
     ofd_by_id(ofd_id).map_or(0, |ofd| ofd.refcount)
 }
 
+pub fn ofd_reconcile_refcount(ofd_id: u32, expected_refcount: i32) -> i32 {
+    if ofd_by_id(ofd_id).is_none() {
+        return 0;
+    }
+    if expected_refcount < 0 {
+        return ofd_refcount(ofd_id);
+    }
+
+    let mut current = ofd_refcount(ofd_id);
+    while current < expected_refcount {
+        fd_table::retain_ofd_id(ofd_id);
+        current = current.saturating_add(1);
+    }
+    while current > expected_refcount {
+        fd_table::release_ofd_id(ofd_id);
+        current = current.saturating_sub(1);
+    }
+    ofd_refcount(ofd_id)
+}
+
 pub fn ofd_offset(ofd_id: u32) -> i64 {
     ofd_by_id(ofd_id).map_or(0, |ofd| ofd.offset)
 }
