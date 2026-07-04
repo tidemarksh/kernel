@@ -1,7 +1,8 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crate::abi::{
-    FD_TYPE_FILE, FD_TYPE_PIPE, FD_TYPE_SOCKET, MAX_FDS, SYS_CLOSE, SYS_CLOSE_RANGE, SYS_EXECVE,
+    FD_TYPE_FILE, FD_TYPE_PIPE, FD_TYPE_PTY_MASTER, FD_TYPE_PTY_SLAVE, FD_TYPE_SOCKET, MAX_FDS,
+    SYS_CLOSE, SYS_CLOSE_RANGE, SYS_EXECVE, SYS_LSEEK,
 };
 use crate::fs::fd_table;
 use crate::types::{OpenFileDesc, ProcessState};
@@ -10,6 +11,22 @@ static FD_CONTROL_COUNT: AtomicU64 = AtomicU64::new(0);
 static FD_CONTROL_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_FD_CONTROL: super::SupervisorFdControlRecord =
     super::SupervisorFdControlRecord::empty();
+static OFD_RESTORE_OFFSET_LOCK: AtomicU32 = AtomicU32::new(0);
+#[derive(Clone, Copy)]
+struct OfdRestoreOffsetFloor {
+    host_fd: i32,
+    ino: u32,
+    offset: i64,
+    valid: bool,
+}
+const EMPTY_OFD_RESTORE_OFFSET_FLOOR: OfdRestoreOffsetFloor = OfdRestoreOffsetFloor {
+    host_fd: 0,
+    ino: 0,
+    offset: 0,
+    valid: false,
+};
+static mut OFD_RESTORE_OFFSET_FLOORS: [OfdRestoreOffsetFloor; MAX_FDS] =
+    [EMPTY_OFD_RESTORE_OFFSET_FLOOR; MAX_FDS];
 const FORK_SHARED_PEER_FLAG_COMPATIBLE: u32 = 1;
 const FORK_SHARED_PEER_FLAG_INCOMPATIBLE: u32 = 1 << 1;
 const FORK_SHARED_PEER_FLAG_PIPE_PEER: u32 = 1 << 2;
@@ -23,6 +40,9 @@ pub(super) fn init() {
     FD_CONTROL_COUNT.store(0, Ordering::Relaxed);
     super::lock::with_spin_lock(&FD_CONTROL_LOCK, || unsafe {
         LAST_FD_CONTROL = super::SupervisorFdControlRecord::empty();
+    });
+    super::lock::with_spin_lock(&OFD_RESTORE_OFFSET_LOCK, || unsafe {
+        OFD_RESTORE_OFFSET_FLOORS = [EMPTY_OFD_RESTORE_OFFSET_FLOOR; MAX_FDS];
     });
 }
 
@@ -238,6 +258,178 @@ fn syscall_may_clear_fd_entries(syscall_nr: u64) -> bool {
     matches!(syscall_nr, SYS_CLOSE | SYS_CLOSE_RANGE | SYS_EXECVE)
 }
 
+fn restore_apply() -> i32 {
+    super::SUPERVISOR_FD_ENTRY_RESTORE_ACTION_APPLY as i32
+}
+
+fn restore_skip() -> i32 {
+    super::SUPERVISOR_FD_ENTRY_RESTORE_ACTION_SKIP as i32
+}
+
+fn fd_type_is_pipe_like(fd_type: i32) -> bool {
+    matches!(
+        fd_type,
+        FD_TYPE_PIPE | FD_TYPE_PTY_MASTER | FD_TYPE_PTY_SLAVE
+    )
+}
+
+fn regular_file_ofds_share_identity(current: OpenFileDesc, candidate: OpenFileDesc) -> bool {
+    current.fd_type == FD_TYPE_FILE
+        && candidate.fd_type == FD_TYPE_FILE
+        && current.host_fd == candidate.host_fd
+        && current.ino == candidate.ino
+}
+
+fn ofd_restore_offset_floor(
+    ofd_id: u32,
+    host_fd: i32,
+    ino: u32,
+    current_offset: i64,
+    candidate_offset: i64,
+) -> i64 {
+    super::lock::with_spin_lock(&OFD_RESTORE_OFFSET_LOCK, || unsafe {
+        let floor = &mut OFD_RESTORE_OFFSET_FLOORS[ofd_id as usize];
+        if !floor.valid || floor.host_fd != host_fd || floor.ino != ino {
+            *floor = OfdRestoreOffsetFloor {
+                host_fd,
+                ino,
+                offset: current_offset,
+                valid: true,
+            };
+        }
+        let max_seen = floor.offset;
+        let next_max = current_offset.max(candidate_offset);
+        if next_max > floor.offset {
+            floor.offset = next_max;
+        }
+        max_seen
+    })
+}
+
+pub fn fd_entry_guest_write_action(
+    vm_ptr: u32,
+    fd: u32,
+    candidate_ofd_id: u32,
+    explicit_ofd_id: u32,
+) -> i32 {
+    if fd as usize >= MAX_FDS || candidate_ofd_id as usize >= MAX_FDS {
+        return restore_apply();
+    }
+    let Some(vm) = super::thread::state_from_ptr(vm_ptr) else {
+        return restore_apply();
+    };
+    let current_ofd_id =
+        fd_table::load_process_fd_entry(vm.guest_base, vm.process_ptr, fd as usize).ofd_id;
+    if current_ofd_id == 0
+        || current_ofd_id as usize >= MAX_FDS
+        || current_ofd_id == candidate_ofd_id
+    {
+        return restore_apply();
+    }
+    let Some(current) = fd_table::get_ofd_by_id(current_ofd_id) else {
+        return restore_apply();
+    };
+    if explicit_ofd_id == current_ofd_id && fd_type_is_pipe_like(current.fd_type) {
+        return restore_skip();
+    }
+    let Some(candidate) = fd_table::get_ofd_by_id(candidate_ofd_id) else {
+        return restore_apply();
+    };
+    if current.refcount > 0
+        && regular_file_ofds_share_identity(current, candidate)
+        && candidate.offset < current.offset
+    {
+        return restore_skip();
+    }
+    restore_apply()
+}
+
+pub fn ofd_slot_write_action(
+    ofd_id: u32,
+    candidate_type: i32,
+    candidate_host_fd: i32,
+    candidate_ino: u32,
+    candidate_offset: i64,
+) -> i32 {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return restore_skip();
+    }
+    let Some(current) = fd_table::get_ofd_by_id(ofd_id) else {
+        return restore_apply();
+    };
+    if current.fd_type == 0 || current.refcount <= 0 {
+        return restore_apply();
+    }
+    if candidate_type == 0 || candidate_type != current.fd_type {
+        return restore_skip();
+    }
+    if candidate_host_fd != current.host_fd || candidate_ino != current.ino {
+        return restore_skip();
+    }
+    if current.fd_type == FD_TYPE_FILE && candidate_offset < current.offset {
+        return restore_skip();
+    }
+    restore_apply()
+}
+
+pub fn ofd_slot_restore_action(
+    ofd_id: u32,
+    candidate_type: i32,
+    candidate_host_fd: i32,
+    candidate_ino: u32,
+    candidate_offset: i64,
+    syscall_nr: u64,
+    flags: u32,
+) -> i32 {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return restore_skip();
+    }
+    let Some(current) = fd_table::get_ofd_by_id(ofd_id) else {
+        return restore_apply();
+    };
+    if current.fd_type == 0 || current.refcount <= 0 {
+        return restore_apply();
+    }
+    let referenced_by_fd_entry =
+        (flags & super::SUPERVISOR_OFD_SLOT_RESTORE_FLAG_REFERENCED_BY_FD_ENTRY) != 0;
+    if !referenced_by_fd_entry {
+        if candidate_type == 0 || candidate_type != current.fd_type {
+            return restore_skip();
+        }
+        if candidate_host_fd != current.host_fd || candidate_ino != current.ino {
+            return restore_skip();
+        }
+    }
+    let trust_regular_file_offset =
+        (flags & super::SUPERVISOR_OFD_SLOT_RESTORE_FLAG_TRUST_REGULAR_FILE_OFFSET) != 0;
+    if trust_regular_file_offset
+        || current.fd_type != FD_TYPE_FILE
+        || candidate_type != FD_TYPE_FILE
+    {
+        return restore_apply();
+    }
+    if candidate_host_fd != current.host_fd || candidate_ino != current.ino {
+        return restore_apply();
+    }
+    let max_seen = ofd_restore_offset_floor(
+        ofd_id,
+        current.host_fd,
+        current.ino,
+        current.offset,
+        candidate_offset,
+    );
+    if candidate_offset < max_seen {
+        return restore_skip();
+    }
+    if candidate_offset >= current.offset {
+        return restore_apply();
+    }
+    if syscall_nr == SYS_LSEEK {
+        return restore_apply();
+    }
+    restore_skip()
+}
+
 pub fn fd_entry_restore_action(
     vm_ptr: u32,
     fd: u32,
@@ -246,13 +438,13 @@ pub fn fd_entry_restore_action(
     flags: u32,
 ) -> i32 {
     if fd as usize >= MAX_FDS {
-        return super::SUPERVISOR_FD_ENTRY_RESTORE_ACTION_SKIP as i32;
+        return restore_skip();
     }
     if syscall_may_clear_fd_entries(syscall_nr) {
-        return super::SUPERVISOR_FD_ENTRY_RESTORE_ACTION_APPLY as i32;
+        return restore_apply();
     }
     let Some(vm) = super::thread::state_from_ptr(vm_ptr) else {
-        return super::SUPERVISOR_FD_ENTRY_RESTORE_ACTION_SKIP as i32;
+        return restore_skip();
     };
     let current_ofd_id =
         fd_table::load_process_fd_entry(vm.guest_base, vm.process_ptr, fd as usize).ofd_id;
@@ -260,20 +452,20 @@ pub fn fd_entry_restore_action(
         || current_ofd_id as usize >= MAX_FDS
         || current_ofd_id == snapshot_ofd_id
     {
-        return super::SUPERVISOR_FD_ENTRY_RESTORE_ACTION_APPLY as i32;
+        return restore_apply();
     }
     if (flags & super::SUPERVISOR_FD_ENTRY_RESTORE_FLAG_PRESERVE_LIVE_REGULAR_FILE) != 0
         && fd_table::get_ofd_by_id(current_ofd_id)
             .is_some_and(|ofd| ofd.fd_type == FD_TYPE_FILE && ofd.refcount > 0)
     {
-        return super::SUPERVISOR_FD_ENTRY_RESTORE_ACTION_SKIP as i32;
+        return restore_skip();
     }
     if (flags & super::SUPERVISOR_FD_ENTRY_RESTORE_FLAG_PRESERVE_LIVE_EPOLL_DEPENDENT) != 0
         && super::epoll::process_epoll_depends_on_ofd(vm_ptr, current_ofd_id) != 0
     {
-        return super::SUPERVISOR_FD_ENTRY_RESTORE_ACTION_SKIP as i32;
+        return restore_skip();
     }
-    super::SUPERVISOR_FD_ENTRY_RESTORE_ACTION_APPLY as i32
+    restore_apply()
 }
 
 #[allow(clippy::too_many_arguments)]

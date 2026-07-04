@@ -131,6 +131,11 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_fd_entry_restore_flag_preserve_live_epoll_dependent(),
         2
     );
+    assert_eq!(supervisor_ofd_slot_restore_flag_referenced_by_fd_entry(), 1);
+    assert_eq!(
+        supervisor_ofd_slot_restore_flag_trust_regular_file_offset(),
+        2
+    );
     assert_eq!(supervisor_fork_shared_peer_flag_compatible(), 1);
     assert_eq!(supervisor_fork_shared_peer_flag_incompatible(), 2);
     assert_eq!(supervisor_fork_shared_peer_flag_pipe_peer(), 4);
@@ -2167,6 +2172,99 @@ fn supervisor_fd_entry_restore_action_preserves_live_regular_file_fds() {
             0,
             SYS_CLOSE,
             supervisor_fd_entry_restore_flag_preserve_live_regular_file(),
+        ),
+        supervisor_fd_entry_restore_action_apply() as i32
+    );
+}
+
+#[test]
+fn supervisor_fd_and_ofd_slot_restore_actions_are_kernel_owned() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
+    let high_fd = t.sys_openat(b"/ofd-slot-restore-action", O_CREAT | O_RDWR);
+    let low_fd = t.sys_openat(b"/ofd-slot-restore-action", O_CREAT | O_RDWR);
+    assert!(high_fd >= 3);
+    assert!(low_fd >= 3);
+    assert_eq!(t.sys_lseek(high_fd, 4096, 0), 4096);
+    assert_eq!(t.sys_lseek(low_fd, 64, 0), 64);
+    let high_ofd = process_fd_ofd_id(vm_ptr, high_fd as u32);
+    let low_ofd = process_fd_ofd_id(vm_ptr, low_fd as u32);
+    assert_ne!(high_ofd, 0);
+    assert_ne!(low_ofd, 0);
+    assert_ne!(high_ofd, low_ofd);
+    assert_eq!(kernel_ofd_fd_type(high_ofd), FD_TYPE_FILE);
+    assert_eq!(kernel_ofd_fd_type(low_ofd), FD_TYPE_FILE);
+    assert_eq!(kernel_ofd_host_fd(high_ofd), kernel_ofd_host_fd(low_ofd));
+    assert_eq!(kernel_ofd_ino(high_ofd), kernel_ofd_ino(low_ofd));
+
+    assert_eq!(
+        supervisor_fd_entry_guest_write_action(vm_ptr, high_fd as u32, low_ofd, 0),
+        supervisor_fd_entry_restore_action_skip() as i32
+    );
+    assert_eq!(
+        supervisor_fd_entry_guest_write_action(vm_ptr, high_fd as u32, high_ofd, 0),
+        supervisor_fd_entry_restore_action_apply() as i32
+    );
+
+    let pipefd_addr = 0x2300;
+    assert_eq!(
+        tidemark_kernel::syscall::pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0),
+        0
+    );
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) };
+    let read_ofd = process_fd_ofd_id(vm_ptr, read_fd);
+    assert_ne!(read_ofd, 0);
+    assert_eq!(
+        supervisor_fd_entry_guest_write_action(vm_ptr, read_fd, 0, read_ofd),
+        supervisor_fd_entry_restore_action_skip() as i32
+    );
+
+    let high_host_fd = kernel_ofd_host_fd(high_ofd);
+    let high_ino = kernel_ofd_ino(high_ofd);
+    assert_eq!(
+        supervisor_ofd_slot_write_action(high_ofd, FD_TYPE_FILE, high_host_fd, high_ino, 64),
+        supervisor_fd_entry_restore_action_skip() as i32
+    );
+    assert_eq!(
+        supervisor_ofd_slot_write_action(high_ofd, FD_TYPE_FILE, high_host_fd, high_ino, 8192),
+        supervisor_fd_entry_restore_action_apply() as i32
+    );
+    assert_eq!(
+        supervisor_ofd_slot_write_action(high_ofd, 0, high_host_fd, high_ino, 4096),
+        supervisor_fd_entry_restore_action_skip() as i32
+    );
+
+    let referenced = supervisor_ofd_slot_restore_flag_referenced_by_fd_entry();
+    let trusted = supervisor_ofd_slot_restore_flag_trust_regular_file_offset();
+    assert_eq!(
+        supervisor_ofd_slot_restore_action(high_ofd, 0, 0, 0, 0, u64::MAX, referenced),
+        supervisor_fd_entry_restore_action_apply() as i32
+    );
+    assert_eq!(
+        supervisor_ofd_slot_restore_action(high_ofd, 0, 0, 0, 0, u64::MAX, 0),
+        supervisor_fd_entry_restore_action_skip() as i32
+    );
+    assert_eq!(
+        supervisor_ofd_slot_restore_action(
+            high_ofd,
+            FD_TYPE_FILE,
+            high_host_fd,
+            high_ino,
+            64,
+            u64::MAX,
+            referenced,
+        ),
+        supervisor_fd_entry_restore_action_skip() as i32
+    );
+    assert_eq!(
+        supervisor_ofd_slot_restore_action(
+            high_ofd,
+            FD_TYPE_FILE,
+            high_host_fd,
+            high_ino,
+            64,
+            u64::MAX,
+            referenced | trusted,
         ),
         supervisor_fd_entry_restore_action_apply() as i32
     );

@@ -367,6 +367,14 @@ export_u32_const!(
     super::SUPERVISOR_FD_ENTRY_RESTORE_FLAG_PRESERVE_LIVE_EPOLL_DEPENDENT
 );
 export_u32_const!(
+    supervisor_ofd_slot_restore_flag_referenced_by_fd_entry,
+    super::SUPERVISOR_OFD_SLOT_RESTORE_FLAG_REFERENCED_BY_FD_ENTRY
+);
+export_u32_const!(
+    supervisor_ofd_slot_restore_flag_trust_regular_file_offset,
+    super::SUPERVISOR_OFD_SLOT_RESTORE_FLAG_TRUST_REGULAR_FILE_OFFSET
+);
+export_u32_const!(
     supervisor_pipe_slot_mode_read,
     super::SUPERVISOR_PIPE_SLOT_MODE_READ
 );
@@ -1611,6 +1619,54 @@ pub extern "C" fn supervisor_fd_entry_restore_action(
     flags: u32,
 ) -> i32 {
     super::fd::fd_entry_restore_action(vm_ptr, fd, snapshot_ofd_id, syscall_nr, flags)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fd_entry_guest_write_action(
+    vm_ptr: u32,
+    fd: u32,
+    candidate_ofd_id: u32,
+    explicit_ofd_id: u32,
+) -> i32 {
+    super::fd::fd_entry_guest_write_action(vm_ptr, fd, candidate_ofd_id, explicit_ofd_id)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_ofd_slot_write_action(
+    ofd_id: u32,
+    candidate_type: i32,
+    candidate_host_fd: i32,
+    candidate_ino: u32,
+    candidate_offset: i64,
+) -> i32 {
+    super::fd::ofd_slot_write_action(
+        ofd_id,
+        candidate_type,
+        candidate_host_fd,
+        candidate_ino,
+        candidate_offset,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_ofd_slot_restore_action(
+    ofd_id: u32,
+    candidate_type: i32,
+    candidate_host_fd: i32,
+    candidate_ino: u32,
+    candidate_offset: i64,
+    syscall_nr: u64,
+    flags: u32,
+) -> i32 {
+    super::fd::ofd_slot_restore_action(
+        ofd_id,
+        candidate_type,
+        candidate_host_fd,
+        candidate_ino,
+        candidate_offset,
+        syscall_nr,
+        flags,
+    )
 }
 
 #[unsafe(no_mangle)]
