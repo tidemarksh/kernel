@@ -330,6 +330,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_process_held_ofd_refcount(0, 1), 0);
     assert_eq!(supervisor_fork_shared_ofd_identity_key(0), 0);
     assert_eq!(supervisor_fork_shared_ofd_publish_action(0, 0), 0);
+    assert_eq!(supervisor_fork_shared_effect_sync_action(0, 1, 0, 0), 0);
     assert_eq!(supervisor_process_private_pipe_slot_mask(0), 0);
     assert_eq!(supervisor_process_private_pipe_source_mode(0, 1), 0);
     assert_eq!(supervisor_process_private_pipe_target_mode(0, 1), 0);
@@ -2222,4 +2223,13 @@ fn supervisor_fork_shared_ofd_identity_and_publish_policy_are_kernel_owned() {
         ),
         0
     );
+}
+
+#[test]
+fn supervisor_fork_shared_effect_sync_action_is_kernel_owned() {
+    assert_eq!(supervisor_fork_shared_effect_sync_action(0, 1, 0, 0), 0);
+    assert_eq!(supervisor_fork_shared_effect_sync_action(1, 0, 0, 0), 0);
+    assert_eq!(supervisor_fork_shared_effect_sync_action(1, 1, 0, 0), 1);
+    assert_eq!(supervisor_fork_shared_effect_sync_action(1, 1, 1, 0), 0);
+    assert_eq!(supervisor_fork_shared_effect_sync_action(1, 1, 1, 1), 1);
 }

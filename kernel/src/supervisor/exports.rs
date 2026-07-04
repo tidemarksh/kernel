@@ -1563,6 +1563,21 @@ pub extern "C" fn supervisor_fork_shared_ofd_publish_action(ofd_id: u32, peer_fl
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fork_shared_effect_sync_action(
+    has_effect: i32,
+    has_tracked_state: i32,
+    source_holds_regular_file: i32,
+    regular_file_has_peer: i32,
+) -> i32 {
+    super::fd::fork_shared_effect_sync_action(
+        has_effect,
+        has_tracked_state,
+        source_holds_regular_file,
+        regular_file_has_peer,
+    )
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fd_entry_restore_action(
     vm_ptr: u32,
     fd: u32,

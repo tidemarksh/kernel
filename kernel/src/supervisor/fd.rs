@@ -167,6 +167,21 @@ pub fn fork_shared_ofd_publish_action(ofd_id: u32, peer_flags: u32) -> i32 {
     }
 }
 
+pub fn fork_shared_effect_sync_action(
+    has_effect: i32,
+    has_tracked_state: i32,
+    source_holds_regular_file: i32,
+    regular_file_has_peer: i32,
+) -> i32 {
+    if has_effect == 0 || has_tracked_state == 0 {
+        return 0;
+    }
+    if source_holds_regular_file != 0 && regular_file_has_peer == 0 {
+        return 0;
+    }
+    1
+}
+
 fn syscall_may_clear_fd_entries(syscall_nr: u64) -> bool {
     matches!(syscall_nr, SYS_CLOSE | SYS_CLOSE_RANGE | SYS_EXECVE)
 }
