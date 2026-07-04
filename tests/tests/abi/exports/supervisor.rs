@@ -348,6 +348,8 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     );
     assert_eq!(supervisor_process_held_ofd_refcount(0, 1), 0);
     assert_eq!(supervisor_process_holds_regular_file_ofd(0, 1), 0);
+    assert_eq!(supervisor_ofd_is_regular_file(0), 0);
+    assert_eq!(supervisor_pipe_sync_ofd_candidate(0), 0);
     assert_eq!(supervisor_fork_shared_held_ofd_track_action(0, 0), 0);
     assert_eq!(supervisor_fork_shared_ofd_identity_key(0), 0);
     assert_eq!(supervisor_fork_shared_ofd_publish_action(0, 0), 0);
@@ -2302,6 +2304,8 @@ fn supervisor_fork_shared_ofd_identity_and_publish_policy_are_kernel_owned() {
         supervisor_process_holds_regular_file_ofd(vm_ptr, file_ofd),
         1
     );
+    assert_eq!(supervisor_ofd_is_regular_file(file_ofd), 1);
+    assert_eq!(supervisor_pipe_sync_ofd_candidate(file_ofd), 0);
     assert_eq!(supervisor_fork_shared_held_ofd_track_action(file_ofd, 0), 0);
     assert_eq!(
         supervisor_fork_shared_held_ofd_track_action(
@@ -2358,6 +2362,8 @@ fn supervisor_fork_shared_ofd_identity_and_publish_policy_are_kernel_owned() {
         supervisor_process_holds_regular_file_ofd(vm_ptr, read_ofd),
         0
     );
+    assert_eq!(supervisor_ofd_is_regular_file(read_ofd), 0);
+    assert_eq!(supervisor_pipe_sync_ofd_candidate(read_ofd), 1);
     assert_eq!(supervisor_fork_shared_held_ofd_track_action(read_ofd, 0), 1);
     assert_eq!(
         supervisor_fork_shared_held_ofd_track_action(

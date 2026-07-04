@@ -140,6 +140,32 @@ pub fn process_holds_regular_file_ofd(vm_ptr: u32, ofd_id: u32) -> i32 {
     1
 }
 
+pub fn ofd_is_regular_file(ofd_id: u32) -> i32 {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return 0;
+    }
+    let Some(ofd) = fd_table::get_ofd_by_id(ofd_id) else {
+        return 0;
+    };
+    if ofd.fd_type == FD_TYPE_FILE {
+        return 1;
+    }
+    0
+}
+
+pub fn pipe_sync_ofd_candidate(ofd_id: u32) -> i32 {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return 0;
+    }
+    let Some(ofd) = fd_table::get_ofd_by_id(ofd_id) else {
+        return 0;
+    };
+    match ofd.fd_type {
+        FD_TYPE_PIPE | FD_TYPE_PTY_MASTER | FD_TYPE_PTY_SLAVE => 1,
+        _ => 0,
+    }
+}
+
 pub fn fork_shared_peer_flag_compatible() -> u32 {
     FORK_SHARED_PEER_FLAG_COMPATIBLE
 }

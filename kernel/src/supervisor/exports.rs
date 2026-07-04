@@ -1551,6 +1551,16 @@ pub extern "C" fn supervisor_process_holds_regular_file_ofd(vm_ptr: u32, ofd_id:
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_ofd_is_regular_file(ofd_id: u32) -> i32 {
+    super::fd::ofd_is_regular_file(ofd_id)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_pipe_sync_ofd_candidate(ofd_id: u32) -> i32 {
+    super::fd::pipe_sync_ofd_candidate(ofd_id)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fork_shared_peer_flag_compatible() -> u32 {
     super::fd::fork_shared_peer_flag_compatible()
 }
