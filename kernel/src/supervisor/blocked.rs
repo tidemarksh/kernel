@@ -19,6 +19,7 @@ pub(super) const RETRY_ACTION_FLAG_RUNNING_WORKER: u32 = 1 << 5;
 pub(super) const RETRY_ACTION_FLAG_KERNEL_WORKER_AVAILABLE: u32 = 1 << 6;
 pub(super) const RETRY_ACTION_FLAG_PIPE_STATE_KERNEL_WORKER_OWNS: u32 = 1 << 7;
 pub(super) const RETRY_ACTION_FLAG_NETWORK_CONNECTIONS_AVAILABLE: u32 = 1 << 8;
+pub(super) const RETRY_ACTION_FLAG_WAIT_TIMER_ALREADY_CHECKED: u32 = 1 << 9;
 pub(super) const RETRY_ACTION_DEFER_SUPERVISOR_TIMER: u32 = 0;
 pub(super) const RETRY_ACTION_DEFER_RPC_PENDING: u32 = 1;
 pub(super) const RETRY_ACTION_DEFER_OWNER_ASYNC: u32 = 2;
@@ -619,6 +620,10 @@ pub(super) fn retry_action_flag_network_connections_available() -> u32 {
     RETRY_ACTION_FLAG_NETWORK_CONNECTIONS_AVAILABLE
 }
 
+pub(super) fn retry_action_flag_wait_timer_already_checked() -> u32 {
+    RETRY_ACTION_FLAG_WAIT_TIMER_ALREADY_CHECKED
+}
+
 pub(super) fn retry_action_defer_supervisor_timer() -> u32 {
     RETRY_ACTION_DEFER_SUPERVISOR_TIMER
 }
@@ -824,12 +829,14 @@ pub(super) fn retry_action(vm_ptr: u32, flags: u32) -> i32 {
     {
         return RETRY_ACTION_DEFER_THREAD_INIT_PENDING as i32;
     }
-    let wait_timer_required = super::timer::blocked_wait_timer_required_for_vm(vm_ptr);
-    if wait_timer_required < 0 {
-        return wait_timer_required;
-    }
-    if wait_timer_required != 0 {
-        return RETRY_ACTION_ARM_WAIT_TIMER as i32;
+    if (flags & RETRY_ACTION_FLAG_WAIT_TIMER_ALREADY_CHECKED) == 0 {
+        let wait_timer_required = super::timer::blocked_wait_timer_required_for_vm(vm_ptr);
+        if wait_timer_required < 0 {
+            return wait_timer_required;
+        }
+        if wait_timer_required != 0 {
+            return RETRY_ACTION_ARM_WAIT_TIMER as i32;
+        }
     }
     if active_child_pid_for_blocked_wait(vm) > 0 {
         return RETRY_ACTION_PARK_ACTIVE_CHILD as i32;

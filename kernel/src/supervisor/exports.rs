@@ -1272,6 +1272,11 @@ pub extern "C" fn supervisor_blocked_retry_action_flag_network_connections_avail
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_flag_wait_timer_already_checked() -> u32 {
+    super::blocked::retry_action_flag_wait_timer_already_checked()
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_retry_action_defer_supervisor_timer() -> u32 {
     super::blocked::retry_action_defer_supervisor_timer()
 }

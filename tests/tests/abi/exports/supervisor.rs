@@ -1320,6 +1320,10 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_blocked_retry_action_flag_network_connections_available(),
         256
     );
+    assert_eq!(
+        supervisor_blocked_retry_action_flag_wait_timer_already_checked(),
+        512
+    );
     assert_eq!(supervisor_blocked_retry_action_defer_supervisor_timer(), 0);
     assert_eq!(supervisor_blocked_retry_action_defer_rpc_pending(), 1);
     assert_eq!(supervisor_blocked_retry_action_defer_owner_async(), 2);

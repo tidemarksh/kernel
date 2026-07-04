@@ -779,6 +779,7 @@ pub use crate::supervisor::{
     supervisor_blocked_retry_action_flag_running_worker,
     supervisor_blocked_retry_action_flag_supervisor_timer_armed,
     supervisor_blocked_retry_action_flag_thread_init_pending,
+    supervisor_blocked_retry_action_flag_wait_timer_already_checked,
     supervisor_blocked_retry_action_park_active_child,
     supervisor_blocked_retry_action_pump_network,
     supervisor_blocked_retry_action_request_pipe_sync,
