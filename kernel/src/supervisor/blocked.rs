@@ -138,6 +138,17 @@ fn state(vm_ptr: u32) -> Result<&'static ThreadState, i32> {
     Ok(unsafe { &*(vm_ptr as *const ThreadState) })
 }
 
+fn vfork_process_gate_blocks(vm: &ThreadState) -> bool {
+    if !crate::syscall::process::vfork_active() {
+        return false;
+    }
+    let child_pid = crate::syscall::process::vfork_child_pid();
+    if child_pid <= 0 {
+        return false;
+    }
+    crate::syscall::process::current_process_pid(vm, vm.guest_base) != child_pid
+}
+
 fn active_child_pid_for_blocked_wait(vm: &ThreadState) -> i32 {
     match vm.status {
         crate::abi::STATUS_PIPE_WAIT
@@ -547,6 +558,9 @@ pub(super) fn retry_reason(vm_ptr: u32, flags: u32) -> i32 {
         Err(errno) => return -errno,
     };
     if (flags & RETRY_FLAG_PROCESS_GATE) != 0 {
+        return RETRY_REASON_PROCESS_GATE as i32;
+    }
+    if vfork_process_gate_blocks(vm) {
         return RETRY_REASON_PROCESS_GATE as i32;
     }
     if (flags & RETRY_FLAG_ACTIVE_CHILD) != 0 {

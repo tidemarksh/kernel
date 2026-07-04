@@ -171,6 +171,44 @@ fn contract_vfork_from_secondary_thread_detaches_parent_thread_record_until_resu
 }
 
 #[test]
+fn supervisor_blocked_retry_reason_process_gates_non_child_during_vfork() {
+    let mut t = TestVm::new();
+    let parent_process_ptr = t.vm.process_ptr;
+    let mut blocked_parent: ThreadState = unsafe { core::mem::zeroed() };
+    blocked_parent.guest_base = t.base;
+    blocked_parent.process_ptr = parent_process_ptr;
+    blocked_parent.tid = t.vm.tid;
+    blocked_parent.status = STATUS_PIPE_WAIT;
+    blocked_parent.epoll_timeout_ms = 0;
+    let blocked_parent_ptr = &mut blocked_parent as *mut ThreadState as u32;
+
+    process_impl::sys_vfork(&mut t.vm, t.base);
+    let child_pid = process_impl::vfork_child_pid();
+    assert!(child_pid > 0);
+    assert_ne!(
+        process_impl::current_process_pid(&blocked_parent, t.base),
+        child_pid
+    );
+    assert_eq!(process_impl::current_process_pid(&t.vm, t.base), child_pid);
+
+    assert_eq!(
+        supervisor_blocked_wait_retry_reason(blocked_parent_ptr, 0),
+        supervisor_blocked_wait_retry_reason_process_gate() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_wait_retry_reason(
+            blocked_parent_ptr,
+            supervisor_blocked_wait_retry_flag_host_progress()
+        ),
+        supervisor_blocked_wait_retry_reason_process_gate() as i32
+    );
+    assert_ne!(
+        supervisor_blocked_wait_retry_reason(&mut t.vm as *mut ThreadState as u32, 0),
+        supervisor_blocked_wait_retry_reason_process_gate() as i32
+    );
+}
+
+#[test]
 fn contract_vfork_parent_resume_clears_spawn_handoff() {
     let mut t = TestVm::new();
     let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
