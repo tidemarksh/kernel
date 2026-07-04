@@ -348,6 +348,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     );
     assert_eq!(supervisor_process_held_ofd_refcount(0, 1), 0);
     assert_eq!(supervisor_process_holds_regular_file_ofd(0, 1), 0);
+    assert_eq!(supervisor_process_fd_is_open(0, 1), 0);
     assert_eq!(supervisor_ofd_is_regular_file(0), 0);
     assert_eq!(supervisor_pipe_sync_ofd_candidate(0), 0);
     assert_eq!(supervisor_ofd_pipe_generation_slot(0), 0);
@@ -363,6 +364,9 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_process_held_pipe_slot_mask(0), 0);
     assert_eq!(supervisor_process_pipe_used_mask(0), 1);
     assert_eq!(supervisor_process_pipe_slot_mode(0, 1), 0);
+    assert_eq!(supervisor_process_pipe_slot_for_fd(0, 1), 0);
+    assert_eq!(supervisor_process_pipe_ofd_for_fd(0, 1), 0);
+    assert_eq!(supervisor_process_pipe_host_fd_for_fd(0, 1), -1);
     assert_eq!(supervisor_process_pipe_read_open_count(0, 1), 0);
     assert_eq!(supervisor_process_pipe_write_open_count(0, 1), 0);
     assert_eq!(supervisor_blocked_pipe_resume_action(0), -(EFAULT as i32));

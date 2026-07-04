@@ -1,8 +1,8 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate::abi::{
-    FD_TYPE_PIPE, FD_TYPE_PTY_MASTER, FD_TYPE_PTY_SLAVE, MAX_FDS, MAX_PIPES, O_RDONLY, O_WRONLY,
-    STATUS_PIPE_WAIT, SYS_READ,
+    FD_TYPE_PIPE, FD_TYPE_PTY_MASTER, FD_TYPE_PTY_SLAVE, MAX_FDS, MAX_PIPES, O_RDONLY, O_RDWR,
+    O_WRONLY, STATUS_PIPE_WAIT, SYS_READ,
 };
 use crate::fs::fd_table;
 use crate::types::{OpenFileDesc, ProcessState, ThreadState};
@@ -315,6 +315,74 @@ pub fn process_pipe_slot_mode(vm_ptr: u32, pipe_slot: u32) -> u32 {
         });
     });
     mode
+}
+
+fn process_fd_ofd(vm_ptr: u32, fd: u32) -> Option<(u32, OpenFileDesc)> {
+    if fd as usize >= MAX_FDS {
+        return None;
+    }
+    let vm = super::thread::state_from_ptr(vm_ptr)?;
+    super::fd::process_state_from_vm_ptr(vm_ptr)?;
+    let ofd_id = fd_table::load_process_fd_entry(vm.guest_base, vm.process_ptr, fd as usize).ofd_id;
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return None;
+    }
+    fd_table::get_ofd_by_id(ofd_id).map(|ofd| (ofd_id, ofd))
+}
+
+fn process_fd_stdio_pipe_slot(fd: u32, ofd: OpenFileDesc) -> u32 {
+    if ofd.fd_type == FD_TYPE_PIPE {
+        return if valid_pipe_slot(ofd.ino) { ofd.ino } else { 0 };
+    }
+    if ofd.fd_type != FD_TYPE_PTY_SLAVE && ofd.fd_type != FD_TYPE_PTY_MASTER {
+        return 0;
+    }
+
+    let access_mode = ofd.status_flags & fd_table::OPEN_ACCESS_MODE_MASK;
+    let input_pipe = crate::syscall::pty::input_pipe_slot(ofd.ino);
+    let output_pipe = crate::syscall::pty::output_pipe_slot(ofd.ino);
+    let fd_writes_to_stdio_output =
+        fd == 1 || fd == 2 || access_mode == O_WRONLY || access_mode == O_RDWR;
+    let pipe_slot = if ofd.fd_type == FD_TYPE_PTY_SLAVE {
+        if fd_writes_to_stdio_output {
+            output_pipe
+        } else {
+            input_pipe
+        }
+    } else if fd_writes_to_stdio_output {
+        input_pipe
+    } else {
+        output_pipe
+    };
+    if valid_pipe_slot(pipe_slot) {
+        pipe_slot
+    } else {
+        0
+    }
+}
+
+pub fn process_pipe_slot_for_fd(vm_ptr: u32, fd: u32) -> u32 {
+    process_fd_ofd(vm_ptr, fd).map_or(0, |(_, ofd)| process_fd_stdio_pipe_slot(fd, ofd))
+}
+
+pub fn process_pipe_ofd_for_fd(vm_ptr: u32, fd: u32) -> u32 {
+    process_fd_ofd(vm_ptr, fd).map_or(0, |(ofd_id, ofd)| {
+        if process_fd_stdio_pipe_slot(fd, ofd) != 0 {
+            ofd_id
+        } else {
+            0
+        }
+    })
+}
+
+pub fn process_pipe_host_fd_for_fd(vm_ptr: u32, fd: u32) -> i32 {
+    process_fd_ofd(vm_ptr, fd).map_or(-1, |(_, ofd)| {
+        if process_fd_stdio_pipe_slot(fd, ofd) != 0 {
+            ofd.host_fd
+        } else {
+            -1
+        }
+    })
 }
 
 fn process_pipe_open_count(vm_ptr: u32, pipe_slot: u32, requested_mode: u32) -> i32 {

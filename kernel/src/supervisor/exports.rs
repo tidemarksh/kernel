@@ -1551,6 +1551,11 @@ pub extern "C" fn supervisor_process_holds_regular_file_ofd(vm_ptr: u32, ofd_id:
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_fd_is_open(vm_ptr: u32, fd: u32) -> i32 {
+    super::fd::process_fd_is_open(vm_ptr, fd)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_ofd_is_regular_file(ofd_id: u32) -> i32 {
     super::fd::ofd_is_regular_file(ofd_id)
 }
@@ -1747,6 +1752,21 @@ pub extern "C" fn supervisor_process_pipe_used_mask(vm_ptr: u32) -> u64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_process_pipe_slot_mode(vm_ptr: u32, pipe_slot: u32) -> u32 {
     super::pipe::process_pipe_slot_mode(vm_ptr, pipe_slot)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_pipe_slot_for_fd(vm_ptr: u32, fd: u32) -> u32 {
+    super::pipe::process_pipe_slot_for_fd(vm_ptr, fd)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_pipe_ofd_for_fd(vm_ptr: u32, fd: u32) -> u32 {
+    super::pipe::process_pipe_ofd_for_fd(vm_ptr, fd)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_pipe_host_fd_for_fd(vm_ptr: u32, fd: u32) -> i32 {
+    super::pipe::process_pipe_host_fd_for_fd(vm_ptr, fd)
 }
 
 #[unsafe(no_mangle)]

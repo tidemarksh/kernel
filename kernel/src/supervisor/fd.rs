@@ -140,6 +140,20 @@ pub fn process_holds_regular_file_ofd(vm_ptr: u32, ofd_id: u32) -> i32 {
     1
 }
 
+pub fn process_fd_is_open(vm_ptr: u32, fd: u32) -> i32 {
+    if fd as usize >= MAX_FDS {
+        return 0;
+    }
+    let Some(vm) = super::thread::state_from_ptr(vm_ptr) else {
+        return 0;
+    };
+    if process_state_from_vm_ptr(vm_ptr).is_none() {
+        return 0;
+    }
+    let ofd_id = fd_table::load_process_fd_entry(vm.guest_base, vm.process_ptr, fd as usize).ofd_id;
+    i32::from(ofd_id > 0 && (ofd_id as usize) < MAX_FDS)
+}
+
 pub fn ofd_is_regular_file(ofd_id: u32) -> i32 {
     if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
         return 0;
