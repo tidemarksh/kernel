@@ -235,13 +235,17 @@ fn supervisor_process_owner_matches_reports_current_process_owner() {
     assert!(parent_pid > 0);
     let vm_ptr = &mut t.vm as *mut ThreadState as u32;
     assert_eq!(supervisor_process_owner_matches(vm_ptr, parent_pid), 1);
+    assert_eq!(supervisor_process_owner_mismatch(vm_ptr, parent_pid), 0);
     assert_eq!(supervisor_process_owner_matches(vm_ptr, parent_pid + 1), 0);
+    assert_eq!(supervisor_process_owner_mismatch(vm_ptr, parent_pid + 1), 1);
 
     process_impl::sys_vfork(&mut t.vm, t.base);
     let child_pid = process_impl::vfork_child_pid();
     assert!(child_pid > 0);
     assert_eq!(supervisor_process_owner_matches(vm_ptr, parent_pid), 0);
+    assert_eq!(supervisor_process_owner_mismatch(vm_ptr, parent_pid), 1);
     assert_eq!(supervisor_process_owner_matches(vm_ptr, child_pid), 1);
+    assert_eq!(supervisor_process_owner_mismatch(vm_ptr, child_pid), 0);
 
     process_impl::vfork_parent_resume(&mut t.vm, child_pid);
 }

@@ -249,6 +249,11 @@ pub extern "C" fn supervisor_process_owner_matches(vm_ptr: u32, runtime_pid: i32
     super::process::owner_matches(vm_ptr, runtime_pid)
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_owner_mismatch(vm_ptr: u32, runtime_pid: i32) -> i32 {
+    super::process::owner_mismatch(vm_ptr, runtime_pid)
+}
+
 export_u32_const!(
     supervisor_fd_control_record_bytes,
     super::SUPERVISOR_FD_CONTROL_RECORD_BYTES

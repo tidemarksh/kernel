@@ -74,6 +74,17 @@ pub(super) fn owner_matches(vm_ptr: u32, runtime_pid: i32) -> i32 {
     i32::from(current_pid == runtime_pid)
 }
 
+pub(super) fn owner_mismatch(vm_ptr: u32, runtime_pid: i32) -> i32 {
+    if vm_ptr == 0 || runtime_pid <= 0 {
+        return 0;
+    }
+    let Some(vm) = super::thread::state_from_ptr(vm_ptr) else {
+        return 0;
+    };
+    let current_pid = crate::syscall::process::current_process_pid(vm, vm.guest_base);
+    i32::from(current_pid > 0 && current_pid != runtime_pid)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn record_process_lifecycle(
     kind: u32,
