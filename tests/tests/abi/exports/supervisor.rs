@@ -348,6 +348,8 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     );
     assert_eq!(supervisor_process_held_ofd_refcount(0, 1), 0);
     assert_eq!(supervisor_process_holds_regular_file_ofd(0, 1), 0);
+    assert_eq!(supervisor_process_ofd_for_fd(0, 1), 0);
+    assert_eq!(supervisor_process_fd_flags_for_fd(0, 1), 0);
     assert_eq!(supervisor_process_fd_is_open(0, 1), 0);
     assert_eq!(supervisor_ofd_is_regular_file(0), 0);
     assert_eq!(supervisor_pipe_sync_ofd_candidate(0), 0);

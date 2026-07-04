@@ -5,7 +5,7 @@ use crate::abi::{
     SYS_CLOSE, SYS_CLOSE_RANGE, SYS_EXECVE, SYS_LSEEK,
 };
 use crate::fs::fd_table;
-use crate::types::{OpenFileDesc, ProcessState};
+use crate::types::{FdEntry, OpenFileDesc, ProcessState};
 
 static FD_CONTROL_COUNT: AtomicU64 = AtomicU64::new(0);
 static FD_CONTROL_LOCK: AtomicU32 = AtomicU32::new(0);
@@ -140,18 +140,43 @@ pub fn process_holds_regular_file_ofd(vm_ptr: u32, ofd_id: u32) -> i32 {
     1
 }
 
-pub fn process_fd_is_open(vm_ptr: u32, fd: u32) -> i32 {
+fn process_fd_entry(vm_ptr: u32, fd: u32) -> Option<FdEntry> {
     if fd as usize >= MAX_FDS {
-        return 0;
+        return None;
     }
-    let Some(vm) = super::thread::state_from_ptr(vm_ptr) else {
-        return 0;
-    };
-    if process_state_from_vm_ptr(vm_ptr).is_none() {
-        return 0;
+    let vm = super::thread::state_from_ptr(vm_ptr)?;
+    process_state_from_vm_ptr(vm_ptr)?;
+    Some(fd_table::load_process_fd_entry(
+        vm.guest_base,
+        vm.process_ptr,
+        fd as usize,
+    ))
+}
+
+pub fn process_ofd_for_fd(vm_ptr: u32, fd: u32) -> u32 {
+    process_fd_entry(vm_ptr, fd).map_or(0, |entry| {
+        if entry.ofd_id > 0 && (entry.ofd_id as usize) < MAX_FDS {
+            entry.ofd_id
+        } else {
+            0
+        }
+    })
+}
+
+pub fn process_fd_flags_for_fd(vm_ptr: u32, fd: u32) -> u32 {
+    process_fd_entry(vm_ptr, fd).map_or(0, |entry| entry.fd_flags)
+}
+
+pub fn process_fd_is_open(vm_ptr: u32, fd: u32) -> i32 {
+    i32::from(process_ofd_for_fd(vm_ptr, fd) != 0)
+}
+
+pub(super) fn process_fd_ofd(vm_ptr: u32, fd: u32) -> Option<(u32, OpenFileDesc)> {
+    let ofd_id = process_ofd_for_fd(vm_ptr, fd);
+    if ofd_id == 0 {
+        return None;
     }
-    let ofd_id = fd_table::load_process_fd_entry(vm.guest_base, vm.process_ptr, fd as usize).ofd_id;
-    i32::from(ofd_id > 0 && (ofd_id as usize) < MAX_FDS)
+    fd_table::get_ofd_by_id(ofd_id).map(|ofd| (ofd_id, ofd))
 }
 
 pub fn ofd_is_regular_file(ofd_id: u32) -> i32 {

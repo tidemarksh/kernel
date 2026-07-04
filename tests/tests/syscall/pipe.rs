@@ -17,8 +17,9 @@ use tidemark_kernel::supervisor::{
     supervisor_fd_control_kind_pipe_created, supervisor_fd_control_record,
     supervisor_fd_control_record_bytes, supervisor_ofd_pipe_generation_slot,
     supervisor_ofd_pipe_slot_mask, supervisor_ofd_pipe_slot_mode, supervisor_pipe_slot_mode_read,
-    supervisor_pipe_slot_mode_write, supervisor_process_fd_is_open,
-    supervisor_process_held_ofd_refcount, supervisor_process_held_pipe_slot_mask,
+    supervisor_pipe_slot_mode_write, supervisor_process_fd_flags_for_fd,
+    supervisor_process_fd_is_open, supervisor_process_held_ofd_refcount,
+    supervisor_process_held_pipe_slot_mask, supervisor_process_ofd_for_fd,
     supervisor_process_pipe_host_fd_for_fd, supervisor_process_pipe_ofd_for_fd,
     supervisor_process_pipe_read_open_count, supervisor_process_pipe_slot_for_fd,
     supervisor_process_pipe_slot_mode, supervisor_process_pipe_used_mask,
@@ -808,6 +809,9 @@ fn supervisor_process_pipe_queries_dedupe_aliases_by_ofd() {
 
     assert_eq!(supervisor_process_held_ofd_refcount(vm_ptr, read_ofd), 2);
     assert_eq!(supervisor_process_held_ofd_refcount(vm_ptr, write_ofd), 1);
+    assert_eq!(supervisor_process_ofd_for_fd(vm_ptr, read_fd), read_ofd);
+    assert_eq!(supervisor_process_ofd_for_fd(vm_ptr, write_fd), write_ofd);
+    assert_eq!(supervisor_process_fd_flags_for_fd(vm_ptr, read_fd), 0);
     assert_eq!(supervisor_process_fd_is_open(vm_ptr, read_fd), 1);
     assert_eq!(supervisor_process_fd_is_open(vm_ptr, dup_read_fd as u32), 1);
     assert_eq!(supervisor_process_fd_is_open(vm_ptr, 63), 0);

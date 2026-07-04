@@ -1551,6 +1551,16 @@ pub extern "C" fn supervisor_process_holds_regular_file_ofd(vm_ptr: u32, ofd_id:
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_ofd_for_fd(vm_ptr: u32, fd: u32) -> u32 {
+    super::fd::process_ofd_for_fd(vm_ptr, fd)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_fd_flags_for_fd(vm_ptr: u32, fd: u32) -> u32 {
+    super::fd::process_fd_flags_for_fd(vm_ptr, fd)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_process_fd_is_open(vm_ptr: u32, fd: u32) -> i32 {
     super::fd::process_fd_is_open(vm_ptr, fd)
 }
