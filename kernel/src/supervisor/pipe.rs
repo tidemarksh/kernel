@@ -215,6 +215,36 @@ where
     }
 }
 
+pub fn ofd_pipe_slot_mask(ofd_id: u32) -> u64 {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return 0;
+    }
+    let Some(ofd) = fd_table::get_ofd_by_id(ofd_id) else {
+        return 0;
+    };
+    let mut mask = 0u64;
+    for_each_ofd_pipe_mode(ofd, |pipe_slot, _mode| {
+        mask |= pipe_bit(pipe_slot);
+    });
+    mask
+}
+
+pub fn ofd_pipe_slot_mode(ofd_id: u32, pipe_slot: u32) -> u32 {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS || !valid_pipe_slot(pipe_slot) {
+        return 0;
+    }
+    let Some(ofd) = fd_table::get_ofd_by_id(ofd_id) else {
+        return 0;
+    };
+    let mut mode = 0u32;
+    for_each_ofd_pipe_mode(ofd, |candidate, candidate_mode| {
+        if candidate == pipe_slot {
+            mode |= candidate_mode;
+        }
+    });
+    mode
+}
+
 pub fn process_private_pipe_slot_mask(vm_ptr: u32) -> u64 {
     super::fd::process_state_from_vm_ptr(vm_ptr).map_or(0, private_pipe_slot_mask_for_process)
 }
