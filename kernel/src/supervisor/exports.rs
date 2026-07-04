@@ -1571,6 +1571,11 @@ pub extern "C" fn supervisor_ofd_pipe_slot_mode(ofd_id: u32, pipe_slot: u32) -> 
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_ofd_pipe_generation_slot(ofd_id: u32) -> u32 {
+    super::pipe::ofd_pipe_generation_slot(ofd_id)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fork_shared_peer_flag_compatible() -> u32 {
     super::fd::fork_shared_peer_flag_compatible()
 }

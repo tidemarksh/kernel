@@ -15,15 +15,15 @@ use tidemark_kernel::supervisor::{
     supervisor_blocked_wait_retry_reason_default,
     supervisor_blocked_wait_retry_reason_passive_wait, supervisor_fd_control_kind_fd_closed,
     supervisor_fd_control_kind_pipe_created, supervisor_fd_control_record,
-    supervisor_fd_control_record_bytes, supervisor_ofd_pipe_slot_mask,
-    supervisor_ofd_pipe_slot_mode, supervisor_pipe_slot_mode_read, supervisor_pipe_slot_mode_write,
-    supervisor_process_held_ofd_refcount, supervisor_process_held_pipe_slot_mask,
-    supervisor_process_pipe_read_open_count, supervisor_process_pipe_slot_mode,
-    supervisor_process_pipe_used_mask, supervisor_process_pipe_write_open_count,
-    supervisor_process_private_pipe_slot_mask, supervisor_process_private_pipe_source_mode,
-    supervisor_process_private_pipe_target_mode, supervisor_reset_shadow_log,
-    supervisor_shadow_fd_control_count, supervisor_stdio_pipe_read_progress_action,
-    supervisor_stdio_pipe_read_progress_action_none,
+    supervisor_fd_control_record_bytes, supervisor_ofd_pipe_generation_slot,
+    supervisor_ofd_pipe_slot_mask, supervisor_ofd_pipe_slot_mode, supervisor_pipe_slot_mode_read,
+    supervisor_pipe_slot_mode_write, supervisor_process_held_ofd_refcount,
+    supervisor_process_held_pipe_slot_mask, supervisor_process_pipe_read_open_count,
+    supervisor_process_pipe_slot_mode, supervisor_process_pipe_used_mask,
+    supervisor_process_pipe_write_open_count, supervisor_process_private_pipe_slot_mask,
+    supervisor_process_private_pipe_source_mode, supervisor_process_private_pipe_target_mode,
+    supervisor_reset_shadow_log, supervisor_shadow_fd_control_count,
+    supervisor_stdio_pipe_read_progress_action, supervisor_stdio_pipe_read_progress_action_none,
     supervisor_stdio_pipe_read_progress_action_snapshot,
 };
 use tidemark_kernel::syscall::pipe::{self, PipeCloseOutcome};
@@ -808,6 +808,8 @@ fn supervisor_process_pipe_queries_dedupe_aliases_by_ofd() {
     assert_eq!(supervisor_process_held_ofd_refcount(vm_ptr, write_ofd), 1);
     assert_eq!(supervisor_ofd_pipe_slot_mask(read_ofd), pipe_bit);
     assert_eq!(supervisor_ofd_pipe_slot_mask(write_ofd), pipe_bit);
+    assert_eq!(supervisor_ofd_pipe_generation_slot(read_ofd), pipe_slot);
+    assert_eq!(supervisor_ofd_pipe_generation_slot(write_ofd), pipe_slot);
     assert_eq!(
         supervisor_ofd_pipe_slot_mode(read_ofd, pipe_slot),
         supervisor_pipe_slot_mode_read()

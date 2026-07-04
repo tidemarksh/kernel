@@ -245,6 +245,20 @@ pub fn ofd_pipe_slot_mode(ofd_id: u32, pipe_slot: u32) -> u32 {
     mode
 }
 
+pub fn ofd_pipe_generation_slot(ofd_id: u32) -> u32 {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return 0;
+    }
+    let Some(ofd) = fd_table::get_ofd_by_id(ofd_id) else {
+        return 0;
+    };
+    if ofd.fd_type == FD_TYPE_PIPE && valid_pipe_slot(ofd.ino) {
+        ofd.ino
+    } else {
+        0
+    }
+}
+
 pub fn process_private_pipe_slot_mask(vm_ptr: u32) -> u64 {
     super::fd::process_state_from_vm_ptr(vm_ptr).map_or(0, private_pipe_slot_mask_for_process)
 }
