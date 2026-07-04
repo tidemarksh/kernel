@@ -1,6 +1,6 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use crate::abi::MAX_FDS;
+use crate::abi::{FD_TYPE_FILE, MAX_FDS, SYS_CLOSE, SYS_CLOSE_RANGE, SYS_EXECVE};
 use crate::fs::fd_table;
 use crate::types::{OpenFileDesc, ProcessState};
 
@@ -91,6 +91,48 @@ pub fn process_held_ofd_refcount(vm_ptr: u32, ofd_id: u32) -> i32 {
         }
     });
     refcount
+}
+
+fn syscall_may_clear_fd_entries(syscall_nr: u64) -> bool {
+    matches!(syscall_nr, SYS_CLOSE | SYS_CLOSE_RANGE | SYS_EXECVE)
+}
+
+pub fn fd_entry_restore_action(
+    vm_ptr: u32,
+    fd: u32,
+    snapshot_ofd_id: u32,
+    syscall_nr: u64,
+    flags: u32,
+) -> i32 {
+    if fd as usize >= MAX_FDS {
+        return super::SUPERVISOR_FD_ENTRY_RESTORE_ACTION_SKIP as i32;
+    }
+    if syscall_may_clear_fd_entries(syscall_nr) {
+        return super::SUPERVISOR_FD_ENTRY_RESTORE_ACTION_APPLY as i32;
+    }
+    let Some(vm) = super::thread::state_from_ptr(vm_ptr) else {
+        return super::SUPERVISOR_FD_ENTRY_RESTORE_ACTION_SKIP as i32;
+    };
+    let current_ofd_id =
+        fd_table::load_process_fd_entry(vm.guest_base, vm.process_ptr, fd as usize).ofd_id;
+    if current_ofd_id == 0
+        || current_ofd_id as usize >= MAX_FDS
+        || current_ofd_id == snapshot_ofd_id
+    {
+        return super::SUPERVISOR_FD_ENTRY_RESTORE_ACTION_APPLY as i32;
+    }
+    if (flags & super::SUPERVISOR_FD_ENTRY_RESTORE_FLAG_PRESERVE_LIVE_REGULAR_FILE) != 0
+        && fd_table::get_ofd_by_id(current_ofd_id)
+            .is_some_and(|ofd| ofd.fd_type == FD_TYPE_FILE && ofd.refcount > 0)
+    {
+        return super::SUPERVISOR_FD_ENTRY_RESTORE_ACTION_SKIP as i32;
+    }
+    if (flags & super::SUPERVISOR_FD_ENTRY_RESTORE_FLAG_PRESERVE_LIVE_EPOLL_DEPENDENT) != 0
+        && super::epoll::process_epoll_depends_on_ofd(vm_ptr, current_ofd_id) != 0
+    {
+        return super::SUPERVISOR_FD_ENTRY_RESTORE_ACTION_SKIP as i32;
+    }
+    super::SUPERVISOR_FD_ENTRY_RESTORE_ACTION_APPLY as i32
 }
 
 #[allow(clippy::too_many_arguments)]

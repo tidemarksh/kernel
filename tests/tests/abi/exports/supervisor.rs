@@ -121,6 +121,16 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_fd_control_kind_socket_connected(), 14);
     assert_eq!(supervisor_fd_control_kind_socket_connect_failed(), 15);
     assert_eq!(supervisor_fd_control_kind_socket_accepted(), 16);
+    assert_eq!(supervisor_fd_entry_restore_action_apply(), 1);
+    assert_eq!(supervisor_fd_entry_restore_action_skip(), 2);
+    assert_eq!(
+        supervisor_fd_entry_restore_flag_preserve_live_regular_file(),
+        1
+    );
+    assert_eq!(
+        supervisor_fd_entry_restore_flag_preserve_live_epoll_dependent(),
+        2
+    );
     assert_eq!(supervisor_thread_take_completed_sync_effects(0, 0), 0);
     assert_eq!(supervisor_pipe_slot_mode_read(), 1);
     assert_eq!(supervisor_pipe_slot_mode_write(), 2);
@@ -377,6 +387,17 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_process_sync_dependent_ofd(0, 0), 0);
     assert_eq!(supervisor_process_epoll_dependent_sync_ofd(0, 0), 0);
     assert_eq!(supervisor_process_epoll_depends_on_ofd(0, 1), 0);
+    assert_eq!(
+        supervisor_fd_entry_restore_action(
+            0,
+            1,
+            0,
+            u64::MAX,
+            supervisor_fd_entry_restore_flag_preserve_live_regular_file()
+                | supervisor_fd_entry_restore_flag_preserve_live_epoll_dependent(),
+        ),
+        supervisor_fd_entry_restore_action_skip() as i32
+    );
     assert_eq!(supervisor_blocked_epoll_watched_ofd(0, 0), 0);
     assert_eq!(supervisor_blocked_epoll_dependent_sync_ofd(0, 0), 0);
     assert_eq!(supervisor_blocked_epoll_watches_pipe(0), 0);
@@ -2028,4 +2049,45 @@ fn supervisor_shadow_rejects_non_empty_null_records() {
     assert_eq!(supervisor_process_resume(0, 0, 1), EFAULT as i32);
     assert_eq!(supervisor_shadow_thread_event_count(), 0);
     assert_eq!(supervisor_shadow_host_completion_count(), 0);
+}
+
+#[test]
+fn supervisor_fd_entry_restore_action_preserves_live_regular_file_fds() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
+    let fd = t.sys_openat(b"/fd-entry-restore-action", O_CREAT | O_RDWR);
+    assert!(fd >= 3);
+    let live_ofd = process_fd_ofd_id(vm_ptr, fd as u32);
+    assert_ne!(live_ofd, 0);
+
+    assert_eq!(
+        supervisor_fd_entry_restore_action(
+            vm_ptr,
+            fd as u32,
+            0,
+            u64::MAX,
+            supervisor_fd_entry_restore_flag_preserve_live_regular_file(),
+        ),
+        supervisor_fd_entry_restore_action_skip() as i32
+    );
+    assert_eq!(
+        supervisor_fd_entry_restore_action(
+            vm_ptr,
+            fd as u32,
+            live_ofd,
+            u64::MAX,
+            supervisor_fd_entry_restore_flag_preserve_live_regular_file(),
+        ),
+        supervisor_fd_entry_restore_action_apply() as i32
+    );
+    assert_eq!(
+        supervisor_fd_entry_restore_action(
+            vm_ptr,
+            fd as u32,
+            0,
+            SYS_CLOSE,
+            supervisor_fd_entry_restore_flag_preserve_live_regular_file(),
+        ),
+        supervisor_fd_entry_restore_action_apply() as i32
+    );
 }

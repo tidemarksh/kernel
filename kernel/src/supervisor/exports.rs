@@ -351,6 +351,22 @@ export_u32_const!(
     super::SUPERVISOR_FD_CONTROL_KIND_SOCKET_ACCEPTED
 );
 export_u32_const!(
+    supervisor_fd_entry_restore_action_apply,
+    super::SUPERVISOR_FD_ENTRY_RESTORE_ACTION_APPLY
+);
+export_u32_const!(
+    supervisor_fd_entry_restore_action_skip,
+    super::SUPERVISOR_FD_ENTRY_RESTORE_ACTION_SKIP
+);
+export_u32_const!(
+    supervisor_fd_entry_restore_flag_preserve_live_regular_file,
+    super::SUPERVISOR_FD_ENTRY_RESTORE_FLAG_PRESERVE_LIVE_REGULAR_FILE
+);
+export_u32_const!(
+    supervisor_fd_entry_restore_flag_preserve_live_epoll_dependent,
+    super::SUPERVISOR_FD_ENTRY_RESTORE_FLAG_PRESERVE_LIVE_EPOLL_DEPENDENT
+);
+export_u32_const!(
     supervisor_pipe_slot_mode_read,
     super::SUPERVISOR_PIPE_SLOT_MODE_READ
 );
@@ -1354,6 +1370,17 @@ pub extern "C" fn supervisor_fd_control_record(out_ptr: u32, out_len: u32) -> i3
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_process_held_ofd_refcount(vm_ptr: u32, ofd_id: u32) -> i32 {
     super::fd::process_held_ofd_refcount(vm_ptr, ofd_id)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fd_entry_restore_action(
+    vm_ptr: u32,
+    fd: u32,
+    snapshot_ofd_id: u32,
+    syscall_nr: u64,
+    flags: u32,
+) -> i32 {
+    super::fd::fd_entry_restore_action(vm_ptr, fd, snapshot_ofd_id, syscall_nr, flags)
 }
 
 #[unsafe(no_mangle)]
