@@ -421,6 +421,13 @@ pub fn process_pipe_write_open_count(vm_ptr: u32, pipe_slot: u32) -> i32 {
     process_pipe_open_count(vm_ptr, pipe_slot, super::SUPERVISOR_PIPE_SLOT_MODE_WRITE)
 }
 
+pub fn pipe_reconcile_control(pipe_slot: u32, read_open: i32, write_open: i32) -> i32 {
+    if !valid_pipe_slot(pipe_slot) {
+        return 0;
+    }
+    crate::syscall::pipe::reconcile_pipe_control(pipe_slot, read_open, write_open)
+}
+
 fn blocked_pipe_fd(vm: &ThreadState) -> u64 {
     if vm.blocked_ofd_id != 0 {
         vm.blocked_fd as u64

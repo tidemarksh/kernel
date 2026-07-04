@@ -1825,6 +1825,15 @@ pub extern "C" fn supervisor_process_pipe_write_open_count(vm_ptr: u32, pipe_slo
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_pipe_reconcile_control(
+    pipe_slot: u32,
+    read_open: i32,
+    write_open: i32,
+) -> i32 {
+    super::pipe::pipe_reconcile_control(pipe_slot, read_open, write_open)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_pipe_resume_action(vm_ptr: u32) -> i32 {
     super::pipe::blocked_pipe_resume_action(vm_ptr)
 }

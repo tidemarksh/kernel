@@ -140,6 +140,15 @@ pub fn debug_read_open(idx: u32) -> i32 {
 pub fn debug_write_open(idx: u32) -> i32 {
     write_open_ptr(slot_addr(idx)).load(Ordering::Acquire)
 }
+pub fn reconcile_pipe_control(idx: u32, read_open: i32, write_open: i32) -> i32 {
+    if idx == 0 || idx as usize >= MAX_PIPES || read_open < 0 || write_open < 0 {
+        return 0;
+    }
+    let addr = slot_addr(idx);
+    read_open_ptr(addr).store(read_open, Ordering::Release);
+    write_open_ptr(addr).store(write_open, Ordering::Release);
+    1
+}
 fn data_ptr(slot: u32) -> *mut u8 {
     (slot + OFF_DATA) as *mut u8
 }

@@ -19,17 +19,17 @@ use tidemark_kernel::supervisor::{
     supervisor_ofd_ino, supervisor_ofd_offset, supervisor_ofd_pipe_generation_slot,
     supervisor_ofd_pipe_slot_mask, supervisor_ofd_pipe_slot_mode,
     supervisor_ofd_reconcile_refcount, supervisor_ofd_refcount, supervisor_ofd_status_flags,
-    supervisor_pipe_slot_mode_read, supervisor_pipe_slot_mode_write,
-    supervisor_process_fd_flags_for_fd, supervisor_process_fd_is_open,
-    supervisor_process_held_ofd_refcount, supervisor_process_held_pipe_slot_mask,
-    supervisor_process_ofd_for_fd, supervisor_process_pipe_host_fd_for_fd,
-    supervisor_process_pipe_ofd_for_fd, supervisor_process_pipe_read_open_count,
-    supervisor_process_pipe_slot_for_fd, supervisor_process_pipe_slot_mode,
-    supervisor_process_pipe_used_mask, supervisor_process_pipe_write_open_count,
-    supervisor_process_private_pipe_slot_mask, supervisor_process_private_pipe_source_mode,
-    supervisor_process_private_pipe_target_mode, supervisor_reset_shadow_log,
-    supervisor_shadow_fd_control_count, supervisor_stdio_pipe_read_progress_action,
-    supervisor_stdio_pipe_read_progress_action_none,
+    supervisor_pipe_reconcile_control, supervisor_pipe_slot_mode_read,
+    supervisor_pipe_slot_mode_write, supervisor_process_fd_flags_for_fd,
+    supervisor_process_fd_is_open, supervisor_process_held_ofd_refcount,
+    supervisor_process_held_pipe_slot_mask, supervisor_process_ofd_for_fd,
+    supervisor_process_pipe_host_fd_for_fd, supervisor_process_pipe_ofd_for_fd,
+    supervisor_process_pipe_read_open_count, supervisor_process_pipe_slot_for_fd,
+    supervisor_process_pipe_slot_mode, supervisor_process_pipe_used_mask,
+    supervisor_process_pipe_write_open_count, supervisor_process_private_pipe_slot_mask,
+    supervisor_process_private_pipe_source_mode, supervisor_process_private_pipe_target_mode,
+    supervisor_reset_shadow_log, supervisor_shadow_fd_control_count,
+    supervisor_stdio_pipe_read_progress_action, supervisor_stdio_pipe_read_progress_action_none,
     supervisor_stdio_pipe_read_progress_action_snapshot,
 };
 use tidemark_kernel::syscall::pipe::{self, PipeCloseOutcome};
@@ -896,6 +896,13 @@ fn supervisor_process_pipe_queries_dedupe_aliases_by_ofd() {
         supervisor_process_pipe_write_open_count(vm_ptr, pipe_slot),
         1
     );
+    assert_eq!(supervisor_pipe_reconcile_control(pipe_slot, 4, 5), 1);
+    assert_eq!(pipe::debug_read_open(pipe_slot), 4);
+    assert_eq!(pipe::debug_write_open(pipe_slot), 5);
+    assert_eq!(supervisor_pipe_reconcile_control(pipe_slot, -1, 1), 0);
+    assert_eq!(pipe::debug_read_open(pipe_slot), 4);
+    assert_eq!(pipe::debug_write_open(pipe_slot), 5);
+    assert_eq!(supervisor_pipe_reconcile_control(pipe_slot, 1, 1), 1);
     assert_eq!(supervisor_ofd_reconcile_refcount(read_ofd, 3), 3);
     assert_eq!(supervisor_ofd_refcount(read_ofd), 3);
     assert_eq!(supervisor_ofd_reconcile_refcount(read_ofd, -1), 3);

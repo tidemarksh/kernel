@@ -378,6 +378,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_process_pipe_host_fd_for_fd(0, 1), -1);
     assert_eq!(supervisor_process_pipe_read_open_count(0, 1), 0);
     assert_eq!(supervisor_process_pipe_write_open_count(0, 1), 0);
+    assert_eq!(supervisor_pipe_reconcile_control(0, 1, 1), 0);
     assert_eq!(supervisor_blocked_pipe_resume_action(0), -(EFAULT as i32));
     assert_eq!(
         supervisor_blocked_pipe_sync_before_retry_action(0, 0),
