@@ -48,6 +48,21 @@ pub(super) fn status_defers_kernel_state_adoption(status: i32) -> i32 {
     i32::from(status == crate::abi::STATUS_CLONE_SPAWN)
 }
 
+pub(super) fn vfork_child_owner_mismatch(vm_ptr: u32, runtime_pid: i32) -> i32 {
+    if vm_ptr == 0 || runtime_pid <= 0 || !crate::syscall::process::vfork_active() {
+        return 0;
+    }
+    let child_pid = crate::syscall::process::vfork_child_pid();
+    if child_pid <= 0 {
+        return 0;
+    }
+    let Some(vm) = super::thread::state_from_ptr(vm_ptr) else {
+        return 0;
+    };
+    let current_pid = crate::syscall::process::current_process_pid(vm, vm.guest_base);
+    i32::from(current_pid == child_pid && current_pid != runtime_pid)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn record_process_lifecycle(
     kind: u32,

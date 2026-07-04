@@ -239,6 +239,11 @@ pub extern "C" fn supervisor_process_status_defers_kernel_state_adoption(status:
     super::process::status_defers_kernel_state_adoption(status)
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_vfork_child_owner_mismatch(vm_ptr: u32, runtime_pid: i32) -> i32 {
+    super::process::vfork_child_owner_mismatch(vm_ptr, runtime_pid)
+}
+
 export_u32_const!(
     supervisor_fd_control_record_bytes,
     super::SUPERVISOR_FD_CONTROL_RECORD_BYTES

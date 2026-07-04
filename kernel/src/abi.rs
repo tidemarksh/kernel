@@ -948,7 +948,7 @@ pub use crate::supervisor::{
     supervisor_thread_exit_cleanup_record, supervisor_thread_exit_cleanup_record_bytes,
     supervisor_thread_exit_cleanup_record_magic, supervisor_thread_state_snapshot,
     supervisor_thread_state_snapshot_bytes, supervisor_thread_state_snapshot_magic,
-    supervisor_thread_take_completed_sync_effects,
+    supervisor_thread_take_completed_sync_effects, supervisor_vfork_child_owner_mismatch,
     supervisor_vfork_execve_handoff_failure_wait_status, supervisor_vfork_execve_rollback,
 };
 
