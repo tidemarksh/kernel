@@ -1293,6 +1293,68 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_blocked_wait_retry_flag_passive_wait(), 4);
     assert_eq!(supervisor_blocked_wait_retry_flag_process_gate(), 8);
     assert_eq!(supervisor_blocked_wait_retry_flag_thread_init_pending(), 16);
+    assert_eq!(
+        supervisor_blocked_retry_action_flag_supervisor_timer_armed(),
+        1
+    );
+    assert_eq!(supervisor_blocked_retry_action_flag_rpc_pending(), 2);
+    assert_eq!(supervisor_blocked_retry_action_flag_owner_async(), 4);
+    assert_eq!(
+        supervisor_blocked_retry_action_flag_thread_init_pending(),
+        8
+    );
+    assert_eq!(
+        supervisor_blocked_retry_action_flag_fork_shared_sync_pending(),
+        16
+    );
+    assert_eq!(supervisor_blocked_retry_action_flag_running_worker(), 32);
+    assert_eq!(
+        supervisor_blocked_retry_action_flag_kernel_worker_available(),
+        64
+    );
+    assert_eq!(
+        supervisor_blocked_retry_action_flag_pipe_state_kernel_worker_owns(),
+        128
+    );
+    assert_eq!(
+        supervisor_blocked_retry_action_flag_network_connections_available(),
+        256
+    );
+    assert_eq!(supervisor_blocked_retry_action_defer_supervisor_timer(), 0);
+    assert_eq!(supervisor_blocked_retry_action_defer_rpc_pending(), 1);
+    assert_eq!(supervisor_blocked_retry_action_defer_owner_async(), 2);
+    assert_eq!(
+        supervisor_blocked_retry_action_defer_thread_init_pending(),
+        3
+    );
+    assert_eq!(supervisor_blocked_retry_action_arm_wait_timer(), 4);
+    assert_eq!(supervisor_blocked_retry_action_park_active_child(), 5);
+    assert_eq!(supervisor_blocked_retry_action_resume_wait4(), 6);
+    assert_eq!(supervisor_blocked_retry_action_defer_fork_shared_sync(), 7);
+    assert_eq!(supervisor_blocked_retry_action_defer_running_worker(), 8);
+    assert_eq!(supervisor_blocked_retry_action_defer_process_gate(), 9);
+    assert_eq!(supervisor_blocked_retry_action_pump_network(), 10);
+    assert_eq!(supervisor_blocked_retry_action_epoll_kernel_worker(), 11);
+    assert_eq!(supervisor_blocked_retry_action_request_pipe_sync(), 12);
+    assert_eq!(
+        supervisor_blocked_retry_action_request_pipe_sync_and_drain_output(),
+        13
+    );
+    assert_eq!(
+        supervisor_blocked_retry_action_schedule_pipe_sync_retry(),
+        14
+    );
+    assert_eq!(supervisor_blocked_retry_action_resume_fs(), 15);
+    assert_eq!(supervisor_blocked_retry_action_defer_passive_wait(), 16);
+    assert_eq!(supervisor_blocked_retry_action_resume_kernel_worker(), 17);
+    assert_eq!(
+        supervisor_blocked_retry_action_resume_wait4_kernel_worker(),
+        18
+    );
+    assert_eq!(supervisor_blocked_retry_action_resume_epoll_direct(), 19);
+    assert_eq!(supervisor_blocked_retry_action_resume_direct(), 20);
+    assert_eq!(supervisor_blocked_retry_action_unsupported(), 21);
+    assert_eq!(supervisor_blocked_retry_action(0, 0), -(EFAULT as i32));
     assert_eq!(supervisor_blocked_wait_retry_reason(0, 0), -(EFAULT as i32));
     assert_eq!(
         supervisor_blocked_epoll_wait_retry_required(0),

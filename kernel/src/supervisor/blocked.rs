@@ -10,6 +10,37 @@ pub(super) const RETRY_FLAG_ACTIVE_CHILD: u32 = 1 << 1;
 pub(super) const RETRY_FLAG_PASSIVE_WAIT: u32 = 1 << 2;
 pub(super) const RETRY_FLAG_PROCESS_GATE: u32 = 1 << 3;
 pub(super) const RETRY_FLAG_THREAD_INIT_PENDING: u32 = 1 << 4;
+pub(super) const RETRY_ACTION_FLAG_SUPERVISOR_TIMER_ARMED: u32 = 1;
+pub(super) const RETRY_ACTION_FLAG_RPC_PENDING: u32 = 1 << 1;
+pub(super) const RETRY_ACTION_FLAG_OWNER_ASYNC: u32 = 1 << 2;
+pub(super) const RETRY_ACTION_FLAG_THREAD_INIT_PENDING: u32 = 1 << 3;
+pub(super) const RETRY_ACTION_FLAG_FORK_SHARED_SYNC_PENDING: u32 = 1 << 4;
+pub(super) const RETRY_ACTION_FLAG_RUNNING_WORKER: u32 = 1 << 5;
+pub(super) const RETRY_ACTION_FLAG_KERNEL_WORKER_AVAILABLE: u32 = 1 << 6;
+pub(super) const RETRY_ACTION_FLAG_PIPE_STATE_KERNEL_WORKER_OWNS: u32 = 1 << 7;
+pub(super) const RETRY_ACTION_FLAG_NETWORK_CONNECTIONS_AVAILABLE: u32 = 1 << 8;
+pub(super) const RETRY_ACTION_DEFER_SUPERVISOR_TIMER: u32 = 0;
+pub(super) const RETRY_ACTION_DEFER_RPC_PENDING: u32 = 1;
+pub(super) const RETRY_ACTION_DEFER_OWNER_ASYNC: u32 = 2;
+pub(super) const RETRY_ACTION_DEFER_THREAD_INIT_PENDING: u32 = 3;
+pub(super) const RETRY_ACTION_ARM_WAIT_TIMER: u32 = 4;
+pub(super) const RETRY_ACTION_PARK_ACTIVE_CHILD: u32 = 5;
+pub(super) const RETRY_ACTION_RESUME_WAIT4: u32 = 6;
+pub(super) const RETRY_ACTION_DEFER_FORK_SHARED_SYNC: u32 = 7;
+pub(super) const RETRY_ACTION_DEFER_RUNNING_WORKER: u32 = 8;
+pub(super) const RETRY_ACTION_DEFER_PROCESS_GATE: u32 = 9;
+pub(super) const RETRY_ACTION_PUMP_NETWORK: u32 = 10;
+pub(super) const RETRY_ACTION_EPOLL_KERNEL_WORKER: u32 = 11;
+pub(super) const RETRY_ACTION_REQUEST_PIPE_SYNC: u32 = 12;
+pub(super) const RETRY_ACTION_REQUEST_PIPE_SYNC_AND_DRAIN_OUTPUT: u32 = 13;
+pub(super) const RETRY_ACTION_SCHEDULE_PIPE_SYNC_RETRY: u32 = 14;
+pub(super) const RETRY_ACTION_RESUME_FS: u32 = 15;
+pub(super) const RETRY_ACTION_DEFER_PASSIVE_WAIT: u32 = 16;
+pub(super) const RETRY_ACTION_RESUME_KERNEL_WORKER: u32 = 17;
+pub(super) const RETRY_ACTION_RESUME_WAIT4_KERNEL_WORKER: u32 = 18;
+pub(super) const RETRY_ACTION_RESUME_EPOLL_DIRECT: u32 = 19;
+pub(super) const RETRY_ACTION_RESUME_DIRECT: u32 = 20;
+pub(super) const RETRY_ACTION_UNSUPPORTED: u32 = 21;
 pub(super) const RESUME_DELEGATION_FLAG_KERNEL_WORKER_AVAILABLE: u32 = 1;
 pub(super) const RESUME_DELEGATION_DIRECT: u32 = 0;
 pub(super) const RESUME_DELEGATION_KERNEL_WORKER: u32 = 1;
@@ -552,6 +583,130 @@ pub(super) fn retry_flag_thread_init_pending() -> u32 {
     RETRY_FLAG_THREAD_INIT_PENDING
 }
 
+pub(super) fn retry_action_flag_supervisor_timer_armed() -> u32 {
+    RETRY_ACTION_FLAG_SUPERVISOR_TIMER_ARMED
+}
+
+pub(super) fn retry_action_flag_rpc_pending() -> u32 {
+    RETRY_ACTION_FLAG_RPC_PENDING
+}
+
+pub(super) fn retry_action_flag_owner_async() -> u32 {
+    RETRY_ACTION_FLAG_OWNER_ASYNC
+}
+
+pub(super) fn retry_action_flag_thread_init_pending() -> u32 {
+    RETRY_ACTION_FLAG_THREAD_INIT_PENDING
+}
+
+pub(super) fn retry_action_flag_fork_shared_sync_pending() -> u32 {
+    RETRY_ACTION_FLAG_FORK_SHARED_SYNC_PENDING
+}
+
+pub(super) fn retry_action_flag_running_worker() -> u32 {
+    RETRY_ACTION_FLAG_RUNNING_WORKER
+}
+
+pub(super) fn retry_action_flag_kernel_worker_available() -> u32 {
+    RETRY_ACTION_FLAG_KERNEL_WORKER_AVAILABLE
+}
+
+pub(super) fn retry_action_flag_pipe_state_kernel_worker_owns() -> u32 {
+    RETRY_ACTION_FLAG_PIPE_STATE_KERNEL_WORKER_OWNS
+}
+
+pub(super) fn retry_action_flag_network_connections_available() -> u32 {
+    RETRY_ACTION_FLAG_NETWORK_CONNECTIONS_AVAILABLE
+}
+
+pub(super) fn retry_action_defer_supervisor_timer() -> u32 {
+    RETRY_ACTION_DEFER_SUPERVISOR_TIMER
+}
+
+pub(super) fn retry_action_defer_rpc_pending() -> u32 {
+    RETRY_ACTION_DEFER_RPC_PENDING
+}
+
+pub(super) fn retry_action_defer_owner_async() -> u32 {
+    RETRY_ACTION_DEFER_OWNER_ASYNC
+}
+
+pub(super) fn retry_action_defer_thread_init_pending() -> u32 {
+    RETRY_ACTION_DEFER_THREAD_INIT_PENDING
+}
+
+pub(super) fn retry_action_arm_wait_timer() -> u32 {
+    RETRY_ACTION_ARM_WAIT_TIMER
+}
+
+pub(super) fn retry_action_park_active_child() -> u32 {
+    RETRY_ACTION_PARK_ACTIVE_CHILD
+}
+
+pub(super) fn retry_action_resume_wait4() -> u32 {
+    RETRY_ACTION_RESUME_WAIT4
+}
+
+pub(super) fn retry_action_defer_fork_shared_sync() -> u32 {
+    RETRY_ACTION_DEFER_FORK_SHARED_SYNC
+}
+
+pub(super) fn retry_action_defer_running_worker() -> u32 {
+    RETRY_ACTION_DEFER_RUNNING_WORKER
+}
+
+pub(super) fn retry_action_defer_process_gate() -> u32 {
+    RETRY_ACTION_DEFER_PROCESS_GATE
+}
+
+pub(super) fn retry_action_pump_network() -> u32 {
+    RETRY_ACTION_PUMP_NETWORK
+}
+
+pub(super) fn retry_action_epoll_kernel_worker() -> u32 {
+    RETRY_ACTION_EPOLL_KERNEL_WORKER
+}
+
+pub(super) fn retry_action_request_pipe_sync() -> u32 {
+    RETRY_ACTION_REQUEST_PIPE_SYNC
+}
+
+pub(super) fn retry_action_request_pipe_sync_and_drain_output() -> u32 {
+    RETRY_ACTION_REQUEST_PIPE_SYNC_AND_DRAIN_OUTPUT
+}
+
+pub(super) fn retry_action_schedule_pipe_sync_retry() -> u32 {
+    RETRY_ACTION_SCHEDULE_PIPE_SYNC_RETRY
+}
+
+pub(super) fn retry_action_resume_fs() -> u32 {
+    RETRY_ACTION_RESUME_FS
+}
+
+pub(super) fn retry_action_defer_passive_wait() -> u32 {
+    RETRY_ACTION_DEFER_PASSIVE_WAIT
+}
+
+pub(super) fn retry_action_resume_kernel_worker() -> u32 {
+    RETRY_ACTION_RESUME_KERNEL_WORKER
+}
+
+pub(super) fn retry_action_resume_wait4_kernel_worker() -> u32 {
+    RETRY_ACTION_RESUME_WAIT4_KERNEL_WORKER
+}
+
+pub(super) fn retry_action_resume_epoll_direct() -> u32 {
+    RETRY_ACTION_RESUME_EPOLL_DIRECT
+}
+
+pub(super) fn retry_action_resume_direct() -> u32 {
+    RETRY_ACTION_RESUME_DIRECT
+}
+
+pub(super) fn retry_action_unsupported() -> u32 {
+    RETRY_ACTION_UNSUPPORTED
+}
+
 pub(super) fn retry_reason(vm_ptr: u32, flags: u32) -> i32 {
     let vm = match state(vm_ptr) {
         Ok(vm) => vm,
@@ -594,6 +749,143 @@ pub(super) fn retry_reason(vm_ptr: u32, flags: u32) -> i32 {
         }
         _ => RETRY_REASON_DEFAULT as i32,
     }
+}
+
+fn retry_action_pipe_sync(vm_ptr: u32, flags: u32) -> i32 {
+    let pipe_flags = if (flags & RETRY_ACTION_FLAG_PIPE_STATE_KERNEL_WORKER_OWNS) != 0 {
+        super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_FLAG_KERNEL_WORKER_AVAILABLE
+    } else {
+        0
+    };
+    match super::pipe::blocked_pipe_sync_before_retry_action(vm_ptr, pipe_flags) {
+        action if action == super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_ACTION_REQUEST_SYNC as i32 => {
+            RETRY_ACTION_REQUEST_PIPE_SYNC as i32
+        }
+        action
+            if action
+                == super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_ACTION_REQUEST_SYNC_AND_DRAIN_OUTPUT
+                    as i32 =>
+        {
+            RETRY_ACTION_REQUEST_PIPE_SYNC_AND_DRAIN_OUTPUT as i32
+        }
+        action
+            if action == super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_ACTION_SCHEDULE_RETRY as i32 =>
+        {
+            RETRY_ACTION_SCHEDULE_PIPE_SYNC_RETRY as i32
+        }
+        action if action == super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_ACTION_NONE as i32 => {
+            RETRY_ACTION_RESUME_DIRECT as i32
+        }
+        errno if errno < 0 => errno,
+        _ => -(crate::abi::EINVAL as i32),
+    }
+}
+
+fn retry_action_resume_delegation(vm_ptr: u32, flags: u32) -> i32 {
+    let resume_flags = if (flags & RETRY_ACTION_FLAG_KERNEL_WORKER_AVAILABLE) != 0 {
+        RESUME_DELEGATION_FLAG_KERNEL_WORKER_AVAILABLE
+    } else {
+        0
+    };
+    match resume_delegation(vm_ptr, resume_flags) {
+        action if action == RESUME_DELEGATION_KERNEL_WORKER as i32 => {
+            RETRY_ACTION_RESUME_KERNEL_WORKER as i32
+        }
+        action if action == RESUME_DELEGATION_WAIT4_KERNEL_WORKER as i32 => {
+            RETRY_ACTION_RESUME_WAIT4_KERNEL_WORKER as i32
+        }
+        action if action == RESUME_DELEGATION_EPOLL_DIRECT as i32 => {
+            RETRY_ACTION_RESUME_EPOLL_DIRECT as i32
+        }
+        action if action == RESUME_DELEGATION_DIRECT as i32 => RETRY_ACTION_RESUME_DIRECT as i32,
+        action if action == RESUME_DELEGATION_UNSUPPORTED as i32 => RETRY_ACTION_UNSUPPORTED as i32,
+        errno if errno < 0 => errno,
+        _ => -(crate::abi::EINVAL as i32),
+    }
+}
+
+pub(super) fn retry_action(vm_ptr: u32, flags: u32) -> i32 {
+    let vm = match state(vm_ptr) {
+        Ok(vm) => vm,
+        Err(errno) => return -errno,
+    };
+
+    if (flags & RETRY_ACTION_FLAG_SUPERVISOR_TIMER_ARMED) != 0 {
+        return RETRY_ACTION_DEFER_SUPERVISOR_TIMER as i32;
+    }
+    if (flags & RETRY_ACTION_FLAG_RPC_PENDING) != 0 {
+        return RETRY_ACTION_DEFER_RPC_PENDING as i32;
+    }
+    if (flags & RETRY_ACTION_FLAG_OWNER_ASYNC) != 0 {
+        return RETRY_ACTION_DEFER_OWNER_ASYNC as i32;
+    }
+    if vm.status == crate::abi::STATUS_EPOLL_WAIT
+        && (flags & RETRY_ACTION_FLAG_THREAD_INIT_PENDING) != 0
+    {
+        return RETRY_ACTION_DEFER_THREAD_INIT_PENDING as i32;
+    }
+    let wait_timer_required = super::timer::blocked_wait_timer_required_for_vm(vm_ptr);
+    if wait_timer_required < 0 {
+        return wait_timer_required;
+    }
+    if wait_timer_required != 0 {
+        return RETRY_ACTION_ARM_WAIT_TIMER as i32;
+    }
+    if active_child_pid_for_blocked_wait(vm) > 0 {
+        return RETRY_ACTION_PARK_ACTIVE_CHILD as i32;
+    }
+    if vm.status == crate::abi::STATUS_WAIT4 {
+        return RETRY_ACTION_RESUME_WAIT4 as i32;
+    }
+    if (flags & RETRY_ACTION_FLAG_FORK_SHARED_SYNC_PENDING) != 0
+        && poll_wait_timeout_ms_for_vm(vm) < 0
+    {
+        return RETRY_ACTION_DEFER_FORK_SHARED_SYNC as i32;
+    }
+    if (flags & RETRY_ACTION_FLAG_RUNNING_WORKER) != 0 {
+        return RETRY_ACTION_DEFER_RUNNING_WORKER as i32;
+    }
+    let reason = retry_reason(vm_ptr, 0);
+    if reason < 0 {
+        return reason;
+    }
+    if reason == RETRY_REASON_PROCESS_GATE as i32 {
+        return RETRY_ACTION_DEFER_PROCESS_GATE as i32;
+    }
+    if (flags & RETRY_ACTION_FLAG_NETWORK_CONNECTIONS_AVAILABLE) != 0
+        && blocked_wait_should_pump_network_for_vm(vm)
+    {
+        match super::network::blocked_wait_pump_action(vm_ptr) {
+            action if action == super::network::pump_action_pump() as i32 => {
+                return RETRY_ACTION_PUMP_NETWORK as i32;
+            }
+            action if action == super::network::pump_action_skip() as i32 => {}
+            errno if errno < 0 => return errno,
+            _ => return -(crate::abi::EINVAL as i32),
+        }
+    }
+    if vm.status == crate::abi::STATUS_EPOLL_WAIT
+        && (flags & RETRY_ACTION_FLAG_KERNEL_WORKER_AVAILABLE) != 0
+    {
+        return RETRY_ACTION_EPOLL_KERNEL_WORKER as i32;
+    }
+    if vm.status == crate::abi::STATUS_PIPE_WAIT {
+        let pipe_action = retry_action_pipe_sync(vm_ptr, flags);
+        if pipe_action < 0 || pipe_action != RETRY_ACTION_RESUME_DIRECT as i32 {
+            return pipe_action;
+        }
+    }
+    if vm.status == crate::abi::STATUS_FS {
+        return RETRY_ACTION_RESUME_FS as i32;
+    }
+    let reason = retry_reason(vm_ptr, 0);
+    if reason < 0 {
+        return reason;
+    }
+    if reason == RETRY_REASON_PASSIVE_WAIT as i32 {
+        return RETRY_ACTION_DEFER_PASSIVE_WAIT as i32;
+    }
+    retry_action_resume_delegation(vm_ptr, flags)
 }
 
 pub(super) fn epoll_wait_retry_required(vm_ptr: u32) -> i32 {

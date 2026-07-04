@@ -147,11 +147,19 @@ fn supervisor_process_has_active_child_tracks_kernel_child_table() {
         supervisor_blocked_wait_retry_reason(vm_ptr, 0),
         supervisor_blocked_wait_retry_reason_active_child() as i32
     );
+    assert_eq!(
+        supervisor_blocked_retry_action(vm_ptr, 0),
+        supervisor_blocked_retry_action_park_active_child() as i32
+    );
     t.vm.status = STATUS_PIPE_WAIT;
     t.vm.epoll_timeout_ms = -1;
     assert_eq!(t.vm.status, STATUS_PIPE_WAIT);
     assert_eq!(t.vm.epoll_timeout_ms, -1);
     assert_eq!(supervisor_blocked_wait_active_child_pid(vm_ptr), child);
+    assert_eq!(
+        supervisor_blocked_retry_action(vm_ptr, 0),
+        supervisor_blocked_retry_action_park_active_child() as i32
+    );
     t.vm.epoll_timeout_ms = 1;
     assert_eq!(t.vm.epoll_timeout_ms, 1);
     assert_eq!(supervisor_blocked_wait_active_child_pid(vm_ptr), 0);

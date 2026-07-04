@@ -1227,6 +1227,166 @@ pub extern "C" fn supervisor_blocked_wait_retry_flag_thread_init_pending() -> u3
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_flag_supervisor_timer_armed() -> u32 {
+    super::blocked::retry_action_flag_supervisor_timer_armed()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_flag_rpc_pending() -> u32 {
+    super::blocked::retry_action_flag_rpc_pending()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_flag_owner_async() -> u32 {
+    super::blocked::retry_action_flag_owner_async()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_flag_thread_init_pending() -> u32 {
+    super::blocked::retry_action_flag_thread_init_pending()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_flag_fork_shared_sync_pending() -> u32 {
+    super::blocked::retry_action_flag_fork_shared_sync_pending()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_flag_running_worker() -> u32 {
+    super::blocked::retry_action_flag_running_worker()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_flag_kernel_worker_available() -> u32 {
+    super::blocked::retry_action_flag_kernel_worker_available()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_flag_pipe_state_kernel_worker_owns() -> u32 {
+    super::blocked::retry_action_flag_pipe_state_kernel_worker_owns()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_flag_network_connections_available() -> u32 {
+    super::blocked::retry_action_flag_network_connections_available()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_defer_supervisor_timer() -> u32 {
+    super::blocked::retry_action_defer_supervisor_timer()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_defer_rpc_pending() -> u32 {
+    super::blocked::retry_action_defer_rpc_pending()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_defer_owner_async() -> u32 {
+    super::blocked::retry_action_defer_owner_async()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_defer_thread_init_pending() -> u32 {
+    super::blocked::retry_action_defer_thread_init_pending()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_arm_wait_timer() -> u32 {
+    super::blocked::retry_action_arm_wait_timer()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_park_active_child() -> u32 {
+    super::blocked::retry_action_park_active_child()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_resume_wait4() -> u32 {
+    super::blocked::retry_action_resume_wait4()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_defer_fork_shared_sync() -> u32 {
+    super::blocked::retry_action_defer_fork_shared_sync()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_defer_running_worker() -> u32 {
+    super::blocked::retry_action_defer_running_worker()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_defer_process_gate() -> u32 {
+    super::blocked::retry_action_defer_process_gate()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_pump_network() -> u32 {
+    super::blocked::retry_action_pump_network()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_epoll_kernel_worker() -> u32 {
+    super::blocked::retry_action_epoll_kernel_worker()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_request_pipe_sync() -> u32 {
+    super::blocked::retry_action_request_pipe_sync()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_request_pipe_sync_and_drain_output() -> u32 {
+    super::blocked::retry_action_request_pipe_sync_and_drain_output()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_schedule_pipe_sync_retry() -> u32 {
+    super::blocked::retry_action_schedule_pipe_sync_retry()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_resume_fs() -> u32 {
+    super::blocked::retry_action_resume_fs()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_defer_passive_wait() -> u32 {
+    super::blocked::retry_action_defer_passive_wait()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_resume_kernel_worker() -> u32 {
+    super::blocked::retry_action_resume_kernel_worker()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_resume_wait4_kernel_worker() -> u32 {
+    super::blocked::retry_action_resume_wait4_kernel_worker()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_resume_epoll_direct() -> u32 {
+    super::blocked::retry_action_resume_epoll_direct()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_resume_direct() -> u32 {
+    super::blocked::retry_action_resume_direct()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action_unsupported() -> u32 {
+    super::blocked::retry_action_unsupported()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_action(vm_ptr: u32, flags: u32) -> i32 {
+    super::blocked::retry_action(vm_ptr, flags)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_enqueue_blocked_wait_timer(vm_ptr: u32) -> i32 {
     super::enqueue_blocked_wait_timer_for_vm(vm_ptr)
 }

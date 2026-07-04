@@ -10,7 +10,8 @@ use tidemark_kernel::supervisor::{
     supervisor_blocked_pipe_sync_before_retry_action_schedule_retry,
     supervisor_blocked_pipe_sync_before_retry_clear,
     supervisor_blocked_pipe_sync_before_retry_flag_kernel_worker_available,
-    supervisor_blocked_pipe_sync_before_retry_requested, supervisor_blocked_wait_retry_reason,
+    supervisor_blocked_pipe_sync_before_retry_requested, supervisor_blocked_retry_action,
+    supervisor_blocked_retry_action_defer_passive_wait, supervisor_blocked_wait_retry_reason,
     supervisor_blocked_wait_retry_reason_default,
     supervisor_blocked_wait_retry_reason_passive_wait, supervisor_fd_control_kind_fd_closed,
     supervisor_fd_control_kind_pipe_created, supervisor_fd_control_record,
@@ -241,6 +242,10 @@ fn supervisor_blocked_pipe_sync_before_retry_requests_drain_for_passive_poll_wai
     assert_eq!(
         supervisor_blocked_wait_retry_reason(vm_ptr, 0),
         supervisor_blocked_wait_retry_reason_passive_wait() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_retry_action(vm_ptr, 0),
+        supervisor_blocked_retry_action_defer_passive_wait() as i32
     );
 }
 

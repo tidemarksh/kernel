@@ -196,6 +196,17 @@ fn supervisor_blocked_retry_reason_process_gates_non_child_during_vfork() {
         supervisor_blocked_wait_retry_reason_process_gate() as i32
     );
     assert_eq!(
+        supervisor_blocked_retry_action(blocked_parent_ptr, 0),
+        supervisor_blocked_retry_action_arm_wait_timer() as i32
+    );
+    unsafe {
+        (*(blocked_parent_ptr as *mut ThreadState)).epoll_timeout_ms = -1;
+    }
+    assert_eq!(
+        supervisor_blocked_retry_action(blocked_parent_ptr, 0),
+        supervisor_blocked_retry_action_park_active_child() as i32
+    );
+    assert_eq!(
         supervisor_blocked_wait_retry_reason(
             blocked_parent_ptr,
             supervisor_blocked_wait_retry_flag_host_progress()
