@@ -842,6 +842,9 @@ pub(super) fn retry_action(vm_ptr: u32, flags: u32) -> i32 {
         return RETRY_ACTION_PARK_ACTIVE_CHILD as i32;
     }
     if vm.status == crate::abi::STATUS_WAIT4 {
+        if (flags & RETRY_ACTION_FLAG_KERNEL_WORKER_AVAILABLE) != 0 {
+            return RETRY_ACTION_RESUME_WAIT4_KERNEL_WORKER as i32;
+        }
         return RETRY_ACTION_RESUME_WAIT4 as i32;
     }
     if (flags & RETRY_ACTION_FLAG_FORK_SHARED_SYNC_PENDING) != 0

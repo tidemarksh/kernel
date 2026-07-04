@@ -173,6 +173,19 @@ fn supervisor_process_has_active_child_tracks_kernel_child_table() {
         tidemark_kernel::abi::process_active_child_pid(parent_pid),
         0
     );
+    t.vm.status = STATUS_WAIT4;
+    assert_eq!(t.vm.status, STATUS_WAIT4);
+    assert_eq!(
+        supervisor_blocked_retry_action(vm_ptr, 0),
+        supervisor_blocked_retry_action_resume_wait4() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_retry_action(
+            vm_ptr,
+            supervisor_blocked_retry_action_flag_kernel_worker_available()
+        ),
+        supervisor_blocked_retry_action_resume_wait4_kernel_worker() as i32
+    );
 }
 
 #[test]
