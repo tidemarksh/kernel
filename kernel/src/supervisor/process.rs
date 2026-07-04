@@ -1,5 +1,7 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
+use crate::types::ProcessState;
+
 static PROCESS_LIFECYCLE_COUNT: AtomicU64 = AtomicU64::new(0);
 static PROCESS_LIFECYCLE_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_PROCESS_LIFECYCLE: super::SupervisorProcessLifecycleRecord =
@@ -83,6 +85,61 @@ pub(super) fn owner_mismatch(vm_ptr: u32, runtime_pid: i32) -> i32 {
     };
     let current_pid = crate::syscall::process::current_process_pid(vm, vm.guest_base);
     i32::from(current_pid > 0 && current_pid != runtime_pid)
+}
+
+fn process_owner_fields(vm_ptr: u32) -> Option<(i32, u32, u32)> {
+    let vm = super::thread::state_from_ptr(vm_ptr)?;
+    let process_ptr = vm.process_ptr;
+    if process_ptr == 0 {
+        return None;
+    }
+    let absolute = (vm.guest_base as u64).checked_add(process_ptr as u64)?;
+    let end = absolute.checked_add(core::mem::size_of::<ProcessState>() as u64)?;
+    if end > crate::wasm::memory_size_bytes() {
+        return None;
+    }
+    let ps = unsafe { &*(absolute as *const ProcessState) };
+    Some((ps.pid, ps.thread_count.load(Ordering::Acquire), process_ptr))
+}
+
+pub(super) fn owner_absent(vm_ptr: u32) -> i32 {
+    if vm_ptr == 0 {
+        return 0;
+    }
+    let Some((pid, thread_count, _process_ptr)) = process_owner_fields(vm_ptr) else {
+        return 1;
+    };
+    i32::from(pid == 0 && thread_count == 0)
+}
+
+pub(super) fn owner_live_matches(vm_ptr: u32, runtime_pid: i32) -> i32 {
+    if vm_ptr == 0 || runtime_pid <= 0 {
+        return 0;
+    }
+    let Some((pid, thread_count, _process_ptr)) = process_owner_fields(vm_ptr) else {
+        return 0;
+    };
+    i32::from(pid == runtime_pid && thread_count > 0)
+}
+
+pub(super) fn owner_missing_or_invalid(vm_ptr: u32) -> i32 {
+    if vm_ptr == 0 {
+        return 1;
+    }
+    let Some((pid, _thread_count, _process_ptr)) = process_owner_fields(vm_ptr) else {
+        return 1;
+    };
+    i32::from(pid == 0 || pid > 0xffff)
+}
+
+pub(super) fn process_identity_matches(vm_ptr: u32, runtime_pid: i32, process_ptr: u32) -> i32 {
+    if vm_ptr == 0 || runtime_pid <= 0 || process_ptr == 0 {
+        return 0;
+    }
+    let Some((pid, _thread_count, current_process_ptr)) = process_owner_fields(vm_ptr) else {
+        return 0;
+    };
+    i32::from(pid == runtime_pid && current_process_ptr == process_ptr)
 }
 
 #[allow(clippy::too_many_arguments)]

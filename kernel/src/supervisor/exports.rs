@@ -254,6 +254,30 @@ pub extern "C" fn supervisor_process_owner_mismatch(vm_ptr: u32, runtime_pid: i3
     super::process::owner_mismatch(vm_ptr, runtime_pid)
 }
 
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_owner_absent(vm_ptr: u32) -> i32 {
+    super::process::owner_absent(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_owner_live_matches(vm_ptr: u32, runtime_pid: i32) -> i32 {
+    super::process::owner_live_matches(vm_ptr, runtime_pid)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_owner_missing_or_invalid(vm_ptr: u32) -> i32 {
+    super::process::owner_missing_or_invalid(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_identity_matches(
+    vm_ptr: u32,
+    runtime_pid: i32,
+    process_ptr: u32,
+) -> i32 {
+    super::process::process_identity_matches(vm_ptr, runtime_pid, process_ptr)
+}
+
 export_u32_const!(
     supervisor_fd_control_record_bytes,
     super::SUPERVISOR_FD_CONTROL_RECORD_BYTES

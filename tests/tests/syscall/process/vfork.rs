@@ -234,18 +234,50 @@ fn supervisor_process_owner_matches_reports_current_process_owner() {
     let parent_pid = process_impl::current_process_pid(&t.vm, t.base);
     assert!(parent_pid > 0);
     let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    let parent_process_ptr = t.vm.process_ptr;
     assert_eq!(supervisor_process_owner_matches(vm_ptr, parent_pid), 1);
     assert_eq!(supervisor_process_owner_mismatch(vm_ptr, parent_pid), 0);
+    assert_eq!(supervisor_process_owner_live_matches(vm_ptr, parent_pid), 1);
+    assert_eq!(supervisor_process_owner_absent(vm_ptr), 0);
+    assert_eq!(supervisor_process_owner_missing_or_invalid(vm_ptr), 0);
+    assert_eq!(
+        supervisor_process_identity_matches(vm_ptr, parent_pid, parent_process_ptr),
+        1
+    );
     assert_eq!(supervisor_process_owner_matches(vm_ptr, parent_pid + 1), 0);
     assert_eq!(supervisor_process_owner_mismatch(vm_ptr, parent_pid + 1), 1);
+    assert_eq!(
+        supervisor_process_identity_matches(vm_ptr, parent_pid + 1, parent_process_ptr),
+        0
+    );
+    assert_eq!(
+        supervisor_process_identity_matches(vm_ptr, parent_pid, parent_process_ptr + 4),
+        0
+    );
+
+    t.vm.process_ptr = 0;
+    assert_eq!(supervisor_process_owner_absent(vm_ptr), 1);
+    assert_eq!(supervisor_process_owner_missing_or_invalid(vm_ptr), 1);
+    assert_eq!(supervisor_process_owner_live_matches(vm_ptr, parent_pid), 0);
+    t.vm.process_ptr = parent_process_ptr;
 
     process_impl::sys_vfork(&mut t.vm, t.base);
     let child_pid = process_impl::vfork_child_pid();
     assert!(child_pid > 0);
+    let child_process_ptr = t.vm.process_ptr;
     assert_eq!(supervisor_process_owner_matches(vm_ptr, parent_pid), 0);
     assert_eq!(supervisor_process_owner_mismatch(vm_ptr, parent_pid), 1);
+    assert_eq!(
+        supervisor_process_identity_matches(vm_ptr, parent_pid, parent_process_ptr),
+        0
+    );
     assert_eq!(supervisor_process_owner_matches(vm_ptr, child_pid), 1);
     assert_eq!(supervisor_process_owner_mismatch(vm_ptr, child_pid), 0);
+    assert_eq!(supervisor_process_owner_live_matches(vm_ptr, child_pid), 1);
+    assert_eq!(
+        supervisor_process_identity_matches(vm_ptr, child_pid, child_process_ptr),
+        1
+    );
 
     process_impl::vfork_parent_resume(&mut t.vm, child_pid);
 }
