@@ -1581,6 +1581,11 @@ pub extern "C" fn supervisor_fork_shared_held_ofd_track_flag_stdio_fd() -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fork_shared_held_ofd_track_flag_fd_entry_source() -> u32 {
+    super::fd::fork_shared_held_ofd_track_flag_fd_entry_source()
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fork_shared_held_ofd_track_action(ofd_id: u32, flags: u32) -> i32 {
     super::fd::fork_shared_held_ofd_track_action(ofd_id, flags)
 }

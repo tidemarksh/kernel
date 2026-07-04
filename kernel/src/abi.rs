@@ -845,6 +845,7 @@ pub use crate::supervisor::{
     supervisor_fd_entry_restore_flag_preserve_live_epoll_dependent,
     supervisor_fd_entry_restore_flag_preserve_live_regular_file,
     supervisor_fork_shared_effect_sync_action, supervisor_fork_shared_held_ofd_track_action,
+    supervisor_fork_shared_held_ofd_track_flag_fd_entry_source,
     supervisor_fork_shared_held_ofd_track_flag_host_stdio_pipe,
     supervisor_fork_shared_held_ofd_track_flag_shared,
     supervisor_fork_shared_held_ofd_track_flag_stdio_fd, supervisor_fork_shared_ofd_identity_key,

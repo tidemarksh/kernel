@@ -149,6 +149,10 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         2
     );
     assert_eq!(supervisor_fork_shared_held_ofd_track_flag_stdio_fd(), 4);
+    assert_eq!(
+        supervisor_fork_shared_held_ofd_track_flag_fd_entry_source(),
+        8
+    );
     assert_eq!(supervisor_thread_take_completed_sync_effects(0, 0), 0);
     assert_eq!(supervisor_pipe_slot_mode_read(), 1);
     assert_eq!(supervisor_pipe_slot_mode_write(), 2);
@@ -2313,6 +2317,13 @@ fn supervisor_fork_shared_ofd_identity_and_publish_policy_are_kernel_owned() {
         ),
         1
     );
+    assert_eq!(
+        supervisor_fork_shared_held_ofd_track_action(
+            file_ofd,
+            supervisor_fork_shared_held_ofd_track_flag_fd_entry_source()
+        ),
+        1
+    );
     let file_key = supervisor_fork_shared_ofd_identity_key(file_ofd);
     assert_ne!(file_key, 0);
     assert_eq!(supervisor_fork_shared_ofd_publish_action(file_ofd, 0), 0);
@@ -2352,6 +2363,14 @@ fn supervisor_fork_shared_ofd_identity_and_publish_policy_are_kernel_owned() {
         supervisor_fork_shared_held_ofd_track_action(
             read_ofd,
             supervisor_fork_shared_held_ofd_track_flag_host_stdio_pipe()
+        ),
+        0
+    );
+    assert_eq!(
+        supervisor_fork_shared_held_ofd_track_action(
+            read_ofd,
+            supervisor_fork_shared_held_ofd_track_flag_host_stdio_pipe()
+                | supervisor_fork_shared_held_ofd_track_flag_fd_entry_source()
         ),
         0
     );
