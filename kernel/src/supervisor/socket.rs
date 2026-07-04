@@ -1,6 +1,60 @@
 use crate::abi::{FD_TYPE_SOCKET, MAX_FDS};
 use crate::fs::fd_table;
 
+fn is_socket_ofd_id(ofd_id: u32) -> bool {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return false;
+    }
+    let Some(ofd) = fd_table::get_ofd_by_id(ofd_id) else {
+        return false;
+    };
+    ofd.fd_type == FD_TYPE_SOCKET && crate::syscall::socket::is_slot_used(ofd.ino)
+}
+
+pub fn socket_ofd_is_socket(ofd_id: u32) -> i32 {
+    i32::from(is_socket_ofd_id(ofd_id))
+}
+
+pub fn process_socket_ofd_for_fd(vm_ptr: u32, fd: u32) -> u32 {
+    let vm = match thread_state(vm_ptr) {
+        Ok(vm) => vm,
+        Err(_) => return 0,
+    };
+    let ofd_id = fd_table::get_ofd_id(vm.guest_base, vm, fd as u64).unwrap_or(0);
+    if is_socket_ofd_id(ofd_id) { ofd_id } else { 0 }
+}
+
+pub fn process_socket_drain_fd(vm_ptr: u32, connected_fd: u32, index: u32) -> i32 {
+    let vm = match thread_state(vm_ptr) {
+        Ok(vm) => vm,
+        Err(errno) => return -errno,
+    };
+    let connected_ofd = fd_table::get_ofd_id(vm.guest_base, vm, connected_fd as u64).unwrap_or(0);
+    if !is_socket_ofd_id(connected_ofd) {
+        return crate::abi::ENOENT as i32;
+    }
+    let mut cursor = 0u32;
+    let mut result = crate::abi::ENOENT as i32;
+    if cursor == index {
+        return connected_fd as i32;
+    }
+    cursor = cursor.saturating_add(1);
+    for fd in 0..MAX_FDS {
+        if fd as u32 == connected_fd {
+            continue;
+        }
+        if fd_table::get_ofd_id(vm.guest_base, vm, fd as u64).unwrap_or(0) != connected_ofd {
+            continue;
+        }
+        if cursor == index {
+            result = fd as i32;
+            break;
+        }
+        cursor = cursor.saturating_add(1);
+    }
+    result
+}
+
 pub fn process_socket_held_ofd(vm_ptr: u32, index: u32) -> u32 {
     let mut seen = [false; MAX_FDS];
     let mut cursor = 0u32;
@@ -13,7 +67,7 @@ pub fn process_socket_held_ofd(vm_ptr: u32, index: u32) -> u32 {
         if ofd.fd_type != FD_TYPE_SOCKET {
             return;
         }
-        if !crate::syscall::socket::is_slot_used(ofd.ino) {
+        if !is_socket_ofd_id(ofd_id) {
             return;
         }
         if cursor == index {
@@ -133,10 +187,8 @@ pub fn bridge_active_fd(
     }
     let current_ofd = fd_table::get_ofd_id(vm.guest_base, vm, preferred_fd as u64).unwrap_or(0);
     if current_ofd > 0 && pending_connect == 0 {
-        if let Some(ofd) = fd_table::get_ofd_by_id(current_ofd) {
-            if ofd.fd_type == FD_TYPE_SOCKET {
-                return preferred_fd as i32;
-            }
+        if is_socket_ofd_id(current_ofd) {
+            return preferred_fd as i32;
         }
     }
     crate::abi::ENOENT as i32

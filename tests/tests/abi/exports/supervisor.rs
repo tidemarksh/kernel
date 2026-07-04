@@ -434,6 +434,12 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_blocked_epoll_dependent_sync_ofd(0, 0), 0);
     assert_eq!(supervisor_blocked_epoll_watches_pipe(0), 0);
     assert_eq!(supervisor_process_socket_held_ofd(0, 0), 0);
+    assert_eq!(supervisor_socket_ofd_is_socket(0), 0);
+    assert_eq!(supervisor_process_socket_ofd_for_fd(0, 0), 0);
+    assert_eq!(
+        supervisor_process_socket_drain_fd(0, 0, 0),
+        -(EFAULT as i32)
+    );
     assert_eq!(supervisor_socket_connect_fd(0), -(EFAULT as i32));
     assert_eq!(
         supervisor_socket_connect_peer_addr(0, 0, 0),

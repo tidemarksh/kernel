@@ -1825,6 +1825,25 @@ pub extern "C" fn supervisor_process_socket_held_ofd(vm_ptr: u32, index: u32) ->
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_socket_ofd_is_socket(ofd_id: u32) -> i32 {
+    super::socket::socket_ofd_is_socket(ofd_id)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_socket_ofd_for_fd(vm_ptr: u32, fd: u32) -> u32 {
+    super::socket::process_socket_ofd_for_fd(vm_ptr, fd)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_socket_drain_fd(
+    vm_ptr: u32,
+    connected_fd: u32,
+    index: u32,
+) -> i32 {
+    super::socket::process_socket_drain_fd(vm_ptr, connected_fd, index)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_socket_connect_fd(vm_ptr: u32) -> i32 {
     super::socket::connect_fd(vm_ptr)
 }

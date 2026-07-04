@@ -319,6 +319,47 @@ fn supervisor_fd_control_records_socket_connect_start_and_failure() {
 }
 
 #[test]
+fn supervisor_socket_bridge_ofd_queries_follow_fd_table_aliases() {
+    let mut t = TestVm::new();
+    let fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
+    assert!(fd >= 0);
+    let dup_fd = t.sys_dup(fd as u64);
+    assert!(dup_fd >= 0);
+    let ofd_id = fd_table::get_ofd_id(t.base, &t.vm, fd as u64).expect("socket OFD should exist");
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+
+    assert_eq!(supervisor_socket_ofd_is_socket(ofd_id), 1);
+    assert_eq!(
+        supervisor_process_socket_ofd_for_fd(vm_ptr, fd as u32),
+        ofd_id
+    );
+    assert_eq!(
+        supervisor_process_socket_ofd_for_fd(vm_ptr, dup_fd as u32),
+        ofd_id
+    );
+    assert_eq!(
+        supervisor_process_socket_drain_fd(vm_ptr, fd as u32, 0),
+        fd as i32
+    );
+    assert_eq!(
+        supervisor_process_socket_drain_fd(vm_ptr, fd as u32, 1),
+        dup_fd as i32
+    );
+    assert_eq!(
+        supervisor_process_socket_drain_fd(vm_ptr, dup_fd as u32, 0),
+        dup_fd as i32
+    );
+    assert_eq!(
+        supervisor_process_socket_drain_fd(vm_ptr, dup_fd as u32, 1),
+        fd as i32
+    );
+    assert_eq!(
+        supervisor_process_socket_drain_fd(vm_ptr, fd as u32, 2),
+        ENOENT as i32
+    );
+}
+
+#[test]
 fn accept4_sets_requested_fd_and_status_flags() {
     let cases = [
         (0_u64, false, false),
