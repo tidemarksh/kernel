@@ -1670,6 +1670,21 @@ pub extern "C" fn supervisor_ofd_slot_restore_action(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_regular_file_offset_restore_action(
+    ofd_id: u32,
+    snapshot_host_fd: i32,
+    snapshot_ino: u32,
+    snapshot_offset: i64,
+) -> i32 {
+    super::fd::regular_file_offset_restore_action(
+        ofd_id,
+        snapshot_host_fd,
+        snapshot_ino,
+        snapshot_offset,
+    )
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_thread_take_completed_sync_effects(vm_ptr: u32, status: i32) -> u32 {
     super::sync_effects::take_completed_sync_effects(vm_ptr, status)
 }

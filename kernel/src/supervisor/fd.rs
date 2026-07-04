@@ -430,6 +430,29 @@ pub fn ofd_slot_restore_action(
     restore_skip()
 }
 
+pub fn regular_file_offset_restore_action(
+    ofd_id: u32,
+    snapshot_host_fd: i32,
+    snapshot_ino: u32,
+    snapshot_offset: i64,
+) -> i32 {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return restore_skip();
+    }
+    let Some(current) = fd_table::get_ofd_by_id(ofd_id) else {
+        return restore_skip();
+    };
+    if current.fd_type != FD_TYPE_FILE
+        || current.refcount <= 0
+        || current.host_fd != snapshot_host_fd
+        || current.ino != snapshot_ino
+        || current.offset >= snapshot_offset
+    {
+        return restore_skip();
+    }
+    restore_apply()
+}
+
 pub fn fd_entry_restore_action(
     vm_ptr: u32,
     fd: u32,

@@ -136,6 +136,10 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_ofd_slot_restore_flag_trust_regular_file_offset(),
         2
     );
+    assert_eq!(
+        supervisor_regular_file_offset_restore_action(0, 0, 0, 0),
+        supervisor_fd_entry_restore_action_skip() as i32
+    );
     assert_eq!(supervisor_fork_shared_peer_flag_compatible(), 1);
     assert_eq!(supervisor_fork_shared_peer_flag_incompatible(), 2);
     assert_eq!(supervisor_fork_shared_peer_flag_pipe_peer(), 4);
@@ -2231,6 +2235,18 @@ fn supervisor_fd_and_ofd_slot_restore_actions_are_kernel_owned() {
     );
     assert_eq!(
         supervisor_ofd_slot_write_action(high_ofd, 0, high_host_fd, high_ino, 4096),
+        supervisor_fd_entry_restore_action_skip() as i32
+    );
+    assert_eq!(
+        supervisor_regular_file_offset_restore_action(high_ofd, high_host_fd, high_ino, 8192),
+        supervisor_fd_entry_restore_action_apply() as i32
+    );
+    assert_eq!(
+        supervisor_regular_file_offset_restore_action(high_ofd, high_host_fd, high_ino, 64),
+        supervisor_fd_entry_restore_action_skip() as i32
+    );
+    assert_eq!(
+        supervisor_regular_file_offset_restore_action(high_ofd, high_host_fd, high_ino + 1, 8192),
         supervisor_fd_entry_restore_action_skip() as i32
     );
 
