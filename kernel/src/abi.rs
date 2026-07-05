@@ -1068,6 +1068,17 @@ pub use crate::supervisor::{
     supervisor_thread_state_snapshot_bytes, supervisor_thread_state_snapshot_magic,
     supervisor_thread_take_completed_sync_effects, supervisor_vfork_child_owner_mismatch,
     supervisor_vfork_execve_handoff_failure_wait_status, supervisor_vfork_execve_rollback,
+    supervisor_wait_in_worker_status_action,
+    supervisor_wait_in_worker_status_action_block_epoll_timeout,
+    supervisor_wait_in_worker_status_action_block_wait4_and_sync_pipe,
+    supervisor_wait_in_worker_status_action_flag_epoll_state_kernel_owns,
+    supervisor_wait_in_worker_status_action_flag_kernel_worker_available,
+    supervisor_wait_in_worker_status_action_flag_running_worker,
+    supervisor_wait_in_worker_status_action_none,
+    supervisor_wait_in_worker_status_action_park_futex,
+    supervisor_wait_in_worker_status_action_sync_epoll,
+    supervisor_wait_in_worker_status_action_sync_pipe,
+    supervisor_wait_in_worker_status_action_sync_socket,
 };
 
 // =============================================================================

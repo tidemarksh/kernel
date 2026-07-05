@@ -563,6 +563,46 @@ export_u32_const!(
     super::state_sync::wake_blocked_action_log_epoll_and_retry()
 );
 export_u32_const!(
+    supervisor_wait_in_worker_status_action_none,
+    super::wait_in_worker::status_action_none()
+);
+export_u32_const!(
+    supervisor_wait_in_worker_status_action_block_epoll_timeout,
+    super::wait_in_worker::status_action_block_epoll_timeout()
+);
+export_u32_const!(
+    supervisor_wait_in_worker_status_action_park_futex,
+    super::wait_in_worker::status_action_park_futex()
+);
+export_u32_const!(
+    supervisor_wait_in_worker_status_action_block_wait4_and_sync_pipe,
+    super::wait_in_worker::status_action_block_wait4_and_sync_pipe()
+);
+export_u32_const!(
+    supervisor_wait_in_worker_status_action_sync_socket,
+    super::wait_in_worker::status_action_sync_socket()
+);
+export_u32_const!(
+    supervisor_wait_in_worker_status_action_sync_epoll,
+    super::wait_in_worker::status_action_sync_epoll()
+);
+export_u32_const!(
+    supervisor_wait_in_worker_status_action_sync_pipe,
+    super::wait_in_worker::status_action_sync_pipe()
+);
+export_u32_const!(
+    supervisor_wait_in_worker_status_action_flag_running_worker,
+    super::wait_in_worker::status_action_flag_running_worker()
+);
+export_u32_const!(
+    supervisor_wait_in_worker_status_action_flag_kernel_worker_available,
+    super::wait_in_worker::status_action_flag_kernel_worker_available()
+);
+export_u32_const!(
+    supervisor_wait_in_worker_status_action_flag_epoll_state_kernel_owns,
+    super::wait_in_worker::status_action_flag_epoll_state_kernel_owns()
+);
+export_u32_const!(
     supervisor_stdio_output_settle_kind_visible,
     super::stdio::output_settle_kind_visible()
 );
@@ -1727,6 +1767,15 @@ pub extern "C" fn supervisor_blocked_wait_status_matches_wake_source(
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_wait_wake_action(status: i32, source: u32, flags: u32) -> i32 {
     super::state_sync::wake_blocked_action(status, source, flags)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_wait_in_worker_status_action(
+    vm_ptr: u32,
+    status: i32,
+    flags: u32,
+) -> i32 {
+    super::wait_in_worker::status_action(vm_ptr, status, flags)
 }
 
 #[unsafe(no_mangle)]

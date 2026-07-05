@@ -39,6 +39,7 @@ mod sync_effects;
 mod thread;
 mod thread_exit;
 mod timer;
+mod wait_in_worker;
 
 pub use abi::*;
 pub(in crate::supervisor) use codec::{read_shadow_bytes, write_u32, write_u64};

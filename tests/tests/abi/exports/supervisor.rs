@@ -377,6 +377,31 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         2
     );
     assert_eq!(supervisor_blocked_wait_wake_action_log_epoll_and_retry(), 3);
+    assert_eq!(supervisor_wait_in_worker_status_action_none(), 0);
+    assert_eq!(
+        supervisor_wait_in_worker_status_action_block_epoll_timeout(),
+        1
+    );
+    assert_eq!(supervisor_wait_in_worker_status_action_park_futex(), 2);
+    assert_eq!(
+        supervisor_wait_in_worker_status_action_block_wait4_and_sync_pipe(),
+        4
+    );
+    assert_eq!(supervisor_wait_in_worker_status_action_sync_socket(), 8);
+    assert_eq!(supervisor_wait_in_worker_status_action_sync_epoll(), 16);
+    assert_eq!(supervisor_wait_in_worker_status_action_sync_pipe(), 32);
+    assert_eq!(
+        supervisor_wait_in_worker_status_action_flag_running_worker(),
+        1
+    );
+    assert_eq!(
+        supervisor_wait_in_worker_status_action_flag_kernel_worker_available(),
+        2
+    );
+    assert_eq!(
+        supervisor_wait_in_worker_status_action_flag_epoll_state_kernel_owns(),
+        4
+    );
     assert_eq!(supervisor_stdio_output_settle_kind_visible(), 1);
     assert_eq!(supervisor_stdio_output_settle_kind_inherited_child(), 2);
     assert_eq!(supervisor_stdio_pipe_read_progress_action_none(), 0);
@@ -1695,6 +1720,90 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_blocked_retry_status_action(STATUS_OK),
         supervisor_blocked_retry_status_action_none() as i32
+    );
+    let wait_in_worker_kernel_flag =
+        supervisor_wait_in_worker_status_action_flag_kernel_worker_available();
+    let wait_in_worker_running_flag = supervisor_wait_in_worker_status_action_flag_running_worker();
+    let wait_in_worker_epoll_owns_flag =
+        supervisor_wait_in_worker_status_action_flag_epoll_state_kernel_owns();
+    assert_eq!(
+        supervisor_wait_in_worker_status_action(
+            0,
+            STATUS_OK,
+            wait_in_worker_kernel_flag
+                | wait_in_worker_running_flag
+                | wait_in_worker_epoll_owns_flag,
+        ),
+        supervisor_wait_in_worker_status_action_none() as i32
+    );
+    assert_eq!(
+        supervisor_wait_in_worker_status_action(0, STATUS_FUTEX_WAIT, 0),
+        supervisor_wait_in_worker_status_action_park_futex() as i32
+    );
+    assert_eq!(
+        supervisor_wait_in_worker_status_action(0, STATUS_WAIT4, wait_in_worker_kernel_flag),
+        supervisor_wait_in_worker_status_action_block_wait4_and_sync_pipe() as i32
+    );
+    assert_eq!(
+        supervisor_wait_in_worker_status_action(
+            0,
+            STATUS_SOCKET_RECV,
+            wait_in_worker_kernel_flag | wait_in_worker_running_flag,
+        ),
+        supervisor_wait_in_worker_status_action_sync_socket() as i32
+    );
+    assert_eq!(
+        supervisor_wait_in_worker_status_action(
+            0,
+            STATUS_SOCKET_SEND,
+            wait_in_worker_kernel_flag
+                | wait_in_worker_running_flag
+                | wait_in_worker_epoll_owns_flag,
+        ),
+        (supervisor_wait_in_worker_status_action_sync_socket()
+            | supervisor_wait_in_worker_status_action_sync_epoll()) as i32
+    );
+    assert_eq!(
+        supervisor_wait_in_worker_status_action(
+            0,
+            STATUS_PIPE_WAIT,
+            wait_in_worker_kernel_flag | wait_in_worker_running_flag,
+        ),
+        supervisor_wait_in_worker_status_action_sync_pipe() as i32
+    );
+    assert_eq!(
+        supervisor_wait_in_worker_status_action(
+            0,
+            STATUS_EPOLL_WAIT,
+            wait_in_worker_running_flag | wait_in_worker_epoll_owns_flag,
+        ),
+        EFAULT as i32
+    );
+    let mut wait_in_worker_vm = TestVm::new();
+    wait_in_worker_vm.vm.status = STATUS_EPOLL_WAIT;
+    wait_in_worker_vm.vm.epoll_timeout_ms = 0;
+    let wait_in_worker_vm_ptr =
+        &mut wait_in_worker_vm.vm as *mut tidemark_kernel::types::ThreadState as u32;
+    assert_eq!(
+        supervisor_wait_in_worker_status_action(
+            wait_in_worker_vm_ptr,
+            STATUS_EPOLL_WAIT,
+            wait_in_worker_running_flag | wait_in_worker_epoll_owns_flag,
+        ),
+        supervisor_wait_in_worker_status_action_block_epoll_timeout() as i32
+    );
+    let mut wait_in_worker_timeout_vm = TestVm::new();
+    wait_in_worker_timeout_vm.vm.status = STATUS_EPOLL_WAIT;
+    wait_in_worker_timeout_vm.vm.epoll_timeout_ms = 25;
+    let wait_in_worker_timeout_vm_ptr =
+        &mut wait_in_worker_timeout_vm.vm as *mut tidemark_kernel::types::ThreadState as u32;
+    assert_eq!(
+        supervisor_wait_in_worker_status_action(
+            wait_in_worker_timeout_vm_ptr,
+            STATUS_EPOLL_WAIT,
+            wait_in_worker_running_flag | wait_in_worker_epoll_owns_flag,
+        ),
+        supervisor_wait_in_worker_status_action_sync_epoll() as i32
     );
     assert_eq!(supervisor_blocked_initial_action_none(), 0);
     assert_eq!(
