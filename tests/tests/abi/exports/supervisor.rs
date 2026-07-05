@@ -352,6 +352,26 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_blocked_pipe_sync_before_retry_flag_kernel_worker_available(),
         1
     );
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_completion_action_none(),
+        0
+    );
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_completion_action_drain_local_pipe(),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_completion_action_schedule_retry(),
+        2
+    );
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_completion_flag_requested_drain_output(),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_completion_flag_kernel_worker_available(),
+        2
+    );
     assert_eq!(supervisor_resume_flag_timeout_expired(), 1);
     assert_eq!(supervisor_blocked_wait_network_pump_action_skip(), 0);
     assert_eq!(supervisor_blocked_wait_network_pump_action_pump(), 1);
@@ -900,6 +920,29 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_blocked_pipe_sync_before_retry_clear(0),
         -(EFAULT as i32)
+    );
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_completion_action(0),
+        (supervisor_blocked_pipe_sync_before_retry_completion_action_drain_local_pipe()
+            | supervisor_blocked_pipe_sync_before_retry_completion_action_schedule_retry())
+            as i32
+    );
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_completion_action(
+            supervisor_blocked_pipe_sync_before_retry_completion_flag_kernel_worker_available()
+        ),
+        supervisor_blocked_pipe_sync_before_retry_completion_action_schedule_retry() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_retry_host_cleanup_action(0),
+        (supervisor_blocked_retry_host_cleanup_action_flush_stdin()
+            | supervisor_blocked_retry_host_cleanup_action_drain_local_pipe()) as i32
+    );
+    assert_eq!(
+        supervisor_blocked_retry_host_cleanup_action(
+            supervisor_blocked_retry_host_cleanup_flag_kernel_worker_available()
+        ),
+        supervisor_blocked_retry_host_cleanup_action_flush_stdin() as i32
     );
     assert_eq!(
         supervisor_blocked_wait_network_pump_action(0),
@@ -1884,6 +1927,19 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_blocked_retry_action_flag_wait_timer_already_checked(),
         512
+    );
+    assert_eq!(
+        supervisor_blocked_retry_host_cleanup_flag_kernel_worker_available(),
+        1
+    );
+    assert_eq!(supervisor_blocked_retry_host_cleanup_action_none(), 0);
+    assert_eq!(
+        supervisor_blocked_retry_host_cleanup_action_flush_stdin(),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_retry_host_cleanup_action_drain_local_pipe(),
+        2
     );
     assert_eq!(supervisor_blocked_retry_action_defer_supervisor_timer(), 0);
     assert_eq!(supervisor_blocked_retry_action_defer_rpc_pending(), 1);

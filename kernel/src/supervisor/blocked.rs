@@ -20,6 +20,10 @@ pub(super) const RETRY_ACTION_FLAG_KERNEL_WORKER_AVAILABLE: u32 = 1 << 6;
 pub(super) const RETRY_ACTION_FLAG_PIPE_STATE_KERNEL_WORKER_OWNS: u32 = 1 << 7;
 pub(super) const RETRY_ACTION_FLAG_NETWORK_CONNECTIONS_AVAILABLE: u32 = 1 << 8;
 pub(super) const RETRY_ACTION_FLAG_WAIT_TIMER_ALREADY_CHECKED: u32 = 1 << 9;
+pub(super) const RETRY_HOST_CLEANUP_FLAG_KERNEL_WORKER_AVAILABLE: u32 = 1;
+pub(super) const RETRY_HOST_CLEANUP_ACTION_NONE: u32 = 0;
+pub(super) const RETRY_HOST_CLEANUP_ACTION_FLUSH_STDIN: u32 = 1;
+pub(super) const RETRY_HOST_CLEANUP_ACTION_DRAIN_LOCAL_PIPE: u32 = 1 << 1;
 pub(super) const RETRY_ACTION_DEFER_SUPERVISOR_TIMER: u32 = 0;
 pub(super) const RETRY_ACTION_DEFER_RPC_PENDING: u32 = 1;
 pub(super) const RETRY_ACTION_DEFER_OWNER_ASYNC: u32 = 2;
@@ -655,6 +659,30 @@ pub(super) fn retry_action_flag_network_connections_available() -> u32 {
 
 pub(super) fn retry_action_flag_wait_timer_already_checked() -> u32 {
     RETRY_ACTION_FLAG_WAIT_TIMER_ALREADY_CHECKED
+}
+
+pub(super) fn retry_host_cleanup_flag_kernel_worker_available() -> u32 {
+    RETRY_HOST_CLEANUP_FLAG_KERNEL_WORKER_AVAILABLE
+}
+
+pub(super) fn retry_host_cleanup_action_none() -> u32 {
+    RETRY_HOST_CLEANUP_ACTION_NONE
+}
+
+pub(super) fn retry_host_cleanup_action_flush_stdin() -> u32 {
+    RETRY_HOST_CLEANUP_ACTION_FLUSH_STDIN
+}
+
+pub(super) fn retry_host_cleanup_action_drain_local_pipe() -> u32 {
+    RETRY_HOST_CLEANUP_ACTION_DRAIN_LOCAL_PIPE
+}
+
+pub(super) fn retry_host_cleanup_action(flags: u32) -> i32 {
+    let mut action = RETRY_HOST_CLEANUP_ACTION_FLUSH_STDIN;
+    if (flags & RETRY_HOST_CLEANUP_FLAG_KERNEL_WORKER_AVAILABLE) == 0 {
+        action |= RETRY_HOST_CLEANUP_ACTION_DRAIN_LOCAL_PIPE;
+    }
+    action as i32
 }
 
 pub(super) fn retry_action_defer_supervisor_timer() -> u32 {

@@ -512,6 +512,26 @@ export_u32_const!(
     super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_FLAG_KERNEL_WORKER_AVAILABLE
 );
 export_u32_const!(
+    supervisor_blocked_pipe_sync_before_retry_completion_action_none,
+    super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_COMPLETION_ACTION_NONE
+);
+export_u32_const!(
+    supervisor_blocked_pipe_sync_before_retry_completion_action_drain_local_pipe,
+    super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_COMPLETION_ACTION_DRAIN_LOCAL_PIPE
+);
+export_u32_const!(
+    supervisor_blocked_pipe_sync_before_retry_completion_action_schedule_retry,
+    super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_COMPLETION_ACTION_SCHEDULE_RETRY
+);
+export_u32_const!(
+    supervisor_blocked_pipe_sync_before_retry_completion_flag_requested_drain_output,
+    super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_COMPLETION_FLAG_REQUESTED_DRAIN_OUTPUT
+);
+export_u32_const!(
+    supervisor_blocked_pipe_sync_before_retry_completion_flag_kernel_worker_available,
+    super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_COMPLETION_FLAG_KERNEL_WORKER_AVAILABLE
+);
+export_u32_const!(
     supervisor_resume_flag_timeout_expired,
     super::blocked::resume_flag_timeout_expired()
 );
@@ -1579,6 +1599,26 @@ pub extern "C" fn supervisor_blocked_retry_action_flag_network_connections_avail
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_retry_action_flag_wait_timer_already_checked() -> u32 {
     super::blocked::retry_action_flag_wait_timer_already_checked()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_host_cleanup_flag_kernel_worker_available() -> u32 {
+    super::blocked::retry_host_cleanup_flag_kernel_worker_available()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_host_cleanup_action_none() -> u32 {
+    super::blocked::retry_host_cleanup_action_none()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_host_cleanup_action_flush_stdin() -> u32 {
+    super::blocked::retry_host_cleanup_action_flush_stdin()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_host_cleanup_action_drain_local_pipe() -> u32 {
+    super::blocked::retry_host_cleanup_action_drain_local_pipe()
 }
 
 #[unsafe(no_mangle)]
@@ -2685,6 +2725,16 @@ pub extern "C" fn supervisor_blocked_pipe_sync_before_retry_requested(vm_ptr: u3
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_pipe_sync_before_retry_clear(vm_ptr: u32) -> i32 {
     super::pipe::blocked_pipe_sync_before_retry_clear(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_pipe_sync_before_retry_completion_action(flags: u32) -> i32 {
+    super::pipe::blocked_pipe_sync_before_retry_completion_action(flags)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_host_cleanup_action(flags: u32) -> i32 {
+    super::blocked::retry_host_cleanup_action(flags)
 }
 
 #[unsafe(no_mangle)]

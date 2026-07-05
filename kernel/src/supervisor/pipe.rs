@@ -807,3 +807,19 @@ pub fn blocked_pipe_sync_before_retry_clear(vm_ptr: u32) -> i32 {
     pipe_sync_before_retry_clear_for_vm(vm_ptr);
     0
 }
+
+pub fn blocked_pipe_sync_before_retry_completion_action(flags: u32) -> i32 {
+    let requested_drain = (flags
+        & super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_COMPLETION_FLAG_REQUESTED_DRAIN_OUTPUT)
+        != 0;
+    let kernel_worker_available = (flags
+        & super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_COMPLETION_FLAG_KERNEL_WORKER_AVAILABLE)
+        != 0;
+    let mut action =
+        super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_COMPLETION_ACTION_SCHEDULE_RETRY;
+    if requested_drain || !kernel_worker_available {
+        action |=
+            super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_COMPLETION_ACTION_DRAIN_LOCAL_PIPE;
+    }
+    action as i32
+}
