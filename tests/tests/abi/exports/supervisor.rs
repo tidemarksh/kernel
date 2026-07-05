@@ -1586,6 +1586,19 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_blocked_retry_action_resume_epoll_direct(), 19);
     assert_eq!(supervisor_blocked_retry_action_resume_direct(), 20);
     assert_eq!(supervisor_blocked_retry_action_unsupported(), 21);
+    assert_eq!(supervisor_blocked_initial_action_none(), 0);
+    assert_eq!(
+        supervisor_blocked_initial_action_defer_supervisor_timer(),
+        1
+    );
+    assert_eq!(supervisor_blocked_initial_action_defer_rpc_pending(), 2);
+    assert_eq!(supervisor_blocked_initial_action_arm_wait_timer(), 3);
+    assert_eq!(supervisor_blocked_initial_action_retry_now(), 4);
+    assert_eq!(supervisor_blocked_initial_action_schedule_retry(), 5);
+    assert_eq!(
+        supervisor_blocked_initial_action(0, STATUS_OK, 0),
+        -(EFAULT as i32)
+    );
     assert_eq!(supervisor_blocked_retry_action(0, 0), -(EFAULT as i32));
     assert_eq!(supervisor_blocked_wait_retry_reason(0, 0), -(EFAULT as i32));
     assert_eq!(
@@ -1827,8 +1840,48 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     };
     process_state.thread_count.store(2, Ordering::Release);
     assert_eq!(supervisor_blocked_epoll_wait_retry_required(vm_ptr), 1);
+    assert_eq!(
+        supervisor_blocked_initial_action(vm_ptr, STATUS_EPOLL_WAIT, 0),
+        supervisor_blocked_initial_action_arm_wait_timer() as i32
+    );
+    t.vm.epoll_timeout_ms = -1;
+    assert_eq!(
+        supervisor_blocked_initial_action(vm_ptr, STATUS_EPOLL_WAIT, 0),
+        supervisor_blocked_initial_action_schedule_retry() as i32
+    );
     t.vm.status = STATUS_PIPE_WAIT;
     assert_eq!(supervisor_blocked_epoll_wait_retry_required(vm_ptr), 0);
+    assert_eq!(
+        supervisor_blocked_initial_action(vm_ptr, STATUS_PIPE_WAIT, 0),
+        supervisor_blocked_initial_action_schedule_retry() as i32
+    );
+    t.vm.status = STATUS_WAIT4;
+    assert_eq!(
+        supervisor_blocked_initial_action(vm_ptr, STATUS_WAIT4, 0),
+        supervisor_blocked_initial_action_retry_now() as i32
+    );
+    t.vm.status = STATUS_EPOLL_WAIT;
+    process_state.thread_count.store(1, Ordering::Release);
+    assert_eq!(
+        supervisor_blocked_initial_action(vm_ptr, STATUS_EPOLL_WAIT, 0),
+        supervisor_blocked_initial_action_none() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_initial_action(
+            vm_ptr,
+            STATUS_EPOLL_WAIT,
+            supervisor_blocked_retry_action_flag_supervisor_timer_armed()
+        ),
+        supervisor_blocked_initial_action_defer_supervisor_timer() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_initial_action(
+            vm_ptr,
+            STATUS_EPOLL_WAIT,
+            supervisor_blocked_retry_action_flag_rpc_pending()
+        ),
+        supervisor_blocked_initial_action_defer_rpc_pending() as i32
+    );
     t.vm.status = STATUS_OK;
     assert_eq!(
         supervisor_blocked_wait_retry_reason(vm_ptr, 0),

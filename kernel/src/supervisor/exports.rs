@@ -1455,6 +1455,45 @@ pub extern "C" fn supervisor_blocked_retry_action_unsupported() -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_initial_action_none() -> u32 {
+    super::blocked::initial_action_none()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_initial_action_defer_supervisor_timer() -> u32 {
+    super::blocked::initial_action_defer_supervisor_timer()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_initial_action_defer_rpc_pending() -> u32 {
+    super::blocked::initial_action_defer_rpc_pending()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_initial_action_arm_wait_timer() -> u32 {
+    super::blocked::initial_action_arm_wait_timer()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_initial_action_retry_now() -> u32 {
+    super::blocked::initial_action_retry_now()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_initial_action_schedule_retry() -> u32 {
+    super::blocked::initial_action_schedule_retry()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_initial_action(
+    vm_ptr: u32,
+    blocked_status: i32,
+    flags: u32,
+) -> i32 {
+    super::blocked::initial_action(vm_ptr, blocked_status, flags)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_retry_action(vm_ptr: u32, flags: u32) -> i32 {
     super::blocked::retry_action(vm_ptr, flags)
 }

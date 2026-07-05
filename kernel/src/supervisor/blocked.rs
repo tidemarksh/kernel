@@ -42,6 +42,12 @@ pub(super) const RETRY_ACTION_RESUME_WAIT4_KERNEL_WORKER: u32 = 18;
 pub(super) const RETRY_ACTION_RESUME_EPOLL_DIRECT: u32 = 19;
 pub(super) const RETRY_ACTION_RESUME_DIRECT: u32 = 20;
 pub(super) const RETRY_ACTION_UNSUPPORTED: u32 = 21;
+pub(super) const INITIAL_BLOCKED_ACTION_NONE: u32 = 0;
+pub(super) const INITIAL_BLOCKED_ACTION_DEFER_SUPERVISOR_TIMER: u32 = 1;
+pub(super) const INITIAL_BLOCKED_ACTION_DEFER_RPC_PENDING: u32 = 2;
+pub(super) const INITIAL_BLOCKED_ACTION_ARM_WAIT_TIMER: u32 = 3;
+pub(super) const INITIAL_BLOCKED_ACTION_RETRY_NOW: u32 = 4;
+pub(super) const INITIAL_BLOCKED_ACTION_SCHEDULE_RETRY: u32 = 5;
 pub(super) const RESUME_DELEGATION_FLAG_KERNEL_WORKER_AVAILABLE: u32 = 1;
 pub(super) const RESUME_DELEGATION_DIRECT: u32 = 0;
 pub(super) const RESUME_DELEGATION_KERNEL_WORKER: u32 = 1;
@@ -710,6 +716,75 @@ pub(super) fn retry_action_resume_direct() -> u32 {
 
 pub(super) fn retry_action_unsupported() -> u32 {
     RETRY_ACTION_UNSUPPORTED
+}
+
+pub(super) fn initial_action_none() -> u32 {
+    INITIAL_BLOCKED_ACTION_NONE
+}
+
+pub(super) fn initial_action_defer_supervisor_timer() -> u32 {
+    INITIAL_BLOCKED_ACTION_DEFER_SUPERVISOR_TIMER
+}
+
+pub(super) fn initial_action_defer_rpc_pending() -> u32 {
+    INITIAL_BLOCKED_ACTION_DEFER_RPC_PENDING
+}
+
+pub(super) fn initial_action_arm_wait_timer() -> u32 {
+    INITIAL_BLOCKED_ACTION_ARM_WAIT_TIMER
+}
+
+pub(super) fn initial_action_retry_now() -> u32 {
+    INITIAL_BLOCKED_ACTION_RETRY_NOW
+}
+
+pub(super) fn initial_action_schedule_retry() -> u32 {
+    INITIAL_BLOCKED_ACTION_SCHEDULE_RETRY
+}
+
+pub(super) fn initial_action(vm_ptr: u32, blocked_status: i32, flags: u32) -> i32 {
+    if let Err(errno) = state(vm_ptr) {
+        return -errno;
+    }
+
+    if !matches!(
+        blocked_status,
+        crate::abi::STATUS_WAIT4
+            | crate::abi::STATUS_PIPE_WAIT
+            | crate::abi::STATUS_EPOLL_WAIT
+            | crate::abi::STATUS_SOCKET_RECV
+            | crate::abi::STATUS_SOCKET_SEND
+            | crate::abi::STATUS_FLOCK_WAIT
+            | crate::abi::STATUS_CONNECT
+            | crate::abi::STATUS_FS
+    ) {
+        return INITIAL_BLOCKED_ACTION_NONE as i32;
+    }
+
+    if (flags & RETRY_ACTION_FLAG_SUPERVISOR_TIMER_ARMED) != 0 {
+        return INITIAL_BLOCKED_ACTION_DEFER_SUPERVISOR_TIMER as i32;
+    }
+    if (flags & RETRY_ACTION_FLAG_RPC_PENDING) != 0 {
+        return INITIAL_BLOCKED_ACTION_DEFER_RPC_PENDING as i32;
+    }
+
+    let wait_timer_required = super::timer::blocked_wait_timer_required_for_vm(vm_ptr);
+    if wait_timer_required < 0 {
+        return wait_timer_required;
+    }
+    if wait_timer_required != 0 {
+        return INITIAL_BLOCKED_ACTION_ARM_WAIT_TIMER as i32;
+    }
+
+    match blocked_status {
+        crate::abi::STATUS_EPOLL_WAIT => match epoll_wait_retry_required(vm_ptr) {
+            retry_required if retry_required < 0 => retry_required,
+            0 => INITIAL_BLOCKED_ACTION_NONE as i32,
+            _ => INITIAL_BLOCKED_ACTION_SCHEDULE_RETRY as i32,
+        },
+        crate::abi::STATUS_WAIT4 => INITIAL_BLOCKED_ACTION_RETRY_NOW as i32,
+        _ => INITIAL_BLOCKED_ACTION_SCHEDULE_RETRY as i32,
+    }
 }
 
 pub(super) fn retry_reason(vm_ptr: u32, flags: u32) -> i32 {
