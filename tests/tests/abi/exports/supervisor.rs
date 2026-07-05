@@ -1646,6 +1646,56 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_blocked_retry_action_resume_epoll_direct(), 19);
     assert_eq!(supervisor_blocked_retry_action_resume_direct(), 20);
     assert_eq!(supervisor_blocked_retry_action_unsupported(), 21);
+    assert_eq!(supervisor_blocked_retry_status_action_none(), 0);
+    assert_eq!(
+        supervisor_blocked_retry_status_action_pipe_retry_diagnostics(),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_retry_status_action_pump_blocked_outcome(),
+        2
+    );
+    assert_eq!(
+        supervisor_blocked_retry_status_action_active_child_pipe(),
+        4
+    );
+    assert_eq!(
+        supervisor_blocked_retry_status_action_active_child_wait4(),
+        8
+    );
+    assert_eq!(
+        supervisor_blocked_retry_status_action_success_log_epoll_ready(),
+        16
+    );
+    assert_eq!(
+        supervisor_blocked_retry_status_action_success_log_wait4_resumed(),
+        32
+    );
+    assert_eq!(
+        supervisor_blocked_retry_status_action_wake_runtime_bridge_while_running(),
+        64
+    );
+    assert_eq!(
+        supervisor_blocked_retry_status_action(STATUS_PIPE_WAIT),
+        (supervisor_blocked_retry_status_action_pipe_retry_diagnostics()
+            | supervisor_blocked_retry_status_action_pump_blocked_outcome()
+            | supervisor_blocked_retry_status_action_active_child_pipe()) as i32
+    );
+    assert_eq!(
+        supervisor_blocked_retry_status_action(STATUS_EPOLL_WAIT),
+        (supervisor_blocked_retry_status_action_success_log_epoll_ready()
+            | supervisor_blocked_retry_status_action_wake_runtime_bridge_while_running())
+            as i32
+    );
+    assert_eq!(
+        supervisor_blocked_retry_status_action(STATUS_WAIT4),
+        (supervisor_blocked_retry_status_action_active_child_wait4()
+            | supervisor_blocked_retry_status_action_success_log_wait4_resumed()) as i32
+    );
+    assert_eq!(
+        supervisor_blocked_retry_status_action(STATUS_OK),
+        supervisor_blocked_retry_status_action_none() as i32
+    );
     assert_eq!(supervisor_blocked_initial_action_none(), 0);
     assert_eq!(
         supervisor_blocked_initial_action_defer_supervisor_timer(),

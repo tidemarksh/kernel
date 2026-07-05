@@ -1475,6 +1475,47 @@ pub extern "C" fn supervisor_blocked_retry_action_unsupported() -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_status_action_none() -> u32 {
+    super::blocked::retry_status_action_none()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_status_action_pipe_retry_diagnostics() -> u32 {
+    super::blocked::retry_status_action_pipe_retry_diagnostics()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_status_action_pump_blocked_outcome() -> u32 {
+    super::blocked::retry_status_action_pump_blocked_outcome()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_status_action_active_child_pipe() -> u32 {
+    super::blocked::retry_status_action_active_child_pipe()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_status_action_active_child_wait4() -> u32 {
+    super::blocked::retry_status_action_active_child_wait4()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_status_action_success_log_epoll_ready() -> u32 {
+    super::blocked::retry_status_action_success_log_epoll_ready()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_status_action_success_log_wait4_resumed() -> u32 {
+    super::blocked::retry_status_action_success_log_wait4_resumed()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_status_action_wake_runtime_bridge_while_running() -> u32
+{
+    super::blocked::retry_status_action_wake_runtime_bridge_while_running()
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_initial_action_none() -> u32 {
     super::blocked::initial_action_none()
 }
@@ -1643,6 +1684,11 @@ pub extern "C" fn supervisor_blocked_rpc_post_resume_sync_action(
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_retry_action(vm_ptr: u32, flags: u32) -> i32 {
     super::blocked::retry_action(vm_ptr, flags)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_status_action(status: i32) -> i32 {
+    super::blocked::retry_status_action(status)
 }
 
 #[unsafe(no_mangle)]

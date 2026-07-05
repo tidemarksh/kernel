@@ -55,6 +55,14 @@ pub(super) const RETRY_RESULT_ACTION_SCHEDULE_RETRY_AND_PUMP: u32 = 3;
 pub(super) const POST_NETWORK_PUMP_ACTION_SCHEDULE_RETRY: u32 = RETRY_ACTION_UNSUPPORTED + 1;
 pub(super) const POST_NETWORK_PUMP_ACTION_SCHEDULE_RETRY_WITH_HOST_PROGRESS: u32 =
     POST_NETWORK_PUMP_ACTION_SCHEDULE_RETRY + 1;
+pub(super) const RETRY_STATUS_ACTION_NONE: u32 = 0;
+pub(super) const RETRY_STATUS_ACTION_PIPE_RETRY_DIAGNOSTICS: u32 = 1;
+pub(super) const RETRY_STATUS_ACTION_PUMP_BLOCKED_OUTCOME: u32 = 1 << 1;
+pub(super) const RETRY_STATUS_ACTION_ACTIVE_CHILD_PIPE: u32 = 1 << 2;
+pub(super) const RETRY_STATUS_ACTION_ACTIVE_CHILD_WAIT4: u32 = 1 << 3;
+pub(super) const RETRY_STATUS_ACTION_SUCCESS_LOG_EPOLL_READY: u32 = 1 << 4;
+pub(super) const RETRY_STATUS_ACTION_SUCCESS_LOG_WAIT4_RESUMED: u32 = 1 << 5;
+pub(super) const RETRY_STATUS_ACTION_WAKE_RUNTIME_BRIDGE_WHILE_RUNNING: u32 = 1 << 6;
 pub(super) const STALE_RETRY_RESULT_ACTION_NONE: u32 = 0;
 pub(super) const STALE_RETRY_RESULT_ACTION_HANDLE_CURRENT_RESULT: u32 = 1;
 pub(super) const STALE_RETRY_RESULT_ACTION_HANDLE_CURRENT_RESULT_WAIT4: u32 = 2;
@@ -736,6 +744,38 @@ pub(super) fn retry_action_unsupported() -> u32 {
     RETRY_ACTION_UNSUPPORTED
 }
 
+pub(super) fn retry_status_action_none() -> u32 {
+    RETRY_STATUS_ACTION_NONE
+}
+
+pub(super) fn retry_status_action_pipe_retry_diagnostics() -> u32 {
+    RETRY_STATUS_ACTION_PIPE_RETRY_DIAGNOSTICS
+}
+
+pub(super) fn retry_status_action_pump_blocked_outcome() -> u32 {
+    RETRY_STATUS_ACTION_PUMP_BLOCKED_OUTCOME
+}
+
+pub(super) fn retry_status_action_active_child_pipe() -> u32 {
+    RETRY_STATUS_ACTION_ACTIVE_CHILD_PIPE
+}
+
+pub(super) fn retry_status_action_active_child_wait4() -> u32 {
+    RETRY_STATUS_ACTION_ACTIVE_CHILD_WAIT4
+}
+
+pub(super) fn retry_status_action_success_log_epoll_ready() -> u32 {
+    RETRY_STATUS_ACTION_SUCCESS_LOG_EPOLL_READY
+}
+
+pub(super) fn retry_status_action_success_log_wait4_resumed() -> u32 {
+    RETRY_STATUS_ACTION_SUCCESS_LOG_WAIT4_RESUMED
+}
+
+pub(super) fn retry_status_action_wake_runtime_bridge_while_running() -> u32 {
+    RETRY_STATUS_ACTION_WAKE_RUNTIME_BRIDGE_WHILE_RUNNING
+}
+
 pub(super) fn initial_action_none() -> u32 {
     INITIAL_BLOCKED_ACTION_NONE
 }
@@ -1151,6 +1191,25 @@ pub(super) fn retry_action(vm_ptr: u32, flags: u32) -> i32 {
         return RETRY_ACTION_DEFER_PASSIVE_WAIT as i32;
     }
     retry_action_resume_delegation(vm_ptr, flags)
+}
+
+pub(super) fn retry_status_action(status: i32) -> i32 {
+    match status {
+        crate::abi::STATUS_PIPE_WAIT => {
+            (RETRY_STATUS_ACTION_PIPE_RETRY_DIAGNOSTICS
+                | RETRY_STATUS_ACTION_PUMP_BLOCKED_OUTCOME
+                | RETRY_STATUS_ACTION_ACTIVE_CHILD_PIPE) as i32
+        }
+        crate::abi::STATUS_EPOLL_WAIT => {
+            (RETRY_STATUS_ACTION_SUCCESS_LOG_EPOLL_READY
+                | RETRY_STATUS_ACTION_WAKE_RUNTIME_BRIDGE_WHILE_RUNNING) as i32
+        }
+        crate::abi::STATUS_WAIT4 => {
+            (RETRY_STATUS_ACTION_ACTIVE_CHILD_WAIT4 | RETRY_STATUS_ACTION_SUCCESS_LOG_WAIT4_RESUMED)
+                as i32
+        }
+        _ => RETRY_STATUS_ACTION_NONE as i32,
+    }
 }
 
 pub(super) fn epoll_wait_retry_required(vm_ptr: u32) -> i32 {
