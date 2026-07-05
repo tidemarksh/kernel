@@ -1917,6 +1917,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_blocked_retry_result_action_schedule_retry_and_pump(),
         3
     );
+    assert_eq!(supervisor_blocked_retry_result_action_park_futex(), 4);
     assert_eq!(
         supervisor_blocked_post_network_pump_action_schedule_retry(),
         22
@@ -1958,6 +1959,10 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_blocked_retry_result_action(0, STATUS_OK),
         -(EFAULT as i32)
+    );
+    assert_eq!(
+        supervisor_blocked_retry_result_action(0, STATUS_FUTEX_WAIT),
+        supervisor_blocked_retry_result_action_park_futex() as i32
     );
     assert_eq!(
         supervisor_blocked_post_network_pump_action(0, 0, 0),

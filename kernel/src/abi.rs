@@ -800,7 +800,7 @@ pub use crate::supervisor::{
     supervisor_blocked_retry_action_schedule_pipe_sync_retry,
     supervisor_blocked_retry_action_unsupported, supervisor_blocked_retry_result_action,
     supervisor_blocked_retry_result_action_arm_wait_timer,
-    supervisor_blocked_retry_result_action_none,
+    supervisor_blocked_retry_result_action_none, supervisor_blocked_retry_result_action_park_futex,
     supervisor_blocked_retry_result_action_schedule_retry,
     supervisor_blocked_retry_result_action_schedule_retry_and_pump,
     supervisor_blocked_retry_status_action,

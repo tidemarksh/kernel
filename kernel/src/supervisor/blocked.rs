@@ -52,6 +52,7 @@ pub(super) const RETRY_RESULT_ACTION_NONE: u32 = 0;
 pub(super) const RETRY_RESULT_ACTION_ARM_WAIT_TIMER: u32 = 1;
 pub(super) const RETRY_RESULT_ACTION_SCHEDULE_RETRY: u32 = 2;
 pub(super) const RETRY_RESULT_ACTION_SCHEDULE_RETRY_AND_PUMP: u32 = 3;
+pub(super) const RETRY_RESULT_ACTION_PARK_FUTEX: u32 = 4;
 pub(super) const POST_NETWORK_PUMP_ACTION_SCHEDULE_RETRY: u32 = RETRY_ACTION_UNSUPPORTED + 1;
 pub(super) const POST_NETWORK_PUMP_ACTION_SCHEDULE_RETRY_WITH_HOST_PROGRESS: u32 =
     POST_NETWORK_PUMP_ACTION_SCHEDULE_RETRY + 1;
@@ -861,7 +862,15 @@ pub(super) fn retry_result_action_schedule_retry_and_pump() -> u32 {
     RETRY_RESULT_ACTION_SCHEDULE_RETRY_AND_PUMP
 }
 
+pub(super) fn retry_result_action_park_futex() -> u32 {
+    RETRY_RESULT_ACTION_PARK_FUTEX
+}
+
 pub(super) fn retry_result_action(vm_ptr: u32, result_status: i32) -> i32 {
+    if result_status == crate::abi::STATUS_FUTEX_WAIT {
+        return RETRY_RESULT_ACTION_PARK_FUTEX as i32;
+    }
+
     if let Err(errno) = state(vm_ptr) {
         return -errno;
     }
