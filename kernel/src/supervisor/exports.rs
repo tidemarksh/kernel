@@ -1950,6 +1950,45 @@ pub extern "C" fn supervisor_worker_status_transition_action(status: i32) -> i32
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_worker_status_sync_action_none() -> u32 {
+    super::status_transition::worker_status_sync_action_none()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_worker_status_sync_action_sync_pipe() -> u32 {
+    super::status_transition::worker_status_sync_action_sync_pipe()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_worker_status_sync_action_sync_socket() -> u32 {
+    super::status_transition::worker_status_sync_action_sync_socket()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_worker_status_sync_action_sync_lifecycle() -> u32 {
+    super::status_transition::worker_status_sync_action_sync_lifecycle()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_worker_status_sync_action_wake_signal_waiters() -> u32 {
+    super::status_transition::worker_status_sync_action_wake_signal_waiters()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_worker_status_sync_flag_wrote_or_drained_pipe() -> u32 {
+    super::status_transition::worker_status_sync_flag_wrote_or_drained_pipe()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_worker_status_sync_action(
+    status: i32,
+    completed_sync_effects: u32,
+    flags: u32,
+) -> i32 {
+    super::status_transition::worker_status_sync_action(status, completed_sync_effects, flags)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_state_sync_request(vm_ptr: u32, kind: u32, flags: u32) -> i32 {
     super::state_sync::request(vm_ptr, kind, flags)
 }

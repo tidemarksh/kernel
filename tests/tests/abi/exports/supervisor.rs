@@ -492,6 +492,18 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_worker_status_transition_action_connect_wait(), 1);
     assert_eq!(supervisor_worker_status_transition_action_park_futex(), 2);
     assert_eq!(supervisor_worker_status_transition_action_host_wait(), 3);
+    assert_eq!(supervisor_worker_status_sync_action_none(), 0);
+    assert_eq!(supervisor_worker_status_sync_action_sync_pipe(), 1);
+    assert_eq!(supervisor_worker_status_sync_action_sync_socket(), 2);
+    assert_eq!(supervisor_worker_status_sync_action_sync_lifecycle(), 4);
+    assert_eq!(
+        supervisor_worker_status_sync_action_wake_signal_waiters(),
+        8
+    );
+    assert_eq!(
+        supervisor_worker_status_sync_flag_wrote_or_drained_pipe(),
+        1
+    );
     assert_eq!(supervisor_stdio_output_settle_kind_visible(), 1);
     assert_eq!(supervisor_stdio_output_settle_kind_inherited_child(), 2);
     assert_eq!(supervisor_stdio_pipe_read_progress_action_none(), 0);
@@ -2068,6 +2080,34 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_worker_status_transition_action(STATUS_OK),
         supervisor_worker_status_transition_action_enqueue() as i32
+    );
+    let worker_status_all_effects = (1 << 0) | (1 << 1) | (1 << 4) | (1 << 5);
+    assert_eq!(
+        supervisor_worker_status_sync_action(STATUS_OK, worker_status_all_effects, 0),
+        (supervisor_worker_status_sync_action_sync_pipe()
+            | supervisor_worker_status_sync_action_sync_socket()
+            | supervisor_worker_status_sync_action_sync_lifecycle()
+            | supervisor_worker_status_sync_action_wake_signal_waiters()) as i32
+    );
+    assert_eq!(
+        supervisor_worker_status_sync_action(
+            STATUS_PIPE_WAIT,
+            0,
+            supervisor_worker_status_sync_flag_wrote_or_drained_pipe()
+        ),
+        supervisor_worker_status_sync_action_sync_pipe() as i32
+    );
+    assert_eq!(
+        supervisor_worker_status_sync_action(
+            STATUS_FS,
+            1 << 0,
+            supervisor_worker_status_sync_flag_wrote_or_drained_pipe()
+        ),
+        supervisor_worker_status_sync_action_none() as i32
+    );
+    assert_eq!(
+        supervisor_worker_status_sync_action(STATUS_OK, 1 << 5, 0),
+        supervisor_worker_status_sync_action_wake_signal_waiters() as i32
     );
     assert_eq!(supervisor_blocked_initial_action_none(), 0);
     assert_eq!(
