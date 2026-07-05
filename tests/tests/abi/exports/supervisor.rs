@@ -1603,11 +1603,36 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         3
     );
     assert_eq!(
+        supervisor_blocked_post_network_pump_action_schedule_retry(),
+        22
+    );
+    assert_eq!(
+        supervisor_blocked_post_network_pump_action_schedule_retry_with_host_progress(),
+        23
+    );
+    assert_eq!(supervisor_blocked_stale_retry_result_action_none(), 0);
+    assert_eq!(
+        supervisor_blocked_stale_retry_result_action_handle_current_result(),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_stale_retry_result_action_handle_current_result_wait4(),
+        2
+    );
+    assert_eq!(
         supervisor_blocked_initial_action(0, STATUS_OK, 0),
         -(EFAULT as i32)
     );
     assert_eq!(
         supervisor_blocked_retry_result_action(0, STATUS_OK),
+        -(EFAULT as i32)
+    );
+    assert_eq!(
+        supervisor_blocked_post_network_pump_action(0, 0, 0),
+        -(EFAULT as i32)
+    );
+    assert_eq!(
+        supervisor_blocked_stale_retry_result_action(0, STATUS_WAIT4),
         -(EFAULT as i32)
     );
     assert_eq!(supervisor_blocked_retry_action(0, 0), -(EFAULT as i32));
@@ -1878,10 +1903,37 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_blocked_retry_result_action(vm_ptr, STATUS_PIPE_WAIT),
         supervisor_blocked_retry_result_action_schedule_retry() as i32
     );
+    assert_eq!(
+        supervisor_blocked_post_network_pump_action(vm_ptr, 0, 0),
+        supervisor_blocked_post_network_pump_action_schedule_retry_with_host_progress() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_post_network_pump_action(vm_ptr, 1, 0),
+        supervisor_blocked_post_network_pump_action_schedule_retry() as i32
+    );
     t.vm.status = STATUS_WAIT4;
     assert_eq!(
         supervisor_blocked_initial_action(vm_ptr, STATUS_WAIT4, 0),
         supervisor_blocked_initial_action_retry_now() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_stale_retry_result_action(vm_ptr, STATUS_WAIT4),
+        supervisor_blocked_stale_retry_result_action_none() as i32
+    );
+    t.vm.status = STATUS_OK;
+    assert_eq!(
+        supervisor_blocked_stale_retry_result_action(vm_ptr, STATUS_WAIT4),
+        supervisor_blocked_stale_retry_result_action_handle_current_result_wait4() as i32
+    );
+    t.vm.status = STATUS_FAULT;
+    assert_eq!(
+        supervisor_blocked_stale_retry_result_action(vm_ptr, STATUS_PIPE_WAIT),
+        supervisor_blocked_stale_retry_result_action_handle_current_result() as i32
+    );
+    t.vm.status = STATUS_EPOLL_WAIT;
+    assert_eq!(
+        supervisor_blocked_stale_retry_result_action(vm_ptr, STATUS_PIPE_WAIT),
+        supervisor_blocked_stale_retry_result_action_none() as i32
     );
     t.vm.status = STATUS_EPOLL_WAIT;
     process_state.thread_count.store(1, Ordering::Release);
@@ -2112,6 +2164,14 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
             status_transition_kernel_worker | status_transition_network
         ),
         supervisor_blocked_status_transition_action_sync_socket() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_post_network_pump_action(
+            vm_ptr,
+            1,
+            supervisor_blocked_retry_action_flag_running_worker()
+        ),
+        supervisor_blocked_retry_action_defer_running_worker() as i32
     );
     assert_eq!(
         supervisor_blocked_resume_delegation(

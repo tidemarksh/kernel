@@ -1519,6 +1519,50 @@ pub extern "C" fn supervisor_blocked_retry_result_action(vm_ptr: u32, result_sta
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_post_network_pump_action_schedule_retry() -> u32 {
+    super::blocked::post_network_pump_action_schedule_retry()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_post_network_pump_action_schedule_retry_with_host_progress()
+-> u32 {
+    super::blocked::post_network_pump_action_schedule_retry_with_host_progress()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_post_network_pump_action(
+    vm_ptr: u32,
+    changed: u32,
+    flags: u32,
+) -> i32 {
+    super::blocked::post_network_pump_action(vm_ptr, changed, flags)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_stale_retry_result_action_none() -> u32 {
+    super::blocked::stale_retry_result_action_none()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_stale_retry_result_action_handle_current_result() -> u32 {
+    super::blocked::stale_retry_result_action_handle_current_result()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_stale_retry_result_action_handle_current_result_wait4() -> u32
+{
+    super::blocked::stale_retry_result_action_handle_current_result_wait4()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_stale_retry_result_action(
+    vm_ptr: u32,
+    blocked_status: i32,
+) -> i32 {
+    super::blocked::stale_retry_result_action(vm_ptr, blocked_status)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_retry_action(vm_ptr: u32, flags: u32) -> i32 {
     super::blocked::retry_action(vm_ptr, flags)
 }

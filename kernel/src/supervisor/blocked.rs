@@ -52,6 +52,12 @@ pub(super) const RETRY_RESULT_ACTION_NONE: u32 = 0;
 pub(super) const RETRY_RESULT_ACTION_ARM_WAIT_TIMER: u32 = 1;
 pub(super) const RETRY_RESULT_ACTION_SCHEDULE_RETRY: u32 = 2;
 pub(super) const RETRY_RESULT_ACTION_SCHEDULE_RETRY_AND_PUMP: u32 = 3;
+pub(super) const POST_NETWORK_PUMP_ACTION_SCHEDULE_RETRY: u32 = RETRY_ACTION_UNSUPPORTED + 1;
+pub(super) const POST_NETWORK_PUMP_ACTION_SCHEDULE_RETRY_WITH_HOST_PROGRESS: u32 =
+    POST_NETWORK_PUMP_ACTION_SCHEDULE_RETRY + 1;
+pub(super) const STALE_RETRY_RESULT_ACTION_NONE: u32 = 0;
+pub(super) const STALE_RETRY_RESULT_ACTION_HANDLE_CURRENT_RESULT: u32 = 1;
+pub(super) const STALE_RETRY_RESULT_ACTION_HANDLE_CURRENT_RESULT_WAIT4: u32 = 2;
 pub(super) const RESUME_DELEGATION_FLAG_KERNEL_WORKER_AVAILABLE: u32 = 1;
 pub(super) const RESUME_DELEGATION_DIRECT: u32 = 0;
 pub(super) const RESUME_DELEGATION_KERNEL_WORKER: u32 = 1;
@@ -828,6 +834,61 @@ pub(super) fn retry_result_action(vm_ptr: u32, result_status: i32) -> i32 {
         },
         _ => RETRY_RESULT_ACTION_SCHEDULE_RETRY as i32,
     }
+}
+
+pub(super) fn post_network_pump_action_schedule_retry() -> u32 {
+    POST_NETWORK_PUMP_ACTION_SCHEDULE_RETRY
+}
+
+pub(super) fn post_network_pump_action_schedule_retry_with_host_progress() -> u32 {
+    POST_NETWORK_PUMP_ACTION_SCHEDULE_RETRY_WITH_HOST_PROGRESS
+}
+
+pub(super) fn post_network_pump_action(vm_ptr: u32, changed: u32, flags: u32) -> i32 {
+    let vm = match state(vm_ptr) {
+        Ok(vm) => vm,
+        Err(errno) => return -errno,
+    };
+
+    if changed == 0 {
+        return POST_NETWORK_PUMP_ACTION_SCHEDULE_RETRY_WITH_HOST_PROGRESS as i32;
+    }
+
+    if vm.status != crate::abi::STATUS_PIPE_WAIT || !poll_wait_has_socket_for_vm(vm) {
+        return POST_NETWORK_PUMP_ACTION_SCHEDULE_RETRY as i32;
+    }
+
+    retry_action(vm_ptr, flags | RETRY_ACTION_FLAG_WAIT_TIMER_ALREADY_CHECKED)
+}
+
+pub(super) fn stale_retry_result_action_none() -> u32 {
+    STALE_RETRY_RESULT_ACTION_NONE
+}
+
+pub(super) fn stale_retry_result_action_handle_current_result() -> u32 {
+    STALE_RETRY_RESULT_ACTION_HANDLE_CURRENT_RESULT
+}
+
+pub(super) fn stale_retry_result_action_handle_current_result_wait4() -> u32 {
+    STALE_RETRY_RESULT_ACTION_HANDLE_CURRENT_RESULT_WAIT4
+}
+
+pub(super) fn stale_retry_result_action(vm_ptr: u32, blocked_status: i32) -> i32 {
+    let vm = match state(vm_ptr) {
+        Ok(vm) => vm,
+        Err(errno) => return -errno,
+    };
+
+    if vm.status == blocked_status {
+        return STALE_RETRY_RESULT_ACTION_NONE as i32;
+    }
+    if !matches!(vm.status, crate::abi::STATUS_OK | crate::abi::STATUS_FAULT) {
+        return STALE_RETRY_RESULT_ACTION_NONE as i32;
+    }
+    if blocked_status == crate::abi::STATUS_WAIT4 {
+        return STALE_RETRY_RESULT_ACTION_HANDLE_CURRENT_RESULT_WAIT4 as i32;
+    }
+    STALE_RETRY_RESULT_ACTION_HANDLE_CURRENT_RESULT as i32
 }
 
 pub(super) fn retry_reason(vm_ptr: u32, flags: u32) -> i32 {
