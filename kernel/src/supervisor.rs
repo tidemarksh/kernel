@@ -30,6 +30,7 @@ pub mod process_wait;
 mod records;
 mod resume;
 mod runnable;
+mod scheduler;
 mod signal;
 mod socket;
 mod state;

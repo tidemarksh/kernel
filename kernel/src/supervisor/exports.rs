@@ -623,6 +623,34 @@ export_u32_const!(
     super::process_wait::wait4_rpc_local_status_action_start()
 );
 export_u32_const!(
+    supervisor_scheduler_clear_blocked_action_none,
+    super::scheduler::clear_blocked_action_none()
+);
+export_u32_const!(
+    supervisor_scheduler_clear_blocked_action_clear_pipe_sync_before_retry,
+    super::scheduler::clear_blocked_action_clear_pipe_sync_before_retry()
+);
+export_u32_const!(
+    supervisor_scheduler_clear_blocked_flag_clear_pipe_sync_before_retry,
+    super::scheduler::clear_blocked_flag_clear_pipe_sync_before_retry()
+);
+export_u32_const!(
+    supervisor_scheduler_block_worker_action_record_blocked,
+    super::scheduler::block_worker_action_record_blocked()
+);
+export_u32_const!(
+    supervisor_scheduler_block_worker_action_park_futex,
+    super::scheduler::block_worker_action_park_futex()
+);
+export_u32_const!(
+    supervisor_scheduler_futex_waiter_action_not_waiter,
+    super::scheduler::futex_waiter_action_not_waiter()
+);
+export_u32_const!(
+    supervisor_scheduler_futex_waiter_action_waiter,
+    super::scheduler::futex_waiter_action_waiter()
+);
+export_u32_const!(
     supervisor_stdio_output_settle_kind_visible,
     super::stdio::output_settle_kind_visible()
 );
@@ -1806,6 +1834,21 @@ pub extern "C" fn supervisor_wait4_child_exit_blocked_parent_action(status: i32)
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_wait4_rpc_local_status_action(status: i32) -> i32 {
     super::process_wait::wait4_rpc_local_status_action(status)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_scheduler_clear_blocked_action(status: i32, flags: u32) -> i32 {
+    super::scheduler::clear_blocked_action(status, flags)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_scheduler_block_worker_action(status: i32) -> i32 {
+    super::scheduler::block_worker_action(status)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_scheduler_futex_waiter_action(status: i32) -> i32 {
+    super::scheduler::futex_waiter_action(status)
 }
 
 #[unsafe(no_mangle)]

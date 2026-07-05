@@ -413,6 +413,19 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     );
     assert_eq!(supervisor_wait4_rpc_local_status_action_skip(), 0);
     assert_eq!(supervisor_wait4_rpc_local_status_action_start(), 1);
+    assert_eq!(supervisor_scheduler_clear_blocked_action_none(), 0);
+    assert_eq!(
+        supervisor_scheduler_clear_blocked_action_clear_pipe_sync_before_retry(),
+        1
+    );
+    assert_eq!(
+        supervisor_scheduler_clear_blocked_flag_clear_pipe_sync_before_retry(),
+        1
+    );
+    assert_eq!(supervisor_scheduler_block_worker_action_record_blocked(), 0);
+    assert_eq!(supervisor_scheduler_block_worker_action_park_futex(), 1);
+    assert_eq!(supervisor_scheduler_futex_waiter_action_not_waiter(), 0);
+    assert_eq!(supervisor_scheduler_futex_waiter_action_waiter(), 1);
     assert_eq!(supervisor_stdio_output_settle_kind_visible(), 1);
     assert_eq!(supervisor_stdio_output_settle_kind_inherited_child(), 2);
     assert_eq!(supervisor_stdio_pipe_read_progress_action_none(), 0);
@@ -1837,6 +1850,36 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_wait4_rpc_local_status_action(STATUS_OK),
         supervisor_wait4_rpc_local_status_action_skip() as i32
+    );
+    let scheduler_clear_pipe_flag =
+        supervisor_scheduler_clear_blocked_flag_clear_pipe_sync_before_retry();
+    assert_eq!(
+        supervisor_scheduler_clear_blocked_action(STATUS_PIPE_WAIT, scheduler_clear_pipe_flag),
+        supervisor_scheduler_clear_blocked_action_clear_pipe_sync_before_retry() as i32
+    );
+    assert_eq!(
+        supervisor_scheduler_clear_blocked_action(STATUS_PIPE_WAIT, 0),
+        supervisor_scheduler_clear_blocked_action_none() as i32
+    );
+    assert_eq!(
+        supervisor_scheduler_clear_blocked_action(STATUS_WAIT4, scheduler_clear_pipe_flag),
+        supervisor_scheduler_clear_blocked_action_none() as i32
+    );
+    assert_eq!(
+        supervisor_scheduler_block_worker_action(STATUS_FUTEX_WAIT),
+        supervisor_scheduler_block_worker_action_park_futex() as i32
+    );
+    assert_eq!(
+        supervisor_scheduler_block_worker_action(STATUS_PIPE_WAIT),
+        supervisor_scheduler_block_worker_action_record_blocked() as i32
+    );
+    assert_eq!(
+        supervisor_scheduler_futex_waiter_action(STATUS_FUTEX_WAIT),
+        supervisor_scheduler_futex_waiter_action_waiter() as i32
+    );
+    assert_eq!(
+        supervisor_scheduler_futex_waiter_action(STATUS_OK),
+        supervisor_scheduler_futex_waiter_action_not_waiter() as i32
     );
     assert_eq!(supervisor_blocked_initial_action_none(), 0);
     assert_eq!(
