@@ -8,14 +8,14 @@ use crate::abi::{
 };
 use crate::types::ThreadState;
 
-const SYNC_EFFECT_PIPE_STATE: u32 = 1 << 0;
-const SYNC_EFFECT_SOCKET_STATE: u32 = 1 << 1;
-const SYNC_EFFECT_EPOLL_STATE: u32 = 1 << 2;
-const SYNC_EFFECT_EPOLL_DEPENDENT_OFD_STATE: u32 = 1 << 3;
-const SYNC_EFFECT_PROCESS_LIFECYCLE: u32 = 1 << 4;
-const SYNC_EFFECT_SIGNAL_WAITERS: u32 = 1 << 5;
-const SYNC_EFFECT_FORK_SHARED_OFD_STATE: u32 = 1 << 6;
-const SYNC_EFFECT_PROCESS_MEMFS: u32 = 1 << 7;
+pub(super) const SYNC_EFFECT_PIPE_STATE: u32 = 1 << 0;
+pub(super) const SYNC_EFFECT_SOCKET_STATE: u32 = 1 << 1;
+pub(super) const SYNC_EFFECT_EPOLL_STATE: u32 = 1 << 2;
+pub(super) const SYNC_EFFECT_EPOLL_DEPENDENT_OFD_STATE: u32 = 1 << 3;
+pub(super) const SYNC_EFFECT_PROCESS_LIFECYCLE: u32 = 1 << 4;
+pub(super) const SYNC_EFFECT_SIGNAL_WAITERS: u32 = 1 << 5;
+pub(super) const SYNC_EFFECT_FORK_SHARED_OFD_STATE: u32 = 1 << 6;
+pub(super) const SYNC_EFFECT_PROCESS_MEMFS: u32 = 1 << 7;
 
 const F_GETFD: u64 = 1;
 const F_SETFD: u64 = 2;

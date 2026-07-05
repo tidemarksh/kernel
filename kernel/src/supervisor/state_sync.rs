@@ -47,6 +47,26 @@ pub(super) const WAKE_BLOCKED_ACTION_RETRY: u32 = 1;
 pub(super) const WAKE_BLOCKED_ACTION_CLEAR_PIPE_SYNC_AND_RETRY: u32 = 2;
 pub(super) const WAKE_BLOCKED_ACTION_LOG_EPOLL_AND_RETRY: u32 = 3;
 
+pub(super) const OWNED_STATE_SYNC_ACTION_NONE: u32 = 0;
+pub(super) const OWNED_STATE_SYNC_ACTION_MARK_PROCESS_MEMFS_DIRTY: u32 = 1;
+pub(super) const OWNED_STATE_SYNC_ACTION_SYNC_FORK_SHARED: u32 = 1 << 1;
+pub(super) const OWNED_STATE_SYNC_ACTION_SYNC_EPOLL_DEPENDENT_OFDS: u32 = 1 << 2;
+pub(super) const OWNED_STATE_SYNC_ACTION_SYNC_SOCKET: u32 = 1 << 3;
+pub(super) const OWNED_STATE_SYNC_ACTION_WAKE_SOCKET_WAITERS: u32 = 1 << 4;
+pub(super) const OWNED_STATE_SYNC_ACTION_SYNC_PROCESS_MEMFS: u32 = 1 << 5;
+pub(super) const OWNED_STATE_SYNC_ACTION_SYNC_EPOLL: u32 = 1 << 6;
+pub(super) const OWNED_STATE_SYNC_ACTION_RETRY_EPOLL_WAITERS: u32 = 1 << 7;
+
+pub(super) const OWNED_STATE_SYNC_FLAG_RUNNING_WORKER: u32 = 1;
+pub(super) const OWNED_STATE_SYNC_FLAG_WORKER_OWNS_AUTHORITATIVE_STATE: u32 = 1 << 1;
+pub(super) const OWNED_STATE_SYNC_FLAG_KERNEL_WORKER_AVAILABLE: u32 = 1 << 2;
+pub(super) const OWNED_STATE_SYNC_FLAG_EPOLL_STATE_KERNEL_OWNS: u32 = 1 << 3;
+pub(super) const OWNED_STATE_SYNC_FLAG_FORK_SHARED_EFFECT_REQUESTED: u32 = 1 << 4;
+pub(super) const OWNED_STATE_SYNC_FLAG_ACTIVE_VFORK_CHILD_OWNER_MISMATCH: u32 = 1 << 5;
+pub(super) const OWNED_STATE_SYNC_FLAG_PROCESS_MEMFS_DIRTY: u32 = 1 << 6;
+pub(super) const OWNED_STATE_SYNC_FLAG_HELD_EPOLL_OFD: u32 = 1 << 7;
+pub(super) const OWNED_STATE_SYNC_FLAG_WROTE_OR_DRAINED_PIPE: u32 = 1 << 8;
+
 fn with_state_sync_lock<T>(f: impl FnOnce(&mut [StateSyncRequest; STATE_SYNC_CAP]) -> T) -> T {
     loop {
         if STATE_SYNC_LOCK
@@ -122,6 +142,78 @@ pub(super) fn wake_blocked_action_clear_pipe_sync_and_retry() -> u32 {
 
 pub(super) fn wake_blocked_action_log_epoll_and_retry() -> u32 {
     WAKE_BLOCKED_ACTION_LOG_EPOLL_AND_RETRY
+}
+
+pub(super) fn owned_state_sync_action_none() -> u32 {
+    OWNED_STATE_SYNC_ACTION_NONE
+}
+
+pub(super) fn owned_state_sync_action_mark_process_memfs_dirty() -> u32 {
+    OWNED_STATE_SYNC_ACTION_MARK_PROCESS_MEMFS_DIRTY
+}
+
+pub(super) fn owned_state_sync_action_sync_fork_shared() -> u32 {
+    OWNED_STATE_SYNC_ACTION_SYNC_FORK_SHARED
+}
+
+pub(super) fn owned_state_sync_action_sync_epoll_dependent_ofds() -> u32 {
+    OWNED_STATE_SYNC_ACTION_SYNC_EPOLL_DEPENDENT_OFDS
+}
+
+pub(super) fn owned_state_sync_action_sync_socket() -> u32 {
+    OWNED_STATE_SYNC_ACTION_SYNC_SOCKET
+}
+
+pub(super) fn owned_state_sync_action_wake_socket_waiters() -> u32 {
+    OWNED_STATE_SYNC_ACTION_WAKE_SOCKET_WAITERS
+}
+
+pub(super) fn owned_state_sync_action_sync_process_memfs() -> u32 {
+    OWNED_STATE_SYNC_ACTION_SYNC_PROCESS_MEMFS
+}
+
+pub(super) fn owned_state_sync_action_sync_epoll() -> u32 {
+    OWNED_STATE_SYNC_ACTION_SYNC_EPOLL
+}
+
+pub(super) fn owned_state_sync_action_retry_epoll_waiters() -> u32 {
+    OWNED_STATE_SYNC_ACTION_RETRY_EPOLL_WAITERS
+}
+
+pub(super) fn owned_state_sync_flag_running_worker() -> u32 {
+    OWNED_STATE_SYNC_FLAG_RUNNING_WORKER
+}
+
+pub(super) fn owned_state_sync_flag_worker_owns_authoritative_state() -> u32 {
+    OWNED_STATE_SYNC_FLAG_WORKER_OWNS_AUTHORITATIVE_STATE
+}
+
+pub(super) fn owned_state_sync_flag_kernel_worker_available() -> u32 {
+    OWNED_STATE_SYNC_FLAG_KERNEL_WORKER_AVAILABLE
+}
+
+pub(super) fn owned_state_sync_flag_epoll_state_kernel_owns() -> u32 {
+    OWNED_STATE_SYNC_FLAG_EPOLL_STATE_KERNEL_OWNS
+}
+
+pub(super) fn owned_state_sync_flag_fork_shared_effect_requested() -> u32 {
+    OWNED_STATE_SYNC_FLAG_FORK_SHARED_EFFECT_REQUESTED
+}
+
+pub(super) fn owned_state_sync_flag_active_vfork_child_owner_mismatch() -> u32 {
+    OWNED_STATE_SYNC_FLAG_ACTIVE_VFORK_CHILD_OWNER_MISMATCH
+}
+
+pub(super) fn owned_state_sync_flag_process_memfs_dirty() -> u32 {
+    OWNED_STATE_SYNC_FLAG_PROCESS_MEMFS_DIRTY
+}
+
+pub(super) fn owned_state_sync_flag_held_epoll_ofd() -> u32 {
+    OWNED_STATE_SYNC_FLAG_HELD_EPOLL_OFD
+}
+
+pub(super) fn owned_state_sync_flag_wrote_or_drained_pipe() -> u32 {
+    OWNED_STATE_SYNC_FLAG_WROTE_OR_DRAINED_PIPE
 }
 
 fn valid_sync_kind(kind: u32) -> bool {
@@ -321,4 +413,79 @@ pub(super) fn wake_blocked_action(status: i32, source: u32, flags: u32) -> i32 {
         }
         _ => WAKE_BLOCKED_ACTION_RETRY as i32,
     }
+}
+
+pub(super) fn owned_state_sync_action(status: i32, completed_sync_effects: u32, flags: u32) -> i32 {
+    let running_worker = (flags & OWNED_STATE_SYNC_FLAG_RUNNING_WORKER) != 0;
+    let worker_owns_authoritative_state =
+        (flags & OWNED_STATE_SYNC_FLAG_WORKER_OWNS_AUTHORITATIVE_STATE) != 0;
+    let kernel_worker_available = (flags & OWNED_STATE_SYNC_FLAG_KERNEL_WORKER_AVAILABLE) != 0;
+    let epoll_state_kernel_owns = (flags & OWNED_STATE_SYNC_FLAG_EPOLL_STATE_KERNEL_OWNS) != 0;
+    let fork_shared_effect_requested =
+        (flags & OWNED_STATE_SYNC_FLAG_FORK_SHARED_EFFECT_REQUESTED) != 0;
+    let active_vfork_child_owner_mismatch =
+        (flags & OWNED_STATE_SYNC_FLAG_ACTIVE_VFORK_CHILD_OWNER_MISMATCH) != 0;
+    let process_memfs_dirty = (flags & OWNED_STATE_SYNC_FLAG_PROCESS_MEMFS_DIRTY) != 0;
+    let held_epoll_ofd = (flags & OWNED_STATE_SYNC_FLAG_HELD_EPOLL_OFD) != 0;
+    let wrote_or_drained_pipe = (flags & OWNED_STATE_SYNC_FLAG_WROTE_OR_DRAINED_PIPE) != 0;
+
+    let has_pipe_effect =
+        (completed_sync_effects & super::sync_effects::SYNC_EFFECT_PIPE_STATE) != 0;
+    let has_socket_effect =
+        (completed_sync_effects & super::sync_effects::SYNC_EFFECT_SOCKET_STATE) != 0;
+    let has_epoll_effect =
+        (completed_sync_effects & super::sync_effects::SYNC_EFFECT_EPOLL_STATE) != 0;
+    let has_epoll_dependent_ofd_effect =
+        (completed_sync_effects & super::sync_effects::SYNC_EFFECT_EPOLL_DEPENDENT_OFD_STATE) != 0;
+    let has_process_memfs_effect =
+        (completed_sync_effects & super::sync_effects::SYNC_EFFECT_PROCESS_MEMFS) != 0;
+
+    let mut action = OWNED_STATE_SYNC_ACTION_NONE;
+    let mark_process_memfs_dirty = running_worker && has_process_memfs_effect;
+    if mark_process_memfs_dirty {
+        action |= OWNED_STATE_SYNC_ACTION_MARK_PROCESS_MEMFS_DIRTY;
+    }
+    if status == crate::abi::STATUS_OK && has_socket_effect {
+        action |= OWNED_STATE_SYNC_ACTION_WAKE_SOCKET_WAITERS;
+    }
+
+    if active_vfork_child_owner_mismatch || super::process::status_is_lifecycle_handoff(status) != 0
+    {
+        return action as i32;
+    }
+
+    let should_sync_fork_shared = worker_owns_authoritative_state
+        && kernel_worker_available
+        && fork_shared_effect_requested
+        && status == crate::abi::STATUS_OK;
+    if should_sync_fork_shared {
+        action |= OWNED_STATE_SYNC_ACTION_SYNC_FORK_SHARED;
+    }
+
+    if running_worker && epoll_state_kernel_owns && has_epoll_dependent_ofd_effect {
+        action |= OWNED_STATE_SYNC_ACTION_SYNC_EPOLL_DEPENDENT_OFDS;
+    }
+
+    if should_sync_fork_shared && running_worker && kernel_worker_available && has_socket_effect {
+        action |= OWNED_STATE_SYNC_ACTION_SYNC_SOCKET;
+    }
+
+    let dirty_process_memfs = process_memfs_dirty || mark_process_memfs_dirty;
+    let should_publish_dirty_memfs = status != crate::abi::STATUS_OK || has_pipe_effect;
+    if running_worker
+        && kernel_worker_available
+        && dirty_process_memfs
+        && should_publish_dirty_memfs
+    {
+        action |= OWNED_STATE_SYNC_ACTION_SYNC_PROCESS_MEMFS;
+    }
+
+    if running_worker && epoll_state_kernel_owns && has_epoll_effect && held_epoll_ofd {
+        action |= OWNED_STATE_SYNC_ACTION_SYNC_EPOLL;
+        if !wrote_or_drained_pipe {
+            action |= OWNED_STATE_SYNC_ACTION_RETRY_EPOLL_WAITERS;
+        }
+    }
+
+    action as i32
 }

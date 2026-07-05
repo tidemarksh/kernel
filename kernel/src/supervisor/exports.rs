@@ -511,6 +511,78 @@ export_u32_const!(
     super::SUPERVISOR_STATE_SYNC_RUN_FLAG_WAKE_WAITERS
 );
 export_u32_const!(
+    supervisor_owned_state_sync_action_none,
+    super::state_sync::owned_state_sync_action_none()
+);
+export_u32_const!(
+    supervisor_owned_state_sync_action_mark_process_memfs_dirty,
+    super::state_sync::owned_state_sync_action_mark_process_memfs_dirty()
+);
+export_u32_const!(
+    supervisor_owned_state_sync_action_sync_fork_shared,
+    super::state_sync::owned_state_sync_action_sync_fork_shared()
+);
+export_u32_const!(
+    supervisor_owned_state_sync_action_sync_epoll_dependent_ofds,
+    super::state_sync::owned_state_sync_action_sync_epoll_dependent_ofds()
+);
+export_u32_const!(
+    supervisor_owned_state_sync_action_sync_socket,
+    super::state_sync::owned_state_sync_action_sync_socket()
+);
+export_u32_const!(
+    supervisor_owned_state_sync_action_wake_socket_waiters,
+    super::state_sync::owned_state_sync_action_wake_socket_waiters()
+);
+export_u32_const!(
+    supervisor_owned_state_sync_action_sync_process_memfs,
+    super::state_sync::owned_state_sync_action_sync_process_memfs()
+);
+export_u32_const!(
+    supervisor_owned_state_sync_action_sync_epoll,
+    super::state_sync::owned_state_sync_action_sync_epoll()
+);
+export_u32_const!(
+    supervisor_owned_state_sync_action_retry_epoll_waiters,
+    super::state_sync::owned_state_sync_action_retry_epoll_waiters()
+);
+export_u32_const!(
+    supervisor_owned_state_sync_flag_running_worker,
+    super::state_sync::owned_state_sync_flag_running_worker()
+);
+export_u32_const!(
+    supervisor_owned_state_sync_flag_worker_owns_authoritative_state,
+    super::state_sync::owned_state_sync_flag_worker_owns_authoritative_state()
+);
+export_u32_const!(
+    supervisor_owned_state_sync_flag_kernel_worker_available,
+    super::state_sync::owned_state_sync_flag_kernel_worker_available()
+);
+export_u32_const!(
+    supervisor_owned_state_sync_flag_epoll_state_kernel_owns,
+    super::state_sync::owned_state_sync_flag_epoll_state_kernel_owns()
+);
+export_u32_const!(
+    supervisor_owned_state_sync_flag_fork_shared_effect_requested,
+    super::state_sync::owned_state_sync_flag_fork_shared_effect_requested()
+);
+export_u32_const!(
+    supervisor_owned_state_sync_flag_active_vfork_child_owner_mismatch,
+    super::state_sync::owned_state_sync_flag_active_vfork_child_owner_mismatch()
+);
+export_u32_const!(
+    supervisor_owned_state_sync_flag_process_memfs_dirty,
+    super::state_sync::owned_state_sync_flag_process_memfs_dirty()
+);
+export_u32_const!(
+    supervisor_owned_state_sync_flag_held_epoll_ofd,
+    super::state_sync::owned_state_sync_flag_held_epoll_ofd()
+);
+export_u32_const!(
+    supervisor_owned_state_sync_flag_wrote_or_drained_pipe,
+    super::state_sync::owned_state_sync_flag_wrote_or_drained_pipe()
+);
+export_u32_const!(
     supervisor_blocked_wait_wake_source_pipe_sync,
     super::state_sync::wake_source_pipe_sync()
 );
@@ -1895,6 +1967,15 @@ pub extern "C" fn supervisor_state_sync_complete(vm_ptr: u32, kind: u32) -> i32 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_state_sync_clear(vm_ptr: u32, kind: u32) -> i32 {
     super::state_sync::clear(vm_ptr, kind)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_owned_state_sync_action(
+    status: i32,
+    completed_sync_effects: u32,
+    flags: u32,
+) -> i32 {
+    super::state_sync::owned_state_sync_action(status, completed_sync_effects, flags)
 }
 
 #[unsafe(no_mangle)]

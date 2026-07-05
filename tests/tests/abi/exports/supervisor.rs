@@ -361,6 +361,51 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_state_sync_request_flag_wake_waiters(), 1);
     assert_eq!(supervisor_state_sync_run_flag_run(), 1);
     assert_eq!(supervisor_state_sync_run_flag_wake_waiters(), 2);
+    assert_eq!(supervisor_owned_state_sync_action_none(), 0);
+    assert_eq!(
+        supervisor_owned_state_sync_action_mark_process_memfs_dirty(),
+        1
+    );
+    assert_eq!(supervisor_owned_state_sync_action_sync_fork_shared(), 2);
+    assert_eq!(
+        supervisor_owned_state_sync_action_sync_epoll_dependent_ofds(),
+        4
+    );
+    assert_eq!(supervisor_owned_state_sync_action_sync_socket(), 8);
+    assert_eq!(supervisor_owned_state_sync_action_wake_socket_waiters(), 16);
+    assert_eq!(supervisor_owned_state_sync_action_sync_process_memfs(), 32);
+    assert_eq!(supervisor_owned_state_sync_action_sync_epoll(), 64);
+    assert_eq!(
+        supervisor_owned_state_sync_action_retry_epoll_waiters(),
+        128
+    );
+    assert_eq!(supervisor_owned_state_sync_flag_running_worker(), 1);
+    assert_eq!(
+        supervisor_owned_state_sync_flag_worker_owns_authoritative_state(),
+        2
+    );
+    assert_eq!(
+        supervisor_owned_state_sync_flag_kernel_worker_available(),
+        4
+    );
+    assert_eq!(
+        supervisor_owned_state_sync_flag_epoll_state_kernel_owns(),
+        8
+    );
+    assert_eq!(
+        supervisor_owned_state_sync_flag_fork_shared_effect_requested(),
+        16
+    );
+    assert_eq!(
+        supervisor_owned_state_sync_flag_active_vfork_child_owner_mismatch(),
+        32
+    );
+    assert_eq!(supervisor_owned_state_sync_flag_process_memfs_dirty(), 64);
+    assert_eq!(supervisor_owned_state_sync_flag_held_epoll_ofd(), 128);
+    assert_eq!(
+        supervisor_owned_state_sync_flag_wrote_or_drained_pipe(),
+        256
+    );
     assert_eq!(supervisor_blocked_wait_wake_source_pipe_sync(), 1);
     assert_eq!(supervisor_blocked_wait_wake_source_epoll_sync(), 2);
     assert_eq!(supervisor_blocked_wait_wake_source_socket_sync(), 3);
@@ -634,6 +679,73 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_state_sync_next_run_flags(0x1000, supervisor_state_sync_kind_epoll()),
         0
+    );
+    let owned_state_running = supervisor_owned_state_sync_flag_running_worker();
+    let owned_state_authoritative =
+        supervisor_owned_state_sync_flag_worker_owns_authoritative_state();
+    let owned_state_kernel_worker = supervisor_owned_state_sync_flag_kernel_worker_available();
+    let owned_state_epoll_kernel = supervisor_owned_state_sync_flag_epoll_state_kernel_owns();
+    let owned_state_fork_shared = supervisor_owned_state_sync_flag_fork_shared_effect_requested();
+    let owned_state_held_epoll = supervisor_owned_state_sync_flag_held_epoll_ofd();
+    let owned_state_all_effects = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 6);
+    assert_eq!(
+        supervisor_owned_state_sync_action(
+            STATUS_OK,
+            owned_state_all_effects,
+            owned_state_running
+                | owned_state_authoritative
+                | owned_state_kernel_worker
+                | owned_state_epoll_kernel
+                | owned_state_fork_shared
+                | owned_state_held_epoll,
+        ),
+        (supervisor_owned_state_sync_action_sync_fork_shared()
+            | supervisor_owned_state_sync_action_sync_epoll_dependent_ofds()
+            | supervisor_owned_state_sync_action_sync_socket()
+            | supervisor_owned_state_sync_action_wake_socket_waiters()
+            | supervisor_owned_state_sync_action_sync_epoll()
+            | supervisor_owned_state_sync_action_retry_epoll_waiters()) as i32
+    );
+    assert_eq!(
+        supervisor_owned_state_sync_action(
+            STATUS_OK,
+            1 << 2,
+            owned_state_running
+                | owned_state_epoll_kernel
+                | owned_state_held_epoll
+                | supervisor_owned_state_sync_flag_wrote_or_drained_pipe(),
+        ),
+        supervisor_owned_state_sync_action_sync_epoll() as i32
+    );
+    assert_eq!(
+        supervisor_owned_state_sync_action(
+            STATUS_PIPE_WAIT,
+            (1 << 0) | (1 << 7),
+            owned_state_running | owned_state_kernel_worker,
+        ),
+        (supervisor_owned_state_sync_action_mark_process_memfs_dirty()
+            | supervisor_owned_state_sync_action_sync_process_memfs()) as i32
+    );
+    assert_eq!(
+        supervisor_owned_state_sync_action(
+            STATUS_OK,
+            1 << 7,
+            owned_state_running | owned_state_kernel_worker,
+        ),
+        supervisor_owned_state_sync_action_mark_process_memfs_dirty() as i32
+    );
+    assert_eq!(
+        supervisor_owned_state_sync_action(
+            STATUS_EXECVE_SPAWN,
+            owned_state_all_effects,
+            owned_state_running
+                | owned_state_authoritative
+                | owned_state_kernel_worker
+                | owned_state_epoll_kernel
+                | owned_state_fork_shared
+                | owned_state_held_epoll,
+        ),
+        supervisor_owned_state_sync_action_none() as i32
     );
     assert_eq!(supervisor_process_held_ofd_refcount(0, 1), 0);
     assert_eq!(supervisor_process_holds_regular_file_ofd(0, 1), 0);
