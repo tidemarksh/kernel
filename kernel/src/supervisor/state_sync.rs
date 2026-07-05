@@ -67,6 +67,16 @@ pub(super) const OWNED_STATE_SYNC_FLAG_PROCESS_MEMFS_DIRTY: u32 = 1 << 6;
 pub(super) const OWNED_STATE_SYNC_FLAG_HELD_EPOLL_OFD: u32 = 1 << 7;
 pub(super) const OWNED_STATE_SYNC_FLAG_WROTE_OR_DRAINED_PIPE: u32 = 1 << 8;
 
+pub(super) const STATE_SYNC_START_ACTION_SKIP: u32 = 0;
+pub(super) const STATE_SYNC_START_ACTION_REQUEST_SYNC: u32 = 1;
+pub(super) const STATE_SYNC_START_ACTION_RETRY_WAITERS: u32 = 2;
+
+pub(super) const STATE_SYNC_START_FLAG_ACTIVE_VFORK_CHILD_OWNER_MISMATCH: u32 = 1;
+pub(super) const STATE_SYNC_START_FLAG_KERNEL_WORKER_AVAILABLE: u32 = 1 << 1;
+pub(super) const STATE_SYNC_START_FLAG_EPOLL_STATE_KERNEL_OWNS: u32 = 1 << 2;
+pub(super) const STATE_SYNC_START_FLAG_HELD_EPOLL_OFD: u32 = 1 << 3;
+pub(super) const STATE_SYNC_START_FLAG_WAKE_WAITERS: u32 = 1 << 4;
+
 fn with_state_sync_lock<T>(f: impl FnOnce(&mut [StateSyncRequest; STATE_SYNC_CAP]) -> T) -> T {
     loop {
         if STATE_SYNC_LOCK
@@ -216,6 +226,38 @@ pub(super) fn owned_state_sync_flag_wrote_or_drained_pipe() -> u32 {
     OWNED_STATE_SYNC_FLAG_WROTE_OR_DRAINED_PIPE
 }
 
+pub(super) fn state_sync_start_action_skip() -> u32 {
+    STATE_SYNC_START_ACTION_SKIP
+}
+
+pub(super) fn state_sync_start_action_request_sync() -> u32 {
+    STATE_SYNC_START_ACTION_REQUEST_SYNC
+}
+
+pub(super) fn state_sync_start_action_retry_waiters() -> u32 {
+    STATE_SYNC_START_ACTION_RETRY_WAITERS
+}
+
+pub(super) fn state_sync_start_flag_active_vfork_child_owner_mismatch() -> u32 {
+    STATE_SYNC_START_FLAG_ACTIVE_VFORK_CHILD_OWNER_MISMATCH
+}
+
+pub(super) fn state_sync_start_flag_kernel_worker_available() -> u32 {
+    STATE_SYNC_START_FLAG_KERNEL_WORKER_AVAILABLE
+}
+
+pub(super) fn state_sync_start_flag_epoll_state_kernel_owns() -> u32 {
+    STATE_SYNC_START_FLAG_EPOLL_STATE_KERNEL_OWNS
+}
+
+pub(super) fn state_sync_start_flag_held_epoll_ofd() -> u32 {
+    STATE_SYNC_START_FLAG_HELD_EPOLL_OFD
+}
+
+pub(super) fn state_sync_start_flag_wake_waiters() -> u32 {
+    STATE_SYNC_START_FLAG_WAKE_WAITERS
+}
+
 fn valid_sync_kind(kind: u32) -> bool {
     matches!(
         kind,
@@ -342,6 +384,39 @@ pub fn clear(vm_ptr: u32, kind: u32) -> i32 {
         }
     });
     0
+}
+
+pub(super) fn start_action(kind: u32, flags: u32) -> i32 {
+    if !valid_sync_kind(kind) {
+        return -(crate::abi::EINVAL as i32);
+    }
+    if (flags & STATE_SYNC_START_FLAG_ACTIVE_VFORK_CHILD_OWNER_MISMATCH) != 0 {
+        return STATE_SYNC_START_ACTION_SKIP as i32;
+    }
+
+    match kind {
+        super::SUPERVISOR_STATE_SYNC_KIND_PIPE | super::SUPERVISOR_STATE_SYNC_KIND_SOCKET => {
+            if (flags & STATE_SYNC_START_FLAG_KERNEL_WORKER_AVAILABLE) != 0 {
+                STATE_SYNC_START_ACTION_REQUEST_SYNC as i32
+            } else {
+                STATE_SYNC_START_ACTION_SKIP as i32
+            }
+        }
+        super::SUPERVISOR_STATE_SYNC_KIND_EPOLL => {
+            if (flags & STATE_SYNC_START_FLAG_EPOLL_STATE_KERNEL_OWNS) == 0 {
+                return STATE_SYNC_START_ACTION_SKIP as i32;
+            }
+            if (flags & STATE_SYNC_START_FLAG_HELD_EPOLL_OFD) != 0 {
+                return STATE_SYNC_START_ACTION_REQUEST_SYNC as i32;
+            }
+            if (flags & STATE_SYNC_START_FLAG_WAKE_WAITERS) != 0 {
+                STATE_SYNC_START_ACTION_RETRY_WAITERS as i32
+            } else {
+                STATE_SYNC_START_ACTION_SKIP as i32
+            }
+        }
+        _ => -(crate::abi::EINVAL as i32),
+    }
 }
 
 pub(super) fn wake_mask_for_sync(source: u32) -> i32 {

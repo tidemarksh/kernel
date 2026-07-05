@@ -1970,6 +1970,51 @@ pub extern "C" fn supervisor_state_sync_clear(vm_ptr: u32, kind: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_state_sync_start_action_skip() -> u32 {
+    super::state_sync::state_sync_start_action_skip()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_state_sync_start_action_request_sync() -> u32 {
+    super::state_sync::state_sync_start_action_request_sync()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_state_sync_start_action_retry_waiters() -> u32 {
+    super::state_sync::state_sync_start_action_retry_waiters()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_state_sync_start_flag_active_vfork_child_owner_mismatch() -> u32 {
+    super::state_sync::state_sync_start_flag_active_vfork_child_owner_mismatch()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_state_sync_start_flag_kernel_worker_available() -> u32 {
+    super::state_sync::state_sync_start_flag_kernel_worker_available()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_state_sync_start_flag_epoll_state_kernel_owns() -> u32 {
+    super::state_sync::state_sync_start_flag_epoll_state_kernel_owns()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_state_sync_start_flag_held_epoll_ofd() -> u32 {
+    super::state_sync::state_sync_start_flag_held_epoll_ofd()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_state_sync_start_flag_wake_waiters() -> u32 {
+    super::state_sync::state_sync_start_flag_wake_waiters()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_state_sync_start_action(kind: u32, flags: u32) -> i32 {
+    super::state_sync::start_action(kind, flags)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_owned_state_sync_action(
     status: i32,
     completed_sync_effects: u32,
