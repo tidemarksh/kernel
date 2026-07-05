@@ -369,6 +369,14 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_blocked_wait_wake_target_epoll_wait(), 2);
     assert_eq!(supervisor_blocked_wait_wake_target_socket_recv(), 4);
     assert_eq!(supervisor_blocked_wait_wake_target_socket_send(), 8);
+    assert_eq!(supervisor_blocked_wait_wake_flag_rpc_pending(), 1);
+    assert_eq!(supervisor_blocked_wait_wake_action_skip(), 0);
+    assert_eq!(supervisor_blocked_wait_wake_action_retry(), 1);
+    assert_eq!(
+        supervisor_blocked_wait_wake_action_clear_pipe_sync_and_retry(),
+        2
+    );
+    assert_eq!(supervisor_blocked_wait_wake_action_log_epoll_and_retry(), 3);
     assert_eq!(supervisor_stdio_output_settle_kind_visible(), 1);
     assert_eq!(supervisor_stdio_output_settle_kind_inherited_child(), 2);
     assert_eq!(supervisor_stdio_pipe_read_progress_action_none(), 0);
@@ -470,6 +478,58 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     );
     assert_eq!(
         supervisor_blocked_wait_status_matches_wake_source(STATUS_OK, 0),
+        -(EINVAL as i32)
+    );
+    assert_eq!(
+        supervisor_blocked_wait_wake_action(
+            STATUS_PIPE_WAIT,
+            supervisor_blocked_wait_wake_source_pipe_sync(),
+            0
+        ),
+        supervisor_blocked_wait_wake_action_clear_pipe_sync_and_retry() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_wait_wake_action(
+            STATUS_PIPE_WAIT,
+            supervisor_blocked_wait_wake_source_pipe_sync(),
+            supervisor_blocked_wait_wake_flag_rpc_pending()
+        ),
+        supervisor_blocked_wait_wake_action_skip() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_wait_wake_action(
+            STATUS_EPOLL_WAIT,
+            supervisor_blocked_wait_wake_source_epoll_sync(),
+            0
+        ),
+        supervisor_blocked_wait_wake_action_log_epoll_and_retry() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_wait_wake_action(
+            STATUS_EPOLL_WAIT,
+            supervisor_blocked_wait_wake_source_socket_sync(),
+            supervisor_blocked_wait_wake_flag_rpc_pending()
+        ),
+        supervisor_blocked_wait_wake_action_skip() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_wait_wake_action(
+            STATUS_SOCKET_RECV,
+            supervisor_blocked_wait_wake_source_socket_sync(),
+            0
+        ),
+        supervisor_blocked_wait_wake_action_retry() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_wait_wake_action(
+            STATUS_SOCKET_SEND,
+            supervisor_blocked_wait_wake_source_pipe_sync(),
+            0
+        ),
+        supervisor_blocked_wait_wake_action_skip() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_wait_wake_action(STATUS_OK, 0, 0),
         -(EINVAL as i32)
     );
     assert_eq!(

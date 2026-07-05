@@ -543,6 +543,26 @@ export_u32_const!(
     super::state_sync::wake_target_socket_send()
 );
 export_u32_const!(
+    supervisor_blocked_wait_wake_flag_rpc_pending,
+    super::state_sync::wake_blocked_flag_rpc_pending()
+);
+export_u32_const!(
+    supervisor_blocked_wait_wake_action_skip,
+    super::state_sync::wake_blocked_action_skip()
+);
+export_u32_const!(
+    supervisor_blocked_wait_wake_action_retry,
+    super::state_sync::wake_blocked_action_retry()
+);
+export_u32_const!(
+    supervisor_blocked_wait_wake_action_clear_pipe_sync_and_retry,
+    super::state_sync::wake_blocked_action_clear_pipe_sync_and_retry()
+);
+export_u32_const!(
+    supervisor_blocked_wait_wake_action_log_epoll_and_retry,
+    super::state_sync::wake_blocked_action_log_epoll_and_retry()
+);
+export_u32_const!(
     supervisor_stdio_output_settle_kind_visible,
     super::stdio::output_settle_kind_visible()
 );
@@ -1656,6 +1676,11 @@ pub extern "C" fn supervisor_blocked_wait_status_matches_wake_source(
     source: u32,
 ) -> i32 {
     super::state_sync::status_matches_wake_source(status, source)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_wait_wake_action(status: i32, source: u32, flags: u32) -> i32 {
+    super::state_sync::wake_blocked_action(status, source, flags)
 }
 
 #[unsafe(no_mangle)]

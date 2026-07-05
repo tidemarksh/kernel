@@ -40,6 +40,13 @@ pub(super) const WAKE_TARGET_EPOLL_WAIT: u32 = 1 << 1;
 pub(super) const WAKE_TARGET_SOCKET_RECV: u32 = 1 << 2;
 pub(super) const WAKE_TARGET_SOCKET_SEND: u32 = 1 << 3;
 
+pub(super) const WAKE_BLOCKED_FLAG_RPC_PENDING: u32 = 1;
+
+pub(super) const WAKE_BLOCKED_ACTION_SKIP: u32 = 0;
+pub(super) const WAKE_BLOCKED_ACTION_RETRY: u32 = 1;
+pub(super) const WAKE_BLOCKED_ACTION_CLEAR_PIPE_SYNC_AND_RETRY: u32 = 2;
+pub(super) const WAKE_BLOCKED_ACTION_LOG_EPOLL_AND_RETRY: u32 = 3;
+
 fn with_state_sync_lock<T>(f: impl FnOnce(&mut [StateSyncRequest; STATE_SYNC_CAP]) -> T) -> T {
     loop {
         if STATE_SYNC_LOCK
@@ -95,6 +102,26 @@ pub(super) fn wake_target_socket_recv() -> u32 {
 
 pub(super) fn wake_target_socket_send() -> u32 {
     WAKE_TARGET_SOCKET_SEND
+}
+
+pub(super) fn wake_blocked_flag_rpc_pending() -> u32 {
+    WAKE_BLOCKED_FLAG_RPC_PENDING
+}
+
+pub(super) fn wake_blocked_action_skip() -> u32 {
+    WAKE_BLOCKED_ACTION_SKIP
+}
+
+pub(super) fn wake_blocked_action_retry() -> u32 {
+    WAKE_BLOCKED_ACTION_RETRY
+}
+
+pub(super) fn wake_blocked_action_clear_pipe_sync_and_retry() -> u32 {
+    WAKE_BLOCKED_ACTION_CLEAR_PIPE_SYNC_AND_RETRY
+}
+
+pub(super) fn wake_blocked_action_log_epoll_and_retry() -> u32 {
+    WAKE_BLOCKED_ACTION_LOG_EPOLL_AND_RETRY
 }
 
 fn valid_sync_kind(kind: u32) -> bool {
@@ -240,6 +267,16 @@ pub(super) fn wake_mask_for_sync(source: u32) -> i32 {
     }
 }
 
+fn valid_wake_source(source: u32) -> bool {
+    matches!(
+        source,
+        WAKE_SOURCE_PIPE_SYNC
+            | WAKE_SOURCE_EPOLL_SYNC
+            | WAKE_SOURCE_SOCKET_SYNC
+            | WAKE_SOURCE_PIPE_AND_EPOLL_SYNC
+    )
+}
+
 fn wake_target_for_status(status: i32) -> u32 {
     match status {
         crate::abi::STATUS_PIPE_WAIT => WAKE_TARGET_PIPE_WAIT,
@@ -251,16 +288,37 @@ fn wake_target_for_status(status: i32) -> u32 {
 }
 
 pub(super) fn status_matches_wake_source(status: i32, source: u32) -> i32 {
-    if !matches!(
-        source,
-        WAKE_SOURCE_PIPE_SYNC
-            | WAKE_SOURCE_EPOLL_SYNC
-            | WAKE_SOURCE_SOCKET_SYNC
-            | WAKE_SOURCE_PIPE_AND_EPOLL_SYNC
-    ) {
+    if !valid_wake_source(source) {
         return -(crate::abi::EINVAL as i32);
     }
     let mask = wake_mask_for_sync(source);
     let target = wake_target_for_status(status);
     i32::from(target != 0 && ((mask as u32) & target) != 0)
+}
+
+pub(super) fn wake_blocked_action(status: i32, source: u32, flags: u32) -> i32 {
+    if !valid_wake_source(source) {
+        return -(crate::abi::EINVAL as i32);
+    }
+    if status_matches_wake_source(status, source) == 0 {
+        return WAKE_BLOCKED_ACTION_SKIP as i32;
+    }
+    let rpc_pending = (flags & WAKE_BLOCKED_FLAG_RPC_PENDING) != 0;
+    match status {
+        crate::abi::STATUS_PIPE_WAIT => {
+            if rpc_pending {
+                WAKE_BLOCKED_ACTION_SKIP as i32
+            } else {
+                WAKE_BLOCKED_ACTION_CLEAR_PIPE_SYNC_AND_RETRY as i32
+            }
+        }
+        crate::abi::STATUS_EPOLL_WAIT => {
+            if rpc_pending {
+                WAKE_BLOCKED_ACTION_SKIP as i32
+            } else {
+                WAKE_BLOCKED_ACTION_LOG_EPOLL_AND_RETRY as i32
+            }
+        }
+        _ => WAKE_BLOCKED_ACTION_RETRY as i32,
+    }
 }
