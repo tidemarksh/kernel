@@ -23,6 +23,51 @@ const WEXITED: u64 = 4;
 const WAIT_KIND_WAIT4: u32 = 1;
 const WAIT_KIND_WAITID: u32 = 2;
 
+pub(super) const CHILD_EXIT_BLOCKED_PARENT_ACTION_NONE: u32 = 0;
+pub(super) const CHILD_EXIT_BLOCKED_PARENT_ACTION_INVALIDATE_RPC: u32 = 1;
+pub(super) const CHILD_EXIT_BLOCKED_PARENT_ACTION_CLEAR_PIPE_SYNC_BEFORE_RETRY: u32 = 1 << 1;
+
+pub(super) const WAIT4_RPC_LOCAL_STATUS_ACTION_SKIP: u32 = 0;
+pub(super) const WAIT4_RPC_LOCAL_STATUS_ACTION_START: u32 = 1;
+
+pub(super) fn child_exit_blocked_parent_action_none() -> u32 {
+    CHILD_EXIT_BLOCKED_PARENT_ACTION_NONE
+}
+
+pub(super) fn child_exit_blocked_parent_action_invalidate_rpc() -> u32 {
+    CHILD_EXIT_BLOCKED_PARENT_ACTION_INVALIDATE_RPC
+}
+
+pub(super) fn child_exit_blocked_parent_action_clear_pipe_sync_before_retry() -> u32 {
+    CHILD_EXIT_BLOCKED_PARENT_ACTION_CLEAR_PIPE_SYNC_BEFORE_RETRY
+}
+
+pub(super) fn wait4_rpc_local_status_action_skip() -> u32 {
+    WAIT4_RPC_LOCAL_STATUS_ACTION_SKIP
+}
+
+pub(super) fn wait4_rpc_local_status_action_start() -> u32 {
+    WAIT4_RPC_LOCAL_STATUS_ACTION_START
+}
+
+pub(super) fn child_exit_blocked_parent_action(status: i32) -> i32 {
+    match status {
+        STATUS_WAIT4 => CHILD_EXIT_BLOCKED_PARENT_ACTION_INVALIDATE_RPC as i32,
+        STATUS_PIPE_WAIT => {
+            (CHILD_EXIT_BLOCKED_PARENT_ACTION_INVALIDATE_RPC
+                | CHILD_EXIT_BLOCKED_PARENT_ACTION_CLEAR_PIPE_SYNC_BEFORE_RETRY) as i32
+        }
+        _ => CHILD_EXIT_BLOCKED_PARENT_ACTION_NONE as i32,
+    }
+}
+
+pub(super) fn wait4_rpc_local_status_action(status: i32) -> i32 {
+    match status {
+        STATUS_WAIT4 => WAIT4_RPC_LOCAL_STATUS_ACTION_START as i32,
+        _ => WAIT4_RPC_LOCAL_STATUS_ACTION_SKIP as i32,
+    }
+}
+
 fn parent_has_exited_child(parent_pid: i32) -> bool {
     children()
         .iter()

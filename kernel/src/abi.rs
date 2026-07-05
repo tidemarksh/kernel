@@ -1079,6 +1079,12 @@ pub use crate::supervisor::{
     supervisor_wait_in_worker_status_action_sync_epoll,
     supervisor_wait_in_worker_status_action_sync_pipe,
     supervisor_wait_in_worker_status_action_sync_socket,
+    supervisor_wait4_child_exit_blocked_parent_action,
+    supervisor_wait4_child_exit_blocked_parent_action_clear_pipe_sync_before_retry,
+    supervisor_wait4_child_exit_blocked_parent_action_invalidate_rpc,
+    supervisor_wait4_child_exit_blocked_parent_action_none,
+    supervisor_wait4_rpc_local_status_action, supervisor_wait4_rpc_local_status_action_skip,
+    supervisor_wait4_rpc_local_status_action_start,
 };
 
 // =============================================================================

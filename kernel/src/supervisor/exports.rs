@@ -603,6 +603,26 @@ export_u32_const!(
     super::wait_in_worker::status_action_flag_epoll_state_kernel_owns()
 );
 export_u32_const!(
+    supervisor_wait4_child_exit_blocked_parent_action_none,
+    super::process_wait::child_exit_blocked_parent_action_none()
+);
+export_u32_const!(
+    supervisor_wait4_child_exit_blocked_parent_action_invalidate_rpc,
+    super::process_wait::child_exit_blocked_parent_action_invalidate_rpc()
+);
+export_u32_const!(
+    supervisor_wait4_child_exit_blocked_parent_action_clear_pipe_sync_before_retry,
+    super::process_wait::child_exit_blocked_parent_action_clear_pipe_sync_before_retry()
+);
+export_u32_const!(
+    supervisor_wait4_rpc_local_status_action_skip,
+    super::process_wait::wait4_rpc_local_status_action_skip()
+);
+export_u32_const!(
+    supervisor_wait4_rpc_local_status_action_start,
+    super::process_wait::wait4_rpc_local_status_action_start()
+);
+export_u32_const!(
     supervisor_stdio_output_settle_kind_visible,
     super::stdio::output_settle_kind_visible()
 );
@@ -1776,6 +1796,16 @@ pub extern "C" fn supervisor_wait_in_worker_status_action(
     flags: u32,
 ) -> i32 {
     super::wait_in_worker::status_action(vm_ptr, status, flags)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_wait4_child_exit_blocked_parent_action(status: i32) -> i32 {
+    super::process_wait::child_exit_blocked_parent_action(status)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_wait4_rpc_local_status_action(status: i32) -> i32 {
+    super::process_wait::wait4_rpc_local_status_action(status)
 }
 
 #[unsafe(no_mangle)]

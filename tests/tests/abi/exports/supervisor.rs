@@ -402,6 +402,17 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_wait_in_worker_status_action_flag_epoll_state_kernel_owns(),
         4
     );
+    assert_eq!(supervisor_wait4_child_exit_blocked_parent_action_none(), 0);
+    assert_eq!(
+        supervisor_wait4_child_exit_blocked_parent_action_invalidate_rpc(),
+        1
+    );
+    assert_eq!(
+        supervisor_wait4_child_exit_blocked_parent_action_clear_pipe_sync_before_retry(),
+        2
+    );
+    assert_eq!(supervisor_wait4_rpc_local_status_action_skip(), 0);
+    assert_eq!(supervisor_wait4_rpc_local_status_action_start(), 1);
     assert_eq!(supervisor_stdio_output_settle_kind_visible(), 1);
     assert_eq!(supervisor_stdio_output_settle_kind_inherited_child(), 2);
     assert_eq!(supervisor_stdio_pipe_read_progress_action_none(), 0);
@@ -1804,6 +1815,28 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
             wait_in_worker_running_flag | wait_in_worker_epoll_owns_flag,
         ),
         supervisor_wait_in_worker_status_action_sync_epoll() as i32
+    );
+    assert_eq!(
+        supervisor_wait4_child_exit_blocked_parent_action(STATUS_WAIT4),
+        supervisor_wait4_child_exit_blocked_parent_action_invalidate_rpc() as i32
+    );
+    assert_eq!(
+        supervisor_wait4_child_exit_blocked_parent_action(STATUS_PIPE_WAIT),
+        (supervisor_wait4_child_exit_blocked_parent_action_invalidate_rpc()
+            | supervisor_wait4_child_exit_blocked_parent_action_clear_pipe_sync_before_retry())
+            as i32
+    );
+    assert_eq!(
+        supervisor_wait4_child_exit_blocked_parent_action(STATUS_OK),
+        supervisor_wait4_child_exit_blocked_parent_action_none() as i32
+    );
+    assert_eq!(
+        supervisor_wait4_rpc_local_status_action(STATUS_WAIT4),
+        supervisor_wait4_rpc_local_status_action_start() as i32
+    );
+    assert_eq!(
+        supervisor_wait4_rpc_local_status_action(STATUS_OK),
+        supervisor_wait4_rpc_local_status_action_skip() as i32
     );
     assert_eq!(supervisor_blocked_initial_action_none(), 0);
     assert_eq!(
