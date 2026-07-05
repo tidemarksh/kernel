@@ -208,6 +208,38 @@ export_u32_const!(
     supervisor_process_lifecycle_kind_wait4_completed,
     super::SUPERVISOR_PROCESS_LIFECYCLE_KIND_WAIT4_COMPLETED
 );
+export_u32_const!(
+    supervisor_process_status_route_action_none,
+    super::process::STATUS_ROUTE_ACTION_NONE
+);
+export_u32_const!(
+    supervisor_process_status_route_action_apply_status_fd_state,
+    super::process::STATUS_ROUTE_ACTION_APPLY_STATUS_FD_STATE
+);
+export_u32_const!(
+    supervisor_process_status_route_action_adopt_thread_kernel_state,
+    super::process::STATUS_ROUTE_ACTION_ADOPT_THREAD_KERNEL_STATE
+);
+export_u32_const!(
+    supervisor_process_status_route_action_apply_fs_memory_writes,
+    super::process::STATUS_ROUTE_ACTION_APPLY_FS_MEMORY_WRITES
+);
+export_u32_const!(
+    supervisor_process_status_route_action_skip_fs_ring_writes,
+    super::process::STATUS_ROUTE_ACTION_SKIP_FS_RING_WRITES
+);
+export_u32_const!(
+    supervisor_process_status_route_action_defer_local_pipe_drain,
+    super::process::STATUS_ROUTE_ACTION_DEFER_LOCAL_PIPE_DRAIN
+);
+export_u32_const!(
+    supervisor_process_status_route_flag_status_state_belongs_to_handle,
+    super::process::STATUS_ROUTE_FLAG_STATUS_STATE_BELONGS_TO_HANDLE
+);
+export_u32_const!(
+    supervisor_process_status_route_flag_kernel_worker_available,
+    super::process::STATUS_ROUTE_FLAG_KERNEL_WORKER_AVAILABLE
+);
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_process_status_is_lifecycle_handoff(status: i32) -> i32 {
@@ -237,6 +269,11 @@ pub extern "C" fn supervisor_process_status_allows_pid_mismatch(status: i32) -> 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_process_status_defers_kernel_state_adoption(status: i32) -> i32 {
     super::process::status_defers_kernel_state_adoption(status)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_status_route_action(status: i32, flags: u32) -> i32 {
+    super::process::status_route_action(status, flags)
 }
 
 #[unsafe(no_mangle)]

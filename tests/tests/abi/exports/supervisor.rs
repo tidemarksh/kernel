@@ -423,6 +423,35 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_owned_state_sync_flag_wrote_or_drained_pipe(),
         256
     );
+    assert_eq!(supervisor_process_status_route_action_none(), 0);
+    assert_eq!(
+        supervisor_process_status_route_action_apply_status_fd_state(),
+        1
+    );
+    assert_eq!(
+        supervisor_process_status_route_action_adopt_thread_kernel_state(),
+        2
+    );
+    assert_eq!(
+        supervisor_process_status_route_action_apply_fs_memory_writes(),
+        4
+    );
+    assert_eq!(
+        supervisor_process_status_route_action_skip_fs_ring_writes(),
+        8
+    );
+    assert_eq!(
+        supervisor_process_status_route_action_defer_local_pipe_drain(),
+        16
+    );
+    assert_eq!(
+        supervisor_process_status_route_flag_status_state_belongs_to_handle(),
+        1
+    );
+    assert_eq!(
+        supervisor_process_status_route_flag_kernel_worker_available(),
+        2
+    );
     assert_eq!(supervisor_blocked_wait_wake_source_pipe_sync(), 1);
     assert_eq!(supervisor_blocked_wait_wake_source_epoll_sync(), 2);
     assert_eq!(supervisor_blocked_wait_wake_source_socket_sync(), 3);
@@ -2275,6 +2304,34 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_process_status_defers_kernel_state_adoption(STATUS_EXECVE_SPAWN),
         0
+    );
+    let status_belongs_flag = supervisor_process_status_route_flag_status_state_belongs_to_handle();
+    let kernel_worker_flag = supervisor_process_status_route_flag_kernel_worker_available();
+    assert_eq!(
+        supervisor_process_status_route_action(STATUS_OK, status_belongs_flag),
+        (supervisor_process_status_route_action_apply_status_fd_state()
+            | supervisor_process_status_route_action_adopt_thread_kernel_state()) as i32
+    );
+    assert_eq!(
+        supervisor_process_status_route_action(STATUS_OK, status_belongs_flag | kernel_worker_flag),
+        (supervisor_process_status_route_action_apply_status_fd_state()
+            | supervisor_process_status_route_action_adopt_thread_kernel_state()
+            | supervisor_process_status_route_action_defer_local_pipe_drain()) as i32
+    );
+    assert_eq!(
+        supervisor_process_status_route_action(STATUS_CLONE_SPAWN, status_belongs_flag),
+        supervisor_process_status_route_action_apply_status_fd_state() as i32
+    );
+    assert_eq!(
+        supervisor_process_status_route_action(STATUS_FS, 0),
+        (supervisor_process_status_route_action_apply_fs_memory_writes()
+            | supervisor_process_status_route_action_skip_fs_ring_writes()) as i32
+    );
+    assert_eq!(
+        supervisor_process_status_route_action(STATUS_FS, status_belongs_flag),
+        (supervisor_process_status_route_action_apply_status_fd_state()
+            | supervisor_process_status_route_action_adopt_thread_kernel_state()
+            | supervisor_process_status_route_action_skip_fs_ring_writes()) as i32
     );
     assert_eq!(supervisor_process_owner_absent(0), 0);
     assert_eq!(supervisor_process_owner_live_matches(0, 1), 0);

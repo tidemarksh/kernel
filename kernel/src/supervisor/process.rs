@@ -7,6 +7,16 @@ static PROCESS_LIFECYCLE_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_PROCESS_LIFECYCLE: super::SupervisorProcessLifecycleRecord =
     super::SupervisorProcessLifecycleRecord::empty();
 
+pub(super) const STATUS_ROUTE_ACTION_NONE: u32 = 0;
+pub(super) const STATUS_ROUTE_ACTION_APPLY_STATUS_FD_STATE: u32 = 1;
+pub(super) const STATUS_ROUTE_ACTION_ADOPT_THREAD_KERNEL_STATE: u32 = 1 << 1;
+pub(super) const STATUS_ROUTE_ACTION_APPLY_FS_MEMORY_WRITES: u32 = 1 << 2;
+pub(super) const STATUS_ROUTE_ACTION_SKIP_FS_RING_WRITES: u32 = 1 << 3;
+pub(super) const STATUS_ROUTE_ACTION_DEFER_LOCAL_PIPE_DRAIN: u32 = 1 << 4;
+
+pub(super) const STATUS_ROUTE_FLAG_STATUS_STATE_BELONGS_TO_HANDLE: u32 = 1;
+pub(super) const STATUS_ROUTE_FLAG_KERNEL_WORKER_AVAILABLE: u32 = 1 << 1;
+
 pub(super) fn init() {
     PROCESS_LIFECYCLE_COUNT.store(0, Ordering::Relaxed);
     super::lock::with_spin_lock(&PROCESS_LIFECYCLE_LOCK, || unsafe {
@@ -48,6 +58,28 @@ pub(super) fn status_allows_pid_mismatch(status: i32) -> i32 {
 
 pub(super) fn status_defers_kernel_state_adoption(status: i32) -> i32 {
     i32::from(status == crate::abi::STATUS_CLONE_SPAWN)
+}
+
+pub(super) fn status_route_action(status: i32, flags: u32) -> i32 {
+    let status_state_belongs = (flags & STATUS_ROUTE_FLAG_STATUS_STATE_BELONGS_TO_HANDLE) != 0;
+    let kernel_worker_available = (flags & STATUS_ROUTE_FLAG_KERNEL_WORKER_AVAILABLE) != 0;
+
+    let mut action = STATUS_ROUTE_ACTION_NONE;
+    if status_state_belongs {
+        action |= STATUS_ROUTE_ACTION_APPLY_STATUS_FD_STATE;
+    }
+    if status_state_belongs && status_defers_kernel_state_adoption(status) == 0 {
+        action |= STATUS_ROUTE_ACTION_ADOPT_THREAD_KERNEL_STATE;
+    } else if status == crate::abi::STATUS_FS {
+        action |= STATUS_ROUTE_ACTION_APPLY_FS_MEMORY_WRITES;
+    }
+    if status == crate::abi::STATUS_FS {
+        action |= STATUS_ROUTE_ACTION_SKIP_FS_RING_WRITES;
+    }
+    if kernel_worker_available {
+        action |= STATUS_ROUTE_ACTION_DEFER_LOCAL_PIPE_DRAIN;
+    }
+    action as i32
 }
 
 pub(super) fn vfork_child_owner_mismatch(vm_ptr: u32, runtime_pid: i32) -> i32 {
