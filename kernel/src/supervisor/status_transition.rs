@@ -11,6 +11,11 @@ pub(super) const WORKER_STATUS_SYNC_ACTION_WAKE_SIGNAL_WAITERS: u32 = 1 << 3;
 
 pub(super) const WORKER_STATUS_SYNC_FLAG_WROTE_OR_DRAINED_PIPE: u32 = 1;
 
+pub(super) const WORKER_SLEEP_STATUS_ACTION_NONE: u32 = 0;
+pub(super) const WORKER_SLEEP_STATUS_ACTION_YIELD: u32 = 1;
+pub(super) const WORKER_SLEEP_STATUS_ACTION_ARM_HOST_TIMER: u32 = 1 << 1;
+pub(super) const WORKER_SLEEP_STATUS_ACTION_SYNC_PIPE_BEFORE_YIELD_CLEAR: u32 = 1 << 2;
+
 pub(super) fn worker_action_enqueue() -> u32 {
     WORKER_ACTION_ENQUEUE
 }
@@ -49,6 +54,22 @@ pub(super) fn worker_status_sync_action_wake_signal_waiters() -> u32 {
 
 pub(super) fn worker_status_sync_flag_wrote_or_drained_pipe() -> u32 {
     WORKER_STATUS_SYNC_FLAG_WROTE_OR_DRAINED_PIPE
+}
+
+pub(super) fn worker_sleep_status_action_none() -> u32 {
+    WORKER_SLEEP_STATUS_ACTION_NONE
+}
+
+pub(super) fn worker_sleep_status_action_yield() -> u32 {
+    WORKER_SLEEP_STATUS_ACTION_YIELD
+}
+
+pub(super) fn worker_sleep_status_action_arm_host_timer() -> u32 {
+    WORKER_SLEEP_STATUS_ACTION_ARM_HOST_TIMER
+}
+
+pub(super) fn worker_sleep_status_action_sync_pipe_before_yield_clear() -> u32 {
+    WORKER_SLEEP_STATUS_ACTION_SYNC_PIPE_BEFORE_YIELD_CLEAR
 }
 
 pub(super) fn worker_action(status: i32) -> i32 {
@@ -93,6 +114,29 @@ pub(super) fn worker_status_sync_action(
         if has_signal_waiters_effect {
             action |= WORKER_STATUS_SYNC_ACTION_WAKE_SIGNAL_WAITERS;
         }
+    }
+    action as i32
+}
+
+pub(super) fn worker_sleep_status_action(
+    vm_ptr: u32,
+    status: i32,
+    completed_sync_effects: u32,
+) -> i32 {
+    if status != crate::abi::STATUS_SLEEP {
+        return WORKER_SLEEP_STATUS_ACTION_NONE as i32;
+    }
+    if vm_ptr == 0 {
+        return crate::abi::EFAULT as i32;
+    }
+    let vm = unsafe { &*(vm_ptr as *const crate::types::ThreadState) };
+    if vm.fault_addr != 0 || vm.fault_pc != 0 {
+        return WORKER_SLEEP_STATUS_ACTION_ARM_HOST_TIMER as i32;
+    }
+
+    let mut action = WORKER_SLEEP_STATUS_ACTION_YIELD;
+    if (completed_sync_effects & super::sync_effects::SYNC_EFFECT_PIPE_STATE) != 0 {
+        action |= WORKER_SLEEP_STATUS_ACTION_SYNC_PIPE_BEFORE_YIELD_CLEAR;
     }
     action as i32
 }

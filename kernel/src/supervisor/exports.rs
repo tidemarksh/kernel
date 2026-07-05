@@ -700,6 +700,10 @@ export_u32_const!(
     super::wait_in_worker::status_action_sync_pipe()
 );
 export_u32_const!(
+    supervisor_wait_in_worker_status_action_drain_local_pipe,
+    super::wait_in_worker::status_action_drain_local_pipe()
+);
+export_u32_const!(
     supervisor_wait_in_worker_status_action_flag_running_worker,
     super::wait_in_worker::status_action_flag_running_worker()
 );
@@ -2023,6 +2027,35 @@ pub extern "C" fn supervisor_worker_status_sync_action(
     flags: u32,
 ) -> i32 {
     super::status_transition::worker_status_sync_action(status, completed_sync_effects, flags)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_worker_sleep_status_action_none() -> u32 {
+    super::status_transition::worker_sleep_status_action_none()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_worker_sleep_status_action_yield() -> u32 {
+    super::status_transition::worker_sleep_status_action_yield()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_worker_sleep_status_action_arm_host_timer() -> u32 {
+    super::status_transition::worker_sleep_status_action_arm_host_timer()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_worker_sleep_status_action_sync_pipe_before_yield_clear() -> u32 {
+    super::status_transition::worker_sleep_status_action_sync_pipe_before_yield_clear()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_worker_sleep_status_action(
+    vm_ptr: u32,
+    status: i32,
+    completed_sync_effects: u32,
+) -> i32 {
+    super::status_transition::worker_sleep_status_action(vm_ptr, status, completed_sync_effects)
 }
 
 #[unsafe(no_mangle)]

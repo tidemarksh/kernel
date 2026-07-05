@@ -482,6 +482,10 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_wait_in_worker_status_action_sync_epoll(), 16);
     assert_eq!(supervisor_wait_in_worker_status_action_sync_pipe(), 32);
     assert_eq!(
+        supervisor_wait_in_worker_status_action_drain_local_pipe(),
+        64
+    );
+    assert_eq!(
         supervisor_wait_in_worker_status_action_flag_running_worker(),
         1
     );
@@ -532,6 +536,13 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_worker_status_sync_flag_wrote_or_drained_pipe(),
         1
+    );
+    assert_eq!(supervisor_worker_sleep_status_action_none(), 0);
+    assert_eq!(supervisor_worker_sleep_status_action_yield(), 1);
+    assert_eq!(supervisor_worker_sleep_status_action_arm_host_timer(), 2);
+    assert_eq!(
+        supervisor_worker_sleep_status_action_sync_pipe_before_yield_clear(),
+        4
     );
     assert_eq!(supervisor_stdio_output_settle_kind_visible(), 1);
     assert_eq!(supervisor_stdio_output_settle_kind_inherited_child(), 2);
@@ -1963,6 +1974,8 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     let wait_in_worker_running_flag = supervisor_wait_in_worker_status_action_flag_running_worker();
     let wait_in_worker_epoll_owns_flag =
         supervisor_wait_in_worker_status_action_flag_epoll_state_kernel_owns();
+    let wait_in_worker_drain_local_pipe =
+        supervisor_wait_in_worker_status_action_drain_local_pipe();
     assert_eq!(
         supervisor_wait_in_worker_status_action(
             0,
@@ -1975,7 +1988,12 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     );
     assert_eq!(
         supervisor_wait_in_worker_status_action(0, STATUS_FUTEX_WAIT, 0),
-        supervisor_wait_in_worker_status_action_park_futex() as i32
+        (supervisor_wait_in_worker_status_action_park_futex() | wait_in_worker_drain_local_pipe)
+            as i32
+    );
+    assert_eq!(
+        supervisor_wait_in_worker_status_action(0, STATUS_OK, wait_in_worker_running_flag),
+        wait_in_worker_drain_local_pipe as i32
     );
     assert_eq!(
         supervisor_wait_in_worker_status_action(0, STATUS_WAIT4, wait_in_worker_kernel_flag),
@@ -2027,7 +2045,8 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
             STATUS_EPOLL_WAIT,
             wait_in_worker_running_flag | wait_in_worker_epoll_owns_flag,
         ),
-        supervisor_wait_in_worker_status_action_block_epoll_timeout() as i32
+        (supervisor_wait_in_worker_status_action_block_epoll_timeout()
+            | wait_in_worker_drain_local_pipe) as i32
     );
     let mut wait_in_worker_timeout_vm = TestVm::new();
     wait_in_worker_timeout_vm.vm.status = STATUS_EPOLL_WAIT;
@@ -2040,7 +2059,8 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
             STATUS_EPOLL_WAIT,
             wait_in_worker_running_flag | wait_in_worker_epoll_owns_flag,
         ),
-        supervisor_wait_in_worker_status_action_sync_epoll() as i32
+        (supervisor_wait_in_worker_status_action_sync_epoll() | wait_in_worker_drain_local_pipe)
+            as i32
     );
     assert_eq!(
         supervisor_wait4_child_exit_blocked_parent_action(STATUS_WAIT4),
@@ -2137,6 +2157,35 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_worker_status_sync_action(STATUS_OK, 1 << 5, 0),
         supervisor_worker_status_sync_action_wake_signal_waiters() as i32
+    );
+    let mut sleep_zero_vm = TestVm::new();
+    sleep_zero_vm.vm.status = STATUS_SLEEP;
+    sleep_zero_vm.vm.fault_addr = 0;
+    sleep_zero_vm.vm.fault_pc = 0;
+    let sleep_zero_vm_ptr =
+        &mut sleep_zero_vm.vm as *mut tidemark_kernel::types::ThreadState as u32;
+    assert_eq!(
+        supervisor_worker_sleep_status_action(sleep_zero_vm_ptr, STATUS_SLEEP, 0),
+        supervisor_worker_sleep_status_action_yield() as i32
+    );
+    assert_eq!(
+        supervisor_worker_sleep_status_action(sleep_zero_vm_ptr, STATUS_SLEEP, 1 << 0),
+        (supervisor_worker_sleep_status_action_yield()
+            | supervisor_worker_sleep_status_action_sync_pipe_before_yield_clear()) as i32
+    );
+    let mut sleep_timer_vm = TestVm::new();
+    sleep_timer_vm.vm.status = STATUS_SLEEP;
+    sleep_timer_vm.vm.fault_addr = 0;
+    sleep_timer_vm.vm.fault_pc = 1_000_000;
+    let sleep_timer_vm_ptr =
+        &mut sleep_timer_vm.vm as *mut tidemark_kernel::types::ThreadState as u32;
+    assert_eq!(
+        supervisor_worker_sleep_status_action(sleep_timer_vm_ptr, STATUS_SLEEP, 0),
+        supervisor_worker_sleep_status_action_arm_host_timer() as i32
+    );
+    assert_eq!(
+        supervisor_worker_sleep_status_action(sleep_timer_vm_ptr, STATUS_OK, 1 << 0),
+        supervisor_worker_sleep_status_action_none() as i32
     );
     assert_eq!(supervisor_blocked_initial_action_none(), 0);
     assert_eq!(

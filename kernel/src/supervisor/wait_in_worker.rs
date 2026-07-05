@@ -5,6 +5,7 @@ pub(super) const STATUS_ACTION_BLOCK_WAIT4_AND_SYNC_PIPE: u32 = 1 << 2;
 pub(super) const STATUS_ACTION_SYNC_SOCKET: u32 = 1 << 3;
 pub(super) const STATUS_ACTION_SYNC_EPOLL: u32 = 1 << 4;
 pub(super) const STATUS_ACTION_SYNC_PIPE: u32 = 1 << 5;
+pub(super) const STATUS_ACTION_DRAIN_LOCAL_PIPE: u32 = 1 << 6;
 
 pub(super) const STATUS_ACTION_FLAG_RUNNING_WORKER: u32 = 1;
 pub(super) const STATUS_ACTION_FLAG_KERNEL_WORKER_AVAILABLE: u32 = 1 << 1;
@@ -38,6 +39,10 @@ pub(super) fn status_action_sync_pipe() -> u32 {
     STATUS_ACTION_SYNC_PIPE
 }
 
+pub(super) fn status_action_drain_local_pipe() -> u32 {
+    STATUS_ACTION_DRAIN_LOCAL_PIPE
+}
+
 pub(super) fn status_action_flag_running_worker() -> u32 {
     STATUS_ACTION_FLAG_RUNNING_WORKER
 }
@@ -51,6 +56,14 @@ pub(super) fn status_action_flag_epoll_state_kernel_owns() -> u32 {
 }
 
 pub(super) fn status_action(vm_ptr: u32, status: i32, flags: u32) -> i32 {
+    let running_worker = (flags & STATUS_ACTION_FLAG_RUNNING_WORKER) != 0;
+    let kernel_worker_available = (flags & STATUS_ACTION_FLAG_KERNEL_WORKER_AVAILABLE) != 0;
+    let epoll_state_kernel_owns = (flags & STATUS_ACTION_FLAG_EPOLL_STATE_KERNEL_OWNS) != 0;
+    let mut actions = STATUS_ACTION_NONE;
+    if !kernel_worker_available {
+        actions |= STATUS_ACTION_DRAIN_LOCAL_PIPE;
+    }
+
     if status == crate::abi::STATUS_EPOLL_WAIT {
         if vm_ptr == 0 {
             return crate::abi::EFAULT as i32;
@@ -60,27 +73,22 @@ pub(super) fn status_action(vm_ptr: u32, status: i32, flags: u32) -> i32 {
             return timeout_ms as i32;
         }
         if timeout_ms == 0 {
-            return STATUS_ACTION_BLOCK_EPOLL_TIMEOUT as i32;
+            return (actions | STATUS_ACTION_BLOCK_EPOLL_TIMEOUT) as i32;
         }
     }
 
     if status == crate::abi::STATUS_FUTEX_WAIT {
-        return STATUS_ACTION_PARK_FUTEX as i32;
+        return (actions | STATUS_ACTION_PARK_FUTEX) as i32;
     }
 
-    let running_worker = (flags & STATUS_ACTION_FLAG_RUNNING_WORKER) != 0;
-    let kernel_worker_available = (flags & STATUS_ACTION_FLAG_KERNEL_WORKER_AVAILABLE) != 0;
-    let epoll_state_kernel_owns = (flags & STATUS_ACTION_FLAG_EPOLL_STATE_KERNEL_OWNS) != 0;
-
     if kernel_worker_available && status == crate::abi::STATUS_WAIT4 {
-        return STATUS_ACTION_BLOCK_WAIT4_AND_SYNC_PIPE as i32;
+        return (actions | STATUS_ACTION_BLOCK_WAIT4_AND_SYNC_PIPE) as i32;
     }
 
     if !running_worker {
-        return STATUS_ACTION_NONE as i32;
+        return actions as i32;
     }
 
-    let mut actions = STATUS_ACTION_NONE;
     if kernel_worker_available
         && matches!(
             status,
