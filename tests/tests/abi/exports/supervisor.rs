@@ -1619,6 +1619,23 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_blocked_stale_retry_result_action_handle_current_result_wait4(),
         2
     );
+    assert_eq!(supervisor_blocked_rpc_pipe_sync_action_not_pipe(), 0);
+    assert_eq!(supervisor_blocked_rpc_pipe_sync_action_none(), 1);
+    assert_eq!(supervisor_blocked_rpc_pipe_sync_action_sync_socket(), 2);
+    assert_eq!(
+        supervisor_blocked_rpc_post_resume_sync_flag_kernel_worker_available(),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_rpc_post_resume_sync_flag_process_owner_mismatch(),
+        2
+    );
+    assert_eq!(supervisor_blocked_rpc_post_resume_sync_action_none(), 0);
+    assert_eq!(
+        supervisor_blocked_rpc_post_resume_sync_action_fork_shared(),
+        1
+    );
+    assert_eq!(supervisor_blocked_rpc_post_resume_sync_action_socket(), 2);
     assert_eq!(
         supervisor_blocked_initial_action(0, STATUS_OK, 0),
         -(EFAULT as i32)
@@ -1635,6 +1652,19 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_blocked_stale_retry_result_action(0, STATUS_WAIT4),
         -(EFAULT as i32)
     );
+    assert_eq!(
+        supervisor_blocked_rpc_pipe_sync_action(0, STATUS_OK),
+        supervisor_blocked_rpc_pipe_sync_action_not_pipe() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_rpc_pipe_sync_action(0, STATUS_PIPE_WAIT),
+        -(EFAULT as i32)
+    );
+    assert_eq!(
+        supervisor_blocked_rpc_preserve_canonical_eof(STATUS_PIPE_WAIT),
+        1
+    );
+    assert_eq!(supervisor_blocked_rpc_preserve_canonical_eof(STATUS_OK), 0);
     assert_eq!(supervisor_blocked_retry_action(0, 0), -(EFAULT as i32));
     assert_eq!(supervisor_blocked_wait_retry_reason(0, 0), -(EFAULT as i32));
     assert_eq!(
@@ -2103,12 +2133,27 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         ),
         supervisor_blocked_status_transition_action_sync_pipe() as i32
     );
+    assert_eq!(
+        supervisor_blocked_rpc_post_resume_sync_action(
+            STATUS_WAIT4,
+            supervisor_blocked_rpc_post_resume_sync_flag_kernel_worker_available()
+        ),
+        supervisor_blocked_rpc_post_resume_sync_action_fork_shared() as i32
+    );
     t.vm.status = STATUS_PIPE_WAIT;
     t.vm.epoll_timeout_ms = -1;
     set_blocked_resume_syscall(&mut t.vm, SYS_READ, [3, 0x1000, 1, 0, 0, 0]);
     assert_eq!(supervisor_blocked_epoll_wait_timeout_ms(vm_ptr), -1);
     assert_eq!(supervisor_blocked_poll_wait_timeout_ms(vm_ptr), -1);
     assert_eq!(supervisor_blocked_poll_wait_has_socket(vm_ptr), 0);
+    assert_eq!(
+        supervisor_blocked_rpc_pipe_sync_action(vm_ptr, STATUS_OK),
+        supervisor_blocked_rpc_pipe_sync_action_not_pipe() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_rpc_pipe_sync_action(vm_ptr, STATUS_PIPE_WAIT),
+        supervisor_blocked_rpc_pipe_sync_action_none() as i32
+    );
     assert_eq!(supervisor_blocked_pipe_wait_has_ready_events(vm_ptr), 0);
     assert_eq!(supervisor_blocked_wait_may_depend_on_network(vm_ptr), 0);
     assert_eq!(supervisor_blocked_wait_should_pump_network(vm_ptr), 1);
@@ -2147,6 +2192,10 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     set_blocked_resume_syscall(&mut t.vm, SYS_PPOLL, [pollfd, 1, 0, 0, 0, 0]);
     assert_eq!(supervisor_blocked_poll_wait_timeout_ms(vm_ptr), 25);
     assert_eq!(supervisor_blocked_poll_wait_has_socket(vm_ptr), 1);
+    assert_eq!(
+        supervisor_blocked_rpc_pipe_sync_action(vm_ptr, STATUS_PIPE_WAIT),
+        supervisor_blocked_rpc_pipe_sync_action_sync_socket() as i32
+    );
     assert_eq!(supervisor_blocked_wait_may_depend_on_network(vm_ptr), 1);
     assert_eq!(supervisor_blocked_wait_should_pump_network(vm_ptr), 1);
     assert_eq!(
@@ -2195,6 +2244,26 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         ),
         supervisor_blocked_status_transition_action_sync_socket_and_fork_shared() as i32
     );
+    assert_eq!(
+        supervisor_blocked_rpc_post_resume_sync_action(STATUS_SOCKET_RECV, 0),
+        supervisor_blocked_rpc_post_resume_sync_action_socket() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_rpc_post_resume_sync_action(
+            STATUS_SOCKET_RECV,
+            supervisor_blocked_rpc_post_resume_sync_flag_kernel_worker_available()
+        ),
+        (supervisor_blocked_rpc_post_resume_sync_action_fork_shared()
+            | supervisor_blocked_rpc_post_resume_sync_action_socket()) as i32
+    );
+    assert_eq!(
+        supervisor_blocked_rpc_post_resume_sync_action(
+            STATUS_SOCKET_RECV,
+            supervisor_blocked_rpc_post_resume_sync_flag_kernel_worker_available()
+                | supervisor_blocked_rpc_post_resume_sync_flag_process_owner_mismatch()
+        ),
+        supervisor_blocked_rpc_post_resume_sync_action_none() as i32
+    );
     t.vm.socket_timeout_ms = 1;
     assert_eq!(supervisor_blocked_wait_timer_required(vm_ptr), 1);
     assert_eq!(
@@ -2216,6 +2285,13 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     t.vm.epoll_timeout_ms = -1;
     assert_eq!(supervisor_blocked_epoll_wait_timeout_ms(vm_ptr), -1);
     assert_eq!(supervisor_blocked_wait_timer_required(vm_ptr), 0);
+    assert_eq!(
+        supervisor_blocked_rpc_post_resume_sync_action(
+            STATUS_EPOLL_WAIT,
+            supervisor_blocked_rpc_post_resume_sync_flag_kernel_worker_available()
+        ),
+        supervisor_blocked_rpc_post_resume_sync_action_none() as i32
+    );
     assert_eq!(
         supervisor_blocked_status_transition_action(
             vm_ptr,

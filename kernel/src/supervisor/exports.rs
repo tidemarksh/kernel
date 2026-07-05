@@ -1563,6 +1563,64 @@ pub extern "C" fn supervisor_blocked_stale_retry_result_action(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_rpc_pipe_sync_action_not_pipe() -> u32 {
+    super::blocked::rpc_pipe_sync_action_not_pipe()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_rpc_pipe_sync_action_none() -> u32 {
+    super::blocked::rpc_pipe_sync_action_none()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_rpc_pipe_sync_action_sync_socket() -> u32 {
+    super::blocked::rpc_pipe_sync_action_sync_socket()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_rpc_pipe_sync_action(vm_ptr: u32, blocked_status: i32) -> i32 {
+    super::blocked::rpc_pipe_sync_action(vm_ptr, blocked_status)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_rpc_preserve_canonical_eof(blocked_status: i32) -> i32 {
+    super::blocked::rpc_preserve_canonical_eof(blocked_status)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_rpc_post_resume_sync_flag_kernel_worker_available() -> u32 {
+    super::blocked::rpc_post_resume_sync_flag_kernel_worker_available()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_rpc_post_resume_sync_flag_process_owner_mismatch() -> u32 {
+    super::blocked::rpc_post_resume_sync_flag_process_owner_mismatch()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_rpc_post_resume_sync_action_none() -> u32 {
+    super::blocked::rpc_post_resume_sync_action_none()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_rpc_post_resume_sync_action_fork_shared() -> u32 {
+    super::blocked::rpc_post_resume_sync_action_fork_shared()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_rpc_post_resume_sync_action_socket() -> u32 {
+    super::blocked::rpc_post_resume_sync_action_socket()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_rpc_post_resume_sync_action(
+    blocked_status: i32,
+    flags: u32,
+) -> i32 {
+    super::blocked::rpc_post_resume_sync_action(blocked_status, flags)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_retry_action(vm_ptr: u32, flags: u32) -> i32 {
     super::blocked::retry_action(vm_ptr, flags)
 }

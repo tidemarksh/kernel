@@ -58,6 +58,14 @@ pub(super) const POST_NETWORK_PUMP_ACTION_SCHEDULE_RETRY_WITH_HOST_PROGRESS: u32
 pub(super) const STALE_RETRY_RESULT_ACTION_NONE: u32 = 0;
 pub(super) const STALE_RETRY_RESULT_ACTION_HANDLE_CURRENT_RESULT: u32 = 1;
 pub(super) const STALE_RETRY_RESULT_ACTION_HANDLE_CURRENT_RESULT_WAIT4: u32 = 2;
+pub(super) const RPC_PIPE_SYNC_ACTION_NOT_PIPE: u32 = 0;
+pub(super) const RPC_PIPE_SYNC_ACTION_NONE: u32 = 1;
+pub(super) const RPC_PIPE_SYNC_ACTION_SYNC_SOCKET: u32 = 2;
+pub(super) const RPC_POST_RESUME_SYNC_FLAG_KERNEL_WORKER_AVAILABLE: u32 = 1;
+pub(super) const RPC_POST_RESUME_SYNC_FLAG_PROCESS_OWNER_MISMATCH: u32 = 1 << 1;
+pub(super) const RPC_POST_RESUME_SYNC_ACTION_NONE: u32 = 0;
+pub(super) const RPC_POST_RESUME_SYNC_ACTION_FORK_SHARED: u32 = 1;
+pub(super) const RPC_POST_RESUME_SYNC_ACTION_SOCKET: u32 = 1 << 1;
 pub(super) const RESUME_DELEGATION_FLAG_KERNEL_WORKER_AVAILABLE: u32 = 1;
 pub(super) const RESUME_DELEGATION_DIRECT: u32 = 0;
 pub(super) const RESUME_DELEGATION_KERNEL_WORKER: u32 = 1;
@@ -889,6 +897,74 @@ pub(super) fn stale_retry_result_action(vm_ptr: u32, blocked_status: i32) -> i32
         return STALE_RETRY_RESULT_ACTION_HANDLE_CURRENT_RESULT_WAIT4 as i32;
     }
     STALE_RETRY_RESULT_ACTION_HANDLE_CURRENT_RESULT as i32
+}
+
+pub(super) fn rpc_pipe_sync_action_not_pipe() -> u32 {
+    RPC_PIPE_SYNC_ACTION_NOT_PIPE
+}
+
+pub(super) fn rpc_pipe_sync_action_none() -> u32 {
+    RPC_PIPE_SYNC_ACTION_NONE
+}
+
+pub(super) fn rpc_pipe_sync_action_sync_socket() -> u32 {
+    RPC_PIPE_SYNC_ACTION_SYNC_SOCKET
+}
+
+pub(super) fn rpc_pipe_sync_action(vm_ptr: u32, blocked_status: i32) -> i32 {
+    if blocked_status != crate::abi::STATUS_PIPE_WAIT {
+        return RPC_PIPE_SYNC_ACTION_NOT_PIPE as i32;
+    }
+    let vm = match state(vm_ptr) {
+        Ok(vm) => vm,
+        Err(errno) => return -errno,
+    };
+    if poll_wait_has_socket_for_vm(vm) {
+        RPC_PIPE_SYNC_ACTION_SYNC_SOCKET as i32
+    } else {
+        RPC_PIPE_SYNC_ACTION_NONE as i32
+    }
+}
+
+pub(super) fn rpc_preserve_canonical_eof(blocked_status: i32) -> i32 {
+    i32::from(blocked_status == crate::abi::STATUS_PIPE_WAIT)
+}
+
+pub(super) fn rpc_post_resume_sync_flag_kernel_worker_available() -> u32 {
+    RPC_POST_RESUME_SYNC_FLAG_KERNEL_WORKER_AVAILABLE
+}
+
+pub(super) fn rpc_post_resume_sync_flag_process_owner_mismatch() -> u32 {
+    RPC_POST_RESUME_SYNC_FLAG_PROCESS_OWNER_MISMATCH
+}
+
+pub(super) fn rpc_post_resume_sync_action_none() -> u32 {
+    RPC_POST_RESUME_SYNC_ACTION_NONE
+}
+
+pub(super) fn rpc_post_resume_sync_action_fork_shared() -> u32 {
+    RPC_POST_RESUME_SYNC_ACTION_FORK_SHARED
+}
+
+pub(super) fn rpc_post_resume_sync_action_socket() -> u32 {
+    RPC_POST_RESUME_SYNC_ACTION_SOCKET
+}
+
+pub(super) fn rpc_post_resume_sync_action(blocked_status: i32, flags: u32) -> i32 {
+    if (flags & RPC_POST_RESUME_SYNC_FLAG_PROCESS_OWNER_MISMATCH) != 0 {
+        return RPC_POST_RESUME_SYNC_ACTION_NONE as i32;
+    }
+
+    let mut action = RPC_POST_RESUME_SYNC_ACTION_NONE;
+    if (flags & RPC_POST_RESUME_SYNC_FLAG_KERNEL_WORKER_AVAILABLE) != 0
+        && blocked_status != crate::abi::STATUS_EPOLL_WAIT
+    {
+        action |= RPC_POST_RESUME_SYNC_ACTION_FORK_SHARED;
+    }
+    if status_syncs_socket_after_resume(blocked_status) != 0 {
+        action |= RPC_POST_RESUME_SYNC_ACTION_SOCKET;
+    }
+    action as i32
 }
 
 pub(super) fn retry_reason(vm_ptr: u32, flags: u32) -> i32 {
