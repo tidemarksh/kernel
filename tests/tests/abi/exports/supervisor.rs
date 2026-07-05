@@ -153,6 +153,12 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_fork_shared_held_ofd_track_flag_fd_entry_source(),
         8
     );
+    assert_eq!(supervisor_fork_shared_sync_target_action_reject(), 0);
+    assert_eq!(supervisor_fork_shared_sync_target_action_defer(), 1);
+    assert_eq!(supervisor_fork_shared_sync_target_action_use(), 2);
+    assert_eq!(supervisor_fork_shared_ofd_action_include(), 1);
+    assert_eq!(supervisor_fork_shared_ofd_action_add_shared(), 2);
+    assert_eq!(supervisor_fork_shared_ofd_action_rehydrate(), 4);
     assert_eq!(supervisor_thread_take_completed_sync_effects(0, 0), 0);
     assert_eq!(supervisor_pipe_slot_mode_read(), 1);
     assert_eq!(supervisor_pipe_slot_mode_write(), 2);
@@ -2433,4 +2439,88 @@ fn supervisor_fork_shared_effect_sync_action_is_kernel_owned() {
     assert_eq!(supervisor_fork_shared_effect_sync_action(1, 1, 0, 0), 1);
     assert_eq!(supervisor_fork_shared_effect_sync_action(1, 1, 1, 0), 0);
     assert_eq!(supervisor_fork_shared_effect_sync_action(1, 1, 1, 1), 1);
+}
+
+#[test]
+fn supervisor_fork_shared_sync_planning_actions_are_kernel_owned() {
+    assert_eq!(
+        supervisor_fork_shared_sync_target_action(0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0),
+        supervisor_fork_shared_sync_target_action_use()
+    );
+    assert_eq!(
+        supervisor_fork_shared_sync_target_action(0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0),
+        supervisor_fork_shared_sync_target_action_defer()
+    );
+    assert_eq!(
+        supervisor_fork_shared_sync_target_action(0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0),
+        supervisor_fork_shared_sync_target_action_defer()
+    );
+    assert_eq!(
+        supervisor_fork_shared_sync_target_action(0, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0),
+        supervisor_fork_shared_sync_target_action_reject()
+    );
+    assert_eq!(
+        supervisor_fork_shared_sync_target_action(0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 1, 1),
+        supervisor_fork_shared_sync_target_action_reject()
+    );
+
+    assert_eq!(
+        supervisor_fork_shared_syncable_ofd_action(1, 0, 1, 0, 0, 0),
+        supervisor_fork_shared_ofd_action_include()
+    );
+    assert_eq!(
+        supervisor_fork_shared_syncable_ofd_action(1, 1, 1, 0, 0, 0),
+        0
+    );
+    assert_eq!(
+        supervisor_fork_shared_syncable_ofd_action(1, 0, 1, 1, 0, 0),
+        0
+    );
+    assert_eq!(
+        supervisor_fork_shared_syncable_ofd_action(1, 0, 1, 1, 1, 0),
+        supervisor_fork_shared_ofd_action_include()
+    );
+    assert_eq!(
+        supervisor_fork_shared_syncable_ofd_action(1, 0, 1, 0, 0, 1),
+        0
+    );
+
+    assert_eq!(
+        supervisor_fork_shared_delta_source_ofd_action(1, 1, 0, 0),
+        supervisor_fork_shared_ofd_action_include()
+    );
+    assert_eq!(
+        supervisor_fork_shared_delta_source_ofd_action(1, 0, 1, 1),
+        supervisor_fork_shared_ofd_action_include()
+            | supervisor_fork_shared_ofd_action_add_shared()
+    );
+    assert_eq!(
+        supervisor_fork_shared_delta_source_ofd_action(0, 1, 1, 1),
+        0
+    );
+
+    assert_eq!(
+        supervisor_fork_shared_tracked_source_ofd_action(1, 0, 1, 0, 0),
+        supervisor_fork_shared_ofd_action_include()
+    );
+    assert_eq!(
+        supervisor_fork_shared_tracked_source_ofd_action(1, 0, 1, 0, 1),
+        0
+    );
+    assert_eq!(
+        supervisor_fork_shared_tracked_source_ofd_action(0, 1, 1, 0, 1),
+        supervisor_fork_shared_ofd_action_include()
+    );
+
+    assert_eq!(
+        supervisor_fork_shared_pipe_peer_ofd_action(0, 1),
+        supervisor_fork_shared_ofd_action_include()
+            | supervisor_fork_shared_ofd_action_add_shared()
+    );
+    assert_eq!(supervisor_fork_shared_pipe_peer_ofd_action(1, 1), 0);
+    assert_eq!(
+        supervisor_fork_shared_rehydrate_ofd_action(1, 0, 1),
+        supervisor_fork_shared_ofd_action_rehydrate()
+    );
+    assert_eq!(supervisor_fork_shared_rehydrate_ofd_action(1, 1, 1), 0);
 }

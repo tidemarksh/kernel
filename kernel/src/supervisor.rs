@@ -13,6 +13,7 @@ mod event;
 mod exports;
 mod fault;
 mod fd;
+mod fork_shared;
 mod fs;
 mod futex;
 mod host_op;

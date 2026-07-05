@@ -1627,52 +1627,82 @@ pub extern "C" fn supervisor_ofd_pipe_generation_slot(ofd_id: u32) -> u32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fork_shared_peer_flag_compatible() -> u32 {
-    super::fd::fork_shared_peer_flag_compatible()
+    super::fork_shared::peer_flag_compatible()
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fork_shared_peer_flag_incompatible() -> u32 {
-    super::fd::fork_shared_peer_flag_incompatible()
+    super::fork_shared::peer_flag_incompatible()
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fork_shared_peer_flag_pipe_peer() -> u32 {
-    super::fd::fork_shared_peer_flag_pipe_peer()
+    super::fork_shared::peer_flag_pipe_peer()
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fork_shared_held_ofd_track_flag_shared() -> u32 {
-    super::fd::fork_shared_held_ofd_track_flag_shared()
+    super::fork_shared::held_ofd_track_flag_shared()
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fork_shared_held_ofd_track_flag_host_stdio_pipe() -> u32 {
-    super::fd::fork_shared_held_ofd_track_flag_host_stdio_pipe()
+    super::fork_shared::held_ofd_track_flag_host_stdio_pipe()
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fork_shared_held_ofd_track_flag_stdio_fd() -> u32 {
-    super::fd::fork_shared_held_ofd_track_flag_stdio_fd()
+    super::fork_shared::held_ofd_track_flag_stdio_fd()
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fork_shared_held_ofd_track_flag_fd_entry_source() -> u32 {
-    super::fd::fork_shared_held_ofd_track_flag_fd_entry_source()
+    super::fork_shared::held_ofd_track_flag_fd_entry_source()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fork_shared_sync_target_action_reject() -> i32 {
+    super::fork_shared::sync_target_action_reject()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fork_shared_sync_target_action_defer() -> i32 {
+    super::fork_shared::sync_target_action_defer()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fork_shared_sync_target_action_use() -> i32 {
+    super::fork_shared::sync_target_action_use()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fork_shared_ofd_action_include() -> i32 {
+    super::fork_shared::ofd_action_include()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fork_shared_ofd_action_add_shared() -> i32 {
+    super::fork_shared::ofd_action_add_shared()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fork_shared_ofd_action_rehydrate() -> i32 {
+    super::fork_shared::ofd_action_rehydrate()
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fork_shared_held_ofd_track_action(ofd_id: u32, flags: u32) -> i32 {
-    super::fd::fork_shared_held_ofd_track_action(ofd_id, flags)
+    super::fork_shared::held_ofd_track_action(ofd_id, flags)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fork_shared_ofd_identity_key(ofd_id: u32) -> u64 {
-    super::fd::fork_shared_ofd_identity_key(ofd_id)
+    super::fork_shared::ofd_identity_key(ofd_id)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_fork_shared_ofd_publish_action(ofd_id: u32, peer_flags: u32) -> i32 {
-    super::fd::fork_shared_ofd_publish_action(ofd_id, peer_flags)
+    super::fork_shared::ofd_publish_action(ofd_id, peer_flags)
 }
 
 #[unsafe(no_mangle)]
@@ -1682,12 +1712,103 @@ pub extern "C" fn supervisor_fork_shared_effect_sync_action(
     source_holds_regular_file: i32,
     regular_file_has_peer: i32,
 ) -> i32 {
-    super::fd::fork_shared_effect_sync_action(
+    super::fork_shared::effect_sync_action(
         has_effect,
         has_tracked_state,
         source_holds_regular_file,
         regular_file_has_peer,
     )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fork_shared_sync_target_action(
+    invalid_pid: i32,
+    running_worker: i32,
+    vfork_ready_worker: i32,
+    has_host_blocked_worker: i32,
+    rpc_pending: i32,
+    process_exit: i32,
+    registered_process_exit: i32,
+    registered_mismatch: i32,
+    incompatible_ofd: i32,
+    require_host_blocked: i32,
+    include_memfs: i32,
+    runtime_network_state: i32,
+) -> i32 {
+    super::fork_shared::sync_target_action(
+        invalid_pid,
+        running_worker,
+        vfork_ready_worker,
+        has_host_blocked_worker,
+        rpc_pending,
+        process_exit,
+        registered_process_exit,
+        registered_mismatch,
+        incompatible_ofd,
+        require_host_blocked,
+        include_memfs,
+        runtime_network_state,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fork_shared_syncable_ofd_action(
+    syncable: i32,
+    source_conflicting: i32,
+    allowed: i32,
+    regular_file: i32,
+    source_published: i32,
+    runtime_network_socket: i32,
+) -> i32 {
+    super::fork_shared::syncable_ofd_action(
+        syncable,
+        source_conflicting,
+        allowed,
+        regular_file,
+        source_published,
+        runtime_network_socket,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fork_shared_delta_source_ofd_action(
+    allowed: i32,
+    source_published: i32,
+    source_held: i32,
+    pipe_peer: i32,
+) -> i32 {
+    super::fork_shared::delta_source_ofd_action(allowed, source_published, source_held, pipe_peer)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fork_shared_tracked_source_ofd_action(
+    kernel_shared: i32,
+    source_fd_entry: i32,
+    syncable: i32,
+    type_none: i32,
+    incompatible_peer: i32,
+) -> i32 {
+    super::fork_shared::tracked_source_ofd_action(
+        kernel_shared,
+        source_fd_entry,
+        syncable,
+        type_none,
+        incompatible_peer,
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fork_shared_pipe_peer_ofd_action(stale: i32, syncable: i32) -> i32 {
+    super::fork_shared::pipe_peer_ofd_action(stale, syncable)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_fork_shared_rehydrate_ofd_action(
+    active: i32,
+    source_held: i32,
+    allowed: i32,
+) -> i32 {
+    super::fork_shared::rehydrate_ofd_action(active, source_held, allowed)
 }
 
 #[unsafe(no_mangle)]

@@ -1,8 +1,8 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crate::abi::{
-    FD_TYPE_FILE, FD_TYPE_PIPE, FD_TYPE_PTY_MASTER, FD_TYPE_PTY_SLAVE, FD_TYPE_SOCKET, MAX_FDS,
-    SYS_CLOSE, SYS_CLOSE_RANGE, SYS_EXECVE, SYS_LSEEK,
+    FD_TYPE_FILE, FD_TYPE_PIPE, FD_TYPE_PTY_MASTER, FD_TYPE_PTY_SLAVE, MAX_FDS, SYS_CLOSE,
+    SYS_CLOSE_RANGE, SYS_EXECVE, SYS_LSEEK,
 };
 use crate::fs::fd_table;
 use crate::types::{FdEntry, OpenFileDesc, ProcessState};
@@ -27,15 +27,6 @@ const EMPTY_OFD_RESTORE_OFFSET_FLOOR: OfdRestoreOffsetFloor = OfdRestoreOffsetFl
 };
 static mut OFD_RESTORE_OFFSET_FLOORS: [OfdRestoreOffsetFloor; MAX_FDS] =
     [EMPTY_OFD_RESTORE_OFFSET_FLOOR; MAX_FDS];
-const FORK_SHARED_PEER_FLAG_COMPATIBLE: u32 = 1;
-const FORK_SHARED_PEER_FLAG_INCOMPATIBLE: u32 = 1 << 1;
-const FORK_SHARED_PEER_FLAG_PIPE_PEER: u32 = 1 << 2;
-const FORK_SHARED_HELD_OFD_TRACK_FLAG_SHARED: u32 = 1;
-const FORK_SHARED_HELD_OFD_TRACK_FLAG_HOST_STDIO_PIPE: u32 = 1 << 1;
-const FORK_SHARED_HELD_OFD_TRACK_FLAG_STDIO_FD: u32 = 1 << 2;
-const FORK_SHARED_HELD_OFD_TRACK_FLAG_FD_ENTRY_SOURCE: u32 = 1 << 3;
-const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
 pub(super) fn init() {
     FD_CONTROL_COUNT.store(0, Ordering::Relaxed);
@@ -254,128 +245,6 @@ pub fn pipe_sync_ofd_candidate(ofd_id: u32) -> i32 {
         FD_TYPE_PIPE | FD_TYPE_PTY_MASTER | FD_TYPE_PTY_SLAVE => 1,
         _ => 0,
     }
-}
-
-pub fn fork_shared_peer_flag_compatible() -> u32 {
-    FORK_SHARED_PEER_FLAG_COMPATIBLE
-}
-
-pub fn fork_shared_peer_flag_incompatible() -> u32 {
-    FORK_SHARED_PEER_FLAG_INCOMPATIBLE
-}
-
-pub fn fork_shared_peer_flag_pipe_peer() -> u32 {
-    FORK_SHARED_PEER_FLAG_PIPE_PEER
-}
-
-pub fn fork_shared_held_ofd_track_flag_shared() -> u32 {
-    FORK_SHARED_HELD_OFD_TRACK_FLAG_SHARED
-}
-
-pub fn fork_shared_held_ofd_track_flag_host_stdio_pipe() -> u32 {
-    FORK_SHARED_HELD_OFD_TRACK_FLAG_HOST_STDIO_PIPE
-}
-
-pub fn fork_shared_held_ofd_track_flag_stdio_fd() -> u32 {
-    FORK_SHARED_HELD_OFD_TRACK_FLAG_STDIO_FD
-}
-
-pub fn fork_shared_held_ofd_track_flag_fd_entry_source() -> u32 {
-    FORK_SHARED_HELD_OFD_TRACK_FLAG_FD_ENTRY_SOURCE
-}
-
-pub fn fork_shared_held_ofd_track_action(ofd_id: u32, flags: u32) -> i32 {
-    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
-        return 0;
-    }
-    if (flags & FORK_SHARED_HELD_OFD_TRACK_FLAG_HOST_STDIO_PIPE) != 0 {
-        return 0;
-    }
-    let Some(ofd) = fd_table::get_ofd_by_id(ofd_id) else {
-        return 0;
-    };
-    if (flags
-        & (FORK_SHARED_HELD_OFD_TRACK_FLAG_SHARED
-            | FORK_SHARED_HELD_OFD_TRACK_FLAG_STDIO_FD
-            | FORK_SHARED_HELD_OFD_TRACK_FLAG_FD_ENTRY_SOURCE))
-        != 0
-    {
-        return 1;
-    }
-    if ofd.fd_type == FD_TYPE_FILE {
-        return 0;
-    }
-    1
-}
-
-fn fold_identity_part(hash: u64, value: u64) -> u64 {
-    let mut next = hash ^ value;
-    next = next.wrapping_mul(FNV_PRIME);
-    next
-}
-
-pub fn fork_shared_ofd_identity_key(ofd_id: u32) -> u64 {
-    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
-        return 0;
-    }
-    let Some(ofd) = fd_table::get_ofd_by_id(ofd_id) else {
-        return 0;
-    };
-    if ofd.fd_type <= 0 {
-        return 0;
-    }
-    let endpoint_or_host_fd = match ofd.fd_type {
-        FD_TYPE_PIPE => {
-            if ofd.host_fd >= 0 {
-                1
-            } else {
-                2
-            }
-        }
-        FD_TYPE_SOCKET => ofd.host_fd as u64,
-        _ => 0,
-    };
-    let hash = fold_identity_part(FNV_OFFSET, ofd.fd_type as u64);
-    let hash = fold_identity_part(hash, ofd.ino as u64);
-    let hash = fold_identity_part(hash, endpoint_or_host_fd);
-    if hash == 0 { FNV_OFFSET } else { hash }
-}
-
-pub fn fork_shared_ofd_publish_action(ofd_id: u32, peer_flags: u32) -> i32 {
-    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
-        return 0;
-    }
-    let Some(ofd) = fd_table::get_ofd_by_id(ofd_id) else {
-        return 0;
-    };
-    if ofd.fd_type <= 0 {
-        return 0;
-    }
-    if (peer_flags & FORK_SHARED_PEER_FLAG_INCOMPATIBLE) != 0 {
-        return 0;
-    }
-    let compatible_peer = (peer_flags & FORK_SHARED_PEER_FLAG_COMPATIBLE) != 0;
-    let pipe_peer = (peer_flags & FORK_SHARED_PEER_FLAG_PIPE_PEER) != 0;
-    match ofd.fd_type {
-        FD_TYPE_FILE => i32::from(compatible_peer),
-        FD_TYPE_PIPE => i32::from(compatible_peer || pipe_peer),
-        _ => 1,
-    }
-}
-
-pub fn fork_shared_effect_sync_action(
-    has_effect: i32,
-    has_tracked_state: i32,
-    source_holds_regular_file: i32,
-    regular_file_has_peer: i32,
-) -> i32 {
-    if has_effect == 0 || has_tracked_state == 0 {
-        return 0;
-    }
-    if source_holds_regular_file != 0 && regular_file_has_peer == 0 {
-        return 0;
-    }
-    1
 }
 
 fn syscall_may_clear_fd_entries(syscall_nr: u64) -> bool {
