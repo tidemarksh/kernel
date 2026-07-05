@@ -651,6 +651,22 @@ export_u32_const!(
     super::scheduler::futex_waiter_action_waiter()
 );
 export_u32_const!(
+    supervisor_worker_status_transition_action_enqueue,
+    super::status_transition::worker_action_enqueue()
+);
+export_u32_const!(
+    supervisor_worker_status_transition_action_connect_wait,
+    super::status_transition::worker_action_connect_wait()
+);
+export_u32_const!(
+    supervisor_worker_status_transition_action_park_futex,
+    super::status_transition::worker_action_park_futex()
+);
+export_u32_const!(
+    supervisor_worker_status_transition_action_host_wait,
+    super::status_transition::worker_action_host_wait()
+);
+export_u32_const!(
     supervisor_stdio_output_settle_kind_visible,
     super::stdio::output_settle_kind_visible()
 );
@@ -1849,6 +1865,11 @@ pub extern "C" fn supervisor_scheduler_block_worker_action(status: i32) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn supervisor_scheduler_futex_waiter_action(status: i32) -> i32 {
     super::scheduler::futex_waiter_action(status)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_worker_status_transition_action(status: i32) -> i32 {
+    super::status_transition::worker_action(status)
 }
 
 #[unsafe(no_mangle)]

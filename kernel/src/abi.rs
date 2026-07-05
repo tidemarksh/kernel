@@ -1092,7 +1092,11 @@ pub use crate::supervisor::{
     supervisor_wait4_child_exit_blocked_parent_action_invalidate_rpc,
     supervisor_wait4_child_exit_blocked_parent_action_none,
     supervisor_wait4_rpc_local_status_action, supervisor_wait4_rpc_local_status_action_skip,
-    supervisor_wait4_rpc_local_status_action_start,
+    supervisor_wait4_rpc_local_status_action_start, supervisor_worker_status_transition_action,
+    supervisor_worker_status_transition_action_connect_wait,
+    supervisor_worker_status_transition_action_enqueue,
+    supervisor_worker_status_transition_action_host_wait,
+    supervisor_worker_status_transition_action_park_futex,
 };
 
 // =============================================================================

@@ -426,6 +426,10 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_scheduler_block_worker_action_park_futex(), 1);
     assert_eq!(supervisor_scheduler_futex_waiter_action_not_waiter(), 0);
     assert_eq!(supervisor_scheduler_futex_waiter_action_waiter(), 1);
+    assert_eq!(supervisor_worker_status_transition_action_enqueue(), 0);
+    assert_eq!(supervisor_worker_status_transition_action_connect_wait(), 1);
+    assert_eq!(supervisor_worker_status_transition_action_park_futex(), 2);
+    assert_eq!(supervisor_worker_status_transition_action_host_wait(), 3);
     assert_eq!(supervisor_stdio_output_settle_kind_visible(), 1);
     assert_eq!(supervisor_stdio_output_settle_kind_inherited_child(), 2);
     assert_eq!(supervisor_stdio_pipe_read_progress_action_none(), 0);
@@ -1880,6 +1884,22 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_scheduler_futex_waiter_action(STATUS_OK),
         supervisor_scheduler_futex_waiter_action_not_waiter() as i32
+    );
+    assert_eq!(
+        supervisor_worker_status_transition_action(STATUS_CONNECT),
+        supervisor_worker_status_transition_action_connect_wait() as i32
+    );
+    assert_eq!(
+        supervisor_worker_status_transition_action(STATUS_FUTEX_WAIT),
+        supervisor_worker_status_transition_action_park_futex() as i32
+    );
+    assert_eq!(
+        supervisor_worker_status_transition_action(STATUS_PIPE_WAIT),
+        supervisor_worker_status_transition_action_host_wait() as i32
+    );
+    assert_eq!(
+        supervisor_worker_status_transition_action(STATUS_OK),
+        supervisor_worker_status_transition_action_enqueue() as i32
     );
     assert_eq!(supervisor_blocked_initial_action_none(), 0);
     assert_eq!(

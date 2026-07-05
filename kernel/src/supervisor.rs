@@ -35,6 +35,7 @@ mod signal;
 mod socket;
 mod state;
 mod state_sync;
+mod status_transition;
 mod stdio;
 mod sync_effects;
 mod thread;
