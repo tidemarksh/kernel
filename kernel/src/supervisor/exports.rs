@@ -1494,6 +1494,31 @@ pub extern "C" fn supervisor_blocked_initial_action(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_result_action_none() -> u32 {
+    super::blocked::retry_result_action_none()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_result_action_arm_wait_timer() -> u32 {
+    super::blocked::retry_result_action_arm_wait_timer()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_result_action_schedule_retry() -> u32 {
+    super::blocked::retry_result_action_schedule_retry()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_result_action_schedule_retry_and_pump() -> u32 {
+    super::blocked::retry_result_action_schedule_retry_and_pump()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_retry_result_action(vm_ptr: u32, result_status: i32) -> i32 {
+    super::blocked::retry_result_action(vm_ptr, result_status)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_blocked_retry_action(vm_ptr: u32, flags: u32) -> i32 {
     super::blocked::retry_action(vm_ptr, flags)
 }

@@ -1595,8 +1595,19 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_blocked_initial_action_arm_wait_timer(), 3);
     assert_eq!(supervisor_blocked_initial_action_retry_now(), 4);
     assert_eq!(supervisor_blocked_initial_action_schedule_retry(), 5);
+    assert_eq!(supervisor_blocked_retry_result_action_none(), 0);
+    assert_eq!(supervisor_blocked_retry_result_action_arm_wait_timer(), 1);
+    assert_eq!(supervisor_blocked_retry_result_action_schedule_retry(), 2);
+    assert_eq!(
+        supervisor_blocked_retry_result_action_schedule_retry_and_pump(),
+        3
+    );
     assert_eq!(
         supervisor_blocked_initial_action(0, STATUS_OK, 0),
+        -(EFAULT as i32)
+    );
+    assert_eq!(
+        supervisor_blocked_retry_result_action(0, STATUS_OK),
         -(EFAULT as i32)
     );
     assert_eq!(supervisor_blocked_retry_action(0, 0), -(EFAULT as i32));
@@ -1844,16 +1855,28 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_blocked_initial_action(vm_ptr, STATUS_EPOLL_WAIT, 0),
         supervisor_blocked_initial_action_arm_wait_timer() as i32
     );
+    assert_eq!(
+        supervisor_blocked_retry_result_action(vm_ptr, STATUS_EPOLL_WAIT),
+        supervisor_blocked_retry_result_action_arm_wait_timer() as i32
+    );
     t.vm.epoll_timeout_ms = -1;
     assert_eq!(
         supervisor_blocked_initial_action(vm_ptr, STATUS_EPOLL_WAIT, 0),
         supervisor_blocked_initial_action_schedule_retry() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_retry_result_action(vm_ptr, STATUS_EPOLL_WAIT),
+        supervisor_blocked_retry_result_action_schedule_retry_and_pump() as i32
     );
     t.vm.status = STATUS_PIPE_WAIT;
     assert_eq!(supervisor_blocked_epoll_wait_retry_required(vm_ptr), 0);
     assert_eq!(
         supervisor_blocked_initial_action(vm_ptr, STATUS_PIPE_WAIT, 0),
         supervisor_blocked_initial_action_schedule_retry() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_retry_result_action(vm_ptr, STATUS_PIPE_WAIT),
+        supervisor_blocked_retry_result_action_schedule_retry() as i32
     );
     t.vm.status = STATUS_WAIT4;
     assert_eq!(
@@ -1865,6 +1888,10 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_blocked_initial_action(vm_ptr, STATUS_EPOLL_WAIT, 0),
         supervisor_blocked_initial_action_none() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_retry_result_action(vm_ptr, STATUS_EPOLL_WAIT),
+        supervisor_blocked_retry_result_action_none() as i32
     );
     assert_eq!(
         supervisor_blocked_initial_action(

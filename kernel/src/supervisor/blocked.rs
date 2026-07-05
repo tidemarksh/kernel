@@ -48,6 +48,10 @@ pub(super) const INITIAL_BLOCKED_ACTION_DEFER_RPC_PENDING: u32 = 2;
 pub(super) const INITIAL_BLOCKED_ACTION_ARM_WAIT_TIMER: u32 = 3;
 pub(super) const INITIAL_BLOCKED_ACTION_RETRY_NOW: u32 = 4;
 pub(super) const INITIAL_BLOCKED_ACTION_SCHEDULE_RETRY: u32 = 5;
+pub(super) const RETRY_RESULT_ACTION_NONE: u32 = 0;
+pub(super) const RETRY_RESULT_ACTION_ARM_WAIT_TIMER: u32 = 1;
+pub(super) const RETRY_RESULT_ACTION_SCHEDULE_RETRY: u32 = 2;
+pub(super) const RETRY_RESULT_ACTION_SCHEDULE_RETRY_AND_PUMP: u32 = 3;
 pub(super) const RESUME_DELEGATION_FLAG_KERNEL_WORKER_AVAILABLE: u32 = 1;
 pub(super) const RESUME_DELEGATION_DIRECT: u32 = 0;
 pub(super) const RESUME_DELEGATION_KERNEL_WORKER: u32 = 1;
@@ -784,6 +788,45 @@ pub(super) fn initial_action(vm_ptr: u32, blocked_status: i32, flags: u32) -> i3
         },
         crate::abi::STATUS_WAIT4 => INITIAL_BLOCKED_ACTION_RETRY_NOW as i32,
         _ => INITIAL_BLOCKED_ACTION_SCHEDULE_RETRY as i32,
+    }
+}
+
+pub(super) fn retry_result_action_none() -> u32 {
+    RETRY_RESULT_ACTION_NONE
+}
+
+pub(super) fn retry_result_action_arm_wait_timer() -> u32 {
+    RETRY_RESULT_ACTION_ARM_WAIT_TIMER
+}
+
+pub(super) fn retry_result_action_schedule_retry() -> u32 {
+    RETRY_RESULT_ACTION_SCHEDULE_RETRY
+}
+
+pub(super) fn retry_result_action_schedule_retry_and_pump() -> u32 {
+    RETRY_RESULT_ACTION_SCHEDULE_RETRY_AND_PUMP
+}
+
+pub(super) fn retry_result_action(vm_ptr: u32, result_status: i32) -> i32 {
+    if let Err(errno) = state(vm_ptr) {
+        return -errno;
+    }
+
+    let wait_timer_required = super::timer::blocked_wait_timer_required_for_vm(vm_ptr);
+    if wait_timer_required < 0 {
+        return wait_timer_required;
+    }
+    if wait_timer_required != 0 {
+        return RETRY_RESULT_ACTION_ARM_WAIT_TIMER as i32;
+    }
+
+    match result_status {
+        crate::abi::STATUS_EPOLL_WAIT => match epoll_wait_retry_required(vm_ptr) {
+            retry_required if retry_required < 0 => retry_required,
+            0 => RETRY_RESULT_ACTION_NONE as i32,
+            _ => RETRY_RESULT_ACTION_SCHEDULE_RETRY_AND_PUMP as i32,
+        },
+        _ => RETRY_RESULT_ACTION_SCHEDULE_RETRY as i32,
     }
 }
 
