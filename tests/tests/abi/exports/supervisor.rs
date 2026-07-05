@@ -34,6 +34,149 @@ fn fold_log_hash(previous: u64, entry_hash: u64, entry_len: u32) -> u64 {
     next
 }
 
+#[test]
+fn supervisor_pipe_slot_snapshot_merge_actions_are_kernel_owned() {
+    let shared = supervisor_pipe_slot_snapshot_context_shared_state();
+    let thread = supervisor_pipe_slot_snapshot_context_thread_step();
+    let kernel_worker_apply = supervisor_pipe_slot_snapshot_context_kernel_worker_apply();
+    let kernel_worker_process = supervisor_pipe_slot_snapshot_context_kernel_worker_process();
+    let kernel_worker_canonical = supervisor_pipe_slot_snapshot_context_kernel_worker_canonical();
+    let read = supervisor_pipe_slot_mode_read();
+    let write = supervisor_pipe_slot_mode_write();
+    let control = supervisor_pipe_slot_mode_control();
+    let skip = supervisor_pipe_slot_snapshot_action_skip();
+    let apply = supervisor_pipe_slot_snapshot_action_apply_slot();
+    let head = supervisor_pipe_slot_snapshot_action_set_head_to_source();
+    let tail = supervisor_pipe_slot_snapshot_action_set_tail_to_source();
+    let copy_full = supervisor_pipe_slot_snapshot_action_copy_full();
+    let copy_delta = supervisor_pipe_slot_snapshot_action_copy_tail_delta();
+    let sync = supervisor_pipe_slot_snapshot_action_sync_generation();
+    let stop = supervisor_pipe_slot_snapshot_action_stop();
+
+    assert_eq!(
+        supervisor_pipe_slot_snapshot_merge_action(
+            shared,
+            read | write,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            4,
+            8,
+            1,
+            1,
+            2,
+        ),
+        skip | stop,
+    );
+    assert_eq!(
+        supervisor_pipe_slot_snapshot_merge_action(
+            shared,
+            read | write | control,
+            1,
+            0,
+            0,
+            1,
+            1,
+            0,
+            0,
+            0,
+            1,
+            1,
+            0,
+        ),
+        apply | sync | stop,
+    );
+    assert_eq!(
+        supervisor_pipe_slot_snapshot_merge_action(shared, read, 0, 5, 8, 1, 1, 0, 1, 2, 1, 1, 0,),
+        head | tail | copy_full | sync,
+    );
+    assert_eq!(
+        supervisor_pipe_slot_snapshot_merge_action(thread, write, 0, 2, 10, 1, 1, 0, 2, 3, 1, 1, 0,),
+        tail | copy_delta | sync,
+    );
+    assert_eq!(
+        supervisor_pipe_slot_snapshot_merge_action(
+            thread, control, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0,
+        ),
+        apply | sync | stop,
+    );
+    assert_eq!(
+        supervisor_pipe_slot_snapshot_merge_action(
+            kernel_worker_apply,
+            read | write,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            7,
+            9,
+            0,
+            0,
+            0,
+        ),
+        apply | sync | stop,
+    );
+    assert_eq!(
+        supervisor_pipe_slot_snapshot_merge_action(
+            kernel_worker_process,
+            read | write,
+            0,
+            5,
+            9,
+            1,
+            1,
+            0,
+            1,
+            3,
+            1,
+            1,
+            0,
+        ),
+        head | tail | copy_full | sync,
+    );
+    assert_eq!(
+        supervisor_pipe_slot_snapshot_merge_action(
+            kernel_worker_canonical,
+            write,
+            0,
+            5,
+            9,
+            1,
+            1,
+            0,
+            1,
+            9,
+            1,
+            1,
+            0,
+        ),
+        head | tail | copy_full | sync,
+    );
+    assert_eq!(
+        supervisor_pipe_slot_snapshot_merge_action(
+            kernel_worker_canonical,
+            read | write,
+            0,
+            0,
+            0,
+            1,
+            1,
+            1,
+            4,
+            8,
+            1,
+            1,
+            2,
+        ),
+        skip | stop,
+    );
+}
+
 fn write_pollfd(t: &mut TestVm, addr: u64, fd: i32, events: u16) {
     let mut bytes = [0u8; 8];
     bytes[0..4].copy_from_slice(&fd.to_le_bytes());
@@ -163,6 +306,33 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_pipe_slot_mode_read(), 1);
     assert_eq!(supervisor_pipe_slot_mode_write(), 2);
     assert_eq!(supervisor_pipe_slot_mode_control(), 4);
+    assert_eq!(supervisor_pipe_slot_snapshot_context_shared_state(), 1);
+    assert_eq!(supervisor_pipe_slot_snapshot_context_thread_step(), 2);
+    assert_eq!(
+        supervisor_pipe_slot_snapshot_context_kernel_worker_apply(),
+        3
+    );
+    assert_eq!(
+        supervisor_pipe_slot_snapshot_context_kernel_worker_process(),
+        4
+    );
+    assert_eq!(
+        supervisor_pipe_slot_snapshot_context_kernel_worker_canonical(),
+        5
+    );
+    assert_eq!(supervisor_pipe_slot_snapshot_action_skip(), 1);
+    assert_eq!(supervisor_pipe_slot_snapshot_action_apply_slot(), 2);
+    assert_eq!(supervisor_pipe_slot_snapshot_action_apply_control(), 4);
+    assert_eq!(supervisor_pipe_slot_snapshot_action_set_head_to_source(), 8);
+    assert_eq!(
+        supervisor_pipe_slot_snapshot_action_set_tail_to_source(),
+        16
+    );
+    assert_eq!(supervisor_pipe_slot_snapshot_action_set_head_zero(), 32);
+    assert_eq!(supervisor_pipe_slot_snapshot_action_copy_full(), 64);
+    assert_eq!(supervisor_pipe_slot_snapshot_action_copy_tail_delta(), 128);
+    assert_eq!(supervisor_pipe_slot_snapshot_action_sync_generation(), 256);
+    assert_eq!(supervisor_pipe_slot_snapshot_action_stop(), 512);
     assert_eq!(supervisor_blocked_pipe_resume_action_defer(), 0);
     assert_eq!(supervisor_blocked_pipe_resume_action_direct(), 1);
     assert_eq!(supervisor_blocked_pipe_sync_before_retry_action_none(), 0);

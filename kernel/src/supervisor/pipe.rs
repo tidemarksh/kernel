@@ -428,6 +428,266 @@ pub fn pipe_reconcile_control(pipe_slot: u32, read_open: i32, write_open: i32) -
     crate::syscall::pipe::reconcile_pipe_control(pipe_slot, read_open, write_open)
 }
 
+fn pipe_counter_ahead(source_value: u32, target_value: u32) -> bool {
+    source_value > target_value
+        || (source_value < target_value
+            && target_value > (crate::syscall::pipe::PIPE_BUF_SIZE as u32 / 2)
+            && source_value < (crate::syscall::pipe::PIPE_BUF_SIZE as u32 / 2))
+}
+
+fn pipe_generation_ahead(source_value: u32, target_value: u32) -> bool {
+    target_value == 0
+        || source_value > target_value
+        || (source_value < target_value && target_value > 0x8000_0000 && source_value < 0x8000_0000)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn pipe_slot_snapshot_merge_action(
+    context: u32,
+    mode: u32,
+    fresh: u32,
+    source_head: u32,
+    source_tail: u32,
+    source_read_open: i32,
+    source_write_open: i32,
+    source_generation: u32,
+    mut target_head: u32,
+    mut target_tail: u32,
+    target_read_open: i32,
+    target_write_open: i32,
+    target_generation: u32,
+) -> u32 {
+    let fresh = fresh != 0;
+    let read_mode = (mode & super::SUPERVISOR_PIPE_SLOT_MODE_READ) != 0;
+    let write_mode = (mode & super::SUPERVISOR_PIPE_SLOT_MODE_WRITE) != 0;
+    let control_mode = (mode & super::SUPERVISOR_PIPE_SLOT_MODE_CONTROL) != 0;
+    let shared_state_context = context == super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_CONTEXT_SHARED_STATE;
+    let thread_step_context = context == super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_CONTEXT_THREAD_STEP;
+    let kernel_worker_apply_context =
+        context == super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_CONTEXT_KERNEL_WORKER_APPLY;
+    let kernel_worker_process_context =
+        context == super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_CONTEXT_KERNEL_WORKER_PROCESS;
+    let kernel_worker_canonical_context =
+        context == super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_CONTEXT_KERNEL_WORKER_CANONICAL;
+    let sync_generation_without_apply =
+        shared_state_context || kernel_worker_process_context || kernel_worker_canonical_context;
+
+    if source_generation != 0 && source_generation != target_generation {
+        if source_head == 0
+            && source_tail == 0
+            && !pipe_generation_ahead(source_generation, target_generation)
+        {
+            if kernel_worker_canonical_context {
+                if target_read_open > 0 && target_write_open > 0 && target_head != target_tail {
+                    return super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SKIP
+                        | super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_STOP;
+                }
+            } else if target_head != target_tail && !fresh {
+                return super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SKIP
+                    | super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_STOP;
+            }
+        }
+        let mut action = super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_STOP;
+        if fresh
+            || pipe_generation_ahead(source_generation, target_generation)
+            || (target_read_open <= 0 && target_write_open <= 0)
+        {
+            action |= super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_APPLY_SLOT
+                | super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SYNC_GENERATION;
+        } else if sync_generation_without_apply {
+            action |= super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SYNC_GENERATION;
+        }
+        return action;
+    }
+
+    if (fresh
+        || ((kernel_worker_process_context || kernel_worker_canonical_context)
+            && target_read_open <= 0
+            && target_write_open <= 0))
+        && source_head == 0
+        && source_tail == 0
+        && target_head == target_tail
+        && source_read_open > 0
+        && source_write_open > 0
+        && read_mode
+        && write_mode
+    {
+        return super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_APPLY_SLOT
+            | super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SYNC_GENERATION
+            | super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_STOP;
+    }
+
+    if kernel_worker_process_context
+        && source_head == 0
+        && source_tail == 0
+        && (target_head != 0 || target_tail != 0)
+    {
+        let mut action = super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SYNC_GENERATION
+            | super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_STOP;
+        if target_read_open <= 0 && target_write_open <= 0 {
+            action |= super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_APPLY_SLOT;
+        }
+        return action;
+    }
+
+    if kernel_worker_apply_context
+        && source_head == 0
+        && source_tail == 0
+        && (target_head != 0 || target_tail != 0)
+        && target_read_open <= 0
+        && target_write_open <= 0
+    {
+        return super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_APPLY_SLOT
+            | super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SYNC_GENERATION
+            | super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_STOP;
+    }
+
+    if (thread_step_context || kernel_worker_apply_context)
+        && target_read_open <= 0
+        && target_write_open <= 0
+        && target_head == target_tail
+        && (source_read_open > 0 || source_write_open > 0)
+        && (write_mode || control_mode)
+    {
+        return super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_APPLY_SLOT
+            | super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SYNC_GENERATION
+            | super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_STOP;
+    }
+
+    let mut action = 0u32;
+    if control_mode && (shared_state_context || thread_step_context || kernel_worker_apply_context)
+    {
+        action |= super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_APPLY_CONTROL;
+    }
+    if read_mode
+        && (!write_mode || kernel_worker_process_context)
+        && source_head != 0
+        && source_head == source_tail
+        && target_tail != source_tail
+        && pipe_counter_ahead(source_tail, target_tail)
+    {
+        action |= super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SET_HEAD_TO_SOURCE
+            | super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SET_TAIL_TO_SOURCE;
+        target_head = source_head;
+        target_tail = source_tail;
+    }
+    if write_mode
+        && !read_mode
+        && source_head == 0
+        && source_tail != 0
+        && target_head != 0
+        && (target_head == target_tail || target_tail == 0)
+        && pipe_counter_ahead(source_tail, target_tail)
+    {
+        action |= super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SET_HEAD_ZERO;
+        target_head = 0;
+    }
+
+    if shared_state_context {
+        let mut read_head_advanced = false;
+        if read_mode {
+            if pipe_counter_ahead(source_head, target_head)
+                && (source_head != source_tail || target_tail == source_tail)
+            {
+                action |= super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SET_HEAD_TO_SOURCE;
+                target_head = source_head;
+                read_head_advanced = true;
+            }
+            if pipe_counter_ahead(source_tail, target_tail)
+                || (read_head_advanced && source_head != source_tail)
+            {
+                action |= super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SET_TAIL_TO_SOURCE
+                    | super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_COPY_FULL;
+                target_tail = source_tail;
+            } else if source_tail == target_tail
+                && source_head != source_tail
+                && !(read_mode && pipe_counter_ahead(target_head, source_head))
+            {
+                action |= super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_COPY_FULL;
+            }
+        }
+        if write_mode {
+            if pipe_counter_ahead(source_tail, target_tail) {
+                action |= super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SET_TAIL_TO_SOURCE
+                    | super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_COPY_FULL;
+            } else if source_tail == target_tail
+                && source_head != source_tail
+                && !(read_mode && pipe_counter_ahead(target_head, source_head))
+            {
+                action |= super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_COPY_FULL;
+            }
+        }
+        return action | super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SYNC_GENERATION;
+    }
+
+    if kernel_worker_process_context {
+        if read_mode
+            && pipe_counter_ahead(source_head, target_head)
+            && (source_head != source_tail || target_tail == source_tail)
+        {
+            action |= super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SET_HEAD_TO_SOURCE;
+        }
+        if write_mode && pipe_counter_ahead(source_tail, target_tail) {
+            action |= super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SET_TAIL_TO_SOURCE
+                | super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_COPY_FULL;
+        } else if write_mode && source_tail == target_tail && source_head != source_tail {
+            action |= super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_COPY_FULL;
+        }
+        return action | super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SYNC_GENERATION;
+    }
+
+    if kernel_worker_canonical_context {
+        if read_mode {
+            if pipe_counter_ahead(source_head, target_head)
+                && (source_head != source_tail || target_tail == source_tail)
+            {
+                action |= super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SET_HEAD_TO_SOURCE;
+                target_head = source_head;
+            }
+            if pipe_counter_ahead(source_tail, target_tail) {
+                action |= super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SET_TAIL_TO_SOURCE
+                    | super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_COPY_FULL;
+            }
+        }
+        if write_mode {
+            let mut repaired_head = false;
+            if pipe_counter_ahead(source_head, target_head)
+                && (source_head != source_tail || target_tail == source_tail)
+            {
+                action |= super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SET_HEAD_TO_SOURCE;
+                repaired_head = true;
+            }
+            if pipe_counter_ahead(source_tail, target_tail)
+                || (repaired_head && source_head != source_tail)
+            {
+                action |= super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SET_TAIL_TO_SOURCE
+                    | super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_COPY_FULL;
+            } else if source_tail == target_tail && source_head != source_tail {
+                action |= super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_COPY_FULL;
+            }
+        }
+        return action | super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SYNC_GENERATION;
+    }
+
+    if read_mode
+        && pipe_counter_ahead(source_head, target_head)
+        && (source_head != source_tail || target_tail == source_tail)
+    {
+        action |= super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SET_HEAD_TO_SOURCE;
+    }
+    if write_mode && pipe_counter_ahead(source_tail, target_tail) {
+        action |= super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SET_TAIL_TO_SOURCE
+            | super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_COPY_TAIL_DELTA;
+    } else if write_mode
+        && source_tail == target_tail
+        && source_head != source_tail
+        && !(read_mode && pipe_counter_ahead(target_head, source_head))
+    {
+        action |= super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_COPY_FULL;
+    }
+    action | super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SYNC_GENERATION
+}
+
 fn blocked_pipe_fd(vm: &ThreadState) -> u64 {
     if vm.blocked_ofd_id != 0 {
         vm.blocked_fd as u64

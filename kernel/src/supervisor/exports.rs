@@ -387,6 +387,66 @@ export_u32_const!(
     super::SUPERVISOR_PIPE_SLOT_MODE_CONTROL
 );
 export_u32_const!(
+    supervisor_pipe_slot_snapshot_context_shared_state,
+    super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_CONTEXT_SHARED_STATE
+);
+export_u32_const!(
+    supervisor_pipe_slot_snapshot_context_thread_step,
+    super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_CONTEXT_THREAD_STEP
+);
+export_u32_const!(
+    supervisor_pipe_slot_snapshot_context_kernel_worker_apply,
+    super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_CONTEXT_KERNEL_WORKER_APPLY
+);
+export_u32_const!(
+    supervisor_pipe_slot_snapshot_context_kernel_worker_process,
+    super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_CONTEXT_KERNEL_WORKER_PROCESS
+);
+export_u32_const!(
+    supervisor_pipe_slot_snapshot_context_kernel_worker_canonical,
+    super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_CONTEXT_KERNEL_WORKER_CANONICAL
+);
+export_u32_const!(
+    supervisor_pipe_slot_snapshot_action_skip,
+    super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SKIP
+);
+export_u32_const!(
+    supervisor_pipe_slot_snapshot_action_apply_slot,
+    super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_APPLY_SLOT
+);
+export_u32_const!(
+    supervisor_pipe_slot_snapshot_action_apply_control,
+    super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_APPLY_CONTROL
+);
+export_u32_const!(
+    supervisor_pipe_slot_snapshot_action_set_head_to_source,
+    super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SET_HEAD_TO_SOURCE
+);
+export_u32_const!(
+    supervisor_pipe_slot_snapshot_action_set_tail_to_source,
+    super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SET_TAIL_TO_SOURCE
+);
+export_u32_const!(
+    supervisor_pipe_slot_snapshot_action_set_head_zero,
+    super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SET_HEAD_ZERO
+);
+export_u32_const!(
+    supervisor_pipe_slot_snapshot_action_copy_full,
+    super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_COPY_FULL
+);
+export_u32_const!(
+    supervisor_pipe_slot_snapshot_action_copy_tail_delta,
+    super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_COPY_TAIL_DELTA
+);
+export_u32_const!(
+    supervisor_pipe_slot_snapshot_action_sync_generation,
+    super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_SYNC_GENERATION
+);
+export_u32_const!(
+    supervisor_pipe_slot_snapshot_action_stop,
+    super::SUPERVISOR_PIPE_SLOT_SNAPSHOT_ACTION_STOP
+);
+export_u32_const!(
     supervisor_blocked_pipe_resume_action_defer,
     super::SUPERVISOR_BLOCKED_PIPE_RESUME_ACTION_DEFER
 );
@@ -1952,6 +2012,39 @@ pub extern "C" fn supervisor_pipe_reconcile_control(
     write_open: i32,
 ) -> i32 {
     super::pipe::pipe_reconcile_control(pipe_slot, read_open, write_open)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_pipe_slot_snapshot_merge_action(
+    context: u32,
+    mode: u32,
+    fresh: u32,
+    source_head: u32,
+    source_tail: u32,
+    source_read_open: i32,
+    source_write_open: i32,
+    source_generation: u32,
+    target_head: u32,
+    target_tail: u32,
+    target_read_open: i32,
+    target_write_open: i32,
+    target_generation: u32,
+) -> u32 {
+    super::pipe::pipe_slot_snapshot_merge_action(
+        context,
+        mode,
+        fresh,
+        source_head,
+        source_tail,
+        source_read_open,
+        source_write_open,
+        source_generation,
+        target_head,
+        target_tail,
+        target_read_open,
+        target_write_open,
+        target_generation,
+    )
 }
 
 #[unsafe(no_mangle)]
