@@ -36,14 +36,7 @@ fn select_decision(vm_ptr: u32) -> Result<super::SupervisorFaultExitDecision, i3
     let mut selected = vm;
     let mut selected_priority = exit_priority(vm);
     for record in ps.threads.iter() {
-        let state = super::event::thread_state_override(record.thread_ptr, record.tid as u32)
-            .map(|event| event.state as i32)
-            .unwrap_or(record.state);
-        if matches!(
-            state,
-            crate::types::THREAD_NONE | crate::types::THREAD_DEAD | crate::types::THREAD_EXITING
-        ) || record.thread_ptr == 0
-        {
+        if record.thread_ptr == 0 {
             continue;
         }
         let Some(thread) =
@@ -51,13 +44,25 @@ fn select_decision(vm_ptr: u32) -> Result<super::SupervisorFaultExitDecision, i3
         else {
             continue;
         };
-        live_threads = live_threads.saturating_add(1);
         let priority = exit_priority(thread);
         if priority > selected_priority {
             selected_priority = priority;
             selected_vm_ptr = record.thread_ptr;
             selected = thread;
         }
+        if thread.status == crate::abi::STATUS_FAULT {
+            continue;
+        }
+        let state = super::event::thread_state_override(record.thread_ptr, record.tid as u32)
+            .map(|event| event.state as i32)
+            .unwrap_or(record.state);
+        if matches!(
+            state,
+            crate::types::THREAD_NONE | crate::types::THREAD_DEAD | crate::types::THREAD_EXITING
+        ) {
+            continue;
+        }
+        live_threads = live_threads.saturating_add(1);
     }
     let kind = if remaining_threads == 0 || live_threads == 0 {
         super::SUPERVISOR_FAULT_EXIT_KIND_PROCESS_EXIT
