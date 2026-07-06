@@ -1,5 +1,17 @@
 use super::support::*;
 
+fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
+    let mut value = [0u8; 4];
+    value.copy_from_slice(&bytes[offset..offset + 4]);
+    u32::from_le_bytes(value)
+}
+
+fn read_u64_le(bytes: &[u8], offset: usize) -> u64 {
+    let mut value = [0u8; 8];
+    value.copy_from_slice(&bytes[offset..offset + 8]);
+    u64::from_le_bytes(value)
+}
+
 #[test]
 fn contract_fork_returns_status_execve_spawn() {
     let mut t = TestVm::new();
@@ -9,6 +21,123 @@ fn contract_fork_returns_status_execve_spawn() {
     assert_eq!(t.vm.spawn_kind, SPAWN_KIND_FORK);
     assert_eq!(t.vm.spawn_child_pid, ret as i32);
     assert_eq!(t.vm.spawn_path, 0);
+}
+
+#[test]
+fn supervisor_process_child_lifecycle_exports_follow_fork_table() {
+    let mut t = TestVm::new();
+    let parent_pid = process_impl::current_process_pid(&t.vm, t.base);
+    let parent_pgid = process_impl::current_process_pgid(&t.vm, t.base);
+    let parent_sid = process_impl::current_process_sid(&t.vm, t.base);
+
+    let child_pid = process_impl::sys_fork(&mut t.vm, t.base, 0, 0, 0, 0, 0) as i32;
+    assert!(child_pid > 0);
+
+    assert_eq!(
+        tidemark_kernel::abi::process_child_ppid(child_pid),
+        parent_pid
+    );
+    assert_eq!(
+        tidemark_kernel::abi::process_child_pgid(child_pid),
+        parent_pgid
+    );
+    assert_eq!(
+        tidemark_kernel::abi::process_child_sid(child_pid),
+        parent_sid
+    );
+    assert_eq!(
+        tidemark_kernel::abi::process_next_pid(),
+        (child_pid + 1).max(3)
+    );
+}
+
+#[test]
+fn supervisor_process_host_op_records_fork_spawn_handoff() {
+    supervisor_reset_shadow_log();
+    let mut t = TestVm::new();
+    t.vm.guest_memory_policy_limit = 5 * 1024 * 1024;
+    t.vm.process_max_memory_pages = 96;
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+
+    let ret = process_impl::sys_fork(&mut t.vm, t.base, 0, 0, 0, 0, 0);
+    assert!(ret > 0);
+    assert_eq!(t.vm.status, STATUS_EXECVE_SPAWN);
+
+    let mut record = vec![0u8; supervisor_process_host_op_record_bytes() as usize];
+    assert_eq!(
+        supervisor_process_host_op(vm_ptr, record.as_mut_ptr() as u32, record.len() as u32),
+        supervisor_process_host_op_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&record, 0), 0x4850_5354);
+    assert_eq!(read_u32_le(&record, 4), supervisor_abi_version());
+    assert_eq!(
+        read_u32_le(&record, 8),
+        supervisor_process_host_op_record_bytes()
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_process_host_op_kind_spawn_process_worker()
+    );
+    assert_eq!(read_u64_le(&record, 16), 1);
+    assert_eq!(read_u32_le(&record, 24), vm_ptr);
+    assert_eq!(read_u32_le(&record, 28), SPAWN_KIND_FORK);
+    assert_eq!(read_u32_le(&record, 32), ret as u32);
+    assert_eq!(read_u32_le(&record, 36), t.vm.process_ptr);
+    assert_eq!(read_u32_le(&record, 40), STATUS_EXECVE_SPAWN as u32);
+    assert_eq!(read_u32_le(&record, 44), t.vm.spawn_address_profile);
+    assert_eq!(
+        read_u64_le(&record, 48),
+        t.vm.spawn_guest_memory_policy_limit
+    );
+    assert_eq!(
+        read_u32_le(&record, 56),
+        t.vm.spawn_process_max_memory_pages
+    );
+    assert_eq!(read_u64_le(&record, 64), 0);
+    assert_eq!(read_u64_le(&record, 72), 0);
+    assert_eq!(read_u64_le(&record, 80), 0);
+
+    let mut memory_record = vec![0u8; supervisor_host_op_record_bytes() as usize];
+    assert_eq!(
+        supervisor_process_memory_host_op(
+            vm_ptr,
+            0,
+            memory_record.as_mut_ptr() as u32,
+            memory_record.len() as u32
+        ),
+        supervisor_host_op_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&memory_record, 0), 0x4f48_5354);
+    assert_eq!(read_u32_le(&memory_record, 4), supervisor_abi_version());
+    assert_eq!(
+        read_u32_le(&memory_record, 12),
+        supervisor_host_op_kind_create_process_memory()
+    );
+    assert_eq!(read_u32_le(&memory_record, 24), vm_ptr);
+    assert_eq!(read_u32_le(&memory_record, 32), ret as u32);
+    assert_eq!(read_u32_le(&memory_record, 36), t.vm.process_ptr);
+    assert_eq!(read_u32_le(&memory_record, 40), STATUS_EXECVE_SPAWN as u32);
+    assert!(read_u64_le(&memory_record, 48) >= t.base as u64);
+    assert_eq!(read_u64_le(&memory_record, 56), 96);
+
+    let mut copy_record = vec![0u8; supervisor_host_op_record_bytes() as usize];
+    assert_eq!(
+        supervisor_process_memory_host_op(
+            vm_ptr,
+            1,
+            copy_record.as_mut_ptr() as u32,
+            copy_record.len() as u32
+        ),
+        supervisor_host_op_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&copy_record, 12),
+        supervisor_host_op_kind_copy_memory_ranges()
+    );
+    assert_eq!(read_u32_le(&copy_record, 24), vm_ptr);
+    assert_eq!(read_u32_le(&copy_record, 32), ret as u32);
+    assert_eq!(read_u32_le(&copy_record, 40), SPAWN_KIND_FORK);
+    assert!(read_u64_le(&copy_record, 56) > read_u64_le(&copy_record, 48));
 }
 
 #[test]

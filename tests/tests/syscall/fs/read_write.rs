@@ -1,5 +1,23 @@
 use super::support::*;
 
+fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
+    let mut value = [0u8; 4];
+    value.copy_from_slice(&bytes[offset..offset + 4]);
+    u32::from_le_bytes(value)
+}
+
+fn read_u64_le(bytes: &[u8], offset: usize) -> u64 {
+    let mut value = [0u8; 8];
+    value.copy_from_slice(&bytes[offset..offset + 8]);
+    u64::from_le_bytes(value)
+}
+
+fn read_i64_le(bytes: &[u8], offset: usize) -> i64 {
+    let mut value = [0u8; 8];
+    value.copy_from_slice(&bytes[offset..offset + 8]);
+    i64::from_le_bytes(value)
+}
+
 fn regular_file_write_advances_offset_across_large_chunks() {
     let mut t = TestVm::new();
     let fd = t.sys_openat(b"/large-partial", O_CREAT | O_RDWR);
@@ -163,6 +181,7 @@ fn syscall_dispatch_reads_regular_file_local_hit_without_fs_ring() {
 
 #[test]
 fn syscall_dispatch_reads_external_partial_page_hit_via_fs_ring() {
+    supervisor_reset_shadow_log();
     let mut t = TestVm::new();
     memfs::enable_harness_page_cache();
     let ino = memfs::create_file(1, b"external-partial-read.bin", 0o644);
@@ -186,6 +205,80 @@ fn syscall_dispatch_reads_external_partial_page_hit_via_fs_ring() {
     );
     assert_eq!(t.vm.status, STATUS_FS);
     assert_eq!(fd_table::get_offset(t.base, &t.vm, fd as u64), 0);
+    assert_eq!(supervisor_shadow_fs_control_count(), 1);
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    assert_eq!(supervisor_fs_pending_ring_request(vm_ptr), 1);
+    assert_eq!(i64::from(supervisor_fs_pending_regular_file_fd(vm_ptr)), fd);
+    assert_ne!(supervisor_fs_pending_regular_file_ofd(vm_ptr), 0);
+    assert_eq!(supervisor_fs_pending_backing_fill_ino(vm_ptr), ino);
+    assert_eq!(supervisor_fs_pending_backing_fill_offset(vm_ptr), 0);
+    assert_eq!(supervisor_fs_pending_backing_fill_length(vm_ptr), 8192);
+    assert_eq!(
+        supervisor_fs_pending_backing_fill_expected_size(vm_ptr),
+        8192
+    );
+    assert_eq!(
+        supervisor_fs_pending_backing_fill_opcode(vm_ptr),
+        tidemark_kernel::fs::ring_buffer::FS_OP_READ
+    );
+    assert_eq!(supervisor_fs_pending_mmap_guest_write_ptr(vm_ptr), 0);
+    assert_eq!(supervisor_fs_pending_mmap_guest_write_len(vm_ptr), 0);
+    let completion_decision = supervisor_fs_completion_decision(
+        vm_ptr,
+        thread_pending_fs_opcode(vm_ptr),
+        thread_pending_fs_effects(vm_ptr),
+        8192,
+        0,
+        0,
+        supervisor_fs_pending_ring_request(vm_ptr),
+        1,
+    );
+    assert_ne!(
+        completion_decision & supervisor_fs_completion_flag_memfs_dirty(),
+        0
+    );
+    assert_eq!(
+        completion_decision & supervisor_fs_completion_flag_memfs_publish_ready(),
+        0
+    );
+    assert_ne!(
+        completion_decision & supervisor_fs_completion_flag_ofd_state_changed(),
+        0
+    );
+    assert_ne!(
+        completion_decision & supervisor_fs_completion_flag_regular_file_request(),
+        0
+    );
+
+    let mut record = vec![0u8; supervisor_fs_control_record_bytes() as usize];
+    assert_eq!(
+        supervisor_fs_control_record(record.as_mut_ptr() as u32, record.len() as u32),
+        supervisor_fs_control_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&record, 0), 0x5346_5354);
+    assert_eq!(read_u32_le(&record, 4), supervisor_abi_version());
+    assert_eq!(
+        read_u32_le(&record, 8),
+        supervisor_fs_control_record_bytes()
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_fs_control_kind_page_cache_miss()
+    );
+    assert_eq!(read_u64_le(&record, 16), 1);
+    assert_eq!(read_u32_le(&record, 28), t.vm.process_ptr);
+    assert_eq!(read_u32_le(&record, 36), fd as u32);
+    assert_eq!(read_u32_le(&record, 40), ino);
+    assert_eq!(
+        read_u32_le(&record, 44),
+        tidemark_kernel::fs::ring_buffer::FS_OP_READ
+    );
+    assert_eq!(read_u64_le(&record, 56), 0);
+    assert_eq!(read_u64_le(&record, 64), 0);
+    assert_eq!(read_u64_le(&record, 72), 8192);
+    assert_eq!(read_i64_le(&record, 80), ENOENT);
+    assert_eq!(read_u64_le(&record, 88), 0);
+    assert_eq!(read_u64_le(&record, 96), 8192);
 }
 
 #[test]

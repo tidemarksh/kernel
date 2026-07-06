@@ -99,6 +99,28 @@ fn spawn_handoff_exports_round_trip() {
 }
 
 #[test]
+fn process_canonicalize_child_pid_export_rewrites_spawn_handoff() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
+    let parent_pid = process_current_pid(vm_ptr);
+
+    let provisional_child_pid =
+        tidemark_kernel::syscall::process::sys_fork(&mut t.vm, t.base, 0, 0, 0, 0, 0) as i32;
+    assert!(provisional_child_pid > 0);
+    assert_eq!(thread_spawn_child_pid(vm_ptr), provisional_child_pid);
+    assert_eq!(t.vm.x[10], provisional_child_pid as u64);
+
+    let canonical_child_pid = provisional_child_pid + 10;
+    assert_eq!(
+        process_canonicalize_child_pid(vm_ptr, provisional_child_pid, canonical_child_pid),
+        canonical_child_pid
+    );
+    assert_eq!(process_current_pid(vm_ptr), parent_pid);
+    assert_eq!(thread_spawn_child_pid(vm_ptr), canonical_child_pid);
+    assert_eq!(t.vm.x[10], canonical_child_pid as u64);
+}
+
+#[test]
 fn target_address_profile_is_memory64() {
     let _t = TestVm::new();
     let memory64_profile = abi_guest_address_profile_memory64();

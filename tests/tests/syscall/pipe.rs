@@ -1,5 +1,37 @@
 use tidemark_kernel::abi::*;
 use tidemark_kernel::harness::TestVm;
+use tidemark_kernel::supervisor::{
+    supervisor_abi_version, supervisor_blocked_pipe_resume_action,
+    supervisor_blocked_pipe_resume_action_defer, supervisor_blocked_pipe_resume_action_direct,
+    supervisor_blocked_pipe_sync_before_retry_action,
+    supervisor_blocked_pipe_sync_before_retry_action_none,
+    supervisor_blocked_pipe_sync_before_retry_action_request_sync,
+    supervisor_blocked_pipe_sync_before_retry_action_request_sync_and_drain_output,
+    supervisor_blocked_pipe_sync_before_retry_action_schedule_retry,
+    supervisor_blocked_pipe_sync_before_retry_clear,
+    supervisor_blocked_pipe_sync_before_retry_flag_kernel_worker_available,
+    supervisor_blocked_pipe_sync_before_retry_requested, supervisor_blocked_retry_action,
+    supervisor_blocked_retry_action_defer_passive_wait, supervisor_blocked_wait_retry_reason,
+    supervisor_blocked_wait_retry_reason_default,
+    supervisor_blocked_wait_retry_reason_passive_wait, supervisor_fd_control_kind_fd_closed,
+    supervisor_fd_control_kind_pipe_created, supervisor_fd_control_record,
+    supervisor_fd_control_record_bytes, supervisor_ofd_fd_type, supervisor_ofd_host_fd,
+    supervisor_ofd_ino, supervisor_ofd_offset, supervisor_ofd_pipe_generation_slot,
+    supervisor_ofd_pipe_slot_mask, supervisor_ofd_pipe_slot_mode,
+    supervisor_ofd_reconcile_refcount, supervisor_ofd_refcount, supervisor_ofd_status_flags,
+    supervisor_pipe_reconcile_control, supervisor_pipe_slot_mode_read,
+    supervisor_pipe_slot_mode_write, supervisor_process_fd_flags_for_fd,
+    supervisor_process_fd_is_open, supervisor_process_held_ofd_refcount,
+    supervisor_process_held_pipe_slot_mask, supervisor_process_ofd_for_fd,
+    supervisor_process_pipe_host_fd_for_fd, supervisor_process_pipe_ofd_for_fd,
+    supervisor_process_pipe_read_open_count, supervisor_process_pipe_slot_for_fd,
+    supervisor_process_pipe_slot_mode, supervisor_process_pipe_used_mask,
+    supervisor_process_pipe_write_open_count, supervisor_process_private_pipe_slot_mask,
+    supervisor_process_private_pipe_source_mode, supervisor_process_private_pipe_target_mode,
+    supervisor_reset_shadow_log, supervisor_shadow_fd_control_count,
+    supervisor_stdio_pipe_read_progress_action, supervisor_stdio_pipe_read_progress_action_none,
+    supervisor_stdio_pipe_read_progress_action_snapshot,
+};
 use tidemark_kernel::syscall::pipe::{self, PipeCloseOutcome};
 use tidemark_kernel::syscall::{poll, pty};
 use tidemark_kernel::types::FdEntry;
@@ -10,6 +42,18 @@ const FIONBIO: u64 = 0x5421;
 const SYNC_EFFECT_PIPE_STATE: u32 = 1 << 0;
 const SYNC_EFFECT_EPOLL_STATE: u32 = 1 << 2;
 const SYNC_EFFECT_FORK_SHARED_OFD_STATE: u32 = 1 << 6;
+
+fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
+    let mut value = [0u8; 4];
+    value.copy_from_slice(&bytes[offset..offset + 4]);
+    u32::from_le_bytes(value)
+}
+
+fn read_u64_le(bytes: &[u8], offset: usize) -> u64 {
+    let mut value = [0u8; 8];
+    value.copy_from_slice(&bytes[offset..offset + 8]);
+    u64::from_le_bytes(value)
+}
 
 #[test]
 fn write_read_roundtrip() {
@@ -74,6 +118,212 @@ fn blocked_read_resumes_eof_after_writer_close() {
     assert_eq!(thread_resume_blocked_syscall(vm_ptr), 0);
     assert_eq!(t.vm.x[10], 0);
     assert_eq!(t.vm.status, STATUS_OK);
+}
+
+#[test]
+fn supervisor_blocked_pipe_resume_action_reports_defer_and_direct() {
+    let mut blocked = TestVm::new();
+    let pipefd_addr = blocked.scratch + 0x1000;
+    assert_eq!(
+        pipe::sys_pipe2(&mut blocked.vm, blocked.base, pipefd_addr, 0),
+        0
+    );
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(blocked.base, pipefd_addr) };
+    let buf_addr = blocked.scratch + 0x1100;
+
+    blocked.vm.x[17] = SYS_READ;
+    blocked.vm.x[10] = read_fd as u64;
+    blocked.vm.x[11] = buf_addr;
+    blocked.vm.x[12] = 16;
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut blocked.vm, blocked.base),
+        STATUS_PIPE_WAIT
+    );
+    let blocked_vm_ptr = &mut blocked.vm as *mut _ as u32;
+    assert_eq!(
+        supervisor_blocked_pipe_resume_action(blocked_vm_ptr),
+        supervisor_blocked_pipe_resume_action_defer() as i32
+    );
+
+    let mut eof = TestVm::new();
+    let pipefd_addr = eof.scratch + 0x1200;
+    assert_eq!(pipe::sys_pipe2(&mut eof.vm, eof.base, pipefd_addr, 0), 0);
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(eof.base, pipefd_addr) };
+    let write_fd = unsafe { tidemark_kernel::guest_mem::read_u32(eof.base, pipefd_addr + 4) };
+    assert_eq!(eof.sys_close(write_fd as i64), 0);
+
+    eof.vm.x[17] = SYS_READ;
+    eof.vm.x[10] = read_fd as u64;
+    eof.vm.x[11] = eof.scratch + 0x1300;
+    eof.vm.x[12] = 16;
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut eof.vm, eof.base),
+        STATUS_PIPE_WAIT
+    );
+    let eof_vm_ptr = &mut eof.vm as *mut _ as u32;
+    assert_eq!(
+        supervisor_blocked_pipe_resume_action(eof_vm_ptr),
+        supervisor_blocked_pipe_resume_action_direct() as i32
+    );
+}
+
+#[test]
+fn supervisor_blocked_pipe_sync_before_retry_tracks_request_by_wait_signature() {
+    let mut t = TestVm::new();
+    let pipefd_addr = t.scratch + 0x1000;
+    assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) };
+    let buf_addr = t.scratch + 0x1100;
+
+    t.vm.x[17] = SYS_READ;
+    t.vm.x[10] = read_fd as u64;
+    t.vm.x[11] = buf_addr;
+    t.vm.x[12] = 16;
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        STATUS_PIPE_WAIT
+    );
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_requested(vm_ptr),
+        0
+    );
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_action(
+            vm_ptr,
+            supervisor_blocked_pipe_sync_before_retry_flag_kernel_worker_available()
+        ),
+        supervisor_blocked_pipe_sync_before_retry_action_request_sync() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_requested(vm_ptr),
+        1
+    );
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_action(
+            vm_ptr,
+            supervisor_blocked_pipe_sync_before_retry_flag_kernel_worker_available()
+        ),
+        supervisor_blocked_pipe_sync_before_retry_action_schedule_retry() as i32
+    );
+    assert_eq!(supervisor_blocked_pipe_sync_before_retry_clear(vm_ptr), 0);
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_requested(vm_ptr),
+        0
+    );
+}
+
+#[test]
+fn supervisor_blocked_pipe_sync_before_retry_requests_drain_for_passive_poll_wait() {
+    let mut t = TestVm::new();
+    let readfds = t.scratch + 0x1100;
+
+    t.vm.x[17] = SYS_PSELECT6;
+    t.vm.x[10] = 8;
+    t.vm.x[11] = readfds;
+    t.vm.x[12] = 0;
+    t.vm.x[13] = 0;
+    t.vm.x[14] = 0;
+    t.vm.x[15] = 0;
+    assert_eq!(
+        poll::sys_pselect6(&mut t.vm, t.base, 8, readfds, 0, 0, 0, 0),
+        0
+    );
+    assert_eq!(t.vm.status, STATUS_PIPE_WAIT);
+
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_action(
+            vm_ptr,
+            supervisor_blocked_pipe_sync_before_retry_flag_kernel_worker_available()
+        ),
+        supervisor_blocked_pipe_sync_before_retry_action_request_sync_and_drain_output() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_pipe_sync_before_retry_action(
+            vm_ptr,
+            supervisor_blocked_pipe_sync_before_retry_flag_kernel_worker_available()
+        ),
+        supervisor_blocked_pipe_sync_before_retry_action_none() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_wait_retry_reason(vm_ptr, 0),
+        supervisor_blocked_wait_retry_reason_passive_wait() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_retry_action(vm_ptr, 0),
+        supervisor_blocked_retry_action_defer_passive_wait() as i32
+    );
+}
+
+#[test]
+fn supervisor_pipe_open_counts_include_private_stdio_peers() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    assert_eq!(process_use_pipe_stdio(vm_ptr), 0);
+
+    let stdin_pipe = process_stdin_pipe(vm_ptr);
+    let stdout_pipe = process_stdout_pipe(vm_ptr);
+    let stderr_pipe = process_stderr_pipe(vm_ptr);
+    assert!(stdin_pipe > 0);
+    assert!(stdout_pipe > 0);
+    assert!(stderr_pipe > 0);
+    assert_ne!(stdin_pipe, stdout_pipe);
+    assert_ne!(stdout_pipe, stderr_pipe);
+
+    let private_mask = supervisor_process_private_pipe_slot_mask(vm_ptr);
+    for pipe_slot in [stdin_pipe, stdout_pipe, stderr_pipe] {
+        assert_ne!(private_mask & (1u64 << pipe_slot), 0);
+        assert_ne!(
+            supervisor_process_pipe_used_mask(vm_ptr) & (1u64 << pipe_slot),
+            0
+        );
+        assert_eq!(
+            supervisor_process_private_pipe_source_mode(vm_ptr, pipe_slot),
+            supervisor_pipe_slot_mode_read() | supervisor_pipe_slot_mode_write()
+        );
+        assert_eq!(
+            supervisor_process_private_pipe_target_mode(vm_ptr, pipe_slot),
+            supervisor_pipe_slot_mode_read()
+        );
+    }
+
+    assert_eq!(
+        supervisor_process_pipe_read_open_count(vm_ptr, stdin_pipe),
+        1
+    );
+    assert_eq!(
+        supervisor_process_pipe_write_open_count(vm_ptr, stdin_pipe),
+        1
+    );
+    assert_eq!(
+        supervisor_process_pipe_read_open_count(vm_ptr, stdout_pipe),
+        1
+    );
+    assert_eq!(
+        supervisor_process_pipe_write_open_count(vm_ptr, stdout_pipe),
+        1
+    );
+    assert_eq!(
+        supervisor_process_pipe_read_open_count(vm_ptr, stderr_pipe),
+        1
+    );
+    assert_eq!(
+        supervisor_process_pipe_write_open_count(vm_ptr, stderr_pipe),
+        1
+    );
+    assert_eq!(
+        supervisor_stdio_pipe_read_progress_action(vm_ptr, stdout_pipe, 0),
+        supervisor_stdio_pipe_read_progress_action_none() as i32
+    );
+    assert_eq!(
+        supervisor_stdio_pipe_read_progress_action(vm_ptr, stdout_pipe, 1),
+        supervisor_stdio_pipe_read_progress_action_snapshot() as i32
+    );
+    assert_eq!(
+        supervisor_stdio_pipe_read_progress_action(vm_ptr, MAX_PIPES as u32, 1),
+        supervisor_stdio_pipe_read_progress_action_none() as i32
+    );
 }
 
 #[test]
@@ -292,6 +542,32 @@ fn blocked_read_resume_eof_marker_uses_pinned_ofd_after_fd_close() {
 }
 
 #[test]
+fn supervisor_retry_reason_marks_empty_pselect_pipe_wait_passive() {
+    let mut t = TestVm::new();
+    let readfds = t.scratch + 0x1100;
+
+    t.vm.x[17] = SYS_PSELECT6;
+    t.vm.x[10] = 8;
+    t.vm.x[11] = readfds;
+    t.vm.x[12] = 0;
+    t.vm.x[13] = 0;
+    t.vm.x[14] = 0;
+    t.vm.x[15] = 0;
+    assert_eq!(
+        poll::sys_pselect6(&mut t.vm, t.base, 8, readfds, 0, 0, 0, 0),
+        0
+    );
+    assert_eq!(t.vm.status, STATUS_PIPE_WAIT);
+
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    assert_eq!(thread_poll_wait_ready_count(vm_ptr), 0);
+    assert_eq!(
+        supervisor_blocked_wait_retry_reason(vm_ptr, 0),
+        supervisor_blocked_wait_retry_reason_passive_wait() as i32
+    );
+}
+
+#[test]
 fn pselect_reports_closed_pipe_read_end_as_ready() {
     let mut t = TestVm::new();
     let pipefd_addr = t.scratch + 0x1000;
@@ -367,6 +643,10 @@ fn pselect_pipe_read_ready_ignores_unwatched_readable_pipe() {
     let vm_ptr = &mut t.vm as *mut _ as u32;
     assert_eq!(thread_poll_wait_ready_count(vm_ptr), 0);
     assert_eq!(thread_blocked_pipe_read_ready(vm_ptr), 0);
+    assert_eq!(
+        supervisor_blocked_wait_retry_reason(vm_ptr, 0),
+        supervisor_blocked_wait_retry_reason_default() as i32
+    );
 }
 
 #[test]
@@ -430,6 +710,226 @@ fn pipe_close_outcome_reports_remaining_open_ends() {
             slot_released: true,
         }
     );
+}
+
+#[test]
+fn supervisor_fd_control_records_pipe_create_and_close() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    let pipefd_addr = t.scratch + 0x1380;
+    let flags = (O_CLOEXEC | O_NONBLOCK) as u64;
+
+    assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, flags), 0);
+
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) };
+    let write_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr + 4) };
+    let read_ofd = tidemark_kernel::fs::fd_table::get_ofd_id(t.base, &t.vm, read_fd as u64)
+        .expect("pipe read fd should have OFD");
+    let write_ofd = tidemark_kernel::fs::fd_table::get_ofd_id(t.base, &t.vm, write_fd as u64)
+        .expect("pipe write fd should have OFD");
+    let pipe_slot = tidemark_kernel::fs::fd_table::get_ofd_by_id(read_ofd)
+        .expect("pipe read OFD should exist")
+        .ino;
+    let generation = pipe::pipe_generation(pipe_slot);
+
+    assert_eq!(supervisor_shadow_fd_control_count(), 1);
+    let mut record = vec![0u8; supervisor_fd_control_record_bytes() as usize];
+    assert_eq!(
+        supervisor_fd_control_record(record.as_mut_ptr() as u32, record.len() as u32),
+        supervisor_fd_control_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&record, 0), 0x4446_5354);
+    assert_eq!(read_u32_le(&record, 4), supervisor_abi_version());
+    assert_eq!(
+        read_u32_le(&record, 8),
+        supervisor_fd_control_record_bytes()
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_fd_control_kind_pipe_created()
+    );
+    assert_eq!(read_u64_le(&record, 16), 1);
+    assert_eq!(read_u32_le(&record, 24), vm_ptr);
+    assert_eq!(read_u32_le(&record, 28), t.vm.process_ptr);
+    assert_eq!(read_u32_le(&record, 36), read_fd);
+    assert_eq!(read_u32_le(&record, 40), write_fd);
+    assert_eq!(read_u32_le(&record, 44), read_ofd);
+    assert_eq!(read_u32_le(&record, 48), write_ofd);
+    assert_eq!(read_u32_le(&record, 52), FD_TYPE_PIPE as u32);
+    assert_eq!(read_u32_le(&record, 56), pipe_slot);
+    assert_eq!(read_u32_le(&record, 60), generation);
+    assert_eq!(read_u64_le(&record, 64), 0);
+    assert_eq!(read_u64_le(&record, 72), flags);
+    assert_eq!(read_u64_le(&record, 80), 1);
+    assert_eq!(read_u64_le(&record, 88), 1);
+
+    assert_eq!(t.sys_close(write_fd as i64), 0);
+    assert_eq!(supervisor_shadow_fd_control_count(), 2);
+    assert_eq!(
+        supervisor_fd_control_record(record.as_mut_ptr() as u32, record.len() as u32),
+        supervisor_fd_control_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_fd_control_kind_fd_closed()
+    );
+    assert_eq!(read_u64_le(&record, 16), 2);
+    assert_eq!(read_u32_le(&record, 24), vm_ptr);
+    assert_eq!(read_u32_le(&record, 28), t.vm.process_ptr);
+    assert_eq!(read_u32_le(&record, 36), write_fd);
+    assert_eq!(read_u32_le(&record, 44), write_ofd);
+    assert_eq!(read_u32_le(&record, 52), FD_TYPE_PIPE as u32);
+    assert_eq!(read_u32_le(&record, 56), pipe_slot);
+    assert_eq!(read_u32_le(&record, 60), generation);
+    assert_eq!(read_u64_le(&record, 64), 0);
+    assert_eq!(read_u64_le(&record, 72), (O_WRONLY | O_NONBLOCK) as u64);
+    assert_eq!(read_u64_le(&record, 80), 1);
+    assert_eq!(read_u64_le(&record, 88), 0);
+}
+
+#[test]
+fn supervisor_process_pipe_queries_dedupe_aliases_by_ofd() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    let pipefd_addr = t.scratch + 0x1480;
+
+    assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) };
+    let write_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr + 4) };
+    let dup_read_fd = t.sys_dup(read_fd as u64);
+    assert!(dup_read_fd >= 0);
+
+    let read_ofd = tidemark_kernel::fs::fd_table::get_ofd_id(t.base, &t.vm, read_fd as u64)
+        .expect("pipe read fd should have OFD");
+    let write_ofd = tidemark_kernel::fs::fd_table::get_ofd_id(t.base, &t.vm, write_fd as u64)
+        .expect("pipe write fd should have OFD");
+    let pipe_slot = tidemark_kernel::fs::fd_table::get_ofd_by_id(read_ofd)
+        .expect("pipe read OFD should exist")
+        .ino;
+    let pipe_bit = 1u64 << pipe_slot;
+
+    assert_eq!(supervisor_process_held_ofd_refcount(vm_ptr, read_ofd), 2);
+    assert_eq!(supervisor_process_held_ofd_refcount(vm_ptr, write_ofd), 1);
+    assert_eq!(supervisor_process_ofd_for_fd(vm_ptr, read_fd), read_ofd);
+    assert_eq!(supervisor_process_ofd_for_fd(vm_ptr, write_fd), write_ofd);
+    assert_eq!(supervisor_process_fd_flags_for_fd(vm_ptr, read_fd), 0);
+    assert_eq!(supervisor_ofd_fd_type(read_ofd), FD_TYPE_PIPE);
+    assert_eq!(supervisor_ofd_fd_type(write_ofd), FD_TYPE_PIPE);
+    assert_eq!(supervisor_ofd_ino(read_ofd), pipe_slot);
+    assert_eq!(supervisor_ofd_ino(write_ofd), pipe_slot);
+    assert!(supervisor_ofd_host_fd(read_ofd) >= 0);
+    assert!(supervisor_ofd_host_fd(write_ofd) < 0);
+    assert_eq!(
+        supervisor_ofd_status_flags(read_ofd) & OPEN_ACCESS_MODE_MASK as i32,
+        O_RDONLY
+    );
+    assert_eq!(
+        supervisor_ofd_status_flags(write_ofd) & OPEN_ACCESS_MODE_MASK as i32,
+        O_WRONLY
+    );
+    assert_eq!(supervisor_ofd_refcount(read_ofd), 2);
+    assert_eq!(supervisor_ofd_refcount(write_ofd), 1);
+    assert_eq!(
+        supervisor_ofd_offset(read_ofd),
+        supervisor_ofd_offset(write_ofd)
+    );
+    assert_eq!(supervisor_process_fd_is_open(vm_ptr, read_fd), 1);
+    assert_eq!(supervisor_process_fd_is_open(vm_ptr, dup_read_fd as u32), 1);
+    assert_eq!(supervisor_process_fd_is_open(vm_ptr, 63), 0);
+    assert_eq!(
+        supervisor_process_pipe_slot_for_fd(vm_ptr, read_fd),
+        pipe_slot
+    );
+    assert_eq!(
+        supervisor_process_pipe_slot_for_fd(vm_ptr, dup_read_fd as u32),
+        pipe_slot
+    );
+    assert_eq!(
+        supervisor_process_pipe_slot_for_fd(vm_ptr, write_fd),
+        pipe_slot
+    );
+    assert_eq!(
+        supervisor_process_pipe_ofd_for_fd(vm_ptr, read_fd),
+        read_ofd
+    );
+    assert_eq!(
+        supervisor_process_pipe_ofd_for_fd(vm_ptr, dup_read_fd as u32),
+        read_ofd
+    );
+    assert_eq!(
+        supervisor_process_pipe_ofd_for_fd(vm_ptr, write_fd),
+        write_ofd
+    );
+    assert_eq!(
+        supervisor_process_pipe_host_fd_for_fd(vm_ptr, read_fd),
+        pipe_slot as i32
+    );
+    assert_eq!(
+        supervisor_process_pipe_host_fd_for_fd(vm_ptr, write_fd),
+        -(pipe_slot as i32) - 1
+    );
+    assert_eq!(supervisor_ofd_pipe_slot_mask(read_ofd), pipe_bit);
+    assert_eq!(supervisor_ofd_pipe_slot_mask(write_ofd), pipe_bit);
+    assert_eq!(supervisor_ofd_pipe_generation_slot(read_ofd), pipe_slot);
+    assert_eq!(supervisor_ofd_pipe_generation_slot(write_ofd), pipe_slot);
+    assert_eq!(
+        supervisor_ofd_pipe_slot_mode(read_ofd, pipe_slot),
+        supervisor_pipe_slot_mode_read()
+    );
+    assert_eq!(
+        supervisor_ofd_pipe_slot_mode(write_ofd, pipe_slot),
+        supervisor_pipe_slot_mode_write()
+    );
+    assert_ne!(supervisor_process_held_pipe_slot_mask(vm_ptr) & pipe_bit, 0);
+    assert_ne!(supervisor_process_pipe_used_mask(vm_ptr) & pipe_bit, 0);
+    assert_eq!(
+        supervisor_process_pipe_slot_mode(vm_ptr, pipe_slot),
+        supervisor_pipe_slot_mode_read() | supervisor_pipe_slot_mode_write()
+    );
+    assert_eq!(
+        supervisor_process_pipe_read_open_count(vm_ptr, pipe_slot),
+        1
+    );
+    assert_eq!(
+        supervisor_process_pipe_write_open_count(vm_ptr, pipe_slot),
+        1
+    );
+    assert_eq!(supervisor_pipe_reconcile_control(pipe_slot, 4, 5), 1);
+    assert_eq!(pipe::debug_read_open(pipe_slot), 4);
+    assert_eq!(pipe::debug_write_open(pipe_slot), 5);
+    assert_eq!(supervisor_pipe_reconcile_control(pipe_slot, -1, 1), 0);
+    assert_eq!(pipe::debug_read_open(pipe_slot), 4);
+    assert_eq!(pipe::debug_write_open(pipe_slot), 5);
+    assert_eq!(supervisor_pipe_reconcile_control(pipe_slot, 1, 1), 1);
+    assert_eq!(supervisor_ofd_reconcile_refcount(read_ofd, 3), 3);
+    assert_eq!(supervisor_ofd_refcount(read_ofd), 3);
+    assert_eq!(supervisor_ofd_reconcile_refcount(read_ofd, -1), 3);
+    assert_eq!(supervisor_ofd_reconcile_refcount(read_ofd, 2), 2);
+}
+
+#[test]
+fn supervisor_process_pipe_slot_for_fd_follows_pty_stdio_direction() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    let stdin_pty = tidemark_kernel::fs::fd_table::get_ofd(t.base, &t.vm, 0)
+        .expect("stdin should be a pty-backed OFD")
+        .ino;
+    let stdout_pty = tidemark_kernel::fs::fd_table::get_ofd(t.base, &t.vm, 1)
+        .expect("stdout should be a pty-backed OFD")
+        .ino;
+    assert_eq!(stdin_pty, stdout_pty);
+    let input_pipe = pty::input_pipe_slot(stdin_pty);
+    let output_pipe = pty::output_pipe_slot(stdout_pty);
+
+    assert_eq!(supervisor_process_pipe_slot_for_fd(vm_ptr, 0), input_pipe);
+    assert_eq!(supervisor_process_pipe_slot_for_fd(vm_ptr, 1), output_pipe);
+    assert_eq!(supervisor_process_pipe_slot_for_fd(vm_ptr, 2), output_pipe);
+    assert_ne!(supervisor_process_pipe_ofd_for_fd(vm_ptr, 1), 0);
+    assert_eq!(supervisor_process_pipe_slot_for_fd(vm_ptr, 63), 0);
+    assert_eq!(supervisor_process_pipe_ofd_for_fd(vm_ptr, 63), 0);
+    assert_eq!(supervisor_process_pipe_host_fd_for_fd(vm_ptr, 63), -1);
 }
 
 #[test]

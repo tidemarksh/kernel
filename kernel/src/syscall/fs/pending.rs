@@ -551,7 +551,7 @@ mod tests {
         );
         assert!(clone_result > 0);
 
-        let child_vm_ptr = crate::syscall::thread::spawn_from_clone(parent_vm_ptr, vm.base);
+        let child_vm_ptr = crate::supervisor::spawn_from_clone(parent_vm_ptr, vm.base);
         assert_ne!(child_vm_ptr, 0);
         let child = unsafe { &mut *(child_vm_ptr as *mut ThreadState) };
         assert_eq!(child.process_ptr, vm.vm.process_ptr);
@@ -1148,6 +1148,36 @@ fn regular_file_read_needs_fs_request(ino: u32, offset: u64, count: u64, local: 
             .is_some_and(|st| st.mode & memfs::S_IFMT == memfs::S_IFREG && offset < st.size)
 }
 
+fn record_page_cache_miss(
+    vm: &mut ThreadState,
+    base: u32,
+    fd: u64,
+    ino: u32,
+    offset: u64,
+    count: u64,
+    flags: u64,
+    local: i64,
+) {
+    let size = memfs::stat(ino).map_or(0, |stat| stat.size);
+    crate::supervisor::record_fs_control(
+        crate::supervisor::SUPERVISOR_FS_CONTROL_KIND_PAGE_CACHE_MISS,
+        vm as *mut ThreadState as u32,
+        vm.process_ptr,
+        crate::syscall::process::current_process_pid(vm, base),
+        fd as u32,
+        ino,
+        ring_buffer::FS_OP_READ,
+        0,
+        offset / PAGE_SIZE,
+        offset,
+        count,
+        local,
+        flags,
+        size,
+        0,
+    );
+}
+
 pub fn dispatch_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: u64) -> i64 {
     let ofd = match fd_table::get_ofd(base, vm, fd) {
         Some(o) => o,
@@ -1161,6 +1191,7 @@ pub fn dispatch_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, count: 
     if !regular_file_read_needs_fs_request(ofd.ino, offset, count, local) {
         return local;
     }
+    record_page_cache_miss(vm, base, fd, ofd.ino, offset, count, 0, local);
     submit_fs_request(
         vm,
         base,
@@ -1194,6 +1225,16 @@ pub fn dispatch_pread64(
     if !regular_file_read_needs_fs_request(ofd.ino, offset, count, local) {
         return local;
     }
+    record_page_cache_miss(
+        vm,
+        base,
+        fd,
+        ofd.ino,
+        offset,
+        count,
+        ring_buffer::FS_REQ_FLAG_PWRITE as u64,
+        local,
+    );
     submit_fs_request(
         vm,
         base,

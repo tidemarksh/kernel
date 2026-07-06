@@ -171,6 +171,136 @@ fn contract_vfork_from_secondary_thread_detaches_parent_thread_record_until_resu
 }
 
 #[test]
+fn supervisor_blocked_retry_reason_process_gates_non_child_during_vfork() {
+    let mut t = TestVm::new();
+    let parent_process_ptr = t.vm.process_ptr;
+    let mut blocked_parent: ThreadState = unsafe { core::mem::zeroed() };
+    blocked_parent.guest_base = t.base;
+    blocked_parent.process_ptr = parent_process_ptr;
+    blocked_parent.tid = t.vm.tid;
+    blocked_parent.status = STATUS_PIPE_WAIT;
+    blocked_parent.epoll_timeout_ms = 0;
+    let blocked_parent_ptr = &mut blocked_parent as *mut ThreadState as u32;
+
+    process_impl::sys_vfork(&mut t.vm, t.base);
+    let child_pid = process_impl::vfork_child_pid();
+    assert!(child_pid > 0);
+    assert_ne!(
+        process_impl::current_process_pid(&blocked_parent, t.base),
+        child_pid
+    );
+    assert_eq!(process_impl::current_process_pid(&t.vm, t.base), child_pid);
+
+    assert_eq!(
+        supervisor_blocked_wait_retry_reason(blocked_parent_ptr, 0),
+        supervisor_blocked_wait_retry_reason_process_gate() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_retry_action(blocked_parent_ptr, 0),
+        supervisor_blocked_retry_action_arm_wait_timer() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_retry_action(
+            blocked_parent_ptr,
+            supervisor_blocked_retry_action_flag_wait_timer_already_checked()
+        ),
+        supervisor_blocked_retry_action_defer_process_gate() as i32
+    );
+    unsafe {
+        (*(blocked_parent_ptr as *mut ThreadState)).epoll_timeout_ms = -1;
+    }
+    assert_eq!(
+        supervisor_blocked_retry_action(blocked_parent_ptr, 0),
+        supervisor_blocked_retry_action_park_active_child() as i32
+    );
+    assert_eq!(
+        supervisor_blocked_wait_retry_reason(
+            blocked_parent_ptr,
+            supervisor_blocked_wait_retry_flag_host_progress()
+        ),
+        supervisor_blocked_wait_retry_reason_process_gate() as i32
+    );
+    assert_ne!(
+        supervisor_blocked_wait_retry_reason(&mut t.vm as *mut ThreadState as u32, 0),
+        supervisor_blocked_wait_retry_reason_process_gate() as i32
+    );
+}
+
+#[test]
+fn supervisor_vfork_child_owner_mismatch_identifies_active_child_owner() {
+    let mut t = TestVm::new();
+    let parent_pid = process_impl::current_process_pid(&t.vm, t.base);
+    assert!(parent_pid > 0);
+    let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+
+    process_impl::sys_vfork(&mut t.vm, t.base);
+    let child_pid = process_impl::vfork_child_pid();
+    assert!(child_pid > 0);
+    assert_eq!(process_impl::current_process_pid(&t.vm, t.base), child_pid);
+
+    assert_eq!(supervisor_vfork_child_owner_mismatch(vm_ptr, parent_pid), 1);
+    assert_eq!(supervisor_vfork_child_owner_mismatch(vm_ptr, child_pid), 0);
+    assert_eq!(supervisor_vfork_child_owner_mismatch(0, parent_pid), 0);
+    assert_eq!(supervisor_vfork_child_owner_mismatch(vm_ptr, 0), 0);
+
+    process_impl::vfork_parent_resume(&mut t.vm, child_pid);
+}
+
+#[test]
+fn supervisor_process_owner_matches_reports_current_process_owner() {
+    let mut t = TestVm::new();
+    let parent_pid = process_impl::current_process_pid(&t.vm, t.base);
+    assert!(parent_pid > 0);
+    let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    let parent_process_ptr = t.vm.process_ptr;
+    assert_eq!(supervisor_process_owner_matches(vm_ptr, parent_pid), 1);
+    assert_eq!(supervisor_process_owner_mismatch(vm_ptr, parent_pid), 0);
+    assert_eq!(supervisor_process_owner_live_matches(vm_ptr, parent_pid), 1);
+    assert_eq!(supervisor_process_owner_absent(vm_ptr), 0);
+    assert_eq!(supervisor_process_owner_missing_or_invalid(vm_ptr), 0);
+    assert_eq!(
+        supervisor_process_identity_matches(vm_ptr, parent_pid, parent_process_ptr),
+        1
+    );
+    assert_eq!(supervisor_process_owner_matches(vm_ptr, parent_pid + 1), 0);
+    assert_eq!(supervisor_process_owner_mismatch(vm_ptr, parent_pid + 1), 1);
+    assert_eq!(
+        supervisor_process_identity_matches(vm_ptr, parent_pid + 1, parent_process_ptr),
+        0
+    );
+    assert_eq!(
+        supervisor_process_identity_matches(vm_ptr, parent_pid, parent_process_ptr + 4),
+        0
+    );
+
+    t.vm.process_ptr = 0;
+    assert_eq!(supervisor_process_owner_absent(vm_ptr), 1);
+    assert_eq!(supervisor_process_owner_missing_or_invalid(vm_ptr), 1);
+    assert_eq!(supervisor_process_owner_live_matches(vm_ptr, parent_pid), 0);
+    t.vm.process_ptr = parent_process_ptr;
+
+    process_impl::sys_vfork(&mut t.vm, t.base);
+    let child_pid = process_impl::vfork_child_pid();
+    assert!(child_pid > 0);
+    let child_process_ptr = t.vm.process_ptr;
+    assert_eq!(supervisor_process_owner_matches(vm_ptr, parent_pid), 0);
+    assert_eq!(supervisor_process_owner_mismatch(vm_ptr, parent_pid), 1);
+    assert_eq!(
+        supervisor_process_identity_matches(vm_ptr, parent_pid, parent_process_ptr),
+        0
+    );
+    assert_eq!(supervisor_process_owner_matches(vm_ptr, child_pid), 1);
+    assert_eq!(supervisor_process_owner_mismatch(vm_ptr, child_pid), 0);
+    assert_eq!(supervisor_process_owner_live_matches(vm_ptr, child_pid), 1);
+    assert_eq!(
+        supervisor_process_identity_matches(vm_ptr, child_pid, child_process_ptr),
+        1
+    );
+
+    process_impl::vfork_parent_resume(&mut t.vm, child_pid);
+}
+
+#[test]
 fn contract_vfork_parent_resume_clears_spawn_handoff() {
     let mut t = TestVm::new();
     let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
@@ -202,6 +332,35 @@ fn contract_vfork_execve_failure_does_not_publish_spawn_handoff() {
     assert_eq!(t.vm.spawn_child_pid, 0);
     assert_eq!(t.vm.process_ptr, child_process_ptr);
     assert_eq!(signal::pid_from_vm(&t.vm, t.base), child_pid);
+}
+
+#[test]
+fn supervisor_vfork_execve_rollback_restores_parent_and_publishes_child_exit() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    let wstatus_addr = t.scratch + 0x1500;
+    let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    let path_addr = install_exec_file(&t, b"test", &elf);
+
+    process_impl::sys_vfork(&mut t.vm, t.base);
+    let child_pid = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0) as i32;
+    assert!(child_pid > 0);
+    assert_eq!(t.vm.status, STATUS_EXECVE_SPAWN);
+
+    let wait_status = supervisor_vfork_execve_handoff_failure_wait_status();
+    assert_eq!(
+        supervisor_vfork_execve_rollback(vm_ptr, child_pid),
+        wait_status
+    );
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(process_impl::vfork_child_pid(), 0);
+
+    let ret = process_impl::sys_wait4(&mut t.vm, t.base, child_pid as i64, wstatus_addr, 0, 0);
+    assert_eq!(ret, child_pid as i64);
+    assert_eq!(
+        unsafe { guest_mem::read_u32(t.base, wstatus_addr) },
+        wait_status as u32
+    );
 }
 
 #[test]

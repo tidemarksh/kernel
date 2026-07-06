@@ -16,6 +16,33 @@ const SYNC_FAULT_SIGNAL_MASK: u64 = (1u64 << (SIGILL - 1))
     | (1u64 << (SIGFPE - 1))
     | (1u64 << (SIGSEGV - 1));
 
+fn process_pending_bits_for_vm(vm: &ThreadState, base: u32) -> u64 {
+    let pid = pid_from_vm(vm, base);
+    if pid <= 0 {
+        return 0;
+    }
+    let idx = (pid - 1) as usize;
+    if idx < MAX_PROCESSES {
+        process_pending()[idx]
+    } else {
+        0
+    }
+}
+
+pub fn pending_signal_snapshot(vm: &ThreadState, base: u32) -> (u64, u64, u64, u64) {
+    let thread_pending = vm.sig_pending;
+    let record_pending = peek_thread_pending_signals(vm, base);
+    let process_pending = process_pending_bits_for_vm(vm, base);
+    let synchronous = if vm.sig_info_code > 0 {
+        vm.sig_pending & SYNC_FAULT_SIGNAL_MASK
+    } else {
+        0
+    };
+    let deliverable =
+        ((thread_pending | record_pending | process_pending) & !vm.sig_mask) | synchronous;
+    (thread_pending, process_pending, record_pending, deliverable)
+}
+
 pub fn pending_signal_interrupts_blocked_syscall(vm: &ThreadState, base: u32) -> bool {
     let pid = pid_from_vm(vm, base);
     let mut pending = vm.sig_pending | peek_thread_pending_signals(vm, base);
@@ -54,17 +81,19 @@ pub fn pending_signal_interrupts_blocked_syscall(vm: &ThreadState, base: u32) ->
 /// Check and deliver pending signals at syscall return boundary.
 /// Called after each syscall returns. Returns true if a signal was delivered.
 pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
+    check_pending_at_boundary(
+        vm,
+        base,
+        crate::supervisor::SUPERVISOR_SIGNAL_BOUNDARY_SYSCALL_RETURN,
+    )
+}
+
+/// Check and deliver pending signals at the supervisor-described boundary.
+pub fn check_pending_at_boundary(vm: &mut ThreadState, base: u32, boundary: u32) -> bool {
     let pid = pid_from_vm(vm, base);
-    let process_pending_bits = if pid > 0 {
-        let idx = (pid - 1) as usize;
-        if idx < MAX_PROCESSES {
-            process_pending()[idx]
-        } else {
-            0
-        }
-    } else {
-        0
-    };
+    let process_pending_bits = process_pending_bits_for_vm(vm, base);
+    let thread_pending_before = vm.sig_pending;
+    let record_pending_bits = peek_thread_pending_signals(vm, base);
     let process_pending_deliverable = process_pending_bits & !vm.sig_mask;
     // Process-directed signals remain pending for the process until a thread
     // that does not block the signal actually accepts delivery. Do not move
@@ -87,6 +116,19 @@ pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
     if sig >= MAX_SIGNALS {
         return false;
     }
+    crate::supervisor::record_signal_control(
+        crate::supervisor::SUPERVISOR_SIGNAL_CONTROL_KIND_BOUNDARY_CHECK,
+        vm,
+        base,
+        sig as u32,
+        boundary,
+        thread_pending_before,
+        process_pending_bits,
+        record_pending_bits,
+        deliverable,
+        0,
+        0,
+    );
 
     // Clear from the pending set that supplied this delivery. Prefer
     // thread-directed pending state when both sets contain the same standard
@@ -120,6 +162,19 @@ pub fn check_pending(vm: &mut ThreadState, base: u32) -> bool {
             }
         }
     }
+    crate::supervisor::record_signal_control(
+        crate::supervisor::SUPERVISOR_SIGNAL_CONTROL_KIND_SIGNAL_DELIVERED,
+        vm,
+        base,
+        sig as u32,
+        boundary,
+        thread_pending_before,
+        process_pending_bits,
+        record_pending_bits,
+        deliverable,
+        action.handler,
+        action.flags,
+    );
 
     vm.sig_info_code = 0;
 

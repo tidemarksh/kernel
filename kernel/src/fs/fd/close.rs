@@ -4,7 +4,7 @@ use super::entry::{
 };
 use super::ofd::{clear as clear_ofd, is_ofd_reserved, set_offset_floor_by_id, table as ofd_table};
 use crate::abi::*;
-use crate::types::{FdEntry, ThreadState};
+use crate::types::{FdEntry, OpenFileDesc, ThreadState};
 
 const CLOSE_RANGE_UNSHARE: u64 = 1 << 1;
 const CLOSE_RANGE_CLOEXEC: u64 = 1 << 2;
@@ -87,6 +87,74 @@ pub(in crate::fs) fn release_process_fd_ref(base: u32, vm: &ThreadState, ofd_id:
     release_ofd_id(ofd_id);
 }
 
+fn pipe_control_details(ofd: OpenFileDesc) -> (u64, u64) {
+    if ofd.fd_type == FD_TYPE_PIPE
+        && crate::syscall::pipe::pipe_generation_matches(ofd.ino, ofd.offset as u32)
+    {
+        return (
+            crate::syscall::pipe::debug_read_open(ofd.ino) as u64,
+            crate::syscall::pipe::debug_write_open(ofd.ino) as u64,
+        );
+    }
+    (0, 0)
+}
+
+pub(in crate::fs) fn record_fd_closed(
+    vm: &ThreadState,
+    base: u32,
+    fd: u64,
+    ofd_id: u32,
+    ofd: OpenFileDesc,
+) {
+    let (detail0, detail1) = pipe_control_details(ofd);
+    crate::supervisor::record_fd_control(
+        crate::supervisor::SUPERVISOR_FD_CONTROL_KIND_FD_CLOSED,
+        vm as *const ThreadState as u32,
+        vm.process_ptr,
+        crate::syscall::process::current_process_pid(vm, base),
+        fd as u32,
+        0,
+        ofd_id,
+        0,
+        ofd.fd_type as u32,
+        ofd.ino,
+        ofd.offset as u32,
+        0,
+        ofd.status_flags as u64,
+        detail0,
+        detail1,
+    );
+}
+
+pub(in crate::fs) fn record_fd_flags_updated(
+    vm: &ThreadState,
+    base: u32,
+    fd: u64,
+    ofd_id: u32,
+    ofd: OpenFileDesc,
+    old_fd_flags: u32,
+    new_fd_flags: u32,
+    reason_flags: u64,
+) {
+    crate::supervisor::record_fd_control(
+        crate::supervisor::SUPERVISOR_FD_CONTROL_KIND_FD_FLAGS_UPDATED,
+        vm as *const ThreadState as u32,
+        vm.process_ptr,
+        crate::syscall::process::current_process_pid(vm, base),
+        fd as u32,
+        0,
+        ofd_id,
+        0,
+        ofd.fd_type as u32,
+        ofd.ino,
+        ofd.offset as u32,
+        0,
+        new_fd_flags as u64,
+        old_fd_flags as u64,
+        reason_flags,
+    );
+}
+
 /// close(fd)
 pub fn sys_close(vm: &mut ThreadState, base: u32, fd: u64) -> i64 {
     unsafe {
@@ -106,11 +174,13 @@ pub fn sys_close(vm: &mut ThreadState, base: u32, fd: u64) -> i64 {
         }
 
         let ofd_id = entry.ofd_id;
+        let ofd = ofd_table()[ofd_id as usize];
         clear_process_fd_entry_ptr(ps, fd as usize);
         release_process_fd_ref(base, vm, ofd_id);
         clear_pipe_eof_marker_for_fd(vm, fd);
 
         vm.socket_timeout_ms = -1;
+        record_fd_closed(vm, base, fd, ofd_id, ofd);
         0
     }
 }
@@ -147,19 +217,33 @@ pub fn sys_close_range(vm: &mut ThreadState, base: u32, first: u64, last: u64, f
                 continue;
             }
             if flags & CLOSE_RANGE_CLOEXEC != 0 {
+                let ofd = ofd_table()[entry.ofd_id as usize];
+                let new_fd_flags = entry.fd_flags | crate::fs::fd_table::FD_CLOEXEC;
                 store_process_fd_entry_ptr(
                     ps,
                     fd,
                     FdEntry {
                         ofd_id: entry.ofd_id,
-                        fd_flags: entry.fd_flags | crate::fs::fd_table::FD_CLOEXEC,
+                        fd_flags: new_fd_flags,
                     },
+                );
+                record_fd_flags_updated(
+                    vm,
+                    base,
+                    fd as u64,
+                    entry.ofd_id,
+                    ofd,
+                    entry.fd_flags,
+                    new_fd_flags,
+                    flags,
                 );
                 continue;
             }
+            let ofd = ofd_table()[entry.ofd_id as usize];
             clear_process_fd_entry_ptr(ps, fd);
             release_process_fd_ref(base, vm, entry.ofd_id);
             clear_pipe_eof_marker_for_fd(vm, fd as u64);
+            record_fd_closed(vm, base, fd as u64, entry.ofd_id, ofd);
         }
     }
 

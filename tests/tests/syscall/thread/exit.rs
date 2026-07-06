@@ -1,5 +1,40 @@
 use super::support::*;
 
+fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
+    let mut value = [0u8; 4];
+    value.copy_from_slice(&bytes[offset..offset + 4]);
+    u32::from_le_bytes(value)
+}
+
+fn read_i32_le(bytes: &[u8], offset: usize) -> i32 {
+    read_u32_le(bytes, offset) as i32
+}
+
+fn write_u32_le(bytes: &mut [u8], offset: usize, value: u32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_u64_le(bytes: &mut [u8], offset: usize, value: u64) {
+    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+fn submit_faulted_thread_event(vm_ptr: u32, pid: u32, tid: u32, status: u32) {
+    let mut event = [0u8; 80];
+    write_u32_le(&mut event, 0, 0x5645_5354);
+    write_u32_le(&mut event, 4, supervisor_abi_version());
+    write_u32_le(&mut event, 8, supervisor_thread_event_record_bytes());
+    write_u32_le(&mut event, 12, supervisor_thread_event_kind_faulted());
+    write_u64_le(&mut event, 16, 1);
+    write_u64_le(&mut event, 24, vm_ptr as u64);
+    write_u32_le(&mut event, 32, pid);
+    write_u32_le(&mut event, 36, tid);
+    write_u32_le(&mut event, 40, status);
+    assert_eq!(
+        supervisor_submit_thread_event(event.as_ptr() as u32, event.len() as u32),
+        0
+    );
+}
+
 #[test]
 fn contract_exit_decrements_thread_count() {
     let mut t = TestVm::new();
@@ -13,6 +48,122 @@ fn contract_exit_decrements_thread_count() {
 
     let tc = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, ps_ptr + tc_off) };
     assert_eq!(tc, 1);
+}
+
+#[test]
+fn supervisor_fault_exit_decision_keeps_process_alive_with_one_remaining_thread() {
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+    let current_vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    let child_ptr = unsafe {
+        tidemark_kernel::alloc::alloc_zeroed(
+            core::mem::size_of::<ThreadState>() as u32,
+            core::mem::align_of::<ThreadState>() as u32,
+        )
+    };
+    assert_ne!(child_ptr, 0);
+    let child = unsafe { &mut *(child_ptr as *mut ThreadState) };
+    child.tid = 2;
+    child.guest_base = t.base;
+    child.process_ptr = t.vm.process_ptr;
+    child.status = STATUS_OK;
+
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    ps.thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
+    ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, child_ptr, 0, 0);
+
+    let status = thread_impl::sys_exit(&mut t.vm, t.base, 42);
+    assert_eq!(status, STATUS_FAULT);
+
+    let mut record = [0u8; 88];
+    assert_eq!(
+        supervisor_fault_exit_decision(
+            current_vm_ptr,
+            record.as_mut_ptr() as u32,
+            record.len() as u32,
+        ),
+        supervisor_fault_exit_decision_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&record, 0), 0x5846_5354);
+    assert_eq!(
+        read_u32_le(&record, 8),
+        supervisor_fault_exit_decision_bytes()
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_fault_exit_kind_thread_exit()
+    );
+    assert_eq!(read_u32_le(&record, 24), current_vm_ptr);
+    assert_eq!(read_u32_le(&record, 28), current_vm_ptr);
+    assert_eq!(read_u32_le(&record, 40), 1);
+    assert_eq!(read_u32_le(&record, 44), 1);
+    assert_eq!(read_i32_le(&record, 48), 42);
+    assert_eq!(read_u32_le(&record, 56), STATUS_FAULT as u32);
+}
+
+#[test]
+fn supervisor_fault_exit_decision_reports_process_exit_when_no_threads_remain() {
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+    let current_vm_ptr = &mut t.vm as *mut ThreadState as u32;
+
+    let status = thread_impl::sys_exit(&mut t.vm, t.base, 7);
+    assert_eq!(status, STATUS_FAULT);
+
+    let mut record = [0u8; 88];
+    assert_eq!(
+        supervisor_fault_exit_decision(
+            current_vm_ptr,
+            record.as_mut_ptr() as u32,
+            record.len() as u32,
+        ),
+        supervisor_fault_exit_decision_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_fault_exit_kind_process_exit()
+    );
+    assert_eq!(read_u32_le(&record, 24), current_vm_ptr);
+    assert_eq!(read_u32_le(&record, 28), current_vm_ptr);
+    assert_eq!(read_u32_le(&record, 40), 0);
+    assert_eq!(read_u32_le(&record, 44), 0);
+    assert_eq!(read_i32_le(&record, 48), 7);
+}
+
+#[test]
+fn supervisor_fault_exit_decision_reports_process_exit_when_tidless_runtime_fault_event_is_only_live_thread()
+ {
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+    t.vm.status = STATUS_FAULT;
+    t.vm.exit_code = 0;
+    t.vm.term_signal = 0;
+    let current_vm_ptr = &mut t.vm as *mut ThreadState as u32;
+
+    submit_faulted_thread_event(current_vm_ptr, 1, 0, STATUS_FAULT as u32);
+
+    let mut record = [0u8; 88];
+    assert_eq!(
+        supervisor_fault_exit_decision(
+            current_vm_ptr,
+            record.as_mut_ptr() as u32,
+            record.len() as u32,
+        ),
+        supervisor_fault_exit_decision_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_fault_exit_kind_process_exit()
+    );
+    assert_eq!(read_u32_le(&record, 24), current_vm_ptr);
+    assert_eq!(read_u32_le(&record, 28), current_vm_ptr);
+    assert_eq!(read_u32_le(&record, 40), 1);
+    assert_eq!(read_u32_le(&record, 44), 0);
+    assert_eq!(read_i32_le(&record, 48), 0);
 }
 
 #[test]
@@ -68,6 +219,74 @@ fn contract_exit_group_terminates_sibling_thread_state_and_blocks_future_steps()
     assert_eq!(child.status, STATUS_FAULT);
     assert_eq!(child.exit_code, 9);
     assert_eq!(child.term_signal, 0);
+}
+
+#[test]
+fn contract_set_tid_address_updates_supervisor_thread_record() {
+    let mut t = TestVm::new();
+    let clear_child_tid = t.scratch + 0x480;
+
+    assert_eq!(
+        thread_impl::sys_set_tid_address(&mut t.vm, clear_child_tid),
+        t.vm.tid as i64
+    );
+    assert_eq!(t.vm.clear_child_tid, clear_child_tid);
+
+    let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+    assert_eq!(
+        ps.threads[(t.vm.tid - 1) as usize].clear_child_tid,
+        clear_child_tid
+    );
+}
+
+#[test]
+fn contract_exit_group_clears_updated_sibling_clear_child_tid() {
+    let mut t = TestVm::new();
+    let child_ptr = unsafe {
+        tidemark_kernel::alloc::alloc_zeroed(
+            core::mem::size_of::<ThreadState>() as u32,
+            core::mem::align_of::<ThreadState>() as u32,
+        )
+    };
+    assert_ne!(child_ptr, 0);
+    let child = unsafe { &mut *(child_ptr as *mut ThreadState) };
+    child.tid = 2;
+    child.guest_base = t.base;
+    child.guest_memory_policy_limit = t.vm.guest_memory_policy_limit;
+    child.process_ptr = t.vm.process_ptr;
+    child.pc = t.vm.pc;
+    child.x[2] = t.vm.x[2];
+
+    let stale_clear_child_tid = t.scratch + 0x500;
+    let updated_clear_child_tid = t.scratch + 0x504;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, stale_clear_child_tid, child.tid as u32);
+        tidemark_kernel::guest_mem::write_u32(t.base, updated_clear_child_tid, child.tid as u32);
+    }
+
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    ps.thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
+    ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, child_ptr, stale_clear_child_tid, 0);
+
+    assert_eq!(
+        thread_impl::sys_set_tid_address(child, updated_clear_child_tid),
+        child.tid as i64
+    );
+    assert_eq!(child.clear_child_tid, updated_clear_child_tid);
+    assert_eq!(ps.threads[1].clear_child_tid, updated_clear_child_tid);
+
+    let status = thread_impl::sys_exit_group(&mut t.vm, t.base, 9);
+    assert_eq!(status, STATUS_FAULT);
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, updated_clear_child_tid) },
+        0
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, stale_clear_child_tid) },
+        child.tid as u32
+    );
+    assert_eq!(child.clear_child_tid, 0);
 }
 
 #[test]

@@ -5,7 +5,8 @@ use super::{
     SOCKADDR_STORAGE_LEN, SocketSlot, alloc_socket_cookie, alloc_socket_recv_buffer,
     alloc_socket_slot, ensure_external_peer, ensure_socket_recv_buffer,
     free_recv_buffer_if_unreferenced, free_socket_slot, get_socket_idx, is_slot_used,
-    shutdown_slot, socket_recv_timeout_ms_for_slot, socket_send_timeout_ms_for_slot, socket_table,
+    record_socket_control, shutdown_slot, socket_identity_detail, socket_recv_timeout_ms_for_slot,
+    socket_send_timeout_ms_for_slot, socket_state_transition_detail, socket_table,
     thread_connect_target_fd,
 };
 use crate::abi::*;
@@ -70,6 +71,53 @@ fn accept_queue_remove(slot: &mut SocketSlot, value: u32) -> bool {
         slot.accept_queue[idx] = queued;
     }
     true
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_socket_transition_control(
+    kind: u32,
+    vm: &ThreadState,
+    base: u32,
+    fd: u64,
+    fd2: u64,
+    socket_idx: u32,
+    socket_idx2: u32,
+    result: i64,
+    flags: u64,
+    before_state: u32,
+    after_state: u32,
+) {
+    let ofd_id = fd_table::get_ofd_id(base, vm, fd).unwrap_or(0);
+    let ofd2_id = if fd2 == 0 {
+        0
+    } else {
+        fd_table::get_ofd_id(base, vm, fd2).unwrap_or(0)
+    };
+    let slot = socket_table()[socket_idx as usize];
+    record_socket_control(
+        kind,
+        vm,
+        base,
+        fd,
+        fd2,
+        ofd_id,
+        ofd2_id,
+        socket_idx,
+        socket_idx2,
+        result,
+        flags,
+        socket_identity_detail(slot.domain, slot.sock_type, slot.protocol),
+        socket_state_transition_detail(before_state, after_state),
+    );
+}
+
+fn socket_peer_slot(idx: usize) -> u32 {
+    let peer_idx = socket_table()[idx].peer_idx;
+    if peer_idx >= 0 {
+        peer_idx as u32
+    } else {
+        u32::MAX
+    }
 }
 
 pub(super) fn remove_socket_from_accept_queues(socket_idx: u32) {
@@ -400,14 +448,28 @@ pub fn sys_bind(vm: &mut ThreadState, base: u32, fd: u64, addr: u64, addrlen: u6
         return EADDRINUSE;
     }
 
+    let before_state = slot.state;
     slot.local_addr[..len].copy_from_slice(&buf[..len]);
     slot.local_len = len as u32;
     slot.state = SOCK_STATE_BOUND;
+    record_socket_transition_control(
+        crate::supervisor::SUPERVISOR_FD_CONTROL_KIND_SOCKET_BOUND,
+        vm,
+        base,
+        fd,
+        0,
+        idx,
+        0,
+        0,
+        addrlen,
+        before_state,
+        SOCK_STATE_BOUND,
+    );
     0
 }
 
 /// listen(fd, backlog) -> 0 or error
-pub fn sys_listen(vm: &mut ThreadState, base: u32, fd: u64, _backlog: u64) -> i64 {
+pub fn sys_listen(vm: &mut ThreadState, base: u32, fd: u64, backlog: u64) -> i64 {
     let idx = match get_socket_idx(base, vm, fd) {
         Some(i) => i,
         None => return ENOTSOCK,
@@ -421,7 +483,21 @@ pub fn sys_listen(vm: &mut ThreadState, base: u32, fd: u64, _backlog: u64) -> i6
         return EINVAL;
     }
 
+    let before_state = slot.state;
     slot.state = SOCK_STATE_LISTENING;
+    record_socket_transition_control(
+        crate::supervisor::SUPERVISOR_FD_CONTROL_KIND_SOCKET_LISTENING,
+        vm,
+        base,
+        fd,
+        0,
+        idx,
+        0,
+        0,
+        backlog,
+        before_state,
+        SOCK_STATE_LISTENING,
+    );
     0
 }
 
@@ -437,32 +513,67 @@ pub fn sys_connect(vm: &mut ThreadState, base: u32, fd: u64, addr: u64, addrlen:
         return EINVAL;
     }
 
-    let slot = &mut socket_table()[idx as usize];
-    if slot.state == SOCK_STATE_CONNECTED {
-        return EISCONN;
-    }
-    if slot.state == SOCK_STATE_LISTENING {
-        return EINVAL;
-    }
+    let (before_state, domain, sock_type) = {
+        let slot = &mut socket_table()[idx as usize];
+        if slot.state == SOCK_STATE_CONNECTED {
+            return EISCONN;
+        }
+        if slot.state == SOCK_STATE_LISTENING {
+            return EINVAL;
+        }
+        (slot.state, slot.domain, slot.sock_type)
+    };
 
     let mut buf = [0u8; SOCKADDR_STORAGE_LEN];
     unsafe {
         guest_mem::read_bytes(base, addr, &mut buf[..len]);
     }
 
-    if slot.domain == AF_UNIX {
-        return match slot.sock_type {
+    if domain == AF_UNIX {
+        let result = match sock_type {
             SOCK_STREAM => unix_connect_stream(idx as usize, &buf, len),
             SOCK_DGRAM => unix_connect_dgram(idx as usize, &buf, len),
             _ => EPROTOTYPE,
         };
+        if result == 0 {
+            record_socket_transition_control(
+                crate::supervisor::SUPERVISOR_FD_CONTROL_KIND_SOCKET_CONNECTED,
+                vm,
+                base,
+                fd,
+                0,
+                idx,
+                socket_peer_slot(idx as usize),
+                result,
+                addrlen,
+                before_state,
+                socket_table()[idx as usize].state,
+            );
+        }
+        return result;
     }
 
-    slot.peer_addr[..len].copy_from_slice(&buf[..len]);
-    slot.peer_len = len as u32;
-    slot.state = SOCK_STATE_CONNECTING;
-    vm.socket_timeout_ms = socket_send_timeout_ms_for_slot(slot);
+    {
+        let slot = &mut socket_table()[idx as usize];
+        slot.peer_addr[..len].copy_from_slice(&buf[..len]);
+        slot.peer_len = len as u32;
+        slot.state = SOCK_STATE_CONNECTING;
+        vm.socket_timeout_ms = socket_send_timeout_ms_for_slot(slot);
+    }
     fd_table::pin_blocked_fd(base, vm, fd);
+    record_socket_transition_control(
+        crate::supervisor::SUPERVISOR_FD_CONTROL_KIND_SOCKET_CONNECT_STARTED,
+        vm,
+        base,
+        fd,
+        0,
+        idx,
+        u32::MAX,
+        0,
+        addrlen,
+        before_state,
+        SOCK_STATE_CONNECTING,
+    );
 
     vm.status = STATUS_CONNECT;
     0
@@ -479,7 +590,8 @@ pub fn resume_connect_result_for_fd(vm: &mut ThreadState, base: u32, fd: u64, re
     let nonblocking =
         fd_table::get_ofd(base, vm, fd).is_some_and(|ofd| ofd.status_flags & O_NONBLOCK != 0);
 
-    if socket_table()[idx].state == SOCK_STATE_CONNECTING {
+    let before_state = socket_table()[idx].state;
+    if before_state == SOCK_STATE_CONNECTING {
         if result == 0 {
             let current_recv = socket_table()[idx].recv_buf_idx;
             let allocated_recv_for_connect = current_recv == INVALID_BUF_IDX;
@@ -499,6 +611,19 @@ pub fn resume_connect_result_for_fd(vm: &mut ThreadState, base: u32, fd: u64, re
                 socket_table()[idx].peer_idx = INVALID_PEER_IDX;
                 socket_table()[idx].last_error = (-ENOMEM) as i32;
                 socket_table()[idx].state = SOCK_STATE_IDLE;
+                record_socket_transition_control(
+                    crate::supervisor::SUPERVISOR_FD_CONTROL_KIND_SOCKET_CONNECT_FAILED,
+                    vm,
+                    base,
+                    fd,
+                    0,
+                    idx as u32,
+                    u32::MAX,
+                    ENOMEM,
+                    0,
+                    before_state,
+                    SOCK_STATE_IDLE,
+                );
                 vm.x[10] = ENOMEM as u64;
                 vm.status = STATUS_OK;
                 fd_table::clear_blocked_ofd_pin(vm);
@@ -507,6 +632,19 @@ pub fn resume_connect_result_for_fd(vm: &mut ThreadState, base: u32, fd: u64, re
             } else if nonblocking {
                 socket_table()[idx].last_error = 0;
             }
+            record_socket_transition_control(
+                crate::supervisor::SUPERVISOR_FD_CONTROL_KIND_SOCKET_CONNECTED,
+                vm,
+                base,
+                fd,
+                0,
+                idx as u32,
+                socket_peer_slot(idx),
+                result,
+                0,
+                before_state,
+                socket_table()[idx].state,
+            );
         } else {
             let slot = &mut socket_table()[idx];
             slot.last_error = (-result) as i32;
@@ -515,6 +653,19 @@ pub fn resume_connect_result_for_fd(vm: &mut ThreadState, base: u32, fd: u64, re
             } else {
                 SOCK_STATE_IDLE
             };
+            record_socket_transition_control(
+                crate::supervisor::SUPERVISOR_FD_CONTROL_KIND_SOCKET_CONNECT_FAILED,
+                vm,
+                base,
+                fd,
+                0,
+                idx as u32,
+                u32::MAX,
+                result,
+                0,
+                before_state,
+                socket_table()[idx].state,
+            );
         }
     }
 
@@ -588,6 +739,19 @@ pub fn sys_accept4(
             guest_mem::write_u32(base, addrlen_ptr, len as u32);
         }
     }
+    record_socket_transition_control(
+        crate::supervisor::SUPERVISOR_FD_CONTROL_KIND_SOCKET_ACCEPTED,
+        vm,
+        base,
+        new_fd as u64,
+        fd,
+        accepted_idx,
+        idx,
+        new_fd,
+        flags,
+        SOCK_STATE_CONNECTED,
+        SOCK_STATE_CONNECTED,
+    );
 
     new_fd
 }

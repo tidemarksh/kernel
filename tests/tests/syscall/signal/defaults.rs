@@ -1,5 +1,11 @@
 use super::support::*;
 
+fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
+    let mut value = [0u8; 4];
+    value.copy_from_slice(&bytes[offset..offset + 4]);
+    u32::from_le_bytes(value)
+}
+
 #[test]
 fn synchronous_sigsegv_ignores_signal_mask() {
     let mut t = TestVm::new();
@@ -134,6 +140,8 @@ fn synchronous_sigsegv_default_action_records_pre_terminate_fault_state() {
 
 #[test]
 fn thread_step_sync_fault_handler_entry_preserves_s11() {
+    supervisor_reset_shadow_log();
+
     let mut t = TestVm::new();
     let handler = 0x88_000;
     let act_addr = t.scratch;
@@ -157,6 +165,19 @@ fn thread_step_sync_fault_handler_entry_preserves_s11() {
     assert_eq!(t.vm.x[27], orig_s11);
     assert_eq!(signal_harness::last_signal_delivery().2, 0x2);
     assert_eq!(signal_harness::last_signal_delivery().7, orig_s11);
+    assert_eq!(supervisor_shadow_signal_control_count(), 2);
+
+    let bytes_len = supervisor_signal_control_record_bytes() as usize;
+    let mut bytes = vec![0u8; bytes_len];
+    assert_eq!(
+        supervisor_signal_control_record(bytes.as_mut_ptr() as u32, bytes_len as u32),
+        bytes_len as i32
+    );
+    assert_eq!(
+        read_u32_le(&bytes, 12),
+        supervisor_signal_control_kind_signal_delivered()
+    );
+    assert_eq!(read_u32_le(&bytes, 52), supervisor_signal_boundary_fault());
 }
 
 #[test]

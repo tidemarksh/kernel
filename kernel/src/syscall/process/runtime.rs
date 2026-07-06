@@ -9,111 +9,111 @@ const MAX_CHILDREN: usize = MAX_PROCESSES;
 const VFORK_PROC_SELF_EXE_MAX: usize = super::execve::PROC_SELF_EXE_SNAPSHOT_MAX;
 
 #[derive(Clone, Copy)]
-pub(super) struct ChildEntry {
-    pub(super) pid: i32,
-    pub(super) parent_pid: i32,
-    pub(super) pgid: i32,
-    pub(super) exited: bool,
-    pub(super) wait_status: i32,
+pub(crate) struct ChildEntry {
+    pub(crate) pid: i32,
+    pub(crate) parent_pid: i32,
+    pub(crate) pgid: i32,
+    pub(crate) exited: bool,
+    pub(crate) wait_status: i32,
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct ProcessEntry {
-    pub(super) pid: i32,
-    pub(super) ppid: i32,
-    pub(super) pgid: i32,
-    pub(super) sid: i32,
-    pub(super) did_exec: bool,
+pub(crate) struct ProcessEntry {
+    pub(crate) pid: i32,
+    pub(crate) ppid: i32,
+    pub(crate) pgid: i32,
+    pub(crate) sid: i32,
+    pub(crate) did_exec: bool,
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct VforkSnapshot {
-    pub(super) x: [u64; 32],
-    pub(super) pc: u64,
-    pub(super) f: [u64; 32],
-    pub(super) fcsr: u32,
-    pub(super) status: i32,
-    pub(super) exit_code: i32,
-    pub(super) term_signal: i32,
-    pub(super) tid: i32,
-    pub(super) uid: u32,
-    pub(super) euid: u32,
-    pub(super) gid: u32,
-    pub(super) egid: u32,
-    pub(super) tls_base: u64,
-    pub(super) clear_child_tid: u64,
-    pub(super) robust_list_head: u64,
-    pub(super) robust_list_len: u64,
-    pub(super) sig_mask: u64,
-    pub(super) sig_pending: u64,
-    pub(super) sig_info_code: i32,
-    pub(super) sigaltstack_sp: u64,
-    pub(super) sigaltstack_size: u64,
-    pub(super) sigaltstack_flags: i32,
-    pub(super) lr_addr: u64,
-    pub(super) lr_val: u64,
-    pub(super) lr_gen: u32,
-    pub(super) lr_gen_end: u32,
-    pub(super) insn_budget: i32,
-    pub(super) fault_pc: u64,
-    pub(super) fault_addr: u64,
-    pub(super) fault_kind: u32,
-    pub(super) fault_signal: i32,
-    pub(super) fault_code: i32,
-    pub(super) _pad_fault: u32,
-    pub(super) guest_base: u32,
-    pub(super) guest_address_profile: u32,
-    pub(super) guest_address_limit: u64,
-    pub(super) guest_memory_policy_limit: u64,
-    pub(super) process_max_memory_pages: u32,
-    pub(super) process_ptr: u32,
-    pub(super) clone_flags: u64,
-    pub(super) clone_child_stack: u64,
-    pub(super) clone_tls: u64,
-    pub(super) clone_child_tidptr: u64,
-    pub(super) clone_child_tid: i32,
-    pub(super) clone_pending: i32,
-    pub(super) spawn_kind: u32,
-    pub(super) spawn_address_profile: u32,
-    pub(super) spawn_guest_memory_policy_limit: u64,
-    pub(super) spawn_process_max_memory_pages: u32,
-    pub(super) spawn_child_pid: i32,
-    pub(super) spawn_path: u64,
-    pub(super) spawn_argv: u64,
-    pub(super) spawn_envp: u64,
-    pub(super) wait_pid: i64,
-    pub(super) wait_kind: u32,
-    pub(super) wait_idtype: u32,
-    pub(super) wait_wstatus_addr: u64,
-    pub(super) wait_options: u64,
-    pub(super) wait_rusage_addr: u64,
-    pub(super) futex_wait_addr: u64,
-    pub(super) futex_wait_timeout: u64,
-    pub(super) futex_wait_expected: u32,
-    pub(super) futex_wait_bitset: u32,
-    pub(super) futex_wait_absolute: u32,
-    pub(super) futex_wait_flags: u32,
-    pub(super) epoll_timeout_ms: i64,
-    pub(super) socket_timeout_ms: i64,
-    pub(super) epoll_maxevents: u32,
-    pub(super) blocked_fd: u32,
-    pub(super) blocked_ofd_id: u32,
-    pub(super) blocked_syscall_nr: u64,
-    pub(super) blocked_syscall_args: [u64; 6],
-    pub(super) child_pid: i32,
+pub(crate) struct VforkSnapshot {
+    pub(crate) x: [u64; 32],
+    pub(crate) pc: u64,
+    pub(crate) f: [u64; 32],
+    pub(crate) fcsr: u32,
+    pub(crate) status: i32,
+    pub(crate) exit_code: i32,
+    pub(crate) term_signal: i32,
+    pub(crate) tid: i32,
+    pub(crate) uid: u32,
+    pub(crate) euid: u32,
+    pub(crate) gid: u32,
+    pub(crate) egid: u32,
+    pub(crate) tls_base: u64,
+    pub(crate) clear_child_tid: u64,
+    pub(crate) robust_list_head: u64,
+    pub(crate) robust_list_len: u64,
+    pub(crate) sig_mask: u64,
+    pub(crate) sig_pending: u64,
+    pub(crate) sig_info_code: i32,
+    pub(crate) sigaltstack_sp: u64,
+    pub(crate) sigaltstack_size: u64,
+    pub(crate) sigaltstack_flags: i32,
+    pub(crate) lr_addr: u64,
+    pub(crate) lr_val: u64,
+    pub(crate) lr_gen: u32,
+    pub(crate) lr_gen_end: u32,
+    pub(crate) insn_budget: i32,
+    pub(crate) fault_pc: u64,
+    pub(crate) fault_addr: u64,
+    pub(crate) fault_kind: u32,
+    pub(crate) fault_signal: i32,
+    pub(crate) fault_code: i32,
+    pub(crate) _pad_fault: u32,
+    pub(crate) guest_base: u32,
+    pub(crate) guest_address_profile: u32,
+    pub(crate) guest_address_limit: u64,
+    pub(crate) guest_memory_policy_limit: u64,
+    pub(crate) process_max_memory_pages: u32,
+    pub(crate) process_ptr: u32,
+    pub(crate) clone_flags: u64,
+    pub(crate) clone_child_stack: u64,
+    pub(crate) clone_tls: u64,
+    pub(crate) clone_child_tidptr: u64,
+    pub(crate) clone_child_tid: i32,
+    pub(crate) clone_pending: i32,
+    pub(crate) spawn_kind: u32,
+    pub(crate) spawn_address_profile: u32,
+    pub(crate) spawn_guest_memory_policy_limit: u64,
+    pub(crate) spawn_process_max_memory_pages: u32,
+    pub(crate) spawn_child_pid: i32,
+    pub(crate) spawn_path: u64,
+    pub(crate) spawn_argv: u64,
+    pub(crate) spawn_envp: u64,
+    pub(crate) wait_pid: i64,
+    pub(crate) wait_kind: u32,
+    pub(crate) wait_idtype: u32,
+    pub(crate) wait_wstatus_addr: u64,
+    pub(crate) wait_options: u64,
+    pub(crate) wait_rusage_addr: u64,
+    pub(crate) futex_wait_addr: u64,
+    pub(crate) futex_wait_timeout: u64,
+    pub(crate) futex_wait_expected: u32,
+    pub(crate) futex_wait_bitset: u32,
+    pub(crate) futex_wait_absolute: u32,
+    pub(crate) futex_wait_flags: u32,
+    pub(crate) epoll_timeout_ms: i64,
+    pub(crate) socket_timeout_ms: i64,
+    pub(crate) epoll_maxevents: u32,
+    pub(crate) blocked_fd: u32,
+    pub(crate) blocked_ofd_id: u32,
+    pub(crate) blocked_syscall_nr: u64,
+    pub(crate) blocked_syscall_args: [u64; 6],
+    pub(crate) child_pid: i32,
 }
 
 #[repr(C)]
-pub(super) struct ProcessRuntimeState {
-    pub(super) heap_base: u32,
-    pub(super) heap_ptr: AtomicU32,
-    pub(super) children: [ChildEntry; MAX_CHILDREN],
-    pub(super) next_pid: i32,
-    pub(super) fork_active: u32,
-    pub(super) vfork_active: u32,
-    pub(super) process_table: [ProcessEntry; MAX_PROCESSES],
-    pub(super) fork_snapshot: VforkSnapshot,
-    pub(super) vfork_snapshot: VforkSnapshot,
+pub(crate) struct ProcessRuntimeState {
+    pub(crate) heap_base: u32,
+    pub(crate) heap_ptr: AtomicU32,
+    pub(crate) children: [ChildEntry; MAX_CHILDREN],
+    pub(crate) next_pid: i32,
+    pub(crate) fork_active: u32,
+    pub(crate) vfork_active: u32,
+    pub(crate) process_table: [ProcessEntry; MAX_PROCESSES],
+    pub(crate) fork_snapshot: VforkSnapshot,
+    pub(crate) vfork_snapshot: VforkSnapshot,
 }
 
 #[cfg(any(test, feature = "harness"))]
@@ -253,7 +253,7 @@ fn checked_process_runtime_state_ptr() -> *mut ProcessRuntimeState {
     ptr
 }
 
-pub(super) fn empty_vfork_snapshot() -> VforkSnapshot {
+pub(crate) fn empty_vfork_snapshot() -> VforkSnapshot {
     VforkSnapshot {
         x: [0; 32],
         pc: 0,
@@ -331,7 +331,7 @@ pub(super) fn empty_vfork_snapshot() -> VforkSnapshot {
     }
 }
 
-pub(super) fn capture_thread_snapshot(vm: &ThreadState, child_pid: i32) -> VforkSnapshot {
+pub(crate) fn capture_thread_snapshot(vm: &ThreadState, child_pid: i32) -> VforkSnapshot {
     macro_rules! capture_snapshot_field {
         ($target:ident, $source:ident, $field:ident) => {
             $target.$field = $source.$field;
@@ -344,7 +344,7 @@ pub(super) fn capture_thread_snapshot(vm: &ThreadState, child_pid: i32) -> Vfork
     snapshot
 }
 
-pub(super) fn restore_thread_snapshot(vm: &mut ThreadState, snap: VforkSnapshot) {
+pub(crate) fn restore_thread_snapshot(vm: &mut ThreadState, snap: VforkSnapshot) {
     macro_rules! restore_snapshot_field {
         ($target:ident, $source:ident, $field:ident) => {
             $target.$field = $source.$field;
@@ -354,18 +354,18 @@ pub(super) fn restore_thread_snapshot(vm: &mut ThreadState, snap: VforkSnapshot)
     for_each_vfork_snapshot_field!(restore_snapshot_field, vm, snap);
 }
 
-pub(super) fn rewrite_snapshot_child_pid(snapshot: &mut VforkSnapshot, old_pid: i32, new_pid: i32) {
+pub(crate) fn rewrite_snapshot_child_pid(snapshot: &mut VforkSnapshot, old_pid: i32, new_pid: i32) {
     if snapshot.child_pid == old_pid {
         snapshot.child_pid = new_pid;
     }
 }
 
-pub(super) fn clear_vfork_runtime_snapshot() {
+pub(crate) fn clear_vfork_runtime_snapshot() {
     prs().vfork_active = 0;
     prs().vfork_snapshot = empty_vfork_snapshot();
 }
 
-pub(super) fn take_fork_snapshot() -> Option<VforkSnapshot> {
+pub(crate) fn take_fork_snapshot() -> Option<VforkSnapshot> {
     if prs().fork_active == 0 {
         return None;
     }
@@ -375,7 +375,7 @@ pub(super) fn take_fork_snapshot() -> Option<VforkSnapshot> {
     Some(snapshot)
 }
 
-pub(super) fn seeded_process_table() -> [ProcessEntry; MAX_PROCESSES] {
+pub(crate) fn seeded_process_table() -> [ProcessEntry; MAX_PROCESSES] {
     let mut table = [ProcessEntry {
         pid: 0,
         ppid: 0,
@@ -393,14 +393,14 @@ pub(super) fn seeded_process_table() -> [ProcessEntry; MAX_PROCESSES] {
     table
 }
 
-pub(super) fn prs() -> &'static mut ProcessRuntimeState {
+pub(crate) fn prs() -> &'static mut ProcessRuntimeState {
     unsafe {
         let p = checked_process_runtime_state_ptr();
         &mut *p
     }
 }
 
-pub(super) fn store_vfork_proc_self_exe_snapshot(target: &[u8]) {
+pub(crate) fn store_vfork_proc_self_exe_snapshot(target: &[u8]) {
     let len = target.len().min(VFORK_PROC_SELF_EXE_MAX);
     unsafe {
         VFORK_PROC_SELF_EXE_TARGET[..len].copy_from_slice(&target[..len]);
@@ -411,7 +411,7 @@ pub(super) fn store_vfork_proc_self_exe_snapshot(target: &[u8]) {
     }
 }
 
-pub(super) fn clear_vfork_proc_self_exe_snapshot() {
+pub(crate) fn clear_vfork_proc_self_exe_snapshot() {
     unsafe {
         VFORK_PROC_SELF_EXE_LEN = 0;
         core::ptr::write_bytes(
@@ -422,15 +422,15 @@ pub(super) fn clear_vfork_proc_self_exe_snapshot() {
     }
 }
 
-pub(super) fn vfork_proc_self_exe_snapshot() -> &'static [u8] {
+pub(crate) fn vfork_proc_self_exe_snapshot() -> &'static [u8] {
     unsafe { &VFORK_PROC_SELF_EXE_TARGET[..VFORK_PROC_SELF_EXE_LEN as usize] }
 }
 
-pub(super) fn children() -> &'static mut [ChildEntry; MAX_CHILDREN] {
+pub(crate) fn children() -> &'static mut [ChildEntry; MAX_CHILDREN] {
     &mut prs().children
 }
 
-pub(super) fn processes() -> &'static mut [ProcessEntry; MAX_PROCESSES] {
+pub(crate) fn processes() -> &'static mut [ProcessEntry; MAX_PROCESSES] {
     &mut prs().process_table
 }
 

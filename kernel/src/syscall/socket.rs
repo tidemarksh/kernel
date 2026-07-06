@@ -33,6 +33,8 @@ pub use send_recv::{
     sys_sendmsg, sys_sendto, sys_shutdown,
 };
 
+use crate::abi::FD_TYPE_SOCKET;
+use crate::types::ThreadState;
 use state::{
     ACCEPT_QUEUE_SIZE, DEFAULT_SOCKET_BUFFER, INVALID_BUF_IDX, INVALID_PEER_IDX, IPPROTO_TCP,
     IPPROTO_UDP, NETLINK_ROUTE, SHUT_RD_MASK, SHUT_WR_MASK, SOCK_STATE_BOUND, SOCK_STATE_CONNECTED,
@@ -43,6 +45,49 @@ use state::{
     record_socket_read_debug, shutdown_slot, socket_has_successful_read, socket_table,
     thread_connect_target_fd,
 };
+
+pub(super) fn socket_identity_detail(domain: u32, sock_type: u32, protocol: u32) -> u64 {
+    (domain as u64) | ((sock_type as u64) << 16) | ((protocol as u64) << 32)
+}
+
+pub(super) fn socket_state_transition_detail(before: u32, after: u32) -> u64 {
+    (before as u64) | ((after as u64) << 32)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn record_socket_control(
+    kind: u32,
+    vm: &ThreadState,
+    base: u32,
+    fd: u64,
+    fd2: u64,
+    ofd_id: u32,
+    ofd2_id: u32,
+    socket_idx: u32,
+    socket_idx2: u32,
+    result: i64,
+    flags: u64,
+    detail0: u64,
+    detail1: u64,
+) {
+    crate::supervisor::record_fd_control(
+        kind,
+        vm as *const ThreadState as u32,
+        vm.process_ptr,
+        crate::syscall::process::current_process_pid(vm, base),
+        fd as u32,
+        fd2 as u32,
+        ofd_id,
+        ofd2_id,
+        FD_TYPE_SOCKET as u32,
+        socket_idx,
+        socket_idx2,
+        result,
+        flags,
+        detail0,
+        detail1,
+    );
+}
 pub use state::{
     attach_socket_state, close_connection_slot, close_external_peer_for_fd,
     commit_external_connect_for_fd, debug_external_outbound_available_for_fd,

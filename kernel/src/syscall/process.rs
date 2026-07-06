@@ -12,12 +12,12 @@
 //! https://man7.org/linux/man-pages/man2/fork.2.html
 //! https://man7.org/linux/man-pages/man2/wait4.2.html
 
-mod common;
-mod execve;
+pub(crate) mod common;
+pub(crate) mod execve;
 mod fork;
-mod handoff;
+pub(crate) mod handoff;
 mod lifecycle;
-mod runtime;
+pub(crate) mod runtime;
 mod vfork;
 mod wait;
 

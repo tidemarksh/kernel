@@ -78,6 +78,288 @@ fn unix_stream_bind_listen_connect_accept_roundtrip() {
 }
 
 #[test]
+fn supervisor_fd_control_records_socket_bind_listen_connect_accept() {
+    let mut t = TestVm::new();
+    let listener_fd = socket::sys_socket(&mut t.vm, t.base, AF_UNIX as u64, SOCK_STREAM as u64, 0);
+    assert!(listener_fd >= 0);
+    let client_fd = socket::sys_socket(&mut t.vm, t.base, AF_UNIX as u64, SOCK_STREAM as u64, 0);
+    assert!(client_fd >= 0);
+
+    let listener_ofd =
+        fd_table::get_ofd_id(t.base, &t.vm, listener_fd as u64).expect("listener OFD should exist");
+    let client_ofd =
+        fd_table::get_ofd_id(t.base, &t.vm, client_fd as u64).expect("client OFD should exist");
+    let listener_idx = fd_table::get_ofd(t.base, &t.vm, listener_fd as u64)
+        .expect("listener OFD should exist")
+        .ino;
+    let client_idx = fd_table::get_ofd(t.base, &t.vm, client_fd as u64)
+        .expect("client OFD should exist")
+        .ino;
+
+    let path = b"/tmp/tidemark-supervisor-lifecycle\0";
+    let addr = t.scratch + 0x240;
+    let mut sockaddr = [0u8; 2 + 108];
+    sockaddr[0..2].copy_from_slice(&(AF_UNIX as u16).to_le_bytes());
+    sockaddr[2..2 + path.len()].copy_from_slice(path);
+    t.write_mem(addr, &sockaddr[..2 + path.len()]);
+    let addrlen = (2 + path.len()) as u64;
+    let read_record = || {
+        let mut record = vec![0u8; supervisor_fd_control_record_bytes() as usize];
+        assert_eq!(
+            supervisor_fd_control_record(record.as_mut_ptr() as u32, record.len() as u32),
+            supervisor_fd_control_record_bytes() as i32
+        );
+        record
+    };
+
+    supervisor_reset_shadow_log();
+    assert_eq!(
+        socket::sys_bind(&mut t.vm, t.base, listener_fd as u64, addr, addrlen),
+        0
+    );
+    assert_eq!(supervisor_shadow_fd_control_count(), 1);
+    let record = read_record();
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_fd_control_kind_socket_bound()
+    );
+    assert_eq!(read_u32_le(&record, 36), listener_fd as u32);
+    assert_eq!(read_u32_le(&record, 44), listener_ofd);
+    assert_eq!(read_u32_le(&record, 52), FD_TYPE_SOCKET as u32);
+    assert_eq!(read_u32_le(&record, 56), listener_idx);
+    assert_eq!(read_u32_le(&record, 60), 0);
+    assert_eq!(read_u64_le(&record, 64), 0);
+    assert_eq!(read_u64_le(&record, 72), addrlen);
+    assert_eq!(
+        read_u64_le(&record, 80),
+        socket_identity_detail(AF_UNIX, SOCK_STREAM, 0)
+    );
+    assert_eq!(
+        read_u64_le(&record, 88),
+        socket_state_transition_detail(SOCK_STATE_IDLE, SOCK_STATE_BOUND)
+    );
+
+    supervisor_reset_shadow_log();
+    assert_eq!(
+        socket::sys_listen(&mut t.vm, t.base, listener_fd as u64, 8),
+        0
+    );
+    assert_eq!(supervisor_shadow_fd_control_count(), 1);
+    let record = read_record();
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_fd_control_kind_socket_listening()
+    );
+    assert_eq!(read_u32_le(&record, 36), listener_fd as u32);
+    assert_eq!(read_u32_le(&record, 44), listener_ofd);
+    assert_eq!(read_u32_le(&record, 56), listener_idx);
+    assert_eq!(read_u64_le(&record, 64), 0);
+    assert_eq!(read_u64_le(&record, 72), 8);
+    assert_eq!(
+        read_u64_le(&record, 88),
+        socket_state_transition_detail(SOCK_STATE_BOUND, SOCK_STATE_LISTENING)
+    );
+
+    supervisor_reset_shadow_log();
+    assert_eq!(
+        socket::sys_connect(&mut t.vm, t.base, client_fd as u64, addr, addrlen),
+        0
+    );
+    assert_eq!(supervisor_shadow_fd_control_count(), 1);
+    let record = read_record();
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_fd_control_kind_socket_connected()
+    );
+    let accepted_idx = read_u32_le(&record, 60);
+    assert_ne!(accepted_idx, u32::MAX);
+    assert_eq!(read_u32_le(&record, 36), client_fd as u32);
+    assert_eq!(read_u32_le(&record, 44), client_ofd);
+    assert_eq!(read_u32_le(&record, 56), client_idx);
+    assert_eq!(read_u64_le(&record, 64), 0);
+    assert_eq!(read_u64_le(&record, 72), addrlen);
+    assert_eq!(
+        read_u64_le(&record, 88),
+        socket_state_transition_detail(SOCK_STATE_IDLE, SOCK_STATE_CONNECTED)
+    );
+
+    supervisor_reset_shadow_log();
+    let accepted_fd = socket::sys_accept4(
+        &mut t.vm,
+        t.base,
+        listener_fd as u64,
+        0,
+        0,
+        SOCK_NONBLOCK as u64,
+    );
+    assert!(accepted_fd >= 0);
+    let accepted_ofd =
+        fd_table::get_ofd_id(t.base, &t.vm, accepted_fd as u64).expect("accepted OFD should exist");
+    let accepted_fd_idx = fd_table::get_ofd(t.base, &t.vm, accepted_fd as u64)
+        .expect("accepted OFD should exist")
+        .ino;
+    assert_eq!(accepted_fd_idx, accepted_idx);
+
+    assert_eq!(supervisor_shadow_fd_control_count(), 1);
+    let record = read_record();
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_fd_control_kind_socket_accepted()
+    );
+    assert_eq!(read_u32_le(&record, 36), accepted_fd as u32);
+    assert_eq!(read_u32_le(&record, 40), listener_fd as u32);
+    assert_eq!(read_u32_le(&record, 44), accepted_ofd);
+    assert_eq!(read_u32_le(&record, 48), listener_ofd);
+    assert_eq!(read_u32_le(&record, 52), FD_TYPE_SOCKET as u32);
+    assert_eq!(read_u32_le(&record, 56), accepted_idx);
+    assert_eq!(read_u32_le(&record, 60), listener_idx);
+    assert_eq!(read_u64_le(&record, 64), accepted_fd as u64);
+    assert_eq!(read_u64_le(&record, 72), SOCK_NONBLOCK as u64);
+    assert_eq!(
+        read_u64_le(&record, 80),
+        socket_identity_detail(AF_UNIX, SOCK_STREAM, 0)
+    );
+    assert_eq!(
+        read_u64_le(&record, 88),
+        socket_state_transition_detail(SOCK_STATE_CONNECTED, SOCK_STATE_CONNECTED)
+    );
+}
+
+#[test]
+fn supervisor_fd_control_records_socket_connect_start_and_failure() {
+    let mut t = TestVm::new();
+    let fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
+    assert!(fd >= 0);
+    let ofd_id = fd_table::get_ofd_id(t.base, &t.vm, fd as u64).expect("socket OFD should exist");
+    let socket_idx = fd_table::get_ofd(t.base, &t.vm, fd as u64)
+        .expect("socket OFD should exist")
+        .ino;
+
+    let sockaddr: [u8; 16] = [2, 0, 0x00, 0x50, 93, 184, 216, 34, 0, 0, 0, 0, 0, 0, 0, 0];
+    let addr = t.scratch + 0x500;
+    t.write_mem(addr, &sockaddr);
+    let read_record = || {
+        let mut record = vec![0u8; supervisor_fd_control_record_bytes() as usize];
+        assert_eq!(
+            supervisor_fd_control_record(record.as_mut_ptr() as u32, record.len() as u32),
+            supervisor_fd_control_record_bytes() as i32
+        );
+        record
+    };
+
+    supervisor_reset_shadow_log();
+    assert_eq!(
+        socket::sys_connect(&mut t.vm, t.base, fd as u64, addr, 16),
+        0
+    );
+    assert_eq!(t.vm.status, STATUS_CONNECT);
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    let mut supervisor_peer = [0u8; 28];
+    assert_eq!(supervisor_socket_connect_fd(vm_ptr), fd as i32);
+    assert_eq!(
+        supervisor_socket_connect_peer_addr(
+            vm_ptr,
+            supervisor_peer.as_mut_ptr() as u32,
+            supervisor_peer.len() as u32
+        ),
+        16
+    );
+    assert_eq!(&supervisor_peer[..16], &sockaddr);
+    supervisor_peer.fill(0);
+    assert_eq!(
+        supervisor_socket_connect_peer_addr_for_fd(
+            vm_ptr,
+            fd as u32,
+            supervisor_peer.as_mut_ptr() as u32,
+            supervisor_peer.len() as u32
+        ),
+        16
+    );
+    assert_eq!(&supervisor_peer[..16], &sockaddr);
+    assert_eq!(supervisor_shadow_fd_control_count(), 1);
+    let record = read_record();
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_fd_control_kind_socket_connect_started()
+    );
+    assert_eq!(read_u32_le(&record, 36), fd as u32);
+    assert_eq!(read_u32_le(&record, 44), ofd_id);
+    assert_eq!(read_u32_le(&record, 52), FD_TYPE_SOCKET as u32);
+    assert_eq!(read_u32_le(&record, 56), socket_idx);
+    assert_eq!(read_u32_le(&record, 60), u32::MAX);
+    assert_eq!(read_u64_le(&record, 64), 0);
+    assert_eq!(read_u64_le(&record, 72), 16);
+    assert_eq!(
+        read_u64_le(&record, 80),
+        socket_identity_detail(AF_INET, SOCK_STREAM, IPPROTO_TCP as u32)
+    );
+    assert_eq!(
+        read_u64_le(&record, 88),
+        socket_state_transition_detail(SOCK_STATE_IDLE, SOCK_STATE_CONNECTING)
+    );
+
+    supervisor_reset_shadow_log();
+    socket::resume_connect_result(&mut t.vm, t.base, ECONNREFUSED);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.x[10] as i64, ECONNREFUSED);
+    assert_eq!(supervisor_shadow_fd_control_count(), 1);
+    let record = read_record();
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_fd_control_kind_socket_connect_failed()
+    );
+    assert_eq!(read_u32_le(&record, 36), fd as u32);
+    assert_eq!(read_u32_le(&record, 44), ofd_id);
+    assert_eq!(read_u32_le(&record, 56), socket_idx);
+    assert_eq!(read_u64_le(&record, 64) as i64, ECONNREFUSED);
+    assert_eq!(
+        read_u64_le(&record, 88),
+        socket_state_transition_detail(SOCK_STATE_CONNECTING, SOCK_STATE_IDLE)
+    );
+}
+
+#[test]
+fn supervisor_socket_bridge_ofd_queries_follow_fd_table_aliases() {
+    let mut t = TestVm::new();
+    let fd = socket::sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
+    assert!(fd >= 0);
+    let dup_fd = t.sys_dup(fd as u64);
+    assert!(dup_fd >= 0);
+    let ofd_id = fd_table::get_ofd_id(t.base, &t.vm, fd as u64).expect("socket OFD should exist");
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+
+    assert_eq!(supervisor_socket_ofd_is_socket(ofd_id), 1);
+    assert_eq!(
+        supervisor_process_socket_ofd_for_fd(vm_ptr, fd as u32),
+        ofd_id
+    );
+    assert_eq!(
+        supervisor_process_socket_ofd_for_fd(vm_ptr, dup_fd as u32),
+        ofd_id
+    );
+    assert_eq!(
+        supervisor_process_socket_drain_fd(vm_ptr, fd as u32, 0),
+        fd as i32
+    );
+    assert_eq!(
+        supervisor_process_socket_drain_fd(vm_ptr, fd as u32, 1),
+        dup_fd as i32
+    );
+    assert_eq!(
+        supervisor_process_socket_drain_fd(vm_ptr, dup_fd as u32, 0),
+        dup_fd as i32
+    );
+    assert_eq!(
+        supervisor_process_socket_drain_fd(vm_ptr, dup_fd as u32, 1),
+        fd as i32
+    );
+    assert_eq!(
+        supervisor_process_socket_drain_fd(vm_ptr, fd as u32, 2),
+        ENOENT as i32
+    );
+}
+
+#[test]
 fn accept4_sets_requested_fd_and_status_flags() {
     let cases = [
         (0_u64, false, false),

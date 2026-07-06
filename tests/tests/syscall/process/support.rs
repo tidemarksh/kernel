@@ -8,7 +8,7 @@ pub(super) use tidemark_kernel::syscall::process as process_impl;
 pub(super) use tidemark_kernel::syscall::signal;
 pub(super) use tidemark_kernel::syscall::thread as thread_impl;
 pub(super) use tidemark_kernel::types::{
-    FdEntry, ProcessState, THREAD_NONE, THREAD_RUNNING, ThreadRecord,
+    FdEntry, ProcessState, THREAD_NONE, THREAD_RUNNING, ThreadRecord, ThreadState,
 };
 pub(super) use tidemark_kernel_tests::support::{
     build_test_elf, build_test_elf_dyn, build_test_elf_dyn_low, build_test_elf_dyn_two_loads,

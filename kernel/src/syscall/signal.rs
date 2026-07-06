@@ -37,7 +37,10 @@ pub use actions::{
     reset_on_execve, sig_slots_ptr, signal_action_table_bytes, signal_slots_bytes,
     sys_rt_sigaction,
 };
-pub use delivery::{check_pending, pending_signal_interrupts_blocked_syscall};
+pub use delivery::{
+    check_pending, check_pending_at_boundary, pending_signal_interrupts_blocked_syscall,
+    pending_signal_snapshot,
+};
 pub(crate) use frame::SS_DISABLE;
 pub use frame::{is_current_sigreturn_trampoline, patch_current_signal_frame_a0, sys_sigaltstack};
 pub(crate) use pending::sanitized_signal_mask;

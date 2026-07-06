@@ -15,6 +15,26 @@ const EPOLLRDHUP: u32 = 0x2000;
 const EPOLLONESHOT: u32 = 1 << 30;
 const EPOLLET: u32 = 1 << 31;
 
+fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
+    let mut value = [0u8; 4];
+    value.copy_from_slice(&bytes[offset..offset + 4]);
+    u32::from_le_bytes(value)
+}
+
+fn read_u64_le(bytes: &[u8], offset: usize) -> u64 {
+    let mut value = [0u8; 8];
+    value.copy_from_slice(&bytes[offset..offset + 8]);
+    u64::from_le_bytes(value)
+}
+
+fn write_u32_le(bytes: &mut [u8], offset: usize, value: u32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_u64_le(bytes: &mut [u8], offset: usize, value: u64) {
+    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
 #[test]
 fn close_epoll_clears_instance_slot() {
     let mut t = TestVm::new();
@@ -28,6 +48,242 @@ fn close_epoll_clears_instance_slot() {
 
     assert_eq!(t.sys_close(epfd), 0);
     assert!(!epoll::epoll_slot_allocated(epoll_idx));
+}
+
+#[test]
+fn supervisor_fd_control_records_epoll_create_and_ctl() {
+    let mut t = TestVm::new();
+    let pipefd_addr = t.scratch + 0x1800;
+    assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) } as u64;
+    let read_ofd =
+        fd_table::get_ofd_id(t.base, &t.vm, read_fd).expect("pipe read OFD should exist");
+
+    supervisor_reset_shadow_log();
+    let epfd = epoll::sys_epoll_create1(&mut t.vm, t.base, O_CLOEXEC as u64);
+    assert!(epfd >= 3);
+    let epoll_ofd =
+        fd_table::get_ofd_id(t.base, &t.vm, epfd as u64).expect("epoll OFD should exist");
+    let epoll_idx = fd_table::get_ofd(t.base, &t.vm, epfd as u64)
+        .expect("epoll OFD should exist")
+        .ino;
+
+    assert_eq!(supervisor_shadow_fd_control_count(), 1);
+    let mut record = vec![0u8; supervisor_fd_control_record_bytes() as usize];
+    assert_eq!(
+        supervisor_fd_control_record(record.as_mut_ptr() as u32, record.len() as u32),
+        supervisor_fd_control_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_fd_control_kind_epoll_created()
+    );
+    assert_eq!(read_u32_le(&record, 36), epfd as u32);
+    assert_eq!(read_u32_le(&record, 44), epoll_ofd);
+    assert_eq!(read_u32_le(&record, 52), FD_TYPE_EPOLL as u32);
+    assert_eq!(read_u32_le(&record, 56), epoll_idx);
+    assert_eq!(read_u64_le(&record, 64), epfd as u64);
+    assert_eq!(read_u64_le(&record, 72), O_CLOEXEC as u64);
+
+    let add_event_addr = t.scratch + 0x2000;
+    let mod_event_addr = t.scratch + 0x2010;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, add_event_addr, EPOLLIN);
+        tidemark_kernel::guest_mem::write_u64(t.base, add_event_addr + 8, 0x1234);
+        tidemark_kernel::guest_mem::write_u32(t.base, mod_event_addr, EPOLLOUT);
+        tidemark_kernel::guest_mem::write_u64(t.base, mod_event_addr + 8, 0x5678);
+    }
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            read_fd,
+            add_event_addr,
+        ),
+        0
+    );
+    assert_eq!(supervisor_shadow_fd_control_count(), 2);
+    assert_eq!(
+        supervisor_fd_control_record(record.as_mut_ptr() as u32, record.len() as u32),
+        supervisor_fd_control_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_fd_control_kind_epoll_ctl_add()
+    );
+    assert_eq!(read_u32_le(&record, 36), epfd as u32);
+    assert_eq!(read_u32_le(&record, 40), read_fd as u32);
+    assert_eq!(read_u32_le(&record, 44), epoll_ofd);
+    assert_eq!(read_u32_le(&record, 48), read_ofd);
+    assert_eq!(read_u32_le(&record, 52), FD_TYPE_PIPE as u32);
+    assert_eq!(read_u32_le(&record, 56), epoll_idx);
+    assert_eq!(read_u32_le(&record, 60), 1);
+    assert_eq!(read_u64_le(&record, 72), EPOLLIN as u64);
+    assert_eq!(read_u64_le(&record, 80), 0x1234);
+    assert_eq!(read_u64_le(&record, 88), 1);
+
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_MOD,
+            read_fd,
+            mod_event_addr,
+        ),
+        0
+    );
+    assert_eq!(supervisor_shadow_fd_control_count(), 3);
+    assert_eq!(
+        supervisor_fd_control_record(record.as_mut_ptr() as u32, record.len() as u32),
+        supervisor_fd_control_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_fd_control_kind_epoll_ctl_mod()
+    );
+    assert_eq!(read_u64_le(&record, 72), EPOLLOUT as u64);
+    assert_eq!(read_u64_le(&record, 80), 0x5678);
+    assert_eq!(read_u64_le(&record, 88), 1);
+
+    assert_eq!(
+        epoll::sys_epoll_ctl(&mut t.vm, t.base, epfd as u64, EPOLL_CTL_DEL, read_fd, 0),
+        0
+    );
+    assert_eq!(supervisor_shadow_fd_control_count(), 4);
+    assert_eq!(
+        supervisor_fd_control_record(record.as_mut_ptr() as u32, record.len() as u32),
+        supervisor_fd_control_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_fd_control_kind_epoll_ctl_del()
+    );
+    assert_eq!(read_u64_le(&record, 72), EPOLLOUT as u64);
+    assert_eq!(read_u64_le(&record, 80), 0x5678);
+    assert_eq!(read_u64_le(&record, 88), 0);
+}
+
+#[test]
+fn supervisor_process_epoll_query_reports_unique_held_ofds() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    let pipefd_addr = t.scratch + 0x2200;
+    let event_addr = t.scratch + 0x2240;
+    let output_addr = t.scratch + 0x2280;
+    assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) };
+    let read_ofd =
+        fd_table::get_ofd_id(t.base, &t.vm, read_fd as u64).expect("pipe read OFD should exist");
+    let epfd = epoll::sys_epoll_create1(&mut t.vm, t.base, 0);
+    assert!(epfd >= 3);
+    let dup_epfd = t.sys_dup(epfd as u64);
+    assert!(dup_epfd >= 0);
+    let epoll_ofd =
+        fd_table::get_ofd_id(t.base, &t.vm, epfd as u64).expect("epoll OFD should exist");
+    let event_fd = pipe::sys_eventfd2(&mut t.vm, t.base, 0, O_NONBLOCK as u64);
+    assert!(event_fd >= 3);
+    let event_ofd =
+        fd_table::get_ofd_id(t.base, &t.vm, event_fd as u64).expect("eventfd OFD should exist");
+    let timer_fd = time::sys_timerfd_create(&mut t.vm, t.base, 1, O_NONBLOCK as u64);
+    assert!(timer_fd >= 3);
+    let timer_ofd =
+        fd_table::get_ofd_id(t.base, &t.vm, timer_fd as u64).expect("timerfd OFD should exist");
+
+    assert_eq!(supervisor_process_epoll_held_ofd(vm_ptr, 0), epoll_ofd);
+    assert_eq!(supervisor_process_epoll_held_ofd(vm_ptr, 1), 0);
+    assert_eq!(supervisor_process_sync_dependent_ofd(vm_ptr, 0), event_ofd);
+    assert_eq!(supervisor_process_sync_dependent_ofd(vm_ptr, 1), timer_ofd);
+    assert_eq!(supervisor_process_sync_dependent_ofd(vm_ptr, 2), 0);
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, event_addr, EPOLLIN);
+        tidemark_kernel::guest_mem::write_u64(t.base, event_addr + 8, 0xfeed);
+    }
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            read_fd as u64,
+            event_addr,
+        ),
+        0
+    );
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, event_addr + 8, 0xbeef);
+    }
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            event_fd as u64,
+            event_addr,
+        ),
+        0
+    );
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, event_addr + 8, 0xcafe);
+    }
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            timer_fd as u64,
+            event_addr,
+        ),
+        0
+    );
+
+    assert_eq!(supervisor_process_epoll_dependent_ofd(vm_ptr, 0), read_ofd);
+    assert_eq!(supervisor_process_epoll_dependent_ofd(vm_ptr, 1), event_ofd);
+    assert_eq!(supervisor_process_epoll_dependent_ofd(vm_ptr, 2), timer_ofd);
+    assert_eq!(supervisor_process_epoll_dependent_ofd(vm_ptr, 3), 0);
+    assert_eq!(
+        supervisor_process_epoll_dependent_sync_ofd(vm_ptr, 0),
+        event_ofd
+    );
+    assert_eq!(
+        supervisor_process_epoll_dependent_sync_ofd(vm_ptr, 1),
+        timer_ofd
+    );
+    assert_eq!(supervisor_process_epoll_dependent_sync_ofd(vm_ptr, 2), 0);
+    assert_eq!(supervisor_process_epoll_depends_on_ofd(vm_ptr, read_ofd), 1);
+    assert_eq!(
+        supervisor_process_epoll_depends_on_ofd(vm_ptr, event_ofd),
+        1
+    );
+    assert_eq!(
+        supervisor_process_epoll_depends_on_ofd(vm_ptr, timer_ofd),
+        1
+    );
+    assert_eq!(supervisor_process_epoll_depends_on_ofd(vm_ptr, 31), 0);
+    assert_eq!(
+        epoll::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, output_addr, 1, -1, 0),
+        0
+    );
+    assert_eq!(t.vm.status, STATUS_EPOLL_WAIT);
+    assert_eq!(supervisor_blocked_epoll_watches_pipe(vm_ptr), 1);
+    assert_eq!(supervisor_blocked_epoll_watched_ofd(vm_ptr, 0), read_ofd);
+    assert_eq!(supervisor_blocked_epoll_watched_ofd(vm_ptr, 1), event_ofd);
+    assert_eq!(supervisor_blocked_epoll_watched_ofd(vm_ptr, 2), timer_ofd);
+    assert_eq!(supervisor_blocked_epoll_watched_ofd(vm_ptr, 3), 0);
+    assert_eq!(
+        supervisor_blocked_epoll_dependent_sync_ofd(vm_ptr, 0),
+        event_ofd
+    );
+    assert_eq!(
+        supervisor_blocked_epoll_dependent_sync_ofd(vm_ptr, 1),
+        timer_ofd
+    );
+    assert_eq!(supervisor_blocked_epoll_dependent_sync_ofd(vm_ptr, 2), 0);
 }
 
 #[test]
@@ -249,6 +505,118 @@ fn epoll_pwait_pins_blocked_epoll_fd_and_releases_on_timeout() {
     assert_eq!(t.vm.blocked_ofd_id, 0);
     let released = fd_table::get_ofd_by_id(epoll_ofd).expect("epoll OFD should still exist");
     assert_eq!(released.refcount, 1);
+}
+
+#[test]
+fn supervisor_epoll_timeout_host_op_resumes_and_publishes_runnable() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    let pipefd_addr = t.scratch + 0x1000;
+    assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) } as u64;
+
+    let epfd = epoll::sys_epoll_create1(&mut t.vm, t.base, 0);
+    assert!(epfd >= 3);
+
+    let event_addr = t.scratch + 0x2000;
+    let out_addr = t.scratch + 0x3000;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, event_addr, EPOLLIN);
+        tidemark_kernel::guest_mem::write_u64(t.base, event_addr + 8, 0x55);
+    }
+
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            read_fd,
+            event_addr,
+        ),
+        0
+    );
+
+    t.vm.x[10] = epfd as u64;
+    t.vm.x[11] = out_addr;
+    t.vm.x[12] = 1;
+    t.vm.x[13] = 10;
+    t.vm.x[14] = 0;
+    t.vm.x[17] = SYS_EPOLL_PWAIT;
+
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        STATUS_EPOLL_WAIT
+    );
+    assert_eq!(t.vm.status, STATUS_EPOLL_WAIT);
+
+    let mut host_op = vec![0u8; supervisor_host_op_record_bytes() as usize];
+    assert_eq!(
+        supervisor_next_host_op(host_op.as_mut_ptr() as u32, host_op.len() as u32),
+        supervisor_host_op_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&host_op, 0), 0x4f48_5354);
+    assert_eq!(read_u32_le(&host_op, 4), supervisor_abi_version());
+    assert_eq!(read_u32_le(&host_op, 8), supervisor_host_op_record_bytes());
+    assert_eq!(
+        read_u32_le(&host_op, 12),
+        supervisor_host_op_kind_arm_host_timer()
+    );
+    assert_eq!(
+        read_u32_le(&host_op, 24),
+        &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32
+    );
+    assert_eq!(read_u32_le(&host_op, 32), t.vm.tid as u32);
+    assert_eq!(read_u32_le(&host_op, 36), t.vm.process_ptr);
+    assert_eq!(read_u32_le(&host_op, 40), STATUS_EPOLL_WAIT as u32);
+    assert_eq!(read_u64_le(&host_op, 48), 10);
+    assert_eq!(read_u64_le(&host_op, 56), 0);
+    assert_eq!(supervisor_next_host_op(0, 0), 0);
+
+    let mut completion = [0u8; 64];
+    write_u32_le(&mut completion, 0, 0x4348_5354);
+    write_u32_le(&mut completion, 4, supervisor_abi_version());
+    write_u32_le(&mut completion, 8, 64);
+    write_u32_le(&mut completion, 12, read_u32_le(&host_op, 12));
+    write_u64_le(&mut completion, 16, read_u64_le(&host_op, 16));
+    write_u32_le(&mut completion, 24, read_u32_le(&host_op, 24));
+    write_u32_le(&mut completion, 28, read_u32_le(&host_op, 28));
+    write_u32_le(&mut completion, 32, read_u32_le(&host_op, 32));
+    write_u32_le(&mut completion, 36, 1);
+    write_u32_le(&mut completion, 40, 0);
+    write_u64_le(&mut completion, 48, read_u64_le(&host_op, 48));
+    write_u64_le(&mut completion, 56, read_u64_le(&host_op, 56));
+
+    assert_eq!(
+        supervisor_complete_host_op(completion.as_ptr() as u32, completion.len() as u32),
+        STATUS_OK
+    );
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.x[10], 0);
+    assert_eq!(t.vm.blocked_fd, 0);
+    assert_eq!(t.vm.blocked_ofd_id, 0);
+
+    let mut resume = vec![0u8; supervisor_resume_record_bytes() as usize];
+    assert_eq!(
+        supervisor_next_resume(resume.as_mut_ptr() as u32, resume.len() as u32),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&resume, 0), 0x5255_5354);
+    assert_eq!(read_u32_le(&resume, 4), supervisor_abi_version());
+    assert_eq!(read_u32_le(&resume, 8), supervisor_resume_record_bytes());
+    assert_eq!(
+        read_u32_le(&resume, 12),
+        supervisor_resume_kind_runnable_thread()
+    );
+    assert_eq!(
+        read_u32_le(&resume, 24),
+        &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32
+    );
+    assert_eq!(read_u32_le(&resume, 28), t.vm.tid as u32);
+    assert_eq!(read_u32_le(&resume, 32), t.vm.process_ptr);
+    assert_eq!(read_u32_le(&resume, 36), STATUS_OK as u32);
 }
 
 #[test]

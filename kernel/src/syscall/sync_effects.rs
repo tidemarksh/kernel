@@ -25,6 +25,10 @@ pub(in crate::syscall) fn mark_socket_sync_effect(vm: &mut ThreadState) {
         SYNC_EFFECT_SOCKET_STATE | SYNC_EFFECT_EPOLL_STATE | SYNC_EFFECT_EPOLL_DEPENDENT_OFD_STATE;
 }
 
+pub(in crate::syscall) fn mark_epoll_ready_sync_effect(vm: &mut ThreadState) {
+    vm.completed_sync_effects |= SYNC_EFFECT_EPOLL_STATE | SYNC_EFFECT_EPOLL_DEPENDENT_OFD_STATE;
+}
+
 pub(in crate::syscall) fn mark_pipe_sync_effect(
     vm: &mut ThreadState,
     pipe_slot: u32,

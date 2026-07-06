@@ -27,6 +27,7 @@ pub extern "C" fn kernel_init(heap_base: u32) {
     crate::net::ring_buffer::init();
     crate::fs::fd_table::init();
     crate::fs::memfs::init();
+    crate::supervisor::init();
 }
 
 #[unsafe(no_mangle)]

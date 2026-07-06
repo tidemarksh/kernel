@@ -140,6 +140,15 @@ pub fn debug_read_open(idx: u32) -> i32 {
 pub fn debug_write_open(idx: u32) -> i32 {
     write_open_ptr(slot_addr(idx)).load(Ordering::Acquire)
 }
+pub fn reconcile_pipe_control(idx: u32, read_open: i32, write_open: i32) -> i32 {
+    if idx == 0 || idx as usize >= MAX_PIPES || read_open < 0 || write_open < 0 {
+        return 0;
+    }
+    let addr = slot_addr(idx);
+    read_open_ptr(addr).store(read_open, Ordering::Release);
+    write_open_ptr(addr).store(write_open, Ordering::Release);
+    1
+}
 fn data_ptr(slot: u32) -> *mut u8 {
     (slot + OFF_DATA) as *mut u8
 }
@@ -232,6 +241,25 @@ pub fn sys_pipe2(vm: &mut ThreadState, base: u32, pipefd_addr: u64, flags: u64) 
         guest_mem::write_u32(base, pipefd_addr, read_fd as u32);
         guest_mem::write_u32(base, pipefd_addr + 4, write_fd as u32);
     }
+    let read_ofd_id = fd_table::get_ofd_id(base, vm, read_fd as u64).unwrap_or(0);
+    let write_ofd_id = fd_table::get_ofd_id(base, vm, write_fd as u64).unwrap_or(0);
+    crate::supervisor::record_fd_control(
+        crate::supervisor::SUPERVISOR_FD_CONTROL_KIND_PIPE_CREATED,
+        vm as *mut ThreadState as u32,
+        vm.process_ptr,
+        crate::syscall::process::current_process_pid(vm, base),
+        read_fd as u32,
+        write_fd as u32,
+        read_ofd_id,
+        write_ofd_id,
+        FD_TYPE_PIPE as u32,
+        pipe_idx,
+        pipe_generation(pipe_idx),
+        0,
+        flags,
+        1,
+        1,
+    );
     0
 }
 

@@ -212,6 +212,60 @@ pub fn wait_set_has_socket(vm: &ThreadState, base: u32) -> bool {
     }
 }
 
+pub fn wait_set_has_no_watched_fds(vm: &ThreadState, base: u32) -> bool {
+    match wait_syscall_nr(vm) {
+        SYS_PPOLL => {
+            let fds_addr = wait_syscall_arg(vm, 0);
+            let nfds = wait_syscall_arg(vm, 1).min(MAX_POLL_FDS);
+            if nfds == 0 {
+                return true;
+            }
+            for index in 0..nfds {
+                let Some(entry_addr) = pollfd_addr(fds_addr, index) else {
+                    return false;
+                };
+                if !crate::syscall::memory::guest_range_accessible(base, entry_addr, POLLFD_SIZE) {
+                    return false;
+                }
+                let fd = unsafe { guest_mem::read_i32(base, entry_addr + POLLFD_FD_OFF) };
+                let events = unsafe { guest_mem::read_u16(base, entry_addr + POLLFD_EVENTS_OFF) };
+                if fd >= 0 && events != 0 {
+                    return false;
+                }
+            }
+            true
+        }
+        SYS_PSELECT6 => {
+            let nfds = wait_syscall_arg(vm, 0).min(MAX_POLL_FDS);
+            if nfds == 0 {
+                return true;
+            }
+            let readfds = wait_syscall_arg(vm, 1);
+            let writefds = wait_syscall_arg(vm, 2);
+            let exceptfds = wait_syscall_arg(vm, 3);
+            let Some(set_bytes) = fd_set_bytes(nfds) else {
+                return false;
+            };
+            if !validate_fd_set(base, readfds, set_bytes)
+                || !validate_fd_set(base, writefds, set_bytes)
+                || !validate_fd_set(base, exceptfds, set_bytes)
+            {
+                return false;
+            }
+            for fd in 0..nfds {
+                if fd_set_has(base, readfds, fd)
+                    || fd_set_has(base, writefds, fd)
+                    || fd_set_has(base, exceptfds, fd)
+                {
+                    return false;
+                }
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
 pub fn wait_set_ready_count(vm: &ThreadState, base: u32) -> i32 {
     match wait_syscall_nr(vm) {
         SYS_PPOLL => {

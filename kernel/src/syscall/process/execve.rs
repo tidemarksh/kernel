@@ -14,7 +14,7 @@ const EXECVE_NAME_MAX: usize = 255;
 const EXECVE_PREFLIGHT_ELF_PREFIX_MAX: usize = 64 * 1024;
 const EXECVE_BACKING_FILL_CHUNK: usize = 64 * 1024;
 const EXECVE_SCRIPT_RECURSION_LIMIT: usize = 4;
-pub(super) const PROC_SELF_EXE_SNAPSHOT_MAX: usize = 512;
+pub(crate) const PROC_SELF_EXE_SNAPSHOT_MAX: usize = 512;
 
 struct ExecveFileReadCache {
     vm_ptr: u32,
@@ -678,7 +678,7 @@ fn install_proc_self_exe(target: &[u8]) {
     replace_proc_self_exe(Some(target));
 }
 
-pub(super) fn snapshot_proc_self_exe_target(out: &mut [u8; PROC_SELF_EXE_SNAPSHOT_MAX]) -> usize {
+pub(crate) fn snapshot_proc_self_exe_target(out: &mut [u8; PROC_SELF_EXE_SNAPSHOT_MAX]) -> usize {
     let ino = memfs::resolve_path(b"/proc/self/exe");
     if ino == 0 {
         return 0;
@@ -686,7 +686,7 @@ pub(super) fn snapshot_proc_self_exe_target(out: &mut [u8; PROC_SELF_EXE_SNAPSHO
     memfs::read_link(ino, out).min(PROC_SELF_EXE_SNAPSHOT_MAX)
 }
 
-pub(super) fn restore_proc_self_exe_target(target: Option<&[u8]>) {
+pub(crate) fn restore_proc_self_exe_target(target: Option<&[u8]>) {
     replace_proc_self_exe(target);
 }
 

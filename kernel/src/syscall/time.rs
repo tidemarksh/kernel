@@ -182,6 +182,42 @@ fn timespec_to_ticks_ceil(sec: u64, nsec: u64) -> u64 {
     base.saturating_add(rounded)
 }
 
+pub fn timeout_timespec_delta_ticks(
+    base: u32,
+    timespec_ptr: u64,
+    absolute: bool,
+    realtime: bool,
+) -> Option<u64> {
+    if timespec_ptr == 0 {
+        return None;
+    }
+    let sec = unsafe { guest_mem::read_u64(base, timespec_ptr) };
+    let nsec = unsafe { guest_mem::read_u64(base, timespec_ptr + 8) };
+    if nsec >= 1_000_000_000 {
+        return Some(0);
+    }
+    let ticks = timespec_to_ticks_ceil(sec, nsec);
+    if !absolute {
+        return Some(ticks);
+    }
+    let clock_id = if realtime {
+        CLOCK_REALTIME
+    } else {
+        CLOCK_MONOTONIC
+    };
+    let now = current_ticks_for_clock(clock_id)?;
+    Some(ticks.saturating_sub(now))
+}
+
+pub fn ticks_to_millis_ceil(ticks: u64) -> u64 {
+    let ticks_per_ms = TICKS_PER_SEC / 1_000;
+    if ticks == 0 {
+        0
+    } else {
+        ticks.div_ceil(ticks_per_ms)
+    }
+}
+
 pub fn sleep_deadline_ticks(sec: u64, nsec: u64) -> u64 {
     monotonic_ticks().saturating_add(timespec_to_ticks_ceil(sec, nsec))
 }
@@ -659,6 +695,8 @@ pub fn timerfd_read(base: u32, buf: u64, count: u64, timerfd_idx: u32) -> i64 {
 /// guest deadline expires.
 /// https://man7.org/linux/man-pages/man2/nanosleep.2.html
 pub fn sys_nanosleep(vm: &mut ThreadState, base: u32, req: u64, _rem: u64) -> i32 {
+    vm.fault_addr = 0;
+    vm.fault_pc = 0;
     if req != 0 {
         let sec = unsafe { guest_mem::read_u64(base, req) };
         let nsec = unsafe { guest_mem::read_u64(base, req + 8) };
@@ -667,7 +705,11 @@ pub fn sys_nanosleep(vm: &mut ThreadState, base: u32, req: u64, _rem: u64) -> i3
         vm.fault_pc = nsec;
     }
     vm.x[10] = 0; // return 0 on success
+    if vm.fault_addr == 0 && vm.fault_pc == 0 {
+        return suspend_with_supervisor_runnable_resume(vm);
+    }
     vm.status = abi::STATUS_SLEEP;
+    crate::supervisor::enqueue_sleep_timer(vm);
     abi::STATUS_SLEEP
 }
 
@@ -727,7 +769,11 @@ pub fn sys_clock_nanosleep(
     vm.fault_addr = sleep_sec;
     vm.fault_pc = sleep_nsec;
     vm.x[10] = 0;
+    if sleep_sec == 0 && sleep_nsec == 0 {
+        return suspend_with_supervisor_runnable_resume(vm);
+    }
     vm.status = abi::STATUS_SLEEP;
+    crate::supervisor::enqueue_sleep_timer(vm);
     abi::STATUS_SLEEP
 }
 
@@ -736,11 +782,16 @@ pub fn sys_clock_nanosleep(
 /// before resuming this one; guest-visible return value remains 0.
 /// https://man7.org/linux/man-pages/man2/sched_yield.2.html
 pub fn sys_sched_yield(vm: &mut ThreadState) -> i32 {
+    suspend_with_supervisor_runnable_resume(vm)
+}
+
+fn suspend_with_supervisor_runnable_resume(vm: &mut ThreadState) -> i32 {
     vm.fault_addr = 0;
     vm.fault_pc = 0;
     vm.x[10] = 0;
-    vm.status = abi::STATUS_SLEEP;
-    0
+    vm.status = abi::STATUS_OK;
+    crate::supervisor::enqueue_runnable_thread(vm);
+    abi::STATUS_SLEEP
 }
 
 /// sched_getaffinity: expose a single online CPU.

@@ -1,5 +1,17 @@
 use super::support::*;
 
+fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
+    let mut value = [0u8; 4];
+    value.copy_from_slice(&bytes[offset..offset + 4]);
+    u32::from_le_bytes(value)
+}
+
+fn read_u64_le(bytes: &[u8], offset: usize) -> u64 {
+    let mut value = [0u8; 8];
+    value.copy_from_slice(&bytes[offset..offset + 8]);
+    u64::from_le_bytes(value)
+}
+
 #[test]
 fn contract_execve_completes_in_place_without_spawn() {
     let mut t = TestVm::new();
@@ -66,6 +78,102 @@ fn syscall_dispatch_preserves_vfork_execve_spawn_after_fs_ring() {
     assert_eq!(t.vm.status, STATUS_EXECVE_SPAWN);
     assert_eq!(t.vm.spawn_kind, SPAWN_KIND_EXECVE);
     assert_eq!(t.vm.spawn_child_pid, child_pid as i32);
+}
+
+#[test]
+fn supervisor_process_host_op_records_vfork_execve_spawn_handoff() {
+    supervisor_reset_shadow_log();
+    let mut t = TestVm::new();
+    t.vm.guest_memory_policy_limit = 7 * 1024 * 1024;
+    t.vm.process_max_memory_pages = 128;
+    let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    let path_addr = install_exec_file(&t, b"supervisor_handoff", &elf);
+    let argv_addr = write_strvec(&t, 0x400, &[b"/bin/supervisor_handoff", b"arg1"]);
+    let envp_addr = write_strvec(&t, 0x800, &[b"KEY=VALUE"]);
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+
+    let vfork_status = process_impl::sys_vfork(&mut t.vm, t.base);
+    assert_eq!(vfork_status, STATUS_VFORK_WAIT);
+    let child_pid = process_impl::sys_execve(&mut t.vm, t.base, path_addr, argv_addr, envp_addr);
+
+    assert!(child_pid > 0);
+    assert_eq!(t.vm.status, STATUS_EXECVE_SPAWN);
+    assert_eq!(t.vm.spawn_kind, SPAWN_KIND_EXECVE);
+
+    let mut record = vec![0u8; supervisor_process_host_op_record_bytes() as usize];
+    assert_eq!(
+        supervisor_process_host_op(vm_ptr, record.as_mut_ptr() as u32, record.len() as u32),
+        supervisor_process_host_op_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&record, 0), 0x4850_5354);
+    assert_eq!(read_u32_le(&record, 4), supervisor_abi_version());
+    assert_eq!(
+        read_u32_le(&record, 8),
+        supervisor_process_host_op_record_bytes()
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_process_host_op_kind_spawn_process_worker()
+    );
+    assert_eq!(read_u32_le(&record, 24), vm_ptr);
+    assert_eq!(read_u32_le(&record, 28), SPAWN_KIND_EXECVE);
+    assert_eq!(read_u32_le(&record, 32), child_pid as u32);
+    assert_eq!(read_u32_le(&record, 36), t.vm.process_ptr);
+    assert_eq!(read_u32_le(&record, 40), STATUS_EXECVE_SPAWN as u32);
+    assert_eq!(read_u32_le(&record, 44), t.vm.spawn_address_profile);
+    assert_eq!(
+        read_u64_le(&record, 48),
+        t.vm.spawn_guest_memory_policy_limit
+    );
+    assert_eq!(
+        read_u32_le(&record, 56),
+        t.vm.spawn_process_max_memory_pages
+    );
+    assert_eq!(read_u64_le(&record, 64), path_addr);
+    assert_eq!(read_u64_le(&record, 72), argv_addr);
+    assert_eq!(read_u64_le(&record, 80), envp_addr);
+
+    let mut memory_record = vec![0u8; supervisor_host_op_record_bytes() as usize];
+    assert_eq!(
+        supervisor_process_memory_host_op(
+            vm_ptr,
+            0,
+            memory_record.as_mut_ptr() as u32,
+            memory_record.len() as u32
+        ),
+        supervisor_host_op_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&memory_record, 0), 0x4f48_5354);
+    assert_eq!(read_u32_le(&memory_record, 4), supervisor_abi_version());
+    assert_eq!(
+        read_u32_le(&memory_record, 12),
+        supervisor_host_op_kind_create_process_memory()
+    );
+    assert_eq!(read_u32_le(&memory_record, 24), vm_ptr);
+    assert_eq!(read_u32_le(&memory_record, 32), child_pid as u32);
+    assert_eq!(read_u32_le(&memory_record, 36), t.vm.process_ptr);
+    assert_eq!(read_u32_le(&memory_record, 40), STATUS_EXECVE_SPAWN as u32);
+    assert!(read_u64_le(&memory_record, 48) >= 64 * 1024 * 1024);
+    assert_eq!(read_u64_le(&memory_record, 56), 128);
+
+    let mut copy_record = vec![0u8; supervisor_host_op_record_bytes() as usize];
+    assert_eq!(
+        supervisor_process_memory_host_op(
+            vm_ptr,
+            1,
+            copy_record.as_mut_ptr() as u32,
+            copy_record.len() as u32
+        ),
+        supervisor_host_op_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&copy_record, 12),
+        supervisor_host_op_kind_copy_memory_ranges()
+    );
+    assert_eq!(read_u32_le(&copy_record, 24), vm_ptr);
+    assert_eq!(read_u32_le(&copy_record, 32), child_pid as u32);
+    assert_eq!(read_u32_le(&copy_record, 40), SPAWN_KIND_EXECVE);
+    assert!(read_u64_le(&copy_record, 56) > read_u64_le(&copy_record, 48));
 }
 
 #[test]

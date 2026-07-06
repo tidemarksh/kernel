@@ -1,7 +1,8 @@
 use super::{
     ACCEPT_QUEUE_SIZE, DEFAULT_SOCKET_BUFFER, IPPROTO_TCP, IPPROTO_UDP, NETLINK_ROUTE,
     SOCK_STATE_CONNECTED, SOCK_STATE_IDLE, SOCKADDR_STORAGE_LEN, SocketSlot, alloc_socket_cookie,
-    alloc_socket_recv_buffer, alloc_socket_slot, free_socket_slot, shutdown_slot, socket_table,
+    alloc_socket_recv_buffer, alloc_socket_slot, free_socket_slot, record_socket_control,
+    shutdown_slot, socket_identity_detail, socket_table,
 };
 use crate::abi::*;
 use crate::fs::fd_table;
@@ -77,6 +78,23 @@ pub fn sys_socket(vm: &mut ThreadState, base: u32, domain: u64, stype: u64, prot
         free_socket_slot(idx);
         return fd;
     }
+    let ofd_id = fd_table::get_ofd_id(base, vm, fd as u64).unwrap_or(0);
+    let slot = socket_table()[idx as usize];
+    record_socket_control(
+        crate::supervisor::SUPERVISOR_FD_CONTROL_KIND_SOCKET_CREATED,
+        vm,
+        base,
+        fd as u64,
+        0,
+        ofd_id,
+        0,
+        idx,
+        0,
+        fd,
+        flags as u64,
+        socket_identity_detail(slot.domain, slot.sock_type, slot.protocol),
+        slot.state as u64,
+    );
     fd
 }
 
@@ -228,5 +246,22 @@ pub fn sys_socketpair(
         guest_mem::write_u32(base, sv, left_fd as u32);
         guest_mem::write_u32(base, sv + 4, right_fd as u32);
     }
+    let left_ofd = fd_table::get_ofd_id(base, vm, left_fd as u64).unwrap_or(0);
+    let right_ofd = fd_table::get_ofd_id(base, vm, right_fd as u64).unwrap_or(0);
+    record_socket_control(
+        crate::supervisor::SUPERVISOR_FD_CONTROL_KIND_SOCKETPAIR_CREATED,
+        vm,
+        base,
+        left_fd as u64,
+        right_fd as u64,
+        left_ofd,
+        right_ofd,
+        left_idx as u32,
+        right_idx as u32,
+        0,
+        flags as u64,
+        socket_identity_detail(domain_val, type_val, protocol_val),
+        ((left_recv as u64) << 32) | right_recv as u64,
+    );
     0
 }
