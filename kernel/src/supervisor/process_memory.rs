@@ -350,6 +350,7 @@ pub(super) fn write_record(vm_ptr: u32, index: u32, out_ptr: u32, out_len: u32) 
     super::write_u32(&mut encoded, 44, 0);
     super::write_u64(&mut encoded, 48, record.detail0);
     super::write_u64(&mut encoded, 56, record.detail1);
+    super::log::record_host_op(&encoded, super::SUPERVISOR_HOST_OP_RECORD_BYTES);
     let out = unsafe {
         core::slice::from_raw_parts_mut(
             out_ptr as usize as *mut u8,

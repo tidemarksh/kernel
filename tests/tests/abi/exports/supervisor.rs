@@ -17,6 +17,14 @@ fn read_u64_le(bytes: &[u8], offset: usize) -> u64 {
     u64::from_le_bytes(value)
 }
 
+fn write_u32_le(bytes: &mut [u8], offset: usize, value: u32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_u64_le(bytes: &mut [u8], offset: usize, value: u64) {
+    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
 fn fnv_hash(bytes: &[u8]) -> u64 {
     let mut hash = FNV_OFFSET;
     for byte in bytes {
@@ -32,6 +40,11 @@ fn fold_log_hash(previous: u64, entry_hash: u64, entry_len: u32) -> u64 {
     next ^= u64::from(entry_len);
     next = next.wrapping_mul(FNV_PRIME);
     next
+}
+
+fn replay_entry_offset(index: u32) -> usize {
+    supervisor_debug_replay_offset() as usize
+        + index as usize * supervisor_replay_log_record_bytes() as usize
 }
 
 #[test]
@@ -189,8 +202,23 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     supervisor_reset_shadow_log();
 
     assert_eq!(supervisor_abi_version(), 1);
-    assert_eq!(supervisor_debug_snapshot_bytes(), 112);
-    assert_eq!(supervisor_debug_snapshot(0, 0), 112);
+    assert_eq!(supervisor_debug_base_snapshot_bytes(), 112);
+    assert_eq!(supervisor_replay_log_record_bytes(), 128);
+    assert_eq!(supervisor_replay_log_payload_bytes(), 96);
+    assert_eq!(supervisor_replay_log_capacity(), 16);
+    assert_eq!(supervisor_debug_replay_offset(), 144);
+    assert_eq!(supervisor_replay_log_source_thread_event(), 1);
+    assert_eq!(supervisor_replay_log_source_host_completion(), 2);
+    assert_eq!(supervisor_replay_log_source_host_op(), 3);
+    assert_eq!(
+        supervisor_debug_snapshot_bytes(),
+        supervisor_debug_replay_offset()
+            + supervisor_replay_log_capacity() * supervisor_replay_log_record_bytes()
+    );
+    assert_eq!(
+        supervisor_debug_snapshot(0, 0),
+        supervisor_debug_snapshot_bytes() as i32
+    );
     assert_eq!(supervisor_thread_event_record_bytes(), 80);
     assert_eq!(supervisor_thread_event_record_magic(), 0x5645_5354);
     assert_eq!(supervisor_thread_event_kind_blocked(), 1);
@@ -2568,13 +2596,87 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
 
     let empty_hash = supervisor_shadow_thread_event_log_hash();
     assert_eq!(supervisor_shadow_thread_event_count(), 0);
-    assert_eq!(supervisor_submit_thread_event(0, 0), 0);
+    let mut thread_event = vec![0u8; supervisor_thread_event_record_bytes() as usize];
+    write_u32_le(&mut thread_event, 0, supervisor_thread_event_record_magic());
+    write_u32_le(&mut thread_event, 4, supervisor_abi_version());
+    write_u32_le(&mut thread_event, 8, supervisor_thread_event_record_bytes());
+    write_u32_le(&mut thread_event, 12, supervisor_thread_event_kind_ready());
+    write_u64_le(&mut thread_event, 16, 7);
+    write_u64_le(&mut thread_event, 24, 0x1000);
+    write_u32_le(&mut thread_event, 32, 41);
+    write_u32_le(&mut thread_event, 36, 42);
+    write_u32_le(&mut thread_event, 40, STATUS_OK as u32);
+    write_u32_le(&mut thread_event, 44, 3);
+    write_u32_le(&mut thread_event, 48, 5);
+    write_u64_le(&mut thread_event, 56, 0x1200);
+    write_u64_le(&mut thread_event, 64, 0x2200);
+    write_u64_le(&mut thread_event, 72, 0x3200);
+    let thread_event_hash = fnv_hash(&thread_event);
+    assert_eq!(
+        supervisor_submit_thread_event(
+            thread_event.as_ptr() as u32,
+            supervisor_thread_event_record_bytes()
+        ),
+        0
+    );
     assert_eq!(supervisor_shadow_thread_event_count(), 1);
-    assert_ne!(supervisor_shadow_thread_event_log_hash(), empty_hash);
+    assert_eq!(
+        supervisor_shadow_thread_event_log_hash(),
+        fold_log_hash(
+            empty_hash,
+            thread_event_hash,
+            supervisor_thread_event_record_bytes()
+        )
+    );
 
+    let empty_completion_hash = supervisor_shadow_host_completion_log_hash();
     assert_eq!(supervisor_shadow_host_completion_count(), 0);
-    assert_eq!(supervisor_complete_host_op(0, 0), 0);
+    let mut completion = vec![0u8; supervisor_host_completion_record_bytes() as usize];
+    write_u32_le(
+        &mut completion,
+        0,
+        supervisor_host_completion_record_magic(),
+    );
+    write_u32_le(&mut completion, 4, supervisor_abi_version());
+    write_u32_le(
+        &mut completion,
+        8,
+        supervisor_host_completion_record_bytes(),
+    );
+    write_u32_le(
+        &mut completion,
+        12,
+        supervisor_host_op_kind_arm_host_timer(),
+    );
+    write_u64_le(&mut completion, 16, 11);
+    write_u32_le(&mut completion, 24, 0x1000);
+    write_u32_le(&mut completion, 28, 0);
+    write_u32_le(&mut completion, 32, 42);
+    write_u32_le(
+        &mut completion,
+        36,
+        supervisor_host_completion_outcome_failure(),
+    );
+    write_u32_le(&mut completion, 40, EINVAL as u32);
+    write_u64_le(&mut completion, 48, 100);
+    write_u64_le(&mut completion, 56, 200);
+    let completion_hash = fnv_hash(&completion);
+    assert_eq!(
+        supervisor_complete_host_op(
+            completion.as_ptr() as u32,
+            supervisor_host_completion_record_bytes()
+        ),
+        0
+    );
     assert_eq!(supervisor_shadow_host_completion_count(), 1);
+    assert_eq!(
+        supervisor_shadow_host_completion_log_hash(),
+        fold_log_hash(
+            empty_completion_hash,
+            completion_hash,
+            supervisor_host_completion_record_bytes()
+        )
+    );
 
     let empty_host_op_hash = supervisor_shadow_host_op_log_hash();
     assert_eq!(supervisor_shadow_host_op_last_hash(), 0);
@@ -3099,14 +3201,68 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_next_resume(0, 0), 0);
     assert_eq!(supervisor_shadow_resume_poll_count(), 1);
 
-    let mut snapshot = [0u8; 112];
+    let host_op_log_before_process_memory = supervisor_shadow_host_op_log_hash();
+    let mut memory_host_op = vec![0u8; supervisor_host_op_record_bytes() as usize];
+    assert_eq!(
+        supervisor_process_memory_host_op(
+            vm_ptr,
+            0,
+            memory_host_op.as_mut_ptr() as u32,
+            memory_host_op.len() as u32
+        ),
+        supervisor_host_op_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&memory_host_op, 0),
+        supervisor_host_op_record_magic()
+    );
+    assert_eq!(read_u32_le(&memory_host_op, 4), supervisor_abi_version());
+    assert_eq!(
+        read_u32_le(&memory_host_op, 8),
+        supervisor_host_op_record_bytes()
+    );
+    assert_eq!(
+        read_u32_le(&memory_host_op, 12),
+        supervisor_host_op_kind_create_process_memory()
+    );
+    assert_eq!(read_u64_le(&memory_host_op, 16), 1);
+    assert_eq!(read_u32_le(&memory_host_op, 24), vm_ptr);
+    assert_eq!(read_u32_le(&memory_host_op, 32), child_pid as u32);
+    let memory_host_op_hash = fnv_hash(&memory_host_op);
+    assert_eq!(supervisor_shadow_host_op_last_hash(), memory_host_op_hash);
+    assert_eq!(
+        supervisor_shadow_host_op_last_len(),
+        supervisor_host_op_record_bytes()
+    );
+    assert_eq!(
+        supervisor_shadow_host_op_log_hash(),
+        fold_log_hash(
+            host_op_log_before_process_memory,
+            memory_host_op_hash,
+            supervisor_host_op_record_bytes()
+        )
+    );
+
+    let mut base_snapshot = [0u8; 112];
+    assert_eq!(
+        supervisor_debug_snapshot(
+            base_snapshot.as_mut_ptr() as u32,
+            base_snapshot.len() as u32
+        ),
+        112
+    );
+    assert_eq!(read_u32_le(&base_snapshot, 0), 0x5055_5354);
+    assert_eq!(read_u32_le(&base_snapshot, 4), 1);
+    assert_eq!(read_u32_le(&base_snapshot, 8), 112);
+
+    let mut snapshot = vec![0u8; supervisor_debug_snapshot_bytes() as usize];
     assert_eq!(
         supervisor_debug_snapshot(snapshot.as_mut_ptr() as u32, snapshot.len() as u32),
-        112
+        supervisor_debug_snapshot_bytes() as i32
     );
     assert_eq!(read_u32_le(&snapshot, 0), 0x5055_5354);
     assert_eq!(read_u32_le(&snapshot, 4), 1);
-    assert_eq!(read_u32_le(&snapshot, 8), 112);
+    assert_eq!(read_u32_le(&snapshot, 8), supervisor_debug_snapshot_bytes());
     assert_eq!(read_u32_le(&snapshot, 12), 0);
     assert_eq!(read_u64_le(&snapshot, 16), 1);
     assert_eq!(read_u64_le(&snapshot, 24), 1);
@@ -3120,20 +3276,122 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         read_u64_le(&snapshot, 56),
         supervisor_shadow_host_completion_log_hash()
     );
-    assert_eq!(read_u32_le(&snapshot, 64), 0);
-    assert_eq!(read_u32_le(&snapshot, 68), 0);
-    assert_ne!(read_u64_le(&snapshot, 72), 0);
-    assert_ne!(read_u64_le(&snapshot, 80), 0);
+    assert_eq!(
+        read_u32_le(&snapshot, 64),
+        supervisor_thread_event_record_bytes()
+    );
+    assert_eq!(
+        read_u32_le(&snapshot, 68),
+        supervisor_host_completion_record_bytes()
+    );
+    assert_eq!(read_u64_le(&snapshot, 72), thread_event_hash);
+    assert_eq!(read_u64_le(&snapshot, 80), completion_hash);
     assert_eq!(
         read_u64_le(&snapshot, 88),
         supervisor_shadow_host_op_log_hash()
     );
-    assert_eq!(read_u64_le(&snapshot, 96), host_op_entry_hash);
+    assert_eq!(read_u64_le(&snapshot, 96), memory_host_op_hash);
     assert_eq!(
         read_u32_le(&snapshot, 104),
-        supervisor_process_host_op_record_bytes()
+        supervisor_host_op_record_bytes()
     );
     assert_eq!(read_u32_le(&snapshot, 108), 0);
+    assert_eq!(
+        read_u32_le(&snapshot, 112),
+        supervisor_replay_log_record_bytes()
+    );
+    assert_eq!(
+        read_u32_le(&snapshot, 116),
+        supervisor_replay_log_payload_bytes()
+    );
+    assert_eq!(
+        read_u32_le(&snapshot, 120),
+        supervisor_replay_log_capacity()
+    );
+    assert_eq!(read_u32_le(&snapshot, 124), 4);
+    assert_eq!(read_u64_le(&snapshot, 128), 4);
+    assert_eq!(read_u64_le(&snapshot, 136), 0);
+
+    let event_replay = replay_entry_offset(0);
+    assert_eq!(
+        read_u32_le(&snapshot, event_replay),
+        supervisor_replay_log_source_thread_event()
+    );
+    assert_eq!(
+        read_u32_le(&snapshot, event_replay + 4),
+        supervisor_thread_event_record_bytes()
+    );
+    assert_eq!(read_u64_le(&snapshot, event_replay + 8), 1);
+    assert_eq!(read_u64_le(&snapshot, event_replay + 16), 7);
+    assert_eq!(read_u64_le(&snapshot, event_replay + 24), thread_event_hash);
+    assert_eq!(
+        &snapshot[event_replay + 32
+            ..event_replay + 32 + supervisor_thread_event_record_bytes() as usize],
+        thread_event.as_slice()
+    );
+
+    let completion_replay = replay_entry_offset(1);
+    assert_eq!(
+        read_u32_le(&snapshot, completion_replay),
+        supervisor_replay_log_source_host_completion()
+    );
+    assert_eq!(
+        read_u32_le(&snapshot, completion_replay + 4),
+        supervisor_host_completion_record_bytes()
+    );
+    assert_eq!(read_u64_le(&snapshot, completion_replay + 8), 2);
+    assert_eq!(read_u64_le(&snapshot, completion_replay + 16), 11);
+    assert_eq!(
+        read_u64_le(&snapshot, completion_replay + 24),
+        completion_hash
+    );
+    assert_eq!(
+        &snapshot[completion_replay + 32
+            ..completion_replay + 32 + supervisor_host_completion_record_bytes() as usize],
+        completion.as_slice()
+    );
+
+    let host_op_replay = replay_entry_offset(2);
+    assert_eq!(
+        read_u32_le(&snapshot, host_op_replay),
+        supervisor_replay_log_source_host_op()
+    );
+    assert_eq!(
+        read_u32_le(&snapshot, host_op_replay + 4),
+        supervisor_process_host_op_record_bytes()
+    );
+    assert_eq!(read_u64_le(&snapshot, host_op_replay + 8), 3);
+    assert_eq!(read_u64_le(&snapshot, host_op_replay + 16), 1);
+    assert_eq!(
+        read_u64_le(&snapshot, host_op_replay + 24),
+        host_op_entry_hash
+    );
+    assert_eq!(
+        &snapshot[host_op_replay + 32
+            ..host_op_replay + 32 + supervisor_process_host_op_record_bytes() as usize],
+        host_op.as_slice()
+    );
+
+    let memory_host_op_replay = replay_entry_offset(3);
+    assert_eq!(
+        read_u32_le(&snapshot, memory_host_op_replay),
+        supervisor_replay_log_source_host_op()
+    );
+    assert_eq!(
+        read_u32_le(&snapshot, memory_host_op_replay + 4),
+        supervisor_host_op_record_bytes()
+    );
+    assert_eq!(read_u64_le(&snapshot, memory_host_op_replay + 8), 4);
+    assert_eq!(read_u64_le(&snapshot, memory_host_op_replay + 16), 1);
+    assert_eq!(
+        read_u64_le(&snapshot, memory_host_op_replay + 24),
+        memory_host_op_hash
+    );
+    assert_eq!(
+        &snapshot[memory_host_op_replay + 32
+            ..memory_host_op_replay + 32 + supervisor_host_op_record_bytes() as usize],
+        memory_host_op.as_slice()
+    );
 
     let mut too_small = [0u8; 111];
     assert_eq!(

@@ -9,8 +9,40 @@ macro_rules! export_u32_const {
 
 export_u32_const!(supervisor_abi_version, super::SUPERVISOR_ABI_VERSION);
 export_u32_const!(
+    supervisor_debug_base_snapshot_bytes,
+    super::SUPERVISOR_DEBUG_BASE_SNAPSHOT_BYTES
+);
+export_u32_const!(
     supervisor_debug_snapshot_bytes,
     super::SUPERVISOR_DEBUG_SNAPSHOT_BYTES
+);
+export_u32_const!(
+    supervisor_debug_replay_offset,
+    super::SUPERVISOR_DEBUG_REPLAY_OFFSET
+);
+export_u32_const!(
+    supervisor_replay_log_record_bytes,
+    super::SUPERVISOR_REPLAY_LOG_RECORD_BYTES
+);
+export_u32_const!(
+    supervisor_replay_log_payload_bytes,
+    super::SUPERVISOR_REPLAY_LOG_PAYLOAD_BYTES
+);
+export_u32_const!(
+    supervisor_replay_log_capacity,
+    super::SUPERVISOR_REPLAY_LOG_CAPACITY
+);
+export_u32_const!(
+    supervisor_replay_log_source_thread_event,
+    super::SUPERVISOR_REPLAY_LOG_SOURCE_THREAD_EVENT
+);
+export_u32_const!(
+    supervisor_replay_log_source_host_completion,
+    super::SUPERVISOR_REPLAY_LOG_SOURCE_HOST_COMPLETION
+);
+export_u32_const!(
+    supervisor_replay_log_source_host_op,
+    super::SUPERVISOR_REPLAY_LOG_SOURCE_HOST_OP
 );
 export_u32_const!(
     supervisor_thread_event_record_bytes,
