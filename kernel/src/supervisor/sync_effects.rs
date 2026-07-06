@@ -45,11 +45,31 @@ pub(super) fn take_completed_sync_effects(vm_ptr: u32, status: i32) -> u32 {
     }
     let vm = unsafe { &mut *(vm_ptr as *mut ThreadState) };
     let completed = vm.completed_sync_effects;
+    let pending_pipe_slot_effect = pending_pipe_slot_sync_effect_for_masks(
+        vm.completed_pipe_sync_slots,
+        vm.completed_pipe_sync_read_slots,
+        vm.completed_pipe_sync_write_slots,
+        vm.completed_pipe_fresh_slots,
+    );
     vm.completed_sync_effects = 0;
     let nr = vm.x[17];
     let result = u64_as_i64(vm.x[10]);
     let trace = latest_fd_trace(vm_ptr, nr);
     classify_completed_sync_effects_for(status, Some(nr), completed, Some(vm.x[11]), result, trace)
+        | pending_pipe_slot_effect
+}
+
+fn pending_pipe_slot_sync_effect_for_masks(
+    slots: u64,
+    read_slots: u64,
+    write_slots: u64,
+    fresh_slots: u64,
+) -> u32 {
+    if (slots | read_slots | write_slots | fresh_slots) == 0 {
+        0
+    } else {
+        SYNC_EFFECT_PIPE_STATE
+    }
 }
 
 fn u64_as_i64(value: u64) -> i64 {
@@ -447,6 +467,23 @@ mod tests {
             ),
             SYNC_EFFECT_EPOLL_STATE | SYNC_EFFECT_EPOLL_DEPENDENT_OFD_STATE
         );
+    }
+
+    #[test]
+    fn supervisor_sync_effects_preserves_pending_pipe_slot_evidence() {
+        assert_eq!(
+            pending_pipe_slot_sync_effect_for_masks(1u64 << 4, 0, 0, 0),
+            SYNC_EFFECT_PIPE_STATE
+        );
+        assert_eq!(
+            pending_pipe_slot_sync_effect_for_masks(0, 0, 1u64 << 4, 0),
+            SYNC_EFFECT_PIPE_STATE
+        );
+        assert_eq!(
+            pending_pipe_slot_sync_effect_for_masks(0, 0, 0, 1u64 << 4),
+            SYNC_EFFECT_PIPE_STATE
+        );
+        assert_eq!(pending_pipe_slot_sync_effect_for_masks(0, 0, 0, 0), 0);
     }
 
     #[test]
