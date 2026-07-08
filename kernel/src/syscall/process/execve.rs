@@ -12,7 +12,7 @@ pub const EXECVE_GUEST_MEMORY_LIMIT: u64 = 0x8000_0000;
 const EXECVE_PATH_MAX: usize = 4096;
 const EXECVE_NAME_MAX: usize = 255;
 const EXECVE_PREFLIGHT_ELF_PREFIX_MAX: usize = 64 * 1024;
-const EXECVE_BACKING_FILL_CHUNK: usize = 64 * 1024;
+const EXECVE_BACKING_FILL_CHUNK: usize = 4 * 1024 * 1024;
 const EXECVE_SCRIPT_RECURSION_LIMIT: usize = 4;
 pub(crate) const PROC_SELF_EXE_SNAPSHOT_MAX: usize = 512;
 
@@ -43,6 +43,7 @@ struct ExecveFileBytes {
 
 static mut EXECVE_PREFIX_READ_CACHE: Option<ExecveFileReadCache> = None;
 static mut EXECVE_FILE_READ_CACHE: Option<ExecveFileReadCache> = None;
+static mut EXECVE_INTERP_FILE_READ_CACHE: Option<ExecveFileReadCache> = None;
 
 impl ExecveFileBytes {
     fn from_owned(bytes: Vec<u8>) -> Self {
@@ -89,6 +90,10 @@ pub fn clear_execve_backing_state(vm_ptr: u32) {
     clear_execve_backing_miss(vm_ptr);
     clear_execve_file_cache(core::ptr::addr_of_mut!(EXECVE_PREFIX_READ_CACHE), vm_ptr);
     clear_execve_file_cache(core::ptr::addr_of_mut!(EXECVE_FILE_READ_CACHE), vm_ptr);
+    clear_execve_file_cache(
+        core::ptr::addr_of_mut!(EXECVE_INTERP_FILE_READ_CACHE),
+        vm_ptr,
+    );
 }
 
 pub fn execve_backing_miss_ino(vm_ptr: u32) -> u32 {
@@ -311,20 +316,37 @@ fn read_guest_strvec(base: u32, vec_addr: u64) -> Result<Vec<Vec<u8>>, i64> {
     Ok(out)
 }
 
-fn read_execve_elf_bytes(vm_ptr: u32, ino: u32, elf_len: u32) -> Result<ExecveFileBytes, i64> {
+fn read_execve_elf_image_bytes_with_cache(
+    cache_slot: *mut Option<ExecveFileReadCache>,
+    vm_ptr: u32,
+    ino: u32,
+    elf_len: u32,
+) -> Result<ExecveFileBytes, i64> {
     crate::tracepoints::record_execve_stage(
         105,
         crate::alloc::heap_base() as u64,
         crate::alloc::heap_ptr() as u64,
     );
     crate::tracepoints::record_execve_dispatch(vm_ptr, 1244);
-    let elf_bytes = read_execve_file_bytes_cached(
-        core::ptr::addr_of_mut!(EXECVE_FILE_READ_CACHE),
-        vm_ptr,
-        ino,
-        elf_len,
-        elf_len,
-    )?;
+    let prefix = read_execve_elf_prefix(vm_ptr, ino, elf_len)?;
+    if prefix.starts_with(b"#!") {
+        crate::tracepoints::record_execve_stage(110, prefix.len() as u64, elf_len as u64);
+        return Ok(ExecveFileBytes::from_owned(prefix));
+    }
+    let required_len = match crate::elf::required_exec_image_file_len_bytes(&prefix, elf_len as u64)
+    {
+        Ok(required_len) => required_len,
+        Err(_) => {
+            crate::tracepoints::record_execve_stage(110, prefix.len() as u64, elf_len as u64);
+            return Ok(ExecveFileBytes::from_owned(prefix));
+        }
+    };
+    crate::tracepoints::record_execve_stage(110, required_len, elf_len as u64);
+    if required_len <= prefix.len() as u64 {
+        return Ok(ExecveFileBytes::from_owned(prefix));
+    }
+    let required_len = u32::try_from(required_len).map_err(|_| ENOEXEC)?;
+    let elf_bytes = read_execve_file_bytes_cached(cache_slot, vm_ptr, ino, required_len, elf_len)?;
     crate::tracepoints::record_execve_stage(
         106,
         elf_bytes.as_ptr() as u64,
@@ -334,6 +356,53 @@ fn read_execve_elf_bytes(vm_ptr: u32, ino: u32, elf_len: u32) -> Result<ExecveFi
     crate::tracepoints::record_execve_stage(109, ino as u64, memfs::debug_file_data_layout(ino));
     crate::tracepoints::record_execve_dispatch(vm_ptr, 1246);
     Ok(ExecveFileBytes::from_owned(elf_bytes))
+}
+
+fn read_execve_elf_image_bytes(
+    vm_ptr: u32,
+    ino: u32,
+    elf_len: u32,
+) -> Result<ExecveFileBytes, i64> {
+    read_execve_elf_image_bytes_with_cache(
+        core::ptr::addr_of_mut!(EXECVE_FILE_READ_CACHE),
+        vm_ptr,
+        ino,
+        elf_len,
+    )
+}
+
+fn read_execve_interp_elf_image_bytes(
+    vm_ptr: u32,
+    ino: u32,
+    elf_len: u32,
+) -> Result<ExecveFileBytes, i64> {
+    read_execve_elf_image_bytes_with_cache(
+        core::ptr::addr_of_mut!(EXECVE_INTERP_FILE_READ_CACHE),
+        vm_ptr,
+        ino,
+        elf_len,
+    )
+}
+
+fn read_execve_elf_metadata_or_image_bytes(
+    vm_ptr: u32,
+    ino: u32,
+    elf_len: u32,
+) -> Result<ExecveFileBytes, i64> {
+    let prefix = read_execve_elf_prefix(vm_ptr, ino, elf_len)?;
+    if prefix.starts_with(b"#!") {
+        crate::tracepoints::record_execve_stage(110, prefix.len() as u64, elf_len as u64);
+        return Ok(ExecveFileBytes::from_owned(prefix));
+    }
+    if crate::elf::required_exec_image_file_len_bytes(&prefix, elf_len as u64).is_err() {
+        crate::tracepoints::record_execve_stage(110, prefix.len() as u64, elf_len as u64);
+        return Ok(ExecveFileBytes::from_owned(prefix));
+    }
+    if matches!(crate::elf::read_interp_path_bytes(&prefix), Ok(Some(_))) {
+        crate::tracepoints::record_execve_stage(111, prefix.len() as u64, elf_len as u64);
+        return Ok(ExecveFileBytes::from_owned(prefix));
+    }
+    read_execve_elf_image_bytes(vm_ptr, ino, elf_len)
 }
 
 fn read_execve_elf_prefix(vm_ptr: u32, ino: u32, elf_len: u32) -> Result<Vec<u8>, i64> {
@@ -471,6 +540,36 @@ fn inspect_execve_elf_bytes(
     }
 }
 
+fn inspect_execve_elf_metadata_bytes(
+    elf_bytes: &[u8],
+    file_len: u64,
+    guest_limit: u64,
+) -> Result<crate::elf::ElfLoadResult, i64> {
+    let file_head0 = elf_bytes
+        .iter()
+        .take(8)
+        .enumerate()
+        .fold(0u64, |acc, (idx, byte)| acc | ((*byte as u64) << (idx * 8)));
+    let file_head1 = elf_bytes
+        .iter()
+        .skip(8)
+        .take(8)
+        .enumerate()
+        .fold(0u64, |acc, (idx, byte)| acc | ((*byte as u64) << (idx * 8)));
+    match crate::elf::inspect_elf_metadata_bytes(elf_bytes, file_len, guest_limit) {
+        Ok(result) => Ok(result),
+        Err(error) => {
+            crate::tracepoints::record_execve_stage(
+                180,
+                error as i64 as u64,
+                elf_bytes.len() as u64,
+            );
+            crate::tracepoints::record_execve_stage(181, file_head0, file_head1);
+            Err(ENOEXEC)
+        }
+    }
+}
+
 fn load_execve_elf_bytes_at(
     base: u32,
     guest_limit: u64,
@@ -514,7 +613,7 @@ fn load_execve_image(
     crate::tracepoints::record_execve_dispatch(vm_ptr, 127);
     crate::tracepoints::record_execve_stage(103, envp.len() as u64, envp_addr);
     crate::tracepoints::record_execve_stage(107, st.size, elf_len as u64);
-    let file_bytes = read_execve_elf_bytes(vm_ptr, ino, elf_len)?;
+    let file_bytes = read_execve_elf_metadata_or_image_bytes(vm_ptr, ino, elf_len)?;
     crate::tracepoints::record_execve_dispatch(vm_ptr, 125);
     let file_head0 = file_bytes
         .as_slice()
@@ -532,6 +631,8 @@ fn load_execve_image(
     crate::tracepoints::record_execve_stage(108, file_head0, file_head1);
     let mut path_bytes = path_bytes;
     let mut main_bytes = file_bytes;
+    let mut main_ino = ino;
+    let mut main_len = elf_len;
     let mut argv = argv;
     for script_depth in 0..=EXECVE_SCRIPT_RECURSION_LIMIT {
         let Some((interp_path, optional_arg)) =
@@ -548,7 +649,7 @@ fn load_execve_image(
         if interp_len == 0 {
             return Err(ENOEXEC);
         }
-        let interp_bytes = read_execve_elf_bytes(vm_ptr, interp_ino, interp_len)?;
+        let interp_bytes = read_execve_elf_metadata_or_image_bytes(vm_ptr, interp_ino, interp_len)?;
         let mut rewritten_argv = Vec::new();
         let mut interp_argv0 = interp_path.clone();
         interp_argv0.push(0);
@@ -565,10 +666,13 @@ fn load_execve_image(
         }
         path_bytes = interp_path;
         main_bytes = interp_bytes;
+        main_ino = interp_ino;
+        main_len = interp_len;
         argv = rewritten_argv;
     }
     crate::tracepoints::record_execve_dispatch(vm_ptr, 128);
-    let mut elf = inspect_execve_elf_bytes(main_bytes.as_slice(), guest_limit)?;
+    let mut elf =
+        inspect_execve_elf_metadata_bytes(main_bytes.as_slice(), main_len as u64, guest_limit)?;
     let interp_path = match crate::elf::read_interp_path_bytes(main_bytes.as_slice()) {
         Ok(path) => path,
         Err(error) => {
@@ -596,7 +700,7 @@ fn load_execve_image(
             if interp_len == 0 {
                 return Err(ENOEXEC);
             }
-            let interp_bytes = read_execve_elf_bytes(vm_ptr, interp_ino, interp_len)?;
+            let interp_bytes = read_execve_interp_elf_image_bytes(vm_ptr, interp_ino, interp_len)?;
             let mut interp_elf = inspect_execve_elf_bytes(interp_bytes.as_slice(), guest_limit)?;
             let interp_bias = crate::elf::interpreter_load_bias(elf.brk_start);
             interp_elf = crate::elf::bias_load_result(interp_elf, interp_bias);
@@ -605,6 +709,9 @@ fn load_execve_image(
         }
         None => (None, 0, None),
     };
+    if interp_bytes.is_some() {
+        main_bytes = read_execve_elf_image_bytes(vm_ptr, main_ino, main_len)?;
+    }
     crate::tracepoints::record_execve_dispatch(vm_ptr, 130);
     if argv.is_empty() {
         // Linux fills in a dummy argv[0] when execve() is called with an

@@ -328,6 +328,71 @@ pub fn inspect_elf_metadata_bytes(
     }
 }
 
+/// Return the contiguous file prefix needed to inspect and load this ELF image.
+///
+/// Exec only needs the ELF/program headers, interpreter string, TLS image, and
+/// PT_LOAD file data. Non-load trailing sections such as debug info do not need
+/// to be copied into kernel heap memory.
+pub fn required_exec_image_file_len_bytes(elf: &[u8], file_len: u64) -> Result<u64, i32> {
+    if elf.len() < 64 {
+        return Err(-1);
+    }
+    if elf[0] != EI_MAG0 || elf[1] != EI_MAG1 || elf[2] != EI_MAG2 || elf[3] != EI_MAG3 {
+        return Err(-1);
+    }
+    if elf[EI_CLASS] != ELFCLASS64 {
+        return Err(-2);
+    }
+    if elf[EI_DATA] != ELFDATA2LSB {
+        return Err(-3);
+    }
+
+    let e_type = read_u16_le(elf, E_TYPE).ok_or(-4)?;
+    if e_type != ET_EXEC && e_type != ET_DYN {
+        return Err(-4);
+    }
+    let e_machine = read_u16_le(elf, E_MACHINE).ok_or(-5)?;
+    if e_machine != EM_RISCV {
+        return Err(-5);
+    }
+
+    let ph_off = read_u64_le(elf, E_PHOFF).ok_or(-6)?;
+    let ph_entsize = read_u16_le(elf, E_PHENTSIZE).ok_or(-6)? as u64;
+    let ph_num = read_u16_le(elf, E_PHNUM).ok_or(-6)? as u64;
+    if ph_entsize < 56 {
+        return Err(-6);
+    }
+    let ph_size = ph_num.checked_mul(ph_entsize).ok_or(-6)?;
+    let ph_end = ph_off.checked_add(ph_size).ok_or(-6)?;
+    if ph_end > file_len || ph_end > elf.len() as u64 {
+        return Err(-6);
+    }
+
+    let mut required_len = 64u64.max(ph_end);
+    let ph_off = usize::try_from(ph_off).map_err(|_| -6)?;
+    let ph_entsize = usize::try_from(ph_entsize).map_err(|_| -6)?;
+    let ph_num = usize::try_from(ph_num).map_err(|_| -6)?;
+    for index in 0..ph_num {
+        let start = ph_off
+            .checked_add(index.checked_mul(ph_entsize).ok_or(-6)?)
+            .ok_or(-6)?;
+        let ph = elf.get(start..start + ph_entsize).ok_or(-6)?;
+        let p_type = read_u32_le(ph, P_TYPE).ok_or(-6)?;
+        if p_type != PT_LOAD && p_type != PT_TLS && p_type != PT_INTERP {
+            continue;
+        }
+        let p_offset = read_u64_le(ph, P_OFFSET).ok_or(-8)?;
+        let p_filesz = read_u64_le(ph, P_FILESZ).ok_or(-8)?;
+        let p_end = p_offset.checked_add(p_filesz).ok_or(-8)?;
+        if p_end > file_len {
+            return Err(-8);
+        }
+        required_len = required_len.max(p_end);
+    }
+
+    Ok(required_len)
+}
+
 /// Validate an ELF image and compute the metadata needed for loading it
 /// without mutating guest memory.
 ///
