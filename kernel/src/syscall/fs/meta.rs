@@ -250,7 +250,12 @@ pub fn sys_utimensat(
         unsafe { guest_mem::read_cstr(base, path_addr, &mut path_buf) }
     };
     let raw_path = &path_buf[..len];
-    let result = if path_addr == 0 || raw_path.is_empty() {
+    let result = if path_addr == 0 {
+        match fd_table::get_ofd(base, vm, dirfd) {
+            Some(_) => 0,
+            None => EBADF,
+        }
+    } else if raw_path.is_empty() {
         if flags & AT_EMPTY_PATH == 0 {
             ENOENT
         } else if dirfd as i64 == AT_FDCWD as i64 {
@@ -480,4 +485,27 @@ pub fn sys_truncate(vm: &mut ThreadState, base: u32, path_addr: u64, length: u64
     }
 
     memfs::truncate(ino, length)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sys_utimensat;
+    use crate::abi::{EBADF, O_CREAT, O_WRONLY};
+    use crate::harness::TestVm;
+
+    #[test]
+    fn utimensat_null_path_updates_fd_like_futimens() {
+        let mut vm = TestVm::new();
+        let fd = vm.sys_openat(b"/out.gz", O_CREAT | O_WRONLY);
+
+        assert!(fd >= 3);
+        assert_eq!(sys_utimensat(&mut vm.vm, vm.base, fd as u64, 0, 0, 0), 0);
+    }
+
+    #[test]
+    fn utimensat_null_path_rejects_invalid_fd() {
+        let mut vm = TestVm::new();
+
+        assert_eq!(sys_utimensat(&mut vm.vm, vm.base, 99, 0, 0, 0), EBADF);
+    }
 }
