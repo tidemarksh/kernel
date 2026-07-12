@@ -64,6 +64,8 @@ fn find_from_supervisor_state(vm_ptr: u32, commit: bool) -> Result<Option<Runnab
             }
             record = ps.threads[slot];
         }
+        let event_override =
+            super::event::thread_state_override(record.thread_ptr, record.tid as u32);
         match super::event::runnable_override(record.thread_ptr, record.tid as u32) {
             Some(false) => continue,
             Some(true) => {}
@@ -78,9 +80,12 @@ fn find_from_supervisor_state(vm_ptr: u32, commit: bool) -> Result<Option<Runnab
         } else {
             runnable_thread_selection_from_record(&record, vm.guest_base, vm.process_ptr)
         };
-        let Some(thread) = thread else {
+        let Some(mut thread) = thread else {
             continue;
         };
+        if let Some(event) = event_override {
+            thread.status = event.status;
+        }
         if thread.status != crate::abi::STATUS_OK as u32
             && thread.status != crate::abi::STATUS_VFORK_WAIT as u32
         {
