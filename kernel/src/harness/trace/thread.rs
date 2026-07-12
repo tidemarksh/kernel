@@ -4,6 +4,7 @@ const CPU_PROFILE_OP_SLOTS: usize = 32;
 const CPU_PROFILE_BLOCK_EXEC_OP_SAMPLE_INTERVAL: u64 = 1024;
 const CPU_PROFILE_BLOCK_MISS_SAMPLE_INTERVAL: u64 = 1024;
 const CPU_PROFILE_BLOCK_MISS_SAMPLE_CAP: usize = 64;
+const CPU_PROFILE_HOT_BLOCK_SAMPLE_CAP: usize = 64;
 
 static mut CPU_PROFILE_BLOCK_HITS: u64 = 0;
 static mut CPU_PROFILE_BLOCK_MISSES: u64 = 0;
@@ -35,6 +36,14 @@ static mut CPU_PROFILE_BLOCK_MISS_SAMPLES: [BlockMissSample; CPU_PROFILE_BLOCK_M
         count: 0,
         index: 0,
     }; CPU_PROFILE_BLOCK_MISS_SAMPLE_CAP];
+static mut CPU_PROFILE_HOT_BLOCK_SAMPLES: [HotBlockSample; CPU_PROFILE_HOT_BLOCK_SAMPLE_CAP] =
+    [HotBlockSample {
+        pc: 0,
+        signature: 0,
+        count: 0,
+        len: 0,
+        loop_flags: 0,
+    }; CPU_PROFILE_HOT_BLOCK_SAMPLE_CAP];
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -43,6 +52,16 @@ pub struct BlockMissSample {
     pub evicted_pc: u64,
     pub count: u64,
     pub index: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct HotBlockSample {
+    pub pc: u64,
+    pub signature: u64,
+    pub count: u64,
+    pub len: u32,
+    pub loop_flags: u32,
 }
 
 #[inline(always)]
@@ -252,6 +271,59 @@ pub(crate) fn record_block_exec_sampled_op(op_id: u32) {
     }
 }
 
+pub(crate) fn record_block_exec_sampled_block(pc: u64, len: u32, loop_flags: u32, signature: u64) {
+    if !RUNTIME_DEBUG_ENABLED {
+        let _ = (pc, len, loop_flags, signature);
+        return;
+    }
+    unsafe {
+        let samples = core::ptr::addr_of_mut!(CPU_PROFILE_HOT_BLOCK_SAMPLES);
+        let mut empty_slot = CPU_PROFILE_HOT_BLOCK_SAMPLE_CAP;
+        let mut min_slot = 0usize;
+        let mut min_count = u64::MAX;
+        for slot in 0..CPU_PROFILE_HOT_BLOCK_SAMPLE_CAP {
+            let entry = core::ptr::read(core::ptr::addr_of!((*samples)[slot]));
+            if entry.count != 0
+                && entry.pc == pc
+                && entry.len == len
+                && entry.loop_flags == loop_flags
+                && entry.signature == signature
+            {
+                core::ptr::write(
+                    core::ptr::addr_of_mut!((*samples)[slot]),
+                    HotBlockSample {
+                        count: entry.count.wrapping_add(1),
+                        ..entry
+                    },
+                );
+                return;
+            }
+            if entry.count == 0 && empty_slot == CPU_PROFILE_HOT_BLOCK_SAMPLE_CAP {
+                empty_slot = slot;
+            }
+            if entry.count < min_count {
+                min_count = entry.count;
+                min_slot = slot;
+            }
+        }
+        let slot = if empty_slot < CPU_PROFILE_HOT_BLOCK_SAMPLE_CAP {
+            empty_slot
+        } else {
+            min_slot
+        };
+        core::ptr::write(
+            core::ptr::addr_of_mut!((*samples)[slot]),
+            HotBlockSample {
+                pc,
+                signature,
+                count: 1,
+                len,
+                loop_flags,
+            },
+        );
+    }
+}
+
 pub(crate) fn record_block_exec_unsupported_op(op_id: u32) {
     if !RUNTIME_DEBUG_ENABLED {
         let _ = op_id;
@@ -440,6 +512,47 @@ pub(crate) fn cpu_profile_block_miss_sample_entry(index: u32) -> BlockMissSample
         evicted_pc: 0,
         count: 0,
         index: 0,
+    }
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn cpu_profile_hot_block_sample_count() -> u32 {
+    if !RUNTIME_DEBUG_ENABLED {
+        return 0;
+    }
+    let mut count = 0u32;
+    unsafe {
+        for slot in 0..CPU_PROFILE_HOT_BLOCK_SAMPLE_CAP {
+            if core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_HOT_BLOCK_SAMPLES[slot])).count != 0
+            {
+                count = count.saturating_add(1);
+            }
+        }
+    }
+    count
+}
+
+#[cfg(any(test, feature = "harness"))]
+pub(crate) fn cpu_profile_hot_block_sample_entry(index: u32) -> HotBlockSample {
+    let mut seen = 0u32;
+    unsafe {
+        for slot in 0..CPU_PROFILE_HOT_BLOCK_SAMPLE_CAP {
+            let entry = core::ptr::read(core::ptr::addr_of!(CPU_PROFILE_HOT_BLOCK_SAMPLES[slot]));
+            if entry.count == 0 {
+                continue;
+            }
+            if seen == index {
+                return entry;
+            }
+            seen = seen.saturating_add(1);
+        }
+    }
+    HotBlockSample {
+        pc: 0,
+        signature: 0,
+        count: 0,
+        len: 0,
+        loop_flags: 0,
     }
 }
 

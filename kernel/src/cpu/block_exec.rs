@@ -17,6 +17,26 @@ use crate::abi;
 use crate::guest_mem;
 use crate::types::ThreadState;
 
+fn sampled_block_signature(blk: &BlockEntry) -> u64 {
+    let mut signature = 0xcbf2_9ce4_8422_2325u64;
+    for op in blk.ops.iter().take(blk.len as usize) {
+        signature ^= op.op_id() as u64;
+        signature = signature.wrapping_mul(0x100_0000_01b3);
+    }
+    signature
+}
+
+fn record_sampled_block(blk: &BlockEntry, sampled: bool) {
+    if sampled {
+        crate::tracepoints::record_block_exec_sampled_block(
+            blk.start_pc,
+            blk.len as u32,
+            blk.loop_flags as u32,
+            sampled_block_signature(blk),
+        );
+    }
+}
+
 pub(super) enum BlockOutcome {
     Restart,
     Return,
@@ -63,6 +83,7 @@ pub(super) unsafe fn exec_simple_load_scan_loop<const FIRST_CONSUMED: bool>(
     let mut cur_pc = blk.start_pc;
     let mut charged_ops = 0u32;
     let sample_ops = crate::tracepoints::record_block_exec_sample_start();
+    record_sampled_block(blk, sample_ops);
     *remaining -= block_budget_charge::<FIRST_CONSUMED>(len);
     charged_ops = charged_ops.saturating_add(len as u32);
 
@@ -257,6 +278,7 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
     let vm_ptr = vm as *const ThreadState as u32;
     crate::tracepoints::record_block_exec_ops(len as u32);
     let sample_ops = crate::tracepoints::record_block_exec_sample_start();
+    record_sampled_block(blk, sample_ops);
     *remaining -= block_budget_charge::<FIRST_CONSUMED>(len);
 
     for index in 0..len {

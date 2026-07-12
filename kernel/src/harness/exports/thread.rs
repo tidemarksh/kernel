@@ -193,6 +193,42 @@ pub extern "C" fn debug_cpu_profile_block_miss_sample_count_at(index: u32) -> u6
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_hot_block_sample_count() -> u32 {
+    crate::harness::debug::cpu_profile_hot_block_sample_count()
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_hot_block_sample_pc(index: u32) -> u64 {
+    crate::harness::debug::cpu_profile_hot_block_sample_entry(index).pc
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_hot_block_sample_signature(index: u32) -> u64 {
+    crate::harness::debug::cpu_profile_hot_block_sample_entry(index).signature
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_hot_block_sample_count_at(index: u32) -> u64 {
+    crate::harness::debug::cpu_profile_hot_block_sample_entry(index).count
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_hot_block_sample_len(index: u32) -> u32 {
+    crate::harness::debug::cpu_profile_hot_block_sample_entry(index).len
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn debug_cpu_profile_hot_block_sample_loop_flags(index: u32) -> u32 {
+    crate::harness::debug::cpu_profile_hot_block_sample_entry(index).loop_flags
+}
+
+#[cfg(any(test, feature = "harness"))]
+#[unsafe(no_mangle)]
 pub extern "C" fn debug_cpu_profile_interpreter_ops() -> u64 {
     crate::harness::debug::cpu_profile_interpreter_ops()
 }
