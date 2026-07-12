@@ -1738,6 +1738,11 @@ fn thread_state_from_ptr(vm_ptr: u32) -> Option<&'static crate::types::ThreadSta
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn thread_tid(vm_ptr: u32) -> i32 {
+    thread_state_from_ptr(vm_ptr).map_or(0, |vm| vm.tid)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn process_thread_tid(vm_ptr: u32, slot: u32) -> i32 {
     let Some(ps) = process_state_from_vm(vm_ptr) else {
         return 0;

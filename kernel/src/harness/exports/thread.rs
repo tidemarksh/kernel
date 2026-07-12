@@ -1,11 +1,5 @@
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
-pub extern "C" fn thread_tid(vm_ptr: u32) -> i32 {
-    unsafe { (*(vm_ptr as *const crate::types::ThreadState)).tid }
-}
-
-#[cfg(any(test, feature = "harness"))]
-#[unsafe(no_mangle)]
 pub extern "C" fn thread_tp(vm_ptr: u32) -> u64 {
     unsafe { (*(vm_ptr as *const crate::types::ThreadState)).x[4] }
 }
