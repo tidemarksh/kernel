@@ -1,4 +1,5 @@
 use super::support::*;
+use core::sync::atomic::Ordering;
 
 fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
     let mut value = [0u8; 4];
@@ -66,6 +67,39 @@ fn contract_exit_decrements_thread_count() {
 
     let tc = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, ps_ptr + tc_off) };
     assert_eq!(tc, 1);
+}
+
+#[test]
+fn supervisor_exit_publication_updates_only_matching_thread_incarnation() {
+    let mut t = TestVm::new();
+    install_current_thread_record(&mut t);
+    let exited_vm_ptr = 0x1234_5000;
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    ps.threads[1] = ThreadRecord::new(2, THREAD_BLOCKED_FUTEX, exited_vm_ptr, 0x8000, 0x9000);
+    ps.thread_count.store(2, Ordering::Release);
+
+    let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    assert_eq!(
+        supervisor_apply_exited_thread_publication(vm_ptr, exited_vm_ptr, 2),
+        0
+    );
+    assert_eq!(ps.thread_count.load(Ordering::Acquire), 1);
+    assert_eq!(ps.threads[1].state, THREAD_DEAD);
+    assert_eq!(ps.threads[1].thread_ptr, 0);
+    assert_eq!(
+        supervisor_apply_exited_thread_publication(vm_ptr, exited_vm_ptr, 2),
+        0
+    );
+    assert_eq!(ps.thread_count.load(Ordering::Acquire), 1);
+
+    ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, 0x5678_9000, 0, 0);
+    ps.thread_count.store(2, Ordering::Release);
+    assert_eq!(
+        supervisor_apply_exited_thread_publication(vm_ptr, exited_vm_ptr, 2),
+        0
+    );
+    assert_eq!(ps.thread_count.load(Ordering::Acquire), 2);
+    assert_eq!(ps.threads[1].thread_ptr, 0x5678_9000);
 }
 
 #[test]

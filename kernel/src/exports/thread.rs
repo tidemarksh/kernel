@@ -1085,8 +1085,11 @@ pub extern "C" fn thread_resume_blocked_syscall(vm_ptr: u32) -> i64 {
             crate::syscall::poll::restore_pselect6_sigmask(vm);
             return EINTR;
         }
-        let saved_fd_entry =
-            crate::fs::fd_table::patch_blocked_fd_entry_for_resume(vm.guest_base, vm);
+        let saved_fd_entry = if vm.status == STATUS_EPOLL_WAIT {
+            None
+        } else {
+            crate::fs::fd_table::patch_blocked_fd_entry_for_resume(vm.guest_base, vm)
+        };
         if vm.blocked_syscall_nr != 0 {
             vm.x[17] = vm.blocked_syscall_nr;
             for (idx, value) in vm.blocked_syscall_args.iter().enumerate() {

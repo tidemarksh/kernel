@@ -785,6 +785,53 @@ fn epoll_pwait_resume_reports_ready_events_with_ok_status() {
 }
 
 #[test]
+fn epoll_pwait_resume_uses_pinned_ofd_after_epfd_close() {
+    let mut t = TestVm::new();
+    let pipefd_addr = t.scratch + 0x1000;
+    assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) } as u64;
+    let write_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr + 4) } as i64;
+    let epfd = epoll::sys_epoll_create1(&mut t.vm, t.base, 0);
+    let event_addr = t.scratch + 0x2000;
+    let out_addr = t.scratch + 0x3000;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, event_addr, EPOLLIN);
+        tidemark_kernel::guest_mem::write_u64(t.base, event_addr + 8, 0x99);
+    }
+    assert_eq!(
+        epoll::sys_epoll_ctl(
+            &mut t.vm,
+            t.base,
+            epfd as u64,
+            EPOLL_CTL_ADD,
+            read_fd,
+            event_addr,
+        ),
+        0
+    );
+    assert_eq!(
+        epoll::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 1, -1, 0),
+        0
+    );
+    assert_eq!(t.vm.status, STATUS_EPOLL_WAIT);
+    let pinned_ofd = t.vm.blocked_ofd_id;
+
+    let waiting_status = t.vm.status;
+    t.vm.status = STATUS_OK;
+    assert_eq!(t.sys_close(epfd), 0);
+    assert!(fd_table::get_ofd_by_id(pinned_ofd).is_some());
+    assert_eq!(t.sys_write_data(write_fd, b"x"), 1);
+    t.vm.status = waiting_status;
+
+    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
+    assert_eq!(thread_resume_blocked_syscall(vm_ptr), 1);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.x[10], 1);
+    assert_eq!(t.vm.blocked_ofd_id, 0);
+    assert!(fd_table::get_ofd_id(t.base, &t.vm, epfd as u64).is_none());
+}
+
+#[test]
 fn supervisor_resume_epoll_ready_wait_publishes_runnable() {
     supervisor_reset_shadow_log();
 

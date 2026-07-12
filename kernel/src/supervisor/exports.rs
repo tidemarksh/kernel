@@ -3394,3 +3394,16 @@ pub extern "C" fn supervisor_debug_snapshot(out_ptr: u32, out_len: u32) -> i32 {
 pub extern "C" fn supervisor_thread_state_snapshot(vm_ptr: u32, out_ptr: u32, out_len: u32) -> i32 {
     super::thread::write_state_snapshot(vm_ptr, out_ptr, out_len)
 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_apply_exited_thread_publication(
+    vm_ptr: u32,
+    exited_vm_ptr: u32,
+    exited_tid: i32,
+) -> i32 {
+    if vm_ptr == 0 {
+        return crate::abi::EFAULT as i32;
+    }
+    let vm = unsafe { &*(vm_ptr as *const crate::types::ThreadState) };
+    super::thread::apply_exited_thread_publication(vm, vm.guest_base, exited_vm_ptr, exited_tid)
+}

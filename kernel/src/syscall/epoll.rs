@@ -719,38 +719,7 @@ pub fn sys_epoll_pwait(
         );
         return EBADF;
     };
-    let max = maxevents as usize;
-    let mut ready = 0usize;
-
-    for i in 0..inst.count as usize {
-        if ready >= max {
-            break;
-        }
-        let entry = inst.entries[i];
-        let Some(ofd) = fd_table::get_ofd_by_id(entry.ofd_id) else {
-            continue;
-        };
-        let polled_revents = poll_ofd(vm, base, &ofd, entry.events);
-        let revents = if entry.events & EPOLLET != 0 {
-            (polled_revents & (EPOLLERR | EPOLLHUP))
-                | ((polled_revents & !(EPOLLERR | EPOLLHUP)) & !entry.last_revents)
-        } else {
-            polled_revents
-        };
-        inst.entries[i].last_revents = polled_revents;
-        if revents != 0 {
-            let out_addr = events_addr + (ready as u64) * EPOLL_EVENT_SIZE;
-            unsafe {
-                guest_mem::write_u32(base, out_addr, revents);
-                guest_mem::write_u64(base, out_addr + EPOLL_EVENT_DATA_OFFSET, entry.data);
-            }
-            if entry.events & EPOLLONESHOT != 0 {
-                inst.entries[i].events = 0;
-                inst.entries[i].last_revents = 0;
-            }
-            ready += 1;
-        }
-    }
+    let ready = collect_ready_events(vm, base, inst, events_addr, maxevents as usize);
 
     if ready > 0 || timeout == 0 {
         vm.status = STATUS_OK;
@@ -801,19 +770,77 @@ pub fn resume_timeout(vm: &mut ThreadState) {
 }
 
 pub fn resume_wait(vm: &mut ThreadState, base: u32) -> i64 {
-    let result = sys_epoll_pwait(
-        vm,
-        base,
-        vm.fault_addr,
-        vm.fault_pc,
-        vm.epoll_maxevents as u64,
-        vm.epoll_timeout_ms,
-        0,
-    );
-    if vm.status == STATUS_OK {
-        vm.x[10] = result as u64;
+    let epoll_ofd_id = vm.blocked_ofd_id;
+    let Some(epoll_ofd) = fd_table::get_ofd_by_id(epoll_ofd_id) else {
+        return complete_failed_resume(vm, EBADF);
+    };
+    if epoll_ofd.fd_type != FD_TYPE_EPOLL {
+        return complete_failed_resume(vm, EINVAL);
     }
-    result
+    let epoll_idx = epoll_ofd.ino as usize;
+    let Some(inst) = validated_epoll_instance(epoll_idx) else {
+        return complete_failed_resume(vm, EBADF);
+    };
+    let ready = collect_ready_events(vm, base, inst, vm.fault_pc, vm.epoll_maxevents as usize);
+    if ready == 0 {
+        return 0;
+    }
+    fd_table::clear_blocked_ofd_pin(vm);
+    vm.epoll_timeout_ms = 0;
+    vm.epoll_maxevents = 0;
+    vm.x[10] = ready as u64;
+    vm.status = STATUS_OK;
+    ready as i64
+}
+
+fn complete_failed_resume(vm: &mut ThreadState, errno: i64) -> i64 {
+    fd_table::clear_blocked_ofd_pin(vm);
+    vm.epoll_timeout_ms = 0;
+    vm.epoll_maxevents = 0;
+    vm.x[10] = errno as u64;
+    vm.status = STATUS_OK;
+    errno
+}
+
+fn collect_ready_events(
+    vm: &ThreadState,
+    base: u32,
+    inst: &mut EpollInstance,
+    events_addr: u64,
+    maxevents: usize,
+) -> usize {
+    let mut ready = 0usize;
+    for i in 0..inst.count as usize {
+        if ready >= maxevents {
+            break;
+        }
+        let entry = inst.entries[i];
+        let Some(ofd) = fd_table::get_ofd_by_id(entry.ofd_id) else {
+            continue;
+        };
+        let polled_revents = poll_ofd(vm, base, &ofd, entry.events);
+        let revents = if entry.events & EPOLLET != 0 {
+            (polled_revents & (EPOLLERR | EPOLLHUP))
+                | ((polled_revents & !(EPOLLERR | EPOLLHUP)) & !entry.last_revents)
+        } else {
+            polled_revents
+        };
+        inst.entries[i].last_revents = polled_revents;
+        if revents == 0 {
+            continue;
+        }
+        let out_addr = events_addr + (ready as u64) * EPOLL_EVENT_SIZE;
+        unsafe {
+            guest_mem::write_u32(base, out_addr, revents);
+            guest_mem::write_u64(base, out_addr + EPOLL_EVENT_DATA_OFFSET, entry.data);
+        }
+        if entry.events & EPOLLONESHOT != 0 {
+            inst.entries[i].events = 0;
+            inst.entries[i].last_revents = 0;
+        }
+        ready += 1;
+    }
+    ready
 }
 
 pub fn timerfd_deadline_ticks(vm: &ThreadState, base: u32) -> u64 {

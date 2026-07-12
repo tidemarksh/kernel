@@ -232,6 +232,37 @@ pub(super) fn mark_current_thread_dead(vm: &ThreadState, base: u32) {
     }
 }
 
+pub fn apply_exited_thread_publication(
+    vm: &ThreadState,
+    base: u32,
+    exited_vm_ptr: u32,
+    exited_tid: i32,
+) -> i32 {
+    if exited_vm_ptr == 0 || exited_tid <= 0 || exited_tid as usize > MAX_THREADS {
+        return crate::abi::EINVAL as i32;
+    }
+    let Some(ps) = process_state_ptr(base, vm.process_ptr) else {
+        return crate::abi::EINVAL as i32;
+    };
+    unsafe {
+        let record = &mut (*ps).threads[(exited_tid - 1) as usize];
+        if record.state == THREAD_NONE || record.state == THREAD_DEAD {
+            return 0;
+        }
+        if record.tid != exited_tid || record.thread_ptr != exited_vm_ptr {
+            return 0;
+        }
+        *record = ThreadRecord::new(exited_tid, THREAD_DEAD, 0, 0, 0);
+        (*ps)
+            .thread_count
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                Some(count.saturating_sub(1))
+            })
+            .unwrap_or(0);
+    }
+    0
+}
+
 pub(super) fn reset_thread_count_for_group_exit(vm: &ThreadState, base: u32) {
     unsafe {
         let Some(ps) = process_state_ptr(base, vm.process_ptr) else {
