@@ -34,9 +34,8 @@ static mut RESERVATION_GEN: *const AtomicU32 = core::ptr::null();
 static mut RESERVATION_LOCK: *const AtomicU32 = core::ptr::null();
 /// Pointer to thread_count in ProcessState. null = single-thread (skip seqlock).
 static mut THREAD_COUNT: *const AtomicU32 = core::ptr::null();
-const RESERVATION_LOCK_SPIN_LIMIT: u32 = 1 << 20;
 #[cfg(not(test))]
-const SEQLOCK_READ_SPIN_LIMIT: u32 = RESERVATION_LOCK_SPIN_LIMIT;
+const SEQLOCK_READ_SPIN_LIMIT: u32 = 1 << 20;
 #[cfg(test)]
 const SEQLOCK_READ_SPIN_LIMIT: u32 = 16;
 const ACCESS_READ: u32 = 1;
@@ -504,18 +503,12 @@ unsafe fn lock_slot_with(reservation_lock: *const AtomicU32, slot: usize) {
 
 #[inline(always)]
 pub(crate) fn acquire_reservation_lock(lock: &AtomicU32) {
-    let mut spins = 0u32;
     loop {
         if lock
             .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
         {
             return;
-        }
-        spins = spins.wrapping_add(1);
-        if spins >= RESERVATION_LOCK_SPIN_LIMIT {
-            let _ = lock.compare_exchange(1, 0, Ordering::AcqRel, Ordering::Relaxed);
-            spins = 0;
         }
         core::hint::spin_loop();
     }
