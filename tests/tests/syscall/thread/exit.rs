@@ -86,6 +86,7 @@ fn supervisor_exit_publication_updates_only_matching_thread_incarnation() {
     assert_eq!(ps.thread_count.load(Ordering::Acquire), 1);
     assert_eq!(ps.threads[1].state, THREAD_DEAD);
     assert_eq!(ps.threads[1].thread_ptr, 0);
+    ps.thread_count.store(2, Ordering::Release);
     assert_eq!(
         supervisor_apply_exited_thread_publication(vm_ptr, exited_vm_ptr, 2),
         0

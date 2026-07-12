@@ -247,20 +247,25 @@ pub fn apply_exited_thread_publication(
     unsafe {
         let record = &mut (*ps).threads[(exited_tid - 1) as usize];
         if record.state == THREAD_NONE || record.state == THREAD_DEAD {
+            reconcile_thread_count(&*ps);
             return 0;
         }
         if record.tid != exited_tid || record.thread_ptr != exited_vm_ptr {
             return 0;
         }
         *record = ThreadRecord::new(exited_tid, THREAD_DEAD, 0, 0, 0);
-        (*ps)
-            .thread_count
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-                Some(count.saturating_sub(1))
-            })
-            .unwrap_or(0);
+        reconcile_thread_count(&*ps);
     }
     0
+}
+
+fn reconcile_thread_count(ps: &ProcessState) {
+    let live = ps
+        .threads
+        .iter()
+        .filter(|record| record.state != THREAD_NONE && record.state != THREAD_DEAD)
+        .count() as u32;
+    ps.thread_count.store(live, Ordering::Release);
 }
 
 pub(super) fn reset_thread_count_for_group_exit(vm: &ThreadState, base: u32) {
