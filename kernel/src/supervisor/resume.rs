@@ -296,6 +296,9 @@ pub(super) fn write_record(out_ptr: u32, out_len: u32) -> i32 {
     let Some(record) = pop_ready_record() else {
         return 0;
     };
+    if record.kind == super::SUPERVISOR_RESUME_KIND_FUTEX_WAKE {
+        super::futex::authorize_wake_completion(record.vm_ptr);
+    }
     write_encoded_record(record, out_ptr)
 }
 

@@ -137,6 +137,9 @@ fn stale_after_authoritative_transition(event: ThreadEventState) -> bool {
     if event.event_kind != super::SUPERVISOR_THREAD_EVENT_KIND_BLOCKED {
         return false;
     }
+    if event.status == crate::abi::STATUS_OK as u32 {
+        return true;
+    }
     super::thread::state_from_ptr(event.vm_ptr)
         .is_some_and(|thread| thread.status as u32 != event.status)
 }
@@ -183,11 +186,16 @@ fn event_state_override(event: ThreadEventState) -> Option<ThreadEventOverride> 
 }
 
 pub(super) fn thread_state_override(vm_ptr: u32, tid: u32) -> Option<ThreadEventOverride> {
-    find_event(vm_ptr, tid).and_then(event_state_override)
+    find_event(vm_ptr, tid)
+        .filter(|event| !stale_after_authoritative_transition(*event))
+        .and_then(event_state_override)
 }
 
 pub(super) fn runnable_override(vm_ptr: u32, tid: u32) -> Option<bool> {
     let event = find_event(vm_ptr, tid)?;
+    if stale_after_authoritative_transition(event) {
+        return None;
+    }
     let _ = (
         event.pid,
         event.sequence,

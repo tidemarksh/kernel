@@ -226,6 +226,11 @@ fn supervisor_next_resume_publishes_kernel_selected_futex_wake() {
     assert_eq!(read_u32_le(&record, 36), STATUS_OK as u32);
     assert_eq!(read_u64_le(&record, 40), futex_addr as u64);
     assert_eq!(supervisor_next_resume(0, 0), 0);
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[0].state = THREAD_BLOCKED_FUTEX;
+        ps.threads[0].blocked_addr = futex_addr as u64;
+    }
     assert_eq!(
         supervisor_complete_futex_wait(vm_ptr, supervisor_futex_wait_completion_woken()),
         STATUS_OK
@@ -999,6 +1004,105 @@ fn supervisor_process_resume_honors_latest_thread_event_blocked_state() {
     assert_eq!(read_u32_le(&resume, 24), thread2_ptr);
     assert_eq!(read_u32_le(&resume, 28), 2);
     assert_eq!(supervisor_shadow_thread_event_count(), 2);
+}
+
+#[test]
+fn supervisor_process_resume_ignores_blocked_event_with_ok_status() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+
+    let mut runnable: ThreadState = unsafe { std::mem::zeroed() };
+    runnable.guest_base = t.base;
+    runnable.process_ptr = t.vm.process_ptr;
+    runnable.tid = 2;
+    runnable.status = STATUS_OK;
+    let runnable_ptr = (&mut runnable as *mut ThreadState) as u32;
+
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[0].state = THREAD_BLOCKED_FUTEX;
+        ps.threads[0].blocked_addr = 0x6100;
+        ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, runnable_ptr, 0, 0);
+        ps.thread_count
+            .store(2, std::sync::atomic::Ordering::Release);
+    }
+
+    let mut event = [0u8; 80];
+    write_thread_event_record(
+        &mut event,
+        supervisor_thread_event_kind_blocked(),
+        43,
+        runnable_ptr,
+        2,
+        STATUS_OK as u32,
+    );
+    assert_eq!(
+        supervisor_submit_thread_event(event.as_ptr() as u32, event.len() as u32),
+        0
+    );
+
+    let vm_ptr = (&mut t.vm as *mut ThreadState) as u32;
+    let mut resume = [0u8; 48];
+    assert_eq!(
+        supervisor_process_resume(vm_ptr, resume.as_mut_ptr() as u32, resume.len() as u32),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&resume, 24), runnable_ptr);
+    assert_eq!(read_u32_le(&resume, 28), 2);
+    assert_eq!(read_u32_le(&resume, 36), STATUS_OK as u32);
+}
+
+#[test]
+fn supervisor_process_resume_ignores_blocked_event_after_status_becomes_ok() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+
+    let mut runnable: ThreadState = unsafe { std::mem::zeroed() };
+    runnable.guest_base = t.base;
+    runnable.process_ptr = t.vm.process_ptr;
+    runnable.tid = 2;
+    runnable.status = STATUS_FUTEX_WAIT;
+    let runnable_ptr = (&mut runnable as *mut ThreadState) as u32;
+
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[0].state = THREAD_BLOCKED_FUTEX;
+        ps.threads[0].blocked_addr = 0x6100;
+        ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, runnable_ptr, 0, 0);
+        ps.thread_count
+            .store(2, std::sync::atomic::Ordering::Release);
+    }
+
+    let mut event = [0u8; 80];
+    write_thread_event_record(
+        &mut event,
+        supervisor_thread_event_kind_blocked(),
+        44,
+        runnable_ptr,
+        2,
+        STATUS_FUTEX_WAIT as u32,
+    );
+    assert_eq!(
+        supervisor_submit_thread_event(event.as_ptr() as u32, event.len() as u32),
+        0
+    );
+
+    runnable.status = STATUS_OK;
+    let vm_ptr = (&mut t.vm as *mut ThreadState) as u32;
+    let mut resume = [0u8; 48];
+    assert_eq!(
+        supervisor_process_resume(vm_ptr, resume.as_mut_ptr() as u32, resume.len() as u32),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&resume, 24), runnable_ptr);
+    assert_eq!(read_u32_le(&resume, 28), 2);
+    assert_eq!(read_u32_le(&resume, 36), STATUS_OK as u32);
 }
 
 #[test]

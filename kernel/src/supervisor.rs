@@ -71,6 +71,7 @@ pub fn init() {
     thread::init();
     event::init_state();
     fault::init();
+    futex::init();
     runnable::init();
     resume::init();
     host_op::init();

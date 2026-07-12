@@ -1,3 +1,22 @@
+use core::sync::atomic::{AtomicU32, Ordering};
+
+static AUTHORIZED_WAKE_VM_PTR: AtomicU32 = AtomicU32::new(0);
+
+pub(super) fn init() {
+    AUTHORIZED_WAKE_VM_PTR.store(0, Ordering::Relaxed);
+}
+
+pub(super) fn authorize_wake_completion(vm_ptr: u32) {
+    AUTHORIZED_WAKE_VM_PTR.store(vm_ptr, Ordering::Release);
+}
+
+fn take_wake_completion_authorization(vm_ptr: u32) -> bool {
+    vm_ptr != 0
+        && AUTHORIZED_WAKE_VM_PTR
+            .compare_exchange(vm_ptr, 0, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+}
+
 fn blocked_wait_signal_pending(vm: &crate::types::ThreadState, base: u32) -> bool {
     crate::syscall::signal::pending_signal_interrupts_blocked_syscall(vm, base)
         || vm.sig_pending != 0
@@ -89,6 +108,10 @@ pub(super) fn complete_wait(vm_ptr: u32, completion: u32) -> i32 {
     let signal_pending = blocked_wait_signal_pending(vm, base);
 
     let result = if blocked_addr == 0 {
+        Some(0)
+    } else if completion == super::SUPERVISOR_FUTEX_WAIT_COMPLETION_WOKEN
+        && take_wake_completion_authorization(vm_ptr)
+    {
         Some(0)
     } else if completion == super::SUPERVISOR_FUTEX_WAIT_COMPLETION_WOKEN
         && vm.status == crate::abi::STATUS_OK
