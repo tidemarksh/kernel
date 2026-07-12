@@ -49,6 +49,7 @@ pub(super) fn take_completed_sync_effects(vm_ptr: u32, status: i32) -> u32 {
         vm.completed_pipe_sync_slots,
         vm.completed_pipe_sync_read_slots,
         vm.completed_pipe_sync_write_slots,
+        vm.completed_pipe_sync_control_slots,
         vm.completed_pipe_fresh_slots,
     );
     vm.completed_sync_effects = 0;
@@ -63,9 +64,10 @@ fn pending_pipe_slot_sync_effect_for_masks(
     slots: u64,
     read_slots: u64,
     write_slots: u64,
+    control_slots: u64,
     fresh_slots: u64,
 ) -> u32 {
-    if (slots | read_slots | write_slots | fresh_slots) == 0 {
+    if (slots | read_slots | write_slots | control_slots | fresh_slots) == 0 {
         0
     } else {
         SYNC_EFFECT_PIPE_STATE
@@ -137,10 +139,14 @@ fn syscall_mutates_fork_shared_ofd_state(nr: Option<u64>) -> bool {
 }
 
 fn normalize_fork_shared_sync_effects(effects: u32, nr: Option<u64>) -> u32 {
-    if nr.is_none() || syscall_mutates_fork_shared_ofd_state(nr) {
+    if (effects & SYNC_EFFECT_FORK_SHARED_OFD_STATE) != 0 {
         effects
     } else {
-        effects & !SYNC_EFFECT_FORK_SHARED_OFD_STATE
+        match nr {
+            None => effects,
+            Some(_) if syscall_mutates_fork_shared_ofd_state(nr) => effects,
+            Some(_) => effects & !SYNC_EFFECT_FORK_SHARED_OFD_STATE,
+        }
     }
 }
 
@@ -225,6 +231,13 @@ fn classify_completed_sync_effects_for(
         } else {
             ioctl_request_may_mutate_fork_shared_ofd(command)
         };
+        if trace.arg0_ofd_type == FD_TYPE_FILE {
+            return if may_mutate_fork_shared_ofd {
+                SYNC_EFFECT_FORK_SHARED_OFD_STATE
+            } else {
+                0
+            };
+        }
         return PIPE_SOCKET_EPOLL_EFFECTS
             | if may_mutate_fork_shared_ofd {
                 SYNC_EFFECT_FORK_SHARED_OFD_STATE
@@ -411,6 +424,17 @@ mod tests {
         assert_eq!(
             classify_completed_sync_effects_for(
                 STATUS_OK,
+                Some(SYS_FCNTL),
+                PIPE_SOCKET_EPOLL_EFFECTS | SYNC_EFFECT_FORK_SHARED_OFD_STATE,
+                Some(F_SETFL),
+                0,
+                Some(trace(SYS_FCNTL, FD_TYPE_FILE, F_SETFL, 0)),
+            ),
+            SYNC_EFFECT_FORK_SHARED_OFD_STATE
+        );
+        assert_eq!(
+            classify_completed_sync_effects_for(
+                STATUS_OK,
                 Some(SYS_IOCTL),
                 PIPE_SOCKET_EPOLL_EFFECTS | SYNC_EFFECT_FORK_SHARED_OFD_STATE,
                 Some(0),
@@ -429,6 +453,17 @@ mod tests {
                 Some(trace(SYS_IOCTL, FD_TYPE_SOCKET, FIONBIO, 0)),
             ),
             PIPE_SOCKET_EPOLL_EFFECTS | SYNC_EFFECT_FORK_SHARED_OFD_STATE
+        );
+        assert_eq!(
+            classify_completed_sync_effects_for(
+                STATUS_OK,
+                Some(SYS_IOCTL),
+                PIPE_SOCKET_EPOLL_EFFECTS | SYNC_EFFECT_FORK_SHARED_OFD_STATE,
+                Some(FIONBIO),
+                0,
+                Some(trace(SYS_IOCTL, FD_TYPE_FILE, FIONBIO, 0)),
+            ),
+            SYNC_EFFECT_FORK_SHARED_OFD_STATE
         );
     }
 
@@ -472,18 +507,37 @@ mod tests {
     #[test]
     fn supervisor_sync_effects_preserves_pending_pipe_slot_evidence() {
         assert_eq!(
-            pending_pipe_slot_sync_effect_for_masks(1u64 << 4, 0, 0, 0),
+            pending_pipe_slot_sync_effect_for_masks(1u64 << 4, 0, 0, 0, 0),
             SYNC_EFFECT_PIPE_STATE
         );
         assert_eq!(
-            pending_pipe_slot_sync_effect_for_masks(0, 0, 1u64 << 4, 0),
+            pending_pipe_slot_sync_effect_for_masks(0, 0, 1u64 << 4, 0, 0),
             SYNC_EFFECT_PIPE_STATE
         );
         assert_eq!(
-            pending_pipe_slot_sync_effect_for_masks(0, 0, 0, 1u64 << 4),
+            pending_pipe_slot_sync_effect_for_masks(0, 0, 0, 1u64 << 4, 0),
             SYNC_EFFECT_PIPE_STATE
         );
-        assert_eq!(pending_pipe_slot_sync_effect_for_masks(0, 0, 0, 0), 0);
+        assert_eq!(
+            pending_pipe_slot_sync_effect_for_masks(0, 0, 0, 0, 1u64 << 4),
+            SYNC_EFFECT_PIPE_STATE
+        );
+        assert_eq!(pending_pipe_slot_sync_effect_for_masks(0, 0, 0, 0, 0), 0);
+    }
+
+    #[test]
+    fn supervisor_sync_effects_preserves_deferred_openat_fork_shared_effect() {
+        assert_eq!(
+            classify_completed_sync_effects_for(
+                STATUS_OK,
+                Some(crate::abi::SYS_NEWFSTATAT),
+                SYNC_EFFECT_FORK_SHARED_OFD_STATE,
+                None,
+                0,
+                None,
+            ),
+            SYNC_EFFECT_FORK_SHARED_OFD_STATE
+        );
     }
 
     #[test]

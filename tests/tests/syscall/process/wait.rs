@@ -1,4 +1,6 @@
 use super::support::*;
+use tidemark_kernel::fs::fd_table;
+use tidemark_kernel::syscall::pipe;
 
 fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
     let mut value = [0u8; 4];
@@ -162,7 +164,41 @@ fn supervisor_process_has_active_child_tracks_kernel_child_table() {
     );
     t.vm.epoll_timeout_ms = 1;
     assert_eq!(t.vm.epoll_timeout_ms, 1);
+    t.vm.x[17] = SYS_PSELECT6;
     assert_eq!(supervisor_blocked_wait_active_child_pid(vm_ptr), 0);
+    assert_eq!(
+        supervisor_blocked_retry_action(vm_ptr, 0),
+        supervisor_blocked_retry_action_arm_wait_timer() as i32
+    );
+    t.vm.x[17] = SYS_READ;
+    assert_eq!(supervisor_blocked_wait_active_child_pid(vm_ptr), child);
+    assert_eq!(
+        supervisor_blocked_retry_action(vm_ptr, 0),
+        supervisor_blocked_retry_action_park_active_child() as i32
+    );
+
+    let pipefd_addr = t.scratch + 0x1300;
+    assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+    let read_fd = unsafe { guest_mem::read_u32(t.base, pipefd_addr) } as u64;
+    let write_fd = unsafe { guest_mem::read_u32(t.base, pipefd_addr + 4) } as u64;
+    let buf_addr = t.scratch + 0x1400;
+
+    t.vm.x[17] = SYS_READ;
+    t.vm.x[10] = read_fd;
+    t.vm.x[11] = buf_addr;
+    t.vm.x[12] = 16;
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        STATUS_PIPE_WAIT
+    );
+    let write_ofd = fd_table::get_ofd(t.base, &t.vm, write_fd).expect("pipe writer OFD");
+    assert_eq!(pipe::pipe_write(write_ofd.ino, b"x"), 1);
+    assert_eq!(thread_blocked_pipe_read_ready(vm_ptr), 1);
+    assert_eq!(supervisor_blocked_wait_active_child_pid(vm_ptr), 0);
+    assert_ne!(
+        supervisor_blocked_retry_action(vm_ptr, 0),
+        supervisor_blocked_retry_action_park_active_child() as i32
+    );
 
     process_impl::record_child_exit(child, 7 << 8);
     assert_eq!(

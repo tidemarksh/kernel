@@ -52,7 +52,7 @@ pub(super) fn wait4_rpc_local_status_action_start() -> u32 {
 
 pub(super) fn child_exit_blocked_parent_action(status: i32) -> i32 {
     match status {
-        STATUS_WAIT4 => CHILD_EXIT_BLOCKED_PARENT_ACTION_INVALIDATE_RPC as i32,
+        STATUS_WAIT4 | STATUS_EPOLL_WAIT => CHILD_EXIT_BLOCKED_PARENT_ACTION_INVALIDATE_RPC as i32,
         STATUS_PIPE_WAIT => {
             (CHILD_EXIT_BLOCKED_PARENT_ACTION_INVALIDATE_RPC
                 | CHILD_EXIT_BLOCKED_PARENT_ACTION_CLEAR_PIPE_SYNC_BEFORE_RETRY) as i32

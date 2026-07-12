@@ -276,6 +276,33 @@ pub fn sys_clone_vfork(
     )
 }
 
+pub fn vfork_parent_fd_entry(fd: u32) -> crate::types::FdEntry {
+    if prs().vfork_active == 0 {
+        return crate::types::FdEntry {
+            ofd_id: 0,
+            fd_flags: 0,
+        };
+    }
+    let snapshot = prs().vfork_snapshot;
+    crate::fs::fd_table::load_process_fd_entry(
+        snapshot.guest_base,
+        snapshot.process_ptr,
+        fd as usize,
+    )
+}
+
+pub fn vfork_parent_fd_generation(fd: u32) -> u32 {
+    if prs().vfork_active == 0 {
+        return 0;
+    }
+    let snapshot = prs().vfork_snapshot;
+    crate::fs::fd_table::load_process_fd_generation(
+        snapshot.guest_base,
+        snapshot.process_ptr,
+        fd as usize,
+    )
+}
+
 fn vfork_parent_resume_inner(vm: &mut ThreadState, child_pid: i32, cleanup_child_fds: bool) {
     if prs().vfork_active == 0 {
         return;

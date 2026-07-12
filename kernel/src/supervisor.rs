@@ -154,3 +154,9 @@ pub fn enqueue_blocked_wait_timer_for_vm(vm_ptr: u32) -> i32 {
 pub fn enqueue_futex_resume(process_ptr: u32, vm_ptr: u32, tid: i32, futex_addr: u64) -> bool {
     futex::enqueue_resume(process_ptr, vm_ptr, tid, futex_addr)
 }
+
+pub fn clear_woken_futex_override(vm_ptr: u32, tid: i32) {
+    if tid > 0 {
+        event::clear_woken_futex_override(vm_ptr, tid as u32);
+    }
+}

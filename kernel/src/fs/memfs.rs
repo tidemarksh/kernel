@@ -344,6 +344,10 @@ const MAX_INODES: usize = 65536;
 const MAX_NAME_LEN: usize = 255;
 const MAX_SYMLINK_FOLLOWS: u32 = 40;
 const INITIAL_DATA_SIZE: u32 = 256 * 1024;
+const LOOKUP_CACHE_SIZE: usize = 4096;
+const LOOKUP_CACHE_MASK: usize = LOOKUP_CACHE_SIZE - 1;
+const LOOKUP_HASH_OFFSET: u64 = 0xcbf29ce484222325;
+const LOOKUP_HASH_PRIME: u64 = 0x100000001b3;
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct Inode {
@@ -366,6 +370,39 @@ struct DirEntry {
     next_sibling: u32,
 }
 
+#[derive(Clone, Copy)]
+struct LookupCacheEntry {
+    memfs_ptr: usize,
+    parent_ino: u32,
+    name_hash: u64,
+    name_len: u16,
+    generation: u32,
+    is_negative: bool,
+    dir_entry_idx: u32,
+    ino: u32,
+    parent_first_child: u32,
+    previous_sibling: u32,
+    next_sibling: u32,
+    dir_entry_count: u32,
+}
+
+impl LookupCacheEntry {
+    const EMPTY: Self = Self {
+        memfs_ptr: 0,
+        parent_ino: 0,
+        name_hash: 0,
+        name_len: 0,
+        generation: 0,
+        is_negative: false,
+        dir_entry_idx: 0,
+        ino: 0,
+        parent_first_child: 0,
+        previous_sibling: 0,
+        next_sibling: 0,
+        dir_entry_count: 0,
+    };
+}
+
 /// MemFS state header, allocated in kernel Worker linear memory.
 /// The inode table, dir entries, first_child array, and data pool are
 /// allocated separately via alloc.rs and referenced by pointers.
@@ -382,6 +419,10 @@ struct MemFsHeader {
 }
 
 static mut MEMFS_PTR: *mut MemFsHeader = core::ptr::null_mut();
+static mut LOOKUP_CACHE: [LookupCacheEntry; LOOKUP_CACHE_SIZE] =
+    [LookupCacheEntry::EMPTY; LOOKUP_CACHE_SIZE];
+static mut LOOKUP_CACHE_GENERATION: u32 = 1;
+static mut LOOKUP_CACHE_MEMFS_PTR: usize = 0;
 static mut LAST_CREATE_SYMLINK_STAGE: u32 = 0;
 static mut LAST_CREATE_SYMLINK_ARG0: u64 = 0;
 static mut LAST_CREATE_SYMLINK_ARG1: u64 = 0;
@@ -469,6 +510,187 @@ fn record_create_symlink(stage: u32, arg0: u64, arg1: u64) {
     }
 }
 
+fn current_memfs_ptr_usize() -> usize {
+    unsafe { core::ptr::read(core::ptr::addr_of!(MEMFS_PTR)) as usize }
+}
+
+fn reset_lookup_cache_for_ptr(ptr: usize) {
+    unsafe {
+        let cache_ptr = core::ptr::addr_of_mut!(LOOKUP_CACHE) as *mut LookupCacheEntry;
+        for idx in 0..LOOKUP_CACHE_SIZE {
+            core::ptr::write(cache_ptr.add(idx), LookupCacheEntry::EMPTY);
+        }
+        core::ptr::write(core::ptr::addr_of_mut!(LOOKUP_CACHE_GENERATION), 1);
+        core::ptr::write(core::ptr::addr_of_mut!(LOOKUP_CACHE_MEMFS_PTR), ptr);
+    }
+}
+
+fn ensure_lookup_cache_context() -> usize {
+    let ptr = current_memfs_ptr_usize();
+    let cached_ptr = unsafe { core::ptr::read(core::ptr::addr_of!(LOOKUP_CACHE_MEMFS_PTR)) };
+    if cached_ptr != ptr {
+        reset_lookup_cache_for_ptr(ptr);
+    }
+    ptr
+}
+
+fn invalidate_lookup_cache() {
+    ensure_lookup_cache_context();
+    unsafe {
+        let generation = core::ptr::read(core::ptr::addr_of!(LOOKUP_CACHE_GENERATION));
+        if generation == u32::MAX {
+            reset_lookup_cache_for_ptr(current_memfs_ptr_usize());
+            return;
+        }
+        core::ptr::write(
+            core::ptr::addr_of_mut!(LOOKUP_CACHE_GENERATION),
+            generation + 1,
+        );
+    }
+}
+
+fn lookup_hash(parent_ino: u32, name: &[u8]) -> u64 {
+    let mut hash = LOOKUP_HASH_OFFSET;
+    for byte in parent_ino.to_le_bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(LOOKUP_HASH_PRIME);
+    }
+    for &byte in name {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(LOOKUP_HASH_PRIME);
+    }
+    hash
+}
+
+fn lookup_cache_slot(hash: u64) -> usize {
+    (hash as usize) & LOOKUP_CACHE_MASK
+}
+
+fn lookup_cache_get(parent_ino: u32, name: &[u8], hash: u64) -> Option<u32> {
+    let memfs_ptr = ensure_lookup_cache_context();
+    if memfs_ptr == 0 {
+        return None;
+    }
+    let slot = lookup_cache_slot(hash);
+    let entry = unsafe {
+        let cache_ptr = core::ptr::addr_of!(LOOKUP_CACHE) as *const LookupCacheEntry;
+        core::ptr::read(cache_ptr.add(slot))
+    };
+    let generation = unsafe { core::ptr::read(core::ptr::addr_of!(LOOKUP_CACHE_GENERATION)) };
+    if entry.memfs_ptr != memfs_ptr
+        || entry.parent_ino != parent_ino
+        || entry.name_hash != hash
+        || entry.name_len as usize != name.len()
+        || entry.generation != generation
+    {
+        return None;
+    }
+
+    let h = fs();
+    if h.dir_entries.is_null() || h.first_child.is_null() {
+        return None;
+    }
+
+    unsafe {
+        let first_child = *h.first_child.add(parent_ino as usize);
+        if first_child != entry.parent_first_child || entry.dir_entry_count != h.dir_entry_count {
+            return None;
+        }
+        if entry.is_negative {
+            return Some(0);
+        }
+        if entry.dir_entry_idx == 0 || entry.dir_entry_idx >= h.dir_entry_count {
+            return None;
+        }
+        if entry.previous_sibling == 0 {
+            if first_child != entry.dir_entry_idx {
+                return None;
+            }
+        } else {
+            if entry.previous_sibling >= h.dir_entry_count {
+                return None;
+            }
+            let prev = &*h.dir_entries.add(entry.previous_sibling as usize);
+            if prev.next_sibling != entry.dir_entry_idx {
+                return None;
+            }
+        }
+
+        let de = &*h.dir_entries.add(entry.dir_entry_idx as usize);
+        if de.ino == entry.ino
+            && de.next_sibling == entry.next_sibling
+            && de.name_len as usize == name.len()
+            && &de.name[..name.len()] == name
+        {
+            return Some(entry.ino);
+        }
+    }
+    None
+}
+
+fn lookup_cache_put(
+    parent_ino: u32,
+    name: &[u8],
+    hash: u64,
+    dir_entry_idx: u32,
+    previous_sibling: u32,
+    de: &DirEntry,
+) {
+    let memfs_ptr = ensure_lookup_cache_context();
+    if memfs_ptr == 0 || dir_entry_idx == 0 {
+        return;
+    }
+    let h = fs();
+    let parent_first_child = unsafe { *h.first_child.add(parent_ino as usize) };
+    let generation = unsafe { core::ptr::read(core::ptr::addr_of!(LOOKUP_CACHE_GENERATION)) };
+    let entry = LookupCacheEntry {
+        memfs_ptr,
+        parent_ino,
+        name_hash: hash,
+        name_len: name.len() as u16,
+        generation,
+        is_negative: false,
+        dir_entry_idx,
+        ino: de.ino,
+        parent_first_child,
+        previous_sibling,
+        next_sibling: de.next_sibling,
+        dir_entry_count: h.dir_entry_count,
+    };
+    unsafe {
+        let cache_ptr = core::ptr::addr_of_mut!(LOOKUP_CACHE) as *mut LookupCacheEntry;
+        core::ptr::write(cache_ptr.add(lookup_cache_slot(hash)), entry);
+    }
+}
+
+fn lookup_cache_put_negative(parent_ino: u32, name: &[u8], hash: u64) {
+    let memfs_ptr = ensure_lookup_cache_context();
+    if memfs_ptr == 0 {
+        return;
+    }
+    let h = fs();
+    let parent_first_child = unsafe { *h.first_child.add(parent_ino as usize) };
+    let generation = unsafe { core::ptr::read(core::ptr::addr_of!(LOOKUP_CACHE_GENERATION)) };
+    let entry = LookupCacheEntry {
+        memfs_ptr,
+        parent_ino,
+        name_hash: hash,
+        name_len: name.len() as u16,
+        generation,
+        is_negative: true,
+        dir_entry_idx: 0,
+        ino: 0,
+        parent_first_child,
+        previous_sibling: 0,
+        next_sibling: 0,
+        dir_entry_count: h.dir_entry_count,
+    };
+    unsafe {
+        let cache_ptr = core::ptr::addr_of_mut!(LOOKUP_CACHE) as *mut LookupCacheEntry;
+        core::ptr::write(cache_ptr.add(lookup_cache_slot(hash)), entry);
+    }
+}
+
 pub fn attach_memfs_ptr(ptr: u32) {
     unsafe {
         core::ptr::write(core::ptr::addr_of_mut!(MEMFS_PTR), ptr as *mut MemFsHeader);
@@ -544,6 +766,7 @@ pub fn init() {
             header_ptr as *mut MemFsHeader,
         );
     }
+    reset_lookup_cache_for_ptr(current_memfs_ptr_usize());
 }
 
 pub fn reset() {
@@ -568,6 +791,7 @@ pub fn reset() {
         root.mode = S_IFDIR | 0o755;
         root.nlink = 2;
     }
+    reset_lookup_cache_for_ptr(current_memfs_ptr_usize());
 }
 
 // =========================================================================
@@ -687,7 +911,7 @@ fn grow_data_pool(needed: u32) -> bool {
 // =========================================================================
 
 pub fn lookup(parent_ino: u32, name: &[u8]) -> u32 {
-    if parent_ino as usize >= MAX_INODES {
+    if parent_ino as usize >= MAX_INODES || name.len() > MAX_NAME_LEN {
         return 0;
     }
     let ptr = memfs_ptr();
@@ -698,15 +922,23 @@ pub fn lookup(parent_ino: u32, name: &[u8]) -> u32 {
     if h.first_child.is_null() || h.dir_entries.is_null() {
         return 0;
     }
+    let hash = lookup_hash(parent_ino, name);
+    if let Some(ino) = lookup_cache_get(parent_ino, name, hash) {
+        return ino;
+    }
     unsafe {
         let mut idx = *h.first_child.add(parent_ino as usize);
+        let mut previous_sibling = 0u32;
         while idx != 0 {
             let de = &*h.dir_entries.add(idx as usize);
             if de.name_len as usize == name.len() && &de.name[..name.len()] == name {
+                lookup_cache_put(parent_ino, name, hash, idx, previous_sibling, de);
                 return de.ino;
             }
+            previous_sibling = idx;
             idx = de.next_sibling;
         }
+        lookup_cache_put_negative(parent_ino, name, hash);
         0
     }
 }
@@ -881,6 +1113,7 @@ fn add_dir_entry(parent_ino: u32, name: &[u8], ino: u32) -> bool {
         *parent_first_child = idx as u32;
     }
     h.dir_entry_count += 1;
+    invalidate_lookup_cache();
     true
 }
 
@@ -901,6 +1134,7 @@ fn remove_dir_entry(parent_ino: u32, name: &[u8]) -> u32 {
             } else {
                 des[prev_idx as usize].next_sibling = next;
             }
+            invalidate_lookup_cache();
             return removed_ino;
         }
         prev_idx = idx;
@@ -1016,6 +1250,39 @@ pub fn create_symlink(parent_ino: u32, name: &[u8], target: &[u8]) -> u32 {
     record_create_symlink(807, ino as u64, 0);
     crate::tracepoints::record_execve_stage(807, ino as u64, 0);
     ino
+}
+
+pub fn replace_symlink_target(ino: u32, target: &[u8]) -> i64 {
+    let idx = ino as usize;
+    if idx >= fs().inode_count as usize || inodes()[idx].mode & S_IFMT != S_IFLNK {
+        return EINVAL;
+    }
+    let target_len = match u32::try_from(target.len()) {
+        Ok(length) => length,
+        Err(_) => return ENOSPC,
+    };
+    let current_cap = inodes()[idx].data_cap;
+    let offset = if current_cap >= target_len {
+        inodes()[idx].data_offset
+    } else {
+        let allocated = alloc_data(target_len);
+        if allocated == u32::MAX {
+            return ENOSPC;
+        }
+        allocated
+    };
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            target.as_ptr(),
+            fs().data.add(offset as usize),
+            target.len(),
+        );
+    }
+    let inode = &mut inodes()[idx];
+    inode.data_offset = offset;
+    inode.data_cap = current_cap.max(target_len);
+    inode.size = target.len() as u64;
+    0
 }
 
 /// Read the target of a symbolic link. Returns bytes written to `buf`.
@@ -1235,6 +1502,27 @@ pub fn read_file(ino: u32, offset: u64, buf: &mut [u8]) -> i64 {
         return unsafe {
             tidemark_page_cache_read(ino, offset, buf.as_mut_ptr() as usize, n as u32)
         };
+    }
+    EOPNOTSUPP
+}
+
+pub fn can_read_file_to_ptr(ino: u32) -> bool {
+    let ins = inodes();
+    let idx = ino as usize;
+    idx < ins.len() && ins[idx].mode & S_IFMT == S_IFREG && ins[idx].data_cap == 0
+}
+
+pub fn read_file_to_ptr(ino: u32, offset: u64, dst_ptr: usize, dst_len: u32) -> i64 {
+    let inode = inodes()[ino as usize];
+    if inode.mode & S_IFMT != S_IFREG {
+        return EBADF;
+    }
+    if offset >= inode.size {
+        return 0;
+    }
+    let avail = (inode.size - offset).min(dst_len as u64) as u32;
+    if inode.data_cap == 0 {
+        return unsafe { tidemark_page_cache_read(ino, offset, dst_ptr, avail) };
     }
     EOPNOTSUPP
 }
@@ -1509,5 +1797,57 @@ mod tests {
         }
         assert_eq!(truncate(truncate_ino, 0), 0);
         assert_eq!(debug_file_data_layout(truncate_ino) >> 32, 0);
+    }
+
+    #[test]
+    fn lookup_cache_invalidates_after_unlink_and_recreate() {
+        let _t = TestVm::new();
+
+        let dir = create_dir(1, b"cache-dir", 0o755);
+        assert!(dir > 0);
+        let first = create_file(dir, b"target.rb", 0o644);
+        assert!(first > 0);
+
+        assert_eq!(lookup(dir, b"target.rb"), first);
+        assert_eq!(lookup(dir, b"target.rb"), first);
+        assert_eq!(unlink(dir, b"target.rb"), 0);
+        assert_eq!(lookup(dir, b"target.rb"), 0);
+
+        let second = create_file(dir, b"target.rb", 0o644);
+        assert!(second > first);
+        assert_eq!(lookup(dir, b"target.rb"), second);
+    }
+
+    #[test]
+    fn lookup_cache_invalidates_negative_entry_after_create() {
+        let _t = TestVm::new();
+
+        let dir = create_dir(1, b"negative-cache", 0o755);
+        assert!(dir > 0);
+
+        assert_eq!(lookup(dir, b"later.rb"), 0);
+        assert_eq!(lookup(dir, b"later.rb"), 0);
+        let ino = create_file(dir, b"later.rb", 0o644);
+        assert!(ino > 0);
+        assert_eq!(lookup(dir, b"later.rb"), ino);
+    }
+
+    #[test]
+    fn lookup_cache_invalidates_after_rename_replace() {
+        let _t = TestVm::new();
+
+        let dir = create_dir(1, b"rename-cache", 0o755);
+        assert!(dir > 0);
+        let old = create_file(dir, b"old.rb", 0o644);
+        let replacement = create_file(dir, b"replacement.rb", 0o644);
+        assert!(old > 0);
+        assert!(replacement > 0);
+
+        assert_eq!(lookup(dir, b"old.rb"), old);
+        assert_eq!(lookup(dir, b"replacement.rb"), replacement);
+        assert_eq!(rename(dir, b"old.rb", dir, b"replacement.rb"), 0);
+
+        assert_eq!(lookup(dir, b"old.rb"), 0);
+        assert_eq!(lookup(dir, b"replacement.rb"), old);
     }
 }

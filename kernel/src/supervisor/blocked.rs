@@ -71,6 +71,7 @@ pub(super) const RETRY_STATUS_ACTION_WAKE_RUNTIME_BRIDGE_WHILE_RUNNING: u32 = 1 
 pub(super) const STALE_RETRY_RESULT_ACTION_NONE: u32 = 0;
 pub(super) const STALE_RETRY_RESULT_ACTION_HANDLE_CURRENT_RESULT: u32 = 1;
 pub(super) const STALE_RETRY_RESULT_ACTION_HANDLE_CURRENT_RESULT_WAIT4: u32 = 2;
+pub(super) const STALE_RETRY_RESULT_ACTION_RESUME_WAIT4: u32 = 3;
 pub(super) const RPC_PIPE_SYNC_ACTION_NOT_PIPE: u32 = 0;
 pub(super) const RPC_PIPE_SYNC_ACTION_NONE: u32 = 1;
 pub(super) const RPC_PIPE_SYNC_ACTION_SYNC_SOCKET: u32 = 2;
@@ -207,7 +208,7 @@ fn state(vm_ptr: u32) -> Result<&'static ThreadState, i32> {
     Ok(unsafe { &*(vm_ptr as *const ThreadState) })
 }
 
-fn vfork_process_gate_blocks(vm: &ThreadState) -> bool {
+pub(super) fn vfork_process_gate_blocks(vm: &ThreadState) -> bool {
     if !crate::syscall::process::vfork_active() {
         return false;
     }
@@ -221,8 +222,10 @@ fn vfork_process_gate_blocks(vm: &ThreadState) -> bool {
 fn active_child_pid_for_blocked_wait(vm: &ThreadState) -> i32 {
     match vm.status {
         crate::abi::STATUS_PIPE_WAIT
-            if vm.epoll_timeout_ms < 0
-                && !crate::syscall::poll::wait_set_has_socket(vm, vm.guest_base) =>
+            if (vm.epoll_timeout_ms < 0
+                || blocked_or_current_syscall_nr(vm) == crate::abi::SYS_READ)
+                && !crate::syscall::poll::wait_set_has_socket(vm, vm.guest_base)
+                && !pipe_wait_has_ready_events_for_vm(vm as *const ThreadState as u32, vm) =>
         {
             let parent_pid = crate::syscall::signal::pid_from_vm(vm, vm.guest_base);
             crate::supervisor::process_lifecycle::active_child_pid(parent_pid)
@@ -445,9 +448,15 @@ pub(super) fn poll_wait_has_socket(vm_ptr: u32) -> i32 {
 
 pub(super) fn pipe_wait_has_ready_events(vm_ptr: u32) -> i32 {
     match state(vm_ptr) {
-        Ok(vm) => i32::from(pipe_wait_ready_count_for_vm(vm) > 0),
+        Ok(vm) => i32::from(pipe_wait_has_ready_events_for_vm(vm_ptr, vm)),
         Err(errno) => -errno,
     }
+}
+
+fn pipe_wait_has_ready_events_for_vm(vm_ptr: u32, vm: &ThreadState) -> bool {
+    pipe_wait_ready_count_for_vm(vm) > 0
+        || crate::exports::thread::thread_blocked_pipe_read_ready(vm_ptr) == 1
+        || crate::exports::thread::thread_blocked_pipe_write_ready(vm_ptr) == 1
 }
 
 pub(super) fn blocked_wait_may_depend_on_network(vm_ptr: u32) -> i32 {
@@ -553,13 +562,21 @@ fn resume_poll_wait_timeout(vm_ptr: u32) -> i64 {
     0
 }
 
+fn enqueue_runnable_after_resume_if_ok(vm_ptr: u32) {
+    if let Ok(vm) = state(vm_ptr)
+        && vm.status == crate::abi::STATUS_OK
+    {
+        super::resume::enqueue_runnable_thread(vm);
+    }
+}
+
 pub(super) fn resume_blocked_syscall(vm_ptr: u32, flags: u32) -> i64 {
     if vm_ptr == 0 {
         return -(crate::abi::EFAULT as i64);
     }
 
     let timeout_expired = (flags & RESUME_FLAG_TIMEOUT_EXPIRED) != 0;
-    match (status(vm_ptr), timeout_expired) {
+    let result = match (status(vm_ptr), timeout_expired) {
         (crate::abi::STATUS_WAIT4, _) => crate::exports::thread::thread_resume_wait4(vm_ptr),
         (
             crate::abi::STATUS_CONNECT
@@ -570,7 +587,9 @@ pub(super) fn resume_blocked_syscall(vm_ptr: u32, flags: u32) -> i64 {
         (crate::abi::STATUS_EPOLL_WAIT, true) => resume_epoll_wait_timeout(vm_ptr),
         (crate::abi::STATUS_PIPE_WAIT, true) => resume_poll_wait_timeout(vm_ptr),
         _ => crate::exports::thread::thread_resume_blocked_syscall(vm_ptr),
-    }
+    };
+    enqueue_runnable_after_resume_if_ok(vm_ptr);
+    result
 }
 
 pub(super) fn resume_flag_timeout_expired() -> u32 {
@@ -958,6 +977,10 @@ pub(super) fn stale_retry_result_action_handle_current_result_wait4() -> u32 {
     STALE_RETRY_RESULT_ACTION_HANDLE_CURRENT_RESULT_WAIT4
 }
 
+pub(super) fn stale_retry_result_action_resume_wait4() -> u32 {
+    STALE_RETRY_RESULT_ACTION_RESUME_WAIT4
+}
+
 pub(super) fn stale_retry_result_action(vm_ptr: u32, blocked_status: i32) -> i32 {
     let vm = match state(vm_ptr) {
         Ok(vm) => vm,
@@ -971,6 +994,13 @@ pub(super) fn stale_retry_result_action(vm_ptr: u32, blocked_status: i32) -> i32
         return STALE_RETRY_RESULT_ACTION_NONE as i32;
     }
     if blocked_status == crate::abi::STATUS_WAIT4 {
+        if vm.status == crate::abi::STATUS_OK
+            && vm.x[10] == 0
+            && vm.wait_kind != 0
+            && vm.wait_options & 1 == 0
+        {
+            return STALE_RETRY_RESULT_ACTION_RESUME_WAIT4 as i32;
+        }
         return STALE_RETRY_RESULT_ACTION_HANDLE_CURRENT_RESULT_WAIT4 as i32;
     }
     STALE_RETRY_RESULT_ACTION_HANDLE_CURRENT_RESULT as i32

@@ -3,6 +3,7 @@ pub(super) use tidemark_kernel::abi::*;
 pub(super) use tidemark_kernel::fs::fd_table::{self, BackendCleanup, FD_CLOEXEC};
 pub(super) use tidemark_kernel::harness::TestVm;
 pub(super) use tidemark_kernel::syscall::{epoll, pipe};
+pub(super) use tidemark_kernel::types::{FdEntry, OpenFileDesc};
 
 pub(super) const LOCK_SH: u64 = 0x1;
 pub(super) const LOCK_EX: u64 = 0x2;

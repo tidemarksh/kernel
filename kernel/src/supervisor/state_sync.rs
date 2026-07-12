@@ -481,7 +481,7 @@ pub(super) fn wake_blocked_action(status: i32, source: u32, flags: u32) -> i32 {
         }
         crate::abi::STATUS_EPOLL_WAIT => {
             if rpc_pending {
-                WAKE_BLOCKED_ACTION_SKIP as i32
+                WAKE_BLOCKED_ACTION_RETRY as i32
             } else {
                 WAKE_BLOCKED_ACTION_LOG_EPOLL_AND_RETRY as i32
             }
@@ -546,7 +546,11 @@ pub(super) fn owned_state_sync_action(status: i32, completed_sync_effects: u32, 
     }
 
     let dirty_process_memfs = process_memfs_dirty || mark_process_memfs_dirty;
-    let should_publish_dirty_memfs = status != crate::abi::STATUS_OK || has_pipe_effect;
+    // STATUS_FS is an intermediate host-op boundary. The owning kernel worker
+    // already has the mutation; peers pull dirty MemFS before their next FS
+    // request, and lifecycle/block boundaries publish it proactively.
+    let should_publish_dirty_memfs =
+        (status != crate::abi::STATUS_OK && status != crate::abi::STATUS_FS) || has_pipe_effect;
     if running_worker
         && kernel_worker_available
         && dirty_process_memfs
@@ -557,7 +561,7 @@ pub(super) fn owned_state_sync_action(status: i32, completed_sync_effects: u32, 
 
     if running_worker && epoll_state_kernel_owns && has_epoll_effect && held_epoll_ofd {
         action |= OWNED_STATE_SYNC_ACTION_SYNC_EPOLL;
-        if !wrote_or_drained_pipe {
+        if !wrote_or_drained_pipe || has_epoll_dependent_ofd_effect {
             action |= OWNED_STATE_SYNC_ACTION_RETRY_EPOLL_WAITERS;
         }
     }

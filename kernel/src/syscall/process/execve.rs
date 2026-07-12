@@ -764,6 +764,11 @@ fn replace_proc_self_exe(target: Option<&[u8]>) {
     let existing_exe = memfs::lookup(self_ino, b"exe");
     crate::tracepoints::record_execve_stage(714, existing_exe as u64, self_ino as u64);
     if existing_exe != 0 {
+        if let Some(target) = target {
+            if memfs::replace_symlink_target(existing_exe, target) == 0 {
+                return;
+            }
+        }
         let _ = memfs::unlink(self_ino, b"exe");
     }
 
@@ -828,6 +833,11 @@ fn ensure_proc_child_dir(parent_ino: u32, name: &[u8], mode: u32) -> u32 {
 fn replace_proc_file(proc_ino: u32, name: &[u8], data: &[u8]) {
     let existing = memfs::lookup(proc_ino, name);
     if existing != 0 {
+        if memfs::truncate(existing, 0) == 0
+            && memfs::write_file(existing, 0, data) == data.len() as i64
+        {
+            return;
+        }
         let _ = memfs::unlink(proc_ino, name);
     }
     let _ = memfs::create_file_with_data(proc_ino, name, data);
@@ -1024,6 +1034,28 @@ fn install_execve_process_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::harness::TestVm;
+
+    #[test]
+    fn repeated_procfs_snapshot_updates_preserve_inode_identity() {
+        let _t = TestVm::new();
+
+        install_procfs_snapshot(b"/bin/first", 64 * 1024 * 1024);
+        let initial_count = memfs::memfs_inode_count();
+        let initial_exe = memfs::resolve_path(b"/proc/self/exe");
+        let initial_stat = memfs::resolve_path(b"/proc/stat");
+        let initial_meminfo = memfs::resolve_path(b"/proc/meminfo");
+
+        install_procfs_snapshot(b"/bin/second-longer", 128 * 1024 * 1024);
+
+        assert_eq!(memfs::memfs_inode_count(), initial_count);
+        assert_eq!(memfs::resolve_path(b"/proc/self/exe"), initial_exe);
+        assert_eq!(memfs::resolve_path(b"/proc/stat"), initial_stat);
+        assert_eq!(memfs::resolve_path(b"/proc/meminfo"), initial_meminfo);
+        let mut target = [0u8; 64];
+        let target_len = memfs::read_link(initial_exe, &mut target);
+        assert_eq!(&target[..target_len], b"/bin/second-longer");
+    }
 
     #[test]
     fn execve_guest_limit_respects_explicit_guest_policy_limit() {
@@ -1056,6 +1088,7 @@ fn complete_execve_in_place_inner(
     base: u32,
     guest_limit: u64,
     flush_shared_mappings: bool,
+    reset_fs_ring: bool,
 ) -> i64 {
     let vm_ptr = vm as *mut ThreadState as u32;
     if vm.spawn_kind != SPAWN_KIND_EXECVE {
@@ -1460,6 +1493,7 @@ fn complete_execve_in_place_inner(
     vm.completed_pipe_sync_slots = 0;
     vm.completed_pipe_sync_read_slots = 0;
     vm.completed_pipe_sync_write_slots = 0;
+    vm.completed_pipe_sync_control_slots = 0;
     vm.completed_pipe_fresh_slots = 0;
     vm.completed_pipe_read_guest_ptr = 0;
     vm.completed_pipe_read_len = 0;
@@ -1485,6 +1519,9 @@ fn complete_execve_in_place_inner(
     if let Some(slot) = ensure_process(target_pid, target_ppid) {
         slot.did_exec = true;
     }
+    if reset_fs_ring {
+        crate::fs::ring_buffer::reset(old_fs_ring_base);
+    }
     crate::tracepoints::record_execve_stage(73, target_pid as u64, target_ppid as u64);
 
     crate::tracepoints::record_execve_dispatch(vm_ptr, 136);
@@ -1502,7 +1539,7 @@ fn effective_execve_guest_memory_limit(vm: &ThreadState, base: u32) -> u64 {
 }
 
 pub fn complete_execve_in_place(vm: &mut ThreadState, base: u32, guest_limit: u64) -> i64 {
-    complete_execve_in_place_inner(vm, base, guest_limit, true)
+    complete_execve_in_place_inner(vm, base, guest_limit, true, false)
 }
 
 pub fn complete_execve_in_place_from_handoff(
@@ -1510,7 +1547,7 @@ pub fn complete_execve_in_place_from_handoff(
     base: u32,
     guest_limit: u64,
 ) -> i64 {
-    complete_execve_in_place_inner(vm, base, guest_limit, true)
+    complete_execve_in_place_inner(vm, base, guest_limit, true, true)
 }
 
 /// execve: replace process image.

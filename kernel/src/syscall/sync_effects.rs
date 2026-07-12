@@ -45,6 +45,15 @@ pub(in crate::syscall) fn mark_pipe_sync_effect(
     }
 }
 
+pub(crate) fn mark_pipe_control_sync_effect(vm: &mut ThreadState, pipe_slot: u32) {
+    vm.completed_sync_effects |= SYNC_EFFECT_PIPE_STATE;
+    if pipe_slot > 0 && pipe_slot < 64 {
+        let bit = 1u64 << pipe_slot;
+        vm.completed_pipe_sync_slots |= bit;
+        vm.completed_pipe_sync_control_slots |= bit;
+    }
+}
+
 pub(super) fn mark_completed_syscall_sync_effects(
     vm: &mut ThreadState,
     base: u32,

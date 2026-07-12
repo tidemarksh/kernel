@@ -11,6 +11,7 @@ use super::csr::{CsrOutcome, exec_csr};
 use super::decode;
 use super::dispatch::StepOutcome;
 use crate::abi;
+use crate::fs::fd_table;
 use crate::types::ThreadState;
 
 const REG_WRITE_SOURCE_VM_RESTORE: u32 = 2;
@@ -18,8 +19,7 @@ const REG_WRITE_SOURCE_VM_RESTORE: u32 = 2;
 fn syscall_needs_runtime_sync_boundary(nr: u64) -> bool {
     matches!(
         nr,
-        abi::SYS_OPENAT
-            | abi::SYS_READ
+        abi::SYS_READ
             | abi::SYS_READV
             | abi::SYS_WRITE
             | abi::SYS_WRITEV
@@ -44,6 +44,87 @@ fn syscall_needs_runtime_sync_boundary(nr: u64) -> bool {
             | abi::SYS_TKILL
             | abi::SYS_TGKILL
     )
+}
+
+fn syscall_needs_runtime_sync_boundary_for_arg0_type(nr: u64, arg0_type: Option<i32>) -> bool {
+    match nr {
+        abi::SYS_READ | abi::SYS_READV | abi::SYS_WRITE | abi::SYS_WRITEV | abi::SYS_CLOSE => {
+            !matches!(arg0_type, Some(abi::FD_TYPE_FILE))
+        }
+        abi::SYS_FCNTL | abi::SYS_IOCTL => !matches!(arg0_type, Some(abi::FD_TYPE_FILE)),
+        _ => syscall_needs_runtime_sync_boundary(nr),
+    }
+}
+
+fn syscall_needs_runtime_sync_boundary_for_arg0_fd(
+    vm: &ThreadState,
+    base: u32,
+    nr: u64,
+    arg0: u64,
+) -> bool {
+    let arg0_type = fd_table::get_ofd(base, vm, arg0).map(|ofd| ofd.fd_type);
+    syscall_needs_runtime_sync_boundary_for_arg0_type(nr, arg0_type)
+}
+
+fn syscall_returns_synthetic_yield_boundary(nr: u64, status: i32, vm_status: i32) -> bool {
+    status == abi::STATUS_SLEEP
+        && vm_status == abi::STATUS_OK
+        && matches!(
+            nr,
+            abi::SYS_SCHED_YIELD | abi::SYS_NANOSLEEP | abi::SYS_CLOCK_NANOSLEEP
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openat_sync_effect_can_defer_until_next_runtime_boundary() {
+        assert!(!syscall_needs_runtime_sync_boundary(abi::SYS_OPENAT));
+        assert!(syscall_needs_runtime_sync_boundary(abi::SYS_READ));
+        assert!(syscall_needs_runtime_sync_boundary(abi::SYS_PIPE2));
+    }
+
+    #[test]
+    fn regular_file_data_and_close_sync_effects_can_defer() {
+        assert!(!syscall_needs_runtime_sync_boundary_for_arg0_type(
+            abi::SYS_READ,
+            Some(abi::FD_TYPE_FILE)
+        ));
+        assert!(!syscall_needs_runtime_sync_boundary_for_arg0_type(
+            abi::SYS_CLOSE,
+            Some(abi::FD_TYPE_FILE)
+        ));
+        assert!(syscall_needs_runtime_sync_boundary_for_arg0_type(
+            abi::SYS_READ,
+            Some(abi::FD_TYPE_PIPE)
+        ));
+        assert!(syscall_needs_runtime_sync_boundary_for_arg0_type(
+            abi::SYS_READ,
+            None
+        ));
+        assert!(syscall_needs_runtime_sync_boundary_for_arg0_type(
+            abi::SYS_PIPE2,
+            Some(abi::FD_TYPE_FILE)
+        ));
+        assert!(!syscall_needs_runtime_sync_boundary_for_arg0_type(
+            abi::SYS_FCNTL,
+            Some(abi::FD_TYPE_FILE)
+        ));
+        assert!(!syscall_needs_runtime_sync_boundary_for_arg0_type(
+            abi::SYS_IOCTL,
+            Some(abi::FD_TYPE_FILE)
+        ));
+        assert!(syscall_needs_runtime_sync_boundary_for_arg0_type(
+            abi::SYS_FCNTL,
+            Some(abi::FD_TYPE_PIPE)
+        ));
+        assert!(syscall_needs_runtime_sync_boundary_for_arg0_type(
+            abi::SYS_IOCTL,
+            Some(abi::FD_TYPE_SOCKET)
+        ));
+    }
 }
 
 // =============================================================================
@@ -73,6 +154,8 @@ pub(super) unsafe fn exec_system(
         match funct12 {
             0 => {
                 let syscall_nr = x[17];
+                let runtime_sync_boundary =
+                    syscall_needs_runtime_sync_boundary_for_arg0_fd(vm, base, syscall_nr, x[10]);
                 if syscall_nr == crate::abi::SYS_EXECVE {
                     crate::tracepoints::record_execve_ecall(
                         vm.process_ptr as u64
@@ -102,7 +185,9 @@ pub(super) unsafe fn exec_system(
                     x,
                 );
                 if status != abi::STATUS_OK {
-                    vm.status = status;
+                    if !syscall_returns_synthetic_yield_boundary(syscall_nr, status, vm.status) {
+                        vm.status = status;
+                    }
                     return StepOutcome::Return(remaining);
                 }
                 x[0] = 0;
@@ -115,7 +200,7 @@ pub(super) unsafe fn exec_system(
                     prev_s11,
                     x,
                 );
-                if syscall_needs_runtime_sync_boundary(syscall_nr) {
+                if runtime_sync_boundary {
                     return StepOutcome::Return(remaining);
                 }
                 StepOutcome::Restart

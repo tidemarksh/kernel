@@ -54,6 +54,7 @@ struct AddressSpaceState {
     brk_current: u64,
     mmap_next: u64,
     has_prot_none: u32,
+    has_writable_exec_seen: u32,
     permit_cache_start: [u64; PERMIT_CACHE_SLOTS],
     permit_cache_end: [u64; PERMIT_CACHE_SLOTS],
     permit_cache_prot: [i32; PERMIT_CACHE_SLOTS],
@@ -119,6 +120,7 @@ pub(crate) struct AddressSpaceStateImage {
     brk_current: u64,
     mmap_next: u64,
     has_prot_none: u32,
+    has_writable_exec_seen: u32,
 }
 
 impl AddressSpaceStateImage {
@@ -135,6 +137,7 @@ impl AddressSpaceStateImage {
             brk_current: 0,
             mmap_next: 0,
             has_prot_none: 0,
+            has_writable_exec_seen: 0,
         }
     }
 
@@ -151,6 +154,8 @@ impl AddressSpaceStateImage {
 /// Pointer to AddressSpaceState in kernel Worker linear memory (allocated via alloc.rs).
 static mut MEM_STATE: *mut AddressSpaceState = core::ptr::null_mut();
 static MEM_STATE_LOCK: AtomicU32 = AtomicU32::new(0);
+static PERMIT_CACHE_GENERATION: AtomicU32 = AtomicU32::new(1);
+static HAS_SHARED_FILE_MAPPINGS: AtomicU32 = AtomicU32::new(0);
 
 pub const DEFAULT_STACK_SIZE: u64 = 8 * 1024 * 1024;
 const MIN_STACK_SIZE: u64 = 64 * 1024;
@@ -192,6 +197,9 @@ pub fn attach_mem_state_ptr(ptr: u32) {
             ptr as *mut AddressSpaceState,
         );
     }
+    let _guard = address_space_lock();
+    recompute_shared_file_mappings(ms());
+    bump_permit_cache_generation();
 }
 
 pub(crate) fn record_debug_syscall(
@@ -340,6 +348,7 @@ pub fn init(brk_start: u64) {
                 brk_current: brk_start,
                 mmap_next: mmap_start,
                 has_prot_none: 0,
+                has_writable_exec_seen: 0,
                 permit_cache_start: [0; PERMIT_CACHE_SLOTS],
                 permit_cache_end: [0; PERMIT_CACHE_SLOTS],
                 permit_cache_prot: [0; PERMIT_CACHE_SLOTS],
@@ -350,6 +359,8 @@ pub fn init(brk_start: u64) {
             ptr as *mut AddressSpaceState,
         );
     }
+    HAS_SHARED_FILE_MAPPINGS.store(0, Ordering::Release);
+    bump_permit_cache_generation();
 }
 
 pub fn has_prot_none() -> bool {
@@ -357,10 +368,52 @@ pub fn has_prot_none() -> bool {
     ms().has_prot_none != 0
 }
 
+pub fn has_writable_exec_seen() -> bool {
+    let _guard = address_space_lock();
+    ms().has_writable_exec_seen != 0
+}
+
+#[inline(always)]
+fn is_writable_exec_prot(prot: i32) -> bool {
+    (prot & (PROT_WRITE | PROT_EXEC)) == (PROT_WRITE | PROT_EXEC)
+}
+
+#[inline(always)]
+fn mark_writable_exec_seen(s: &mut AddressSpaceState, prot: i32) {
+    if is_writable_exec_prot(prot) {
+        s.has_writable_exec_seen = 1;
+    }
+}
+
 fn invalidate_permit_cache(s: &mut AddressSpaceState) {
     s.permit_cache_start = [0; PERMIT_CACHE_SLOTS];
     s.permit_cache_end = [0; PERMIT_CACHE_SLOTS];
     s.permit_cache_prot = [0; PERMIT_CACHE_SLOTS];
+    bump_permit_cache_generation();
+}
+
+fn bump_permit_cache_generation() {
+    let mut current = PERMIT_CACHE_GENERATION.load(Ordering::Relaxed);
+    loop {
+        let mut next = current.wrapping_add(1);
+        if next == 0 {
+            next = 1;
+        }
+        match PERMIT_CACHE_GENERATION.compare_exchange_weak(
+            current,
+            next,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+#[inline(always)]
+pub(crate) fn permit_cache_generation() -> u32 {
+    PERMIT_CACHE_GENERATION.load(Ordering::Acquire)
 }
 
 #[inline(always)]
@@ -401,6 +454,7 @@ pub(crate) fn capture_state_image_into(image: &mut AddressSpaceStateImage) {
     image.brk_current = s.brk_current;
     image.mmap_next = s.mmap_next;
     image.has_prot_none = s.has_prot_none;
+    image.has_writable_exec_seen = s.has_writable_exec_seen;
 }
 
 #[inline(never)]
@@ -461,6 +515,8 @@ pub(crate) fn restore_state_from_image(image: &AddressSpaceStateImage) {
     s.brk_current = image.brk_current;
     s.mmap_next = image.mmap_next;
     s.has_prot_none = image.has_prot_none;
+    s.has_writable_exec_seen = image.has_writable_exec_seen;
+    recompute_shared_file_mappings(s);
     invalidate_permit_cache(s);
 }
 
@@ -477,6 +533,8 @@ pub fn reset_for_execve_with_flush(base: u32, brk_start: u64, flush_shared: bool
     s.brk_current = brk_start;
     s.mmap_next = mmap_start;
     s.has_prot_none = 0;
+    s.has_writable_exec_seen = 0;
+    HAS_SHARED_FILE_MAPPINGS.store(0, Ordering::Release);
     invalidate_permit_cache(s);
 }
 
@@ -694,9 +752,15 @@ fn range_fully_covered_by_sparse_anon_reservation(
 }
 
 #[inline(always)]
-pub fn guest_range_permitted(vm: &ThreadState, base: u32, start: u64, len: u64, prot: i32) -> bool {
+pub(crate) fn guest_range_permitted_cover(
+    vm: &ThreadState,
+    base: u32,
+    start: u64,
+    len: u64,
+    prot: i32,
+) -> Option<(u64, u64, u32)> {
     if len == 0 {
-        return true;
+        return Some((start, start, permit_cache_generation()));
     }
     let Some(end) = start.checked_add(len) else {
         crate::tracepoints::record_guest_range_permit_check(prot as u32, PERMIT_OUTCOME_DENIED);
@@ -710,7 +774,7 @@ pub fn guest_range_permitted(vm: &ThreadState, base: u32, start: u64, len: u64, 
             (0, 0, 0),
             PERMIT_DENIED_OVERFLOW,
         );
-        return false;
+        return None;
     };
     let guest_limit = effective_guest_limit(vm, base).min(current_linear_guest_limit(base));
     if end > guest_limit {
@@ -725,11 +789,12 @@ pub fn guest_range_permitted(vm: &ThreadState, base: u32, start: u64, len: u64, 
             (0, 0, 0),
             PERMIT_DENIED_LIMIT,
         );
-        return false;
+        return None;
     }
 
     let _guard = address_space_lock();
     let s = ms();
+    let generation = permit_cache_generation();
     let slot = permit_cache_slot(prot);
     for i in slot..slot + PERMIT_CACHE_WAYS {
         if start >= s.permit_cache_start[i]
@@ -740,7 +805,11 @@ pub fn guest_range_permitted(vm: &ThreadState, base: u32, start: u64, len: u64, 
                 prot as u32,
                 PERMIT_OUTCOME_CACHE_HIT,
             );
-            return true;
+            return Some((
+                s.permit_cache_start[i],
+                s.permit_cache_end[i].min(guest_limit),
+                generation,
+            ));
         }
     }
     let mut cur = start;
@@ -757,7 +826,7 @@ pub fn guest_range_permitted(vm: &ThreadState, base: u32, start: u64, len: u64, 
                 containing_vma_debug_locked(s, cur),
                 PERMIT_DENIED_NO_COVER,
             );
-            return false;
+            return None;
         };
         if cover_end <= cur {
             crate::tracepoints::record_guest_range_permit_check(prot as u32, PERMIT_OUTCOME_DENIED);
@@ -771,7 +840,7 @@ pub fn guest_range_permitted(vm: &ThreadState, base: u32, start: u64, len: u64, 
                 (cover_start, cover_end, cover_prot),
                 PERMIT_DENIED_STALLED_COVER,
             );
-            return false;
+            return None;
         }
         if cur == start && end <= cover_end {
             cache_permitted_range(s, cover_start, cover_end, cover_prot, prot);
@@ -779,12 +848,17 @@ pub fn guest_range_permitted(vm: &ThreadState, base: u32, start: u64, len: u64, 
                 prot as u32,
                 PERMIT_OUTCOME_COVER_HIT,
             );
-            return true;
+            return Some((cover_start, cover_end.min(guest_limit), generation));
         }
         cur = cover_end.min(end);
     }
     crate::tracepoints::record_guest_range_permit_check(prot as u32, PERMIT_OUTCOME_COVER_HIT);
-    true
+    Some((start, end, generation))
+}
+
+#[inline(always)]
+pub fn guest_range_permitted(vm: &ThreadState, base: u32, start: u64, len: u64, prot: i32) -> bool {
+    guest_range_permitted_cover(vm, base, start, len, prot).is_some()
 }
 
 pub fn register_elf_load_segment(start: u64, end: u64, prot: i32) {
@@ -804,6 +878,7 @@ pub fn register_elf_load_segment(start: u64, end: u64, prot: i32) {
         _pad: 0,
         offset: 0,
     });
+    mark_writable_exec_seen(s, prot);
     s.vmas.sort_by_key(|v| v.start);
     recompute_prot_none(s);
     invalidate_permit_cache(s);
@@ -1071,6 +1146,7 @@ fn map_fixed_anonymous(base: u32, start: u64, length: u64, prot: i32, guest_limi
         _pad: 0,
         offset: 0,
     });
+    mark_writable_exec_seen(s, prot);
     s.vmas.sort_by_key(|v| v.start);
     recompute_prot_none(s);
     invalidate_permit_cache(s);
@@ -1398,10 +1474,8 @@ pub fn sys_mmap(
         offset,
     });
     s.vmas.sort_by_key(|v| v.start);
-
-    if prot as i32 == PROT_NONE {
-        s.has_prot_none = 1;
-    }
+    mark_writable_exec_seen(s, prot as i32);
+    recompute_prot_none(s);
     invalidate_permit_cache(s);
 
     start as i64
@@ -1674,6 +1748,7 @@ pub fn sys_mprotect(vm: &mut ThreadState, base: u32, addr: u64, length: u64, pro
     }
 
     s.vmas = rebuilt_vmas;
+    mark_writable_exec_seen(s, prot as i32);
     recompute_prot_none(s);
     invalidate_permit_cache(s);
     0
@@ -1990,15 +2065,35 @@ fn find_vma_containing(s: &AddressSpaceState, addr: u64) -> Option<usize> {
 
 fn recompute_prot_none(s: &mut AddressSpaceState) {
     s.has_prot_none = 0;
+    let mut has_shared_file_mappings = 0;
     for v in s.vmas.iter() {
         if v.prot == PROT_NONE {
             s.has_prot_none = 1;
-            return;
+        }
+        if v.fd >= 0 && (v.flags as u64 & MAP_SHARED) != 0 {
+            has_shared_file_mappings = 1;
         }
     }
+    HAS_SHARED_FILE_MAPPINGS.store(has_shared_file_mappings, Ordering::Release);
+}
+
+fn recompute_shared_file_mappings(s: &AddressSpaceState) {
+    let has_shared_file_mappings = s
+        .vmas
+        .iter()
+        .any(|v| v.fd >= 0 && (v.flags as u64 & MAP_SHARED) != 0);
+    HAS_SHARED_FILE_MAPPINGS.store(has_shared_file_mappings as u32, Ordering::Release);
+}
+
+#[inline(always)]
+fn has_shared_file_mappings() -> bool {
+    HAS_SHARED_FILE_MAPPINGS.load(Ordering::Acquire) != 0
 }
 
 fn flush_shared_mappings_in_range(base: u32, start: u64, length: u64) {
+    if !has_shared_file_mappings() {
+        return;
+    }
     let end = start.saturating_add(length);
     let s = ms();
     for vma in s.vmas.iter() {
@@ -2012,6 +2107,9 @@ fn flush_shared_mappings_in_range(base: u32, start: u64, length: u64) {
 }
 
 pub(crate) fn flush_shared_mappings_for_guest_write(base: u32, start: u64, length: u64) -> bool {
+    if !has_shared_file_mappings() {
+        return false;
+    }
     let end = start.saturating_add(length);
     let _guard = address_space_lock();
     let s = ms();

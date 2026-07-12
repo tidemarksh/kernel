@@ -228,6 +228,47 @@ pub unsafe fn alloc_zeroed(size: u32, align: u32) -> u32 {
     ptr
 }
 
+/// Allocate and zero a region whose end must not exceed `limit`.
+///
+/// The shared allocator checks the limit inside its compare-exchange loop so
+/// concurrent thread allocations cannot race past a reserved address boundary.
+pub unsafe fn alloc_zeroed_below(size: u32, align: u32, limit: u32) -> u32 {
+    #[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
+    let ptr = if crate::syscall::process::shared_heap_ptr().is_some() {
+        crate::syscall::process::shared_heap_alloc_below(size, align, limit).unwrap_or(0)
+    } else {
+        let current = unsafe { HEAP_PTR };
+        let Some(align_mask) = align.checked_sub(1) else {
+            return 0;
+        };
+        if align == 0 || align & align_mask != 0 {
+            return 0;
+        }
+        let Some(aligned) = current
+            .checked_add(align_mask)
+            .map(|value| value & !align_mask)
+        else {
+            return 0;
+        };
+        let Some(end) = aligned.checked_add(size) else {
+            return 0;
+        };
+        if end > limit {
+            return 0;
+        }
+        unsafe { HEAP_PTR = end };
+        aligned
+    };
+    #[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
+    let ptr = unsafe { alloc(size, align) };
+
+    if ptr == 0 || ptr.checked_add(size).is_none_or(|end| end > limit) {
+        return 0;
+    }
+    unsafe { core::ptr::write_bytes(ptr as *mut u8, 0, size as usize) };
+    ptr
+}
+
 /// Convenience: allocate space for a type T, zeroed.
 ///
 /// # Safety

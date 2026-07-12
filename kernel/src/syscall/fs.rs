@@ -56,11 +56,12 @@ const TMPFS_MAGIC: u64 = 0x0102_1994;
 const S_IFIFO: u32 = 0o010000;
 const S_IFSOCK: u32 = 0o140000;
 const MAX_PATH_SYMLINK_FOLLOWS: u32 = 40;
-pub use getdents::sys_getdents64;
+pub use getdents::{complete_submitted_getdents64, sys_getdents64};
 pub use lseek::sys_lseek;
 pub use meta::{
-    sys_faccessat, sys_fchmod, sys_fchmodat, sys_fchown, sys_fchownat, sys_fstat, sys_fsync,
-    sys_ftruncate, sys_newfstatat, sys_readlinkat, sys_statfs, sys_truncate, sys_utimensat,
+    complete_submitted_ftruncate, sys_faccessat, sys_fchmod, sys_fchmodat, sys_fchown,
+    sys_fchownat, sys_fstat, sys_fsync, sys_ftruncate, sys_newfstatat, sys_readlinkat, sys_statfs,
+    sys_truncate, sys_utimensat,
 };
 pub use mount::{sys_chroot, sys_mount, sys_umount2};
 pub use mutation::{sys_mkdirat, sys_renameat, sys_renameat2, sys_unlinkat};
@@ -74,10 +75,13 @@ pub use pending::{
     dispatch_pwrite64, dispatch_read, dispatch_renameat2, dispatch_truncate, dispatch_unlinkat,
     dispatch_write, pending_request_absolute_path, pending_request_effects, pending_request_opcode,
     pending_request_path_len, pending_request_path_ptr, pending_request_secondary_absolute_path,
-    pending_request_target_ino, process_pending_requests, resume_from_fs,
+    pending_request_target_ino, process_pending_requests, resume_from_fs, resume_from_fs_result,
 };
 pub(crate) use read_write::PIPE_READ_EOF_SYNC_RETRY_MARKER;
-pub use read_write::{sys_pread64, sys_pwrite64, sys_read, sys_readv, sys_write};
+pub use read_write::{
+    complete_submitted_regular_file_read, complete_submitted_regular_file_write, sys_pread64,
+    sys_pwrite64, sys_read, sys_readv, sys_write,
+};
 pub(crate) use state::sys_umask;
 pub use xattr::{
     sys_fgetxattr, sys_flistxattr, sys_fremovexattr, sys_fsetxattr, sys_getxattr, sys_listxattr,

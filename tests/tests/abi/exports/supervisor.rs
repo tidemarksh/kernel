@@ -48,6 +48,28 @@ fn replay_entry_offset(index: u32) -> usize {
 }
 
 #[test]
+fn supervisor_child_exit_blocked_parent_actions_include_epoll_wait() {
+    assert_eq!(
+        supervisor_wait4_child_exit_blocked_parent_action(STATUS_WAIT4),
+        supervisor_wait4_child_exit_blocked_parent_action_invalidate_rpc() as i32
+    );
+    assert_eq!(
+        supervisor_wait4_child_exit_blocked_parent_action(STATUS_PIPE_WAIT),
+        (supervisor_wait4_child_exit_blocked_parent_action_invalidate_rpc()
+            | supervisor_wait4_child_exit_blocked_parent_action_clear_pipe_sync_before_retry())
+            as i32
+    );
+    assert_eq!(
+        supervisor_wait4_child_exit_blocked_parent_action(STATUS_EPOLL_WAIT),
+        supervisor_wait4_child_exit_blocked_parent_action_invalidate_rpc() as i32
+    );
+    assert_eq!(
+        supervisor_wait4_child_exit_blocked_parent_action(STATUS_OK),
+        supervisor_wait4_child_exit_blocked_parent_action_none() as i32
+    );
+}
+
+#[test]
 fn supervisor_pipe_slot_snapshot_merge_actions_are_kernel_owned() {
     let shared = supervisor_pipe_slot_snapshot_context_shared_state();
     let thread = supervisor_pipe_slot_snapshot_context_thread_step();
@@ -725,7 +747,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
             supervisor_blocked_wait_wake_source_socket_sync(),
             supervisor_blocked_wait_wake_flag_rpc_pending()
         ),
-        supervisor_blocked_wait_wake_action_skip() as i32
+        supervisor_blocked_wait_wake_action_retry() as i32
     );
     assert_eq!(
         supervisor_blocked_wait_wake_action(
@@ -885,6 +907,14 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_owned_state_sync_action(
             STATUS_OK,
+            1 << 7,
+            owned_state_running | owned_state_kernel_worker,
+        ),
+        supervisor_owned_state_sync_action_mark_process_memfs_dirty() as i32
+    );
+    assert_eq!(
+        supervisor_owned_state_sync_action(
+            STATUS_FS,
             1 << 7,
             owned_state_running | owned_state_kernel_worker,
         ),
@@ -1210,8 +1240,8 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         0
     );
     assert_eq!(supervisor_fs_backing_fill_span_offset(), 0);
-    assert_eq!(supervisor_fs_backing_fill_span_end(), 1024 * 1024);
-    assert_eq!(supervisor_fs_backing_fill_span_length(), 1024 * 1024);
+    assert_eq!(supervisor_fs_backing_fill_span_end(), 8 * 1024);
+    assert_eq!(supervisor_fs_backing_fill_span_length(), 8 * 1024);
     assert_eq!(
         supervisor_fs_backing_fill_span_decision(
             tidemark_kernel::fs::ring_buffer::FS_OP_READ,
@@ -1339,6 +1369,8 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
             0,
             0,
             vm_ptr,
+            0,
+            0,
         );
         assert!(idx >= 0);
         assert_eq!(
@@ -1594,6 +1626,24 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     );
     assert_eq!(
         supervisor_fs_data_sync_decision(
+            supervisor_fs_data_sync_kind_restore(),
+            2,
+            0,
+            0,
+            tidemark_kernel::fs::memfs::S_IFREG | 0o644,
+            0,
+            1,
+            tidemark_kernel::fs::memfs::S_IFREG | 0o644,
+            64,
+            7,
+            0,
+            0,
+            0,
+        ),
+        supervisor_fs_sync_action_externalize() as i32
+    );
+    assert_eq!(
+        supervisor_fs_data_sync_decision(
             99,
             2,
             tidemark_kernel::fs::memfs::S_IFREG | 0o644,
@@ -1764,21 +1814,21 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_fs_backing_fill_probe_direct(
             tidemark_kernel::fs::ring_buffer::FS_OP_MMAP,
-            16 * 1024 * 1024,
+            128 * 1024,
         ),
         1
     );
     assert_eq!(
         supervisor_fs_backing_fill_probe_direct(
             tidemark_kernel::fs::ring_buffer::FS_OP_MMAP,
-            16 * 1024 * 1024 - 1,
+            128 * 1024 - 1,
         ),
         0
     );
     assert_eq!(
         supervisor_fs_backing_fill_probe_direct(
             tidemark_kernel::fs::ring_buffer::FS_OP_READ,
-            16 * 1024 * 1024,
+            128 * 1024,
         ),
         0
     );
@@ -1789,7 +1839,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_fs_backing_fill_mode_decision(
             tidemark_kernel::fs::ring_buffer::FS_OP_MMAP,
-            16 * 1024 * 1024,
+            128 * 1024,
             1,
             1,
         ),
@@ -1798,7 +1848,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_fs_backing_fill_mode_decision(
             tidemark_kernel::fs::ring_buffer::FS_OP_MMAP,
-            16 * 1024 * 1024,
+            128 * 1024,
             1,
             0,
         ),
@@ -1807,7 +1857,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_fs_backing_fill_mode_decision(
             tidemark_kernel::fs::ring_buffer::FS_OP_READ,
-            16 * 1024 * 1024,
+            128 * 1024,
             1,
             1,
         ),
@@ -2155,6 +2205,10 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         (supervisor_wait4_child_exit_blocked_parent_action_invalidate_rpc()
             | supervisor_wait4_child_exit_blocked_parent_action_clear_pipe_sync_before_retry())
             as i32
+    );
+    assert_eq!(
+        supervisor_wait4_child_exit_blocked_parent_action(STATUS_EPOLL_WAIT),
+        supervisor_wait4_child_exit_blocked_parent_action_invalidate_rpc() as i32
     );
     assert_eq!(
         supervisor_wait4_child_exit_blocked_parent_action(STATUS_OK),
@@ -2743,6 +2797,18 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_blocked_stale_retry_result_action_none() as i32
     );
     t.vm.status = STATUS_OK;
+    assert_eq!(
+        supervisor_blocked_stale_retry_result_action(vm_ptr, STATUS_WAIT4),
+        supervisor_blocked_stale_retry_result_action_handle_current_result_wait4() as i32
+    );
+    t.vm.wait_kind = 1;
+    t.vm.wait_options = 0;
+    t.vm.x[10] = 0;
+    assert_eq!(
+        supervisor_blocked_stale_retry_result_action(vm_ptr, STATUS_WAIT4),
+        supervisor_blocked_stale_retry_result_action_resume_wait4() as i32
+    );
+    t.vm.wait_options = 1;
     assert_eq!(
         supervisor_blocked_stale_retry_result_action(vm_ptr, STATUS_WAIT4),
         supervisor_blocked_stale_retry_result_action_handle_current_result_wait4() as i32
@@ -3510,13 +3576,23 @@ fn supervisor_shadow_rejects_non_empty_null_records() {
 }
 
 #[test]
-fn supervisor_fd_entry_restore_action_preserves_live_regular_file_fds() {
+fn supervisor_fd_entry_restore_action_preserves_live_file_like_fds() {
     let mut t = TestVm::new();
     let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
     let fd = t.sys_openat(b"/fd-entry-restore-action", O_CREAT | O_RDWR);
     assert!(fd >= 3);
     let live_ofd = process_fd_ofd_id(vm_ptr, fd as u32);
     assert_ne!(live_ofd, 0);
+    assert_eq!(
+        supervisor_fd_entry_restore_action(
+            vm_ptr,
+            fd as u32,
+            live_ofd + 1,
+            u64::MAX,
+            supervisor_fd_entry_restore_flag_preserve_live_regular_file(),
+        ),
+        supervisor_fd_entry_restore_action_skip() as i32
+    );
 
     assert_eq!(
         supervisor_fd_entry_restore_action(
@@ -3542,6 +3618,32 @@ fn supervisor_fd_entry_restore_action_preserves_live_regular_file_fds() {
         supervisor_fd_entry_restore_action(
             vm_ptr,
             fd as u32,
+            0,
+            SYS_CLOSE,
+            supervisor_fd_entry_restore_flag_preserve_live_regular_file(),
+        ),
+        supervisor_fd_entry_restore_action_apply() as i32
+    );
+
+    let devnull_fd = t.sys_openat(b"/dev/null", O_RDONLY);
+    assert!(devnull_fd >= 3);
+    let devnull_ofd = process_fd_ofd_id(vm_ptr, devnull_fd as u32);
+    assert_ne!(devnull_ofd, 0);
+    assert_eq!(kernel_ofd_fd_type(devnull_ofd), FD_TYPE_DEVNULL);
+    assert_eq!(
+        supervisor_fd_entry_restore_action(
+            vm_ptr,
+            devnull_fd as u32,
+            0,
+            u64::MAX,
+            supervisor_fd_entry_restore_flag_preserve_live_regular_file(),
+        ),
+        supervisor_fd_entry_restore_action_skip() as i32
+    );
+    assert_eq!(
+        supervisor_fd_entry_restore_action(
+            vm_ptr,
+            devnull_fd as u32,
             0,
             SYS_CLOSE,
             supervisor_fd_entry_restore_flag_preserve_live_regular_file(),
@@ -3592,6 +3694,30 @@ fn supervisor_fd_and_ofd_slot_restore_actions_are_kernel_owned() {
         supervisor_fd_entry_restore_action_skip() as i32
     );
 
+    let epfd = tidemark_kernel::syscall::epoll::sys_epoll_create1(&mut t.vm, t.base, 0);
+    assert!(epfd >= 3);
+    let epoll_ofd = process_fd_ofd_id(vm_ptr, epfd as u32);
+    assert_ne!(epoll_ofd, 0);
+    assert_eq!(kernel_ofd_fd_type(epoll_ofd), FD_TYPE_EPOLL);
+    let event_fd = tidemark_kernel::syscall::pipe::sys_eventfd2(&mut t.vm, t.base, 0, 0);
+    assert!(event_fd >= 3);
+    let event_ofd = process_fd_ofd_id(vm_ptr, event_fd as u32);
+    assert_ne!(event_ofd, 0);
+    assert_eq!(kernel_ofd_fd_type(event_ofd), FD_TYPE_EVENTFD);
+    let preserve_epoll = supervisor_fd_entry_restore_flag_preserve_live_epoll_dependent();
+    assert_eq!(
+        supervisor_fd_entry_restore_action(vm_ptr, epfd as u32, 0, u64::MAX, preserve_epoll),
+        supervisor_fd_entry_restore_action_skip() as i32
+    );
+    assert_eq!(
+        supervisor_fd_entry_restore_action(vm_ptr, event_fd as u32, 0, u64::MAX, preserve_epoll),
+        supervisor_fd_entry_restore_action_skip() as i32
+    );
+    assert_eq!(
+        supervisor_fd_entry_restore_action(vm_ptr, epfd as u32, 0, SYS_CLOSE, preserve_epoll),
+        supervisor_fd_entry_restore_action_apply() as i32
+    );
+
     let high_host_fd = kernel_ofd_host_fd(high_ofd);
     let high_ino = kernel_ofd_ino(high_ofd);
     assert_eq!(
@@ -3623,7 +3749,7 @@ fn supervisor_fd_and_ofd_slot_restore_actions_are_kernel_owned() {
     let trusted = supervisor_ofd_slot_restore_flag_trust_regular_file_offset();
     assert_eq!(
         supervisor_ofd_slot_restore_action(high_ofd, 0, 0, 0, 0, u64::MAX, referenced),
-        supervisor_fd_entry_restore_action_apply() as i32
+        supervisor_fd_entry_restore_action_skip() as i32
     );
     assert_eq!(
         supervisor_ofd_slot_restore_action(high_ofd, 0, 0, 0, 0, u64::MAX, 0),
@@ -3650,6 +3776,83 @@ fn supervisor_fd_and_ofd_slot_restore_actions_are_kernel_owned() {
             64,
             u64::MAX,
             referenced | trusted,
+        ),
+        supervisor_fd_entry_restore_action_apply() as i32
+    );
+    assert_eq!(
+        supervisor_ofd_slot_restore_action(
+            high_ofd,
+            FD_TYPE_FILE,
+            high_host_fd,
+            high_ino + 1,
+            8192,
+            u64::MAX,
+            referenced | trusted,
+        ),
+        supervisor_fd_entry_restore_action_skip() as i32
+    );
+}
+
+#[test]
+fn supervisor_ofd_slot_restore_rejects_stale_pipe_generation() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
+    let pipefd_addr = 0x2400;
+
+    assert_eq!(
+        tidemark_kernel::syscall::pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0),
+        0
+    );
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) };
+    let write_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr + 4) };
+    let read_ofd = process_fd_ofd_id(vm_ptr, read_fd);
+    let write_ofd = process_fd_ofd_id(vm_ptr, write_fd);
+    assert_ne!(read_ofd, 0);
+    assert_ne!(write_ofd, 0);
+
+    let pipe_slot = kernel_ofd_ino(read_ofd);
+    let pipe_generation = tidemark_kernel::syscall::pipe::pipe_generation(pipe_slot);
+    let stale_pipe_generation = if pipe_generation > 1 {
+        pipe_generation - 1
+    } else {
+        pipe_generation + 1
+    };
+    assert_eq!(kernel_ofd_fd_type(read_ofd), FD_TYPE_PIPE);
+    assert_eq!(kernel_ofd_fd_type(write_ofd), FD_TYPE_PIPE);
+    assert_eq!(kernel_ofd_ino(write_ofd), pipe_slot);
+    assert_eq!(kernel_ofd_offset(read_ofd), pipe_generation as i64);
+    assert_eq!(kernel_ofd_offset(write_ofd), pipe_generation as i64);
+    assert_eq!(
+        supervisor_ofd_slot_write_action(
+            write_ofd,
+            FD_TYPE_PIPE,
+            kernel_ofd_host_fd(write_ofd),
+            pipe_slot,
+            stale_pipe_generation as i64,
+        ),
+        supervisor_fd_entry_restore_action_skip() as i32
+    );
+    assert_eq!(
+        supervisor_ofd_slot_restore_action(
+            write_ofd,
+            FD_TYPE_PIPE,
+            kernel_ofd_host_fd(write_ofd),
+            pipe_slot,
+            stale_pipe_generation as i64,
+            u64::MAX,
+            0,
+        ),
+        supervisor_fd_entry_restore_action_skip() as i32
+    );
+    assert_eq!(
+        supervisor_ofd_slot_restore_action(
+            write_ofd,
+            FD_TYPE_PIPE,
+            kernel_ofd_host_fd(write_ofd),
+            pipe_slot,
+            pipe_generation as i64,
+            u64::MAX,
+            0,
         ),
         supervisor_fd_entry_restore_action_apply() as i32
     );

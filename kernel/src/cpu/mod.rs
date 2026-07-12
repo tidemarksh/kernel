@@ -24,7 +24,7 @@ pub mod trace;
 use self::block_cache::{BLOCK_LOOP_SIMPLE_LOAD_SCAN, BlockCache};
 use self::block_exec::{BlockOutcome, exec_block, exec_simple_load_scan_loop};
 use self::dispatch::{StepOutcome, exec_decoded};
-use self::fault::{deliver_sync_sigsegv, guest_range_in_bounds};
+use self::fault::{AccessPermitCache, deliver_sync_sigsegv, guest_range_in_bounds};
 use self::trace::{HotCounts, JitBitmap, TraceBuffer};
 use crate::abi;
 use crate::guest_mem;
@@ -50,6 +50,36 @@ struct ExecLoopCtx<'a> {
     hot_counts: Option<&'a mut HotCounts>,
     jit_bitmap: Option<&'a JitBitmap>,
     trace_buf: Option<&'a mut TraceBuffer>,
+}
+
+#[inline(always)]
+fn cached_exec_fetch_permitted(
+    vm: &ThreadState,
+    base: u32,
+    pc: u64,
+    width: u64,
+    cache_start: &mut u64,
+    cache_end: &mut u64,
+    cache_generation: &mut u32,
+) -> bool {
+    let Some(end) = pc.checked_add(width) else {
+        *cache_generation = 0;
+        return false;
+    };
+    let generation = crate::syscall::memory::permit_cache_generation();
+    if *cache_generation == generation && pc >= *cache_start && end <= *cache_end {
+        return true;
+    }
+    let Some((cover_start, cover_end, cover_generation)) =
+        crate::syscall::memory::guest_range_permitted_cover(vm, base, pc, width, abi::PROT_EXEC)
+    else {
+        *cache_generation = 0;
+        return false;
+    };
+    *cache_start = cover_start;
+    *cache_end = cover_end;
+    *cache_generation = cover_generation;
+    true
 }
 
 /// Execute up to `budget` guest instructions.
@@ -158,6 +188,10 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
     let mut hot_counts = ctx.hot_counts.take();
     let jit_bitmap = ctx.jit_bitmap;
     let mut trace_buf = ctx.trace_buf.take();
+    let mut exec_permit_start = 0u64;
+    let mut exec_permit_end = 0u64;
+    let mut exec_permit_generation = 0u32;
+    let mut access_permit_cache = AccessPermitCache::new();
     loop {
         if *remaining <= 0 {
             let prev_sp = x[2];
@@ -235,7 +269,15 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
             );
             continue;
         }
-        if !crate::syscall::memory::guest_range_permitted(vm, base, *pc, 2, abi::PROT_EXEC) {
+        if !cached_exec_fetch_permitted(
+            vm,
+            base,
+            *pc,
+            2,
+            &mut exec_permit_start,
+            &mut exec_permit_end,
+            &mut exec_permit_generation,
+        ) {
             let fault_addr = *pc;
             let accerr = guest_range_in_bounds(base, *pc, 2);
             if !unsafe { deliver_sync_sigsegv(vm, x, f, fcsr, pc, base, fault_addr, accerr) } {
@@ -253,10 +295,32 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
             if cost > 0 && remaining.saturating_add(1) >= cost {
                 let outcome = if blk.loop_flags & BLOCK_LOOP_SIMPLE_LOAD_SCAN != 0 {
                     unsafe {
-                        exec_simple_load_scan_loop::<true>(blk, vm, x, f, fcsr, pc, base, remaining)
+                        exec_simple_load_scan_loop::<true>(
+                            blk,
+                            vm,
+                            x,
+                            f,
+                            fcsr,
+                            pc,
+                            base,
+                            remaining,
+                            &mut access_permit_cache,
+                        )
                     }
                 } else {
-                    unsafe { exec_block::<true>(blk, vm, x, f, fcsr, pc, base, remaining) }
+                    unsafe {
+                        exec_block::<true>(
+                            blk,
+                            vm,
+                            x,
+                            f,
+                            fcsr,
+                            pc,
+                            base,
+                            remaining,
+                            &mut access_permit_cache,
+                        )
+                    }
                 };
                 match outcome {
                     BlockOutcome::Restart => {
@@ -307,7 +371,15 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
             }
             (expanded, 2)
         } else {
-            if !crate::syscall::memory::guest_range_permitted(vm, base, *pc, 4, abi::PROT_EXEC) {
+            if !cached_exec_fetch_permitted(
+                vm,
+                base,
+                *pc,
+                4,
+                &mut exec_permit_start,
+                &mut exec_permit_end,
+                &mut exec_permit_generation,
+            ) {
                 let fault_addr = *pc;
                 let accerr = guest_range_in_bounds(base, *pc, 4);
                 if !unsafe { deliver_sync_sigsegv(vm, x, f, fcsr, pc, base, fault_addr, accerr) } {
@@ -372,11 +444,15 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
                 prev_sp,
                 prev_tp,
                 prev_s11,
+                &mut access_permit_cache,
             )
         } {
             StepOutcome::Advance => {}
             StepOutcome::Restart => continue,
             StepOutcome::Return(remaining) => return remaining,
+        }
+        if decode::opcode(raw) == decode::OP_SYSTEM {
+            exec_permit_generation = 0;
         }
         x[0] = 0;
         crate::tracepoints::record_special_reg_transitions(

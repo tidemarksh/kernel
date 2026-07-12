@@ -369,6 +369,27 @@ fn syscall_dispatch_completes_vfork_execve_handoff_with_large_image_argv() {
     assert_eq!(t.vm.spawn_kind, SPAWN_KIND_EXECVE);
     assert_eq!(t.vm.spawn_child_pid, child_pid);
 
+    let fs_ring_base = unsafe {
+        (&*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState)).fs_ring_base
+    };
+    assert!(fs_ring_base > 0);
+    assert!(
+        tidemark_kernel::fs::ring_buffer::submit_request(
+            fs_ring_base,
+            tidemark_kernel::fs::ring_buffer::FS_OP_READ,
+            3,
+            0,
+            1,
+            t.scratch,
+            0,
+            0,
+            0,
+            vm_ptr,
+            1,
+            1,
+        ) >= 0
+    );
+
     process_impl::clear_vfork_runtime_state();
     let ret = process_impl::complete_execve_in_place_from_handoff(
         &mut t.vm,
@@ -377,6 +398,8 @@ fn syscall_dispatch_completes_vfork_execve_handoff_with_large_image_argv() {
     );
 
     assert_eq!(ret, 0);
+    let ring_header = unsafe { core::slice::from_raw_parts(fs_ring_base as *const u32, 4) };
+    assert_eq!(ring_header, [0, 0, 0, 0]);
     assert_eq!(t.vm.pc, 0x1000);
     let argc = unsafe { guest_mem::read_u64(t.base, t.vm.x[2]) };
     assert_eq!(argc, 2);

@@ -175,13 +175,16 @@ pub struct ThreadState {
     pub completed_pipe_sync_read_slots: u64,
     /// Pipe slots whose write tail/data changed by local syscalls since last poll.
     pub completed_pipe_sync_write_slots: u64,
+    /// Pipe slots whose endpoint open counts changed since last poll.
+    pub completed_pipe_sync_control_slots: u64,
     /// Pipe slots freshly allocated by pipe2 since last poll.
     pub completed_pipe_fresh_slots: u64,
     /// Guest buffer pointer written by the latest completed pipe read.
     pub completed_pipe_read_guest_ptr: u64,
     /// Number of bytes written by the latest completed pipe read.
     pub completed_pipe_read_len: u32,
-    _pad_completed_pipe_read: u32,
+    /// FS ring request id awaited by this thread. Zero means no pending request.
+    pub pending_fs_request_id: u32,
     /// Thread-local decoded block cache pointer. 0 = inactive/unallocated.
     pub block_cache_ptr: u32,
     /// Pending execve backing miss inode for runtime resident publication. 0 = inactive.

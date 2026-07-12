@@ -50,7 +50,6 @@ noop_tracepoint! {
         status: i32,
     ) {}
     fn record_memory_syscall(nr: u64, arg0: u64, arg1: u64, arg2: u64, arg3: u64, result: i64) {}
-    fn record_path_syscall(vm_ptr: u32, nr: u64, dirfd: i64, path: &[u8], result: i64, status: i32) {}
     fn record_pipe_close_event(
         pipe_idx: u32,
         is_read_end: bool,
@@ -71,5 +70,16 @@ noop_tracepoint! {
         pipe_read_open: i32,
         pipe_write_open: i32,
         bytes: Option<&[u8]>,
+    ) {}
+}
+
+noop_tracepoint! {
+    fn record_path_syscall(
+        vm_ptr: u32,
+        nr: u64,
+        dirfd: i64,
+        path: &[u8],
+        result: i64,
+        status: i32,
     ) {}
 }

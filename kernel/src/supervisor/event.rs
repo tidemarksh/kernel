@@ -133,6 +133,14 @@ fn store_event(event: ThreadEventState) {
     });
 }
 
+fn stale_after_authoritative_transition(event: ThreadEventState) -> bool {
+    if event.event_kind != super::SUPERVISOR_THREAD_EVENT_KIND_BLOCKED {
+        return false;
+    }
+    super::thread::state_from_ptr(event.vm_ptr)
+        .is_some_and(|thread| thread.status as u32 != event.status)
+}
+
 fn find_event(vm_ptr: u32, tid: u32) -> Option<ThreadEventState> {
     if vm_ptr == 0 {
         return None;
@@ -200,6 +208,27 @@ pub(super) fn runnable_override(vm_ptr: u32, tid: u32) -> Option<bool> {
     }
 }
 
+pub(super) fn clear_woken_futex_override(vm_ptr: u32, tid: u32) {
+    if vm_ptr == 0 || tid == 0 {
+        return;
+    }
+    with_state_lock(|| unsafe {
+        let table = core::ptr::addr_of_mut!(THREAD_EVENT_STATE) as *mut ThreadEventState;
+        for idx in 0..THREAD_EVENT_STATE_CAP {
+            let current = core::ptr::read(table.add(idx));
+            if current.vm_ptr != vm_ptr || (current.tid != 0 && current.tid != tid) {
+                continue;
+            }
+            if current.event_kind == super::SUPERVISOR_THREAD_EVENT_KIND_BLOCKED
+                && current.status == crate::abi::STATUS_FUTEX_WAIT as u32
+            {
+                core::ptr::write(table.add(idx), ThreadEventState::empty());
+            }
+            return;
+        }
+    });
+}
+
 pub(super) fn init_state() {
     THREAD_EVENT_STATE_REPLACE_CURSOR.store(0, Ordering::Relaxed);
     with_state_lock(|| unsafe {
@@ -217,7 +246,9 @@ pub(super) fn submit(event_ptr: u32, event_len: u32) -> i32 {
     };
     let arrival_seq = super::log::record_thread_event(bytes, event_len);
     if let Some(event) = decode(bytes, arrival_seq) {
-        store_event(event);
+        if !stale_after_authoritative_transition(event) {
+            store_event(event);
+        }
     }
     0
 }

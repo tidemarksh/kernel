@@ -334,6 +334,11 @@ pub extern "C" fn supervisor_process_owner_live_matches(vm_ptr: u32, runtime_pid
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_fd_authority_vm_ptr(vm_ptr: u32, runtime_pid: i32) -> u32 {
+    super::process::fd_authority_vm_ptr(vm_ptr, runtime_pid)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_process_owner_missing_or_invalid(vm_ptr: u32) -> i32 {
     super::process::owner_missing_or_invalid(vm_ptr)
 }
@@ -1907,6 +1912,11 @@ pub extern "C" fn supervisor_blocked_stale_retry_result_action_handle_current_re
 pub extern "C" fn supervisor_blocked_stale_retry_result_action_handle_current_result_wait4() -> u32
 {
     super::blocked::stale_retry_result_action_handle_current_result_wait4()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_blocked_stale_retry_result_action_resume_wait4() -> u32 {
+    super::blocked::stale_retry_result_action_resume_wait4()
 }
 
 #[unsafe(no_mangle)]

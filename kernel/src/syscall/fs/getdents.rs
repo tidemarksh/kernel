@@ -1,6 +1,7 @@
 use crate::abi::*;
 use crate::fs::{fd_table, memfs};
 use crate::guest_mem;
+use crate::syscall::sync_effects::mark_fork_shared_ofd_sync_effect;
 use crate::types::ThreadState;
 
 const DT_UNKNOWN: u8 = 0;
@@ -60,14 +61,13 @@ fn u32_decimal_bytes(value: u32, out: &mut [u8; 10]) -> &[u8] {
     &out[cursor..]
 }
 
-fn sys_getdents64_proc_self_fd(
-    vm: &mut ThreadState,
+fn read_proc_self_fd_dirents(
+    vm: &ThreadState,
     base: u32,
-    fd: u64,
     start_index: u64,
     buf: u64,
     buf_size: u64,
-) -> i64 {
+) -> (i64, u64) {
     let mut offset = 0u64;
     let mut entry_index = 0u64;
 
@@ -94,22 +94,18 @@ fn sys_getdents64_proc_self_fd(
         }
     }
 
-    fd_table::set_offset(base, vm, fd, entry_index);
-    offset as i64
+    (offset as i64, entry_index)
 }
 
-/// getdents64: read directory entries into guest buffer.
-/// Writes linux_dirent64 records (variable-size, 8-byte aligned).
-pub fn sys_getdents64(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, buf_size: u64) -> i64 {
-    let ofd = match fd_table::get_ofd(base, vm, fd) {
-        Some(o) => o,
-        None => return EBADF,
-    };
-
-    let dir_ino = ofd.ino;
-    let start_index = ofd.offset.max(0) as u64;
-    if dir_ino == proc_self_fd_dir_ino() {
-        return sys_getdents64_proc_self_fd(vm, base, fd, start_index, buf, buf_size);
+fn read_memfs_dirents(
+    base: u32,
+    dir_ino: u32,
+    start_index: u64,
+    buf: u64,
+    buf_size: u64,
+) -> (i64, u64) {
+    if memfs::stat(dir_ino).is_none() {
+        return (EBADF, start_index);
     }
 
     let mut offset = 0u64;
@@ -144,9 +140,70 @@ pub fn sys_getdents64(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, buf_si
         }
     });
     if readdir_result < 0 {
-        return readdir_result;
+        return (readdir_result, start_index);
     }
 
-    fd_table::set_offset(base, vm, fd, entry_index);
-    offset as i64
+    (offset as i64, entry_index)
+}
+
+/// getdents64: read directory entries into guest buffer.
+/// Writes linux_dirent64 records (variable-size, 8-byte aligned).
+pub fn sys_getdents64(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, buf_size: u64) -> i64 {
+    let ofd = match fd_table::get_ofd(base, vm, fd) {
+        Some(o) => o,
+        None => return EBADF,
+    };
+
+    let dir_ino = ofd.ino;
+    let start_index = ofd.offset.max(0) as u64;
+    let (result, next_index) = if dir_ino == proc_self_fd_dir_ino() {
+        read_proc_self_fd_dirents(vm, base, start_index, buf, buf_size)
+    } else {
+        read_memfs_dirents(base, dir_ino, start_index, buf, buf_size)
+    };
+    if result < 0 {
+        return result;
+    }
+
+    fd_table::set_offset(base, vm, fd, next_index);
+    mark_fork_shared_ofd_sync_effect(vm);
+    result
+}
+
+pub fn complete_submitted_getdents64(
+    vm: &mut ThreadState,
+    base: u32,
+    fd: u64,
+    buf: u64,
+    buf_size: u64,
+    request_offset: u64,
+    request_ofd_id: u32,
+    request_ino: u32,
+) -> i64 {
+    if request_ino == 0 {
+        return sys_getdents64(vm, base, fd, buf, buf_size);
+    }
+
+    let (result, next_index) = if request_ino == proc_self_fd_dir_ino() {
+        read_proc_self_fd_dirents(vm, base, request_offset, buf, buf_size)
+    } else {
+        read_memfs_dirents(base, request_ino, request_offset, buf, buf_size)
+    };
+    if result < 0 {
+        return result;
+    }
+
+    if request_ofd_id > 0
+        && let Some(ofd) = fd_table::get_ofd_by_id(request_ofd_id)
+        && ofd.ino == request_ino
+        && ofd.fd_type == FD_TYPE_FILE
+        && memfs::stat(request_ino).is_some_and(|st| st.mode & memfs::S_IFMT == memfs::S_IFDIR)
+    {
+        fd_table::set_offset_by_id(
+            request_ofd_id,
+            next_index.max(fd_table::get_offset_by_id(request_ofd_id)),
+        );
+        mark_fork_shared_ofd_sync_effect(vm);
+    }
+    result
 }

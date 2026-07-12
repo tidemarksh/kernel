@@ -137,7 +137,8 @@ pub fn retain_ofd_id(ofd_id: u32) {
 pub fn blocked_status_uses_ofd_pin(status: i32) -> bool {
     matches!(
         status,
-        STATUS_PIPE_WAIT
+        STATUS_FS
+            | STATUS_PIPE_WAIT
             | STATUS_EPOLL_WAIT
             | STATUS_CONNECT
             | STATUS_SOCKET_RECV

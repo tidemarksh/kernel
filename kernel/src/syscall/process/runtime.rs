@@ -605,6 +605,10 @@ pub fn shared_heap_ptr() -> Option<u32> {
 }
 
 pub fn shared_heap_alloc(size: u32, align: u32) -> Option<u32> {
+    shared_heap_alloc_below(size, align, u32::MAX)
+}
+
+pub fn shared_heap_alloc_below(size: u32, align: u32, limit: u32) -> Option<u32> {
     let ptr = checked_process_runtime_state_ptr();
     if ptr.is_null() {
         return None;
@@ -635,6 +639,9 @@ pub fn shared_heap_alloc(size: u32, align: u32) -> Option<u32> {
         let Some(end) = aligned.checked_add(size) else {
             return Some(0);
         };
+        if end > limit {
+            return Some(0);
+        }
         #[cfg(any(test, feature = "harness"))]
         {
             if aligned < state.heap_base {

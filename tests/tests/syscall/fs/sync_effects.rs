@@ -1,5 +1,9 @@
 use super::support::*;
 
+fn encode_i(opcode: u32, rd: u32, funct3: u32, rs1: u32, imm: i32) -> u32 {
+    (((imm as u32) & 0x0fff) << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode
+}
+
 #[test]
 fn resume_from_fs_rejects_unbacked_fs_ring_base() {
     let mut t = TestVm::new();
@@ -21,6 +25,209 @@ fn resume_from_fs_rejects_unbacked_fs_ring_base() {
     assert_eq!(t.vm.status, STATUS_OK);
 }
 
+#[test]
+fn thread_step_defers_openat_boundary_and_preserves_fork_shared_sync_effect() {
+    let mut t = TestVm::new();
+    t.memfs.create_file(b"shared-open.txt", b"contents");
+    let path_addr = t.write_path(0x5800, b"/shared-open.txt");
+    let code_addr = t.sys_mmap(
+        0,
+        4096,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    ) as u64;
+    assert!(code_addr > 0);
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, code_addr, 0x0000_0073); // ecall
+        tidemark_kernel::guest_mem::write_u32(
+            t.base,
+            code_addr + 4,
+            encode_i(0x13, 17, 0, 0, SYS_NEWFSTATAT as i32),
+        );
+        tidemark_kernel::guest_mem::write_u32(t.base, code_addr + 8, encode_i(0x13, 5, 0, 0, 7));
+    }
+
+    t.vm.pc = code_addr;
+    t.vm.x[10] = AT_FDCWD;
+    t.vm.x[11] = path_addr;
+    t.vm.x[12] = O_RDONLY as u64;
+    t.vm.x[13] = 0;
+    t.vm.x[17] = SYS_OPENAT;
+    t.vm.status = STATUS_OK;
+
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    let remaining = tidemark_kernel::abi::thread_step(vm_ptr, 3);
+
+    assert_eq!(remaining, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, code_addr + 12);
+    assert!(t.vm.x[10] as i64 >= 3);
+    assert_eq!(t.vm.x[5], 7);
+    assert_eq!(t.vm.x[17], SYS_NEWFSTATAT);
+    let effects =
+        tidemark_kernel::abi::supervisor_thread_take_completed_sync_effects(vm_ptr, t.vm.status);
+    assert_ne!(effects & SYNC_EFFECT_FORK_SHARED_OFD_STATE, 0);
+}
+
+#[test]
+fn thread_step_defers_regular_file_read_and_close_boundaries() {
+    let mut t = TestVm::new();
+    t.memfs.create_file(b"regular-boundary.txt", b"ruby");
+    let fd = t.sys_openat(b"/regular-boundary.txt", O_RDONLY as i32);
+    assert!(fd >= 3);
+
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    let _ =
+        tidemark_kernel::abi::supervisor_thread_take_completed_sync_effects(vm_ptr, t.vm.status);
+
+    let buf_addr = t.scratch + 0x6200;
+    let code_addr = t.sys_mmap(
+        0,
+        4096,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    ) as u64;
+    assert!(code_addr > 0);
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, code_addr, 0x0000_0073); // read ecall
+        tidemark_kernel::guest_mem::write_u32(
+            t.base,
+            code_addr + 4,
+            encode_i(0x13, 17, 0, 0, SYS_CLOSE as i32),
+        );
+        tidemark_kernel::guest_mem::write_u32(
+            t.base,
+            code_addr + 8,
+            encode_i(0x13, 10, 0, 0, fd as i32),
+        );
+        tidemark_kernel::guest_mem::write_u32(t.base, code_addr + 12, 0x0000_0073); // close ecall
+        tidemark_kernel::guest_mem::write_u32(t.base, code_addr + 16, encode_i(0x13, 5, 0, 0, 9));
+    }
+
+    t.vm.pc = code_addr;
+    t.vm.x[10] = fd as u64;
+    t.vm.x[11] = buf_addr;
+    t.vm.x[12] = 4;
+    t.vm.x[17] = SYS_READ;
+    t.vm.status = STATUS_OK;
+
+    let remaining = tidemark_kernel::abi::thread_step(vm_ptr, 5);
+
+    assert_eq!(remaining, 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, code_addr + 20);
+    assert_eq!(t.vm.x[5], 9);
+    assert!(fd_table::get_ofd(t.base, &t.vm, fd as u64).is_none());
+    let mut out = [0u8; 4];
+    unsafe {
+        tidemark_kernel::guest_mem::read_bytes(t.base, buf_addr, &mut out);
+    }
+    assert_eq!(&out, b"ruby");
+    let effects =
+        tidemark_kernel::abi::supervisor_thread_take_completed_sync_effects(vm_ptr, t.vm.status);
+    assert_ne!(effects & SYNC_EFFECT_FORK_SHARED_OFD_STATE, 0);
+}
+
+#[test]
+fn thread_step_keeps_pipe_close_as_runtime_boundary() {
+    let mut t = TestVm::new();
+    let pipefd_addr = t.scratch + 0x6600;
+    assert_eq!(
+        tidemark_kernel::syscall::pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0),
+        0
+    );
+    let write_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr + 4) } as u64;
+
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    let _ =
+        tidemark_kernel::abi::supervisor_thread_take_completed_sync_effects(vm_ptr, t.vm.status);
+
+    let code_addr = t.sys_mmap(
+        0,
+        4096,
+        PROT_READ | PROT_WRITE | PROT_EXEC,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    ) as u64;
+    assert!(code_addr > 0);
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, code_addr, 0x0000_0073); // close ecall
+        tidemark_kernel::guest_mem::write_u32(t.base, code_addr + 4, encode_i(0x13, 5, 0, 0, 11));
+    }
+
+    t.vm.pc = code_addr;
+    t.vm.x[10] = write_fd;
+    t.vm.x[17] = SYS_CLOSE;
+    t.vm.status = STATUS_OK;
+
+    let remaining = tidemark_kernel::abi::thread_step(vm_ptr, 2);
+
+    assert_eq!(remaining, 1);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, code_addr + 4);
+    assert_eq!(t.vm.x[5], 0);
+    let effects =
+        tidemark_kernel::abi::supervisor_thread_take_completed_sync_effects(vm_ptr, t.vm.status);
+    assert_ne!(effects & SYNC_EFFECT_PIPE_STATE, 0);
+    assert_ne!(effects & SYNC_EFFECT_FORK_SHARED_OFD_STATE, 0);
+}
+
+#[test]
+fn dispatch_mmap_uses_local_resident_file_hit() {
+    let mut t = TestVm::new();
+    t.memfs.create_file(b"resident-map.txt", b"map-data");
+    let fd = t.sys_openat(b"/resident-map.txt", O_RDONLY as i32);
+    assert!(fd >= 3);
+
+    let result = fs::dispatch_mmap(
+        &mut t.vm,
+        t.base,
+        0,
+        4096,
+        PROT_READ as u64,
+        MAP_PRIVATE,
+        fd,
+        0,
+    );
+
+    assert!(result > 0);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.guest_mem(result as u64, 8), b"map-data".to_vec());
+}
+
+#[test]
+fn dispatch_mmap_falls_back_to_fs_ring_on_external_file_miss() {
+    let mut t = TestVm::new();
+    let ino = memfs::create_file(1, b"external-map.txt", 0o644);
+    assert!(ino > 0);
+    assert_eq!(memfs::set_file_external(ino, 8192), 0);
+    let fd = t.sys_openat(b"/external-map.txt", O_RDONLY as i32);
+    assert!(fd >= 3);
+
+    let result = fs::dispatch_mmap(
+        &mut t.vm,
+        t.base,
+        0,
+        4096,
+        PROT_READ as u64,
+        MAP_PRIVATE,
+        fd,
+        0,
+    );
+
+    assert_eq!(result, 0);
+    assert_eq!(t.vm.status, STATUS_FS);
+}
+
+#[test]
 fn dispatch_openat_marks_fork_shared_ofd_sync_effect_without_harness_trace() {
     let mut t = TestVm::new();
     t.memfs.create_file(b"shared-open.txt", b"contents");
@@ -76,13 +283,11 @@ fn fs_ring_routes_mkdir_completions_to_the_owning_thread() {
         t.base,
     );
 
-    assert_eq!(
-        fs::resume_from_fs(
-            (&mut vm2 as *mut tidemark_kernel::types::ThreadState) as u32,
-            t.base
-        ),
-        0
-    );
+    let vm2_ptr = (&mut vm2 as *mut tidemark_kernel::types::ThreadState) as u32;
+    assert_eq!(fs::resume_from_fs(vm2_ptr, t.base), EAGAIN);
+    assert_eq!(vm2.status, STATUS_FS);
+    fs::process_pending_requests(vm2_ptr, t.base);
+    assert_eq!(fs::resume_from_fs(vm2_ptr, t.base), 0);
     assert_eq!(vm2.status, STATUS_OK);
     assert_eq!(
         fs::resume_from_fs(
@@ -133,4 +338,48 @@ fn pipe_writev_marks_pipe_sync_effect() {
     let mut out = [0u8; 16];
     assert_eq!(t.sys_read(read_fd, &mut out), 9);
     assert_eq!(&out[..9], b"pipe-sync");
+}
+
+#[test]
+fn pipe_close_marks_pipe_control_sync_effect() {
+    let mut t = TestVm::new();
+    let pipefd_addr = t.scratch + 0x7700;
+    assert_eq!(
+        tidemark_kernel::syscall::pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0),
+        0
+    );
+    let write_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr + 4) } as u64;
+    let pipe_slot = fd_table::get_ofd(t.base, &t.vm, write_fd)
+        .map(|ofd| ofd.ino)
+        .unwrap_or(0);
+    t.vm.completed_pipe_sync_slots = 0;
+    t.vm.completed_pipe_sync_control_slots = 0;
+
+    assert_eq!(fd_table::sys_close(&mut t.vm, t.base, write_fd), 0);
+
+    let bit = 1u64 << pipe_slot;
+    assert_ne!(t.vm.completed_pipe_sync_slots & bit, 0);
+    assert_ne!(t.vm.completed_pipe_sync_control_slots & bit, 0);
+}
+
+#[test]
+fn process_exit_close_all_marks_pipe_control_sync_effect() {
+    let mut t = TestVm::new();
+    let pipefd_addr = t.scratch + 0x7800;
+    assert_eq!(
+        tidemark_kernel::syscall::pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0),
+        0
+    );
+    let write_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr + 4) } as u64;
+    let pipe_slot = fd_table::get_ofd(t.base, &t.vm, write_fd)
+        .map(|ofd| ofd.ino)
+        .unwrap_or(0);
+    t.vm.completed_pipe_sync_slots = 0;
+    t.vm.completed_pipe_sync_control_slots = 0;
+
+    fd_table::close_all_for_process(t.base, &mut t.vm);
+
+    let bit = 1u64 << pipe_slot;
+    assert_ne!(t.vm.completed_pipe_sync_slots & bit, 0);
+    assert_ne!(t.vm.completed_pipe_sync_control_slots & bit, 0);
 }

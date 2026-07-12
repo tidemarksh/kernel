@@ -271,6 +271,22 @@ pub fn current_process_ppid(vm: &ThreadState, base: u32) -> i32 {
         .unwrap_or(0)
 }
 
+pub fn restore_current_process_identity(
+    vm: &mut ThreadState,
+    base: u32,
+    pid: i32,
+    ppid: i32,
+    next_pid: i32,
+) {
+    if pid > 0 && ppid >= 0 {
+        if let Some(ps) = current_process_state_mut(vm, base) {
+            ps.pid = pid;
+            ps.ppid = ppid;
+        }
+    }
+    set_next_pid_floor(next_pid);
+}
+
 pub fn current_process_pgid(vm: &ThreadState, base: u32) -> i32 {
     ensure_current_process(vm, base)
         .map(|slot| slot.pgid)
@@ -518,6 +534,7 @@ pub fn prepare_fork_child_after_handoff(vm: &mut ThreadState, base: u32, pid: i3
     vm.completed_pipe_sync_slots = 0;
     vm.completed_pipe_sync_read_slots = 0;
     vm.completed_pipe_sync_write_slots = 0;
+    vm.completed_pipe_sync_control_slots = 0;
     vm.completed_pipe_fresh_slots = 0;
     vm.completed_pipe_read_guest_ptr = 0;
     vm.completed_pipe_read_len = 0;
@@ -585,6 +602,7 @@ pub fn restore_fork_parent_after_handoff(
     vm.completed_pipe_sync_slots = 0;
     vm.completed_pipe_sync_read_slots = 0;
     vm.completed_pipe_sync_write_slots = 0;
+    vm.completed_pipe_sync_control_slots = 0;
     vm.completed_pipe_fresh_slots = 0;
     vm.completed_pipe_read_guest_ptr = 0;
     vm.completed_pipe_read_len = 0;

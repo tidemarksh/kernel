@@ -5,12 +5,11 @@ use tidemark_kernel::supervisor::{
     supervisor_blocked_pipe_resume_action_defer, supervisor_blocked_pipe_resume_action_direct,
     supervisor_blocked_pipe_sync_before_retry_action,
     supervisor_blocked_pipe_sync_before_retry_action_none,
-    supervisor_blocked_pipe_sync_before_retry_action_request_sync,
     supervisor_blocked_pipe_sync_before_retry_action_request_sync_and_drain_output,
-    supervisor_blocked_pipe_sync_before_retry_action_schedule_retry,
     supervisor_blocked_pipe_sync_before_retry_clear,
     supervisor_blocked_pipe_sync_before_retry_flag_kernel_worker_available,
-    supervisor_blocked_pipe_sync_before_retry_requested, supervisor_blocked_retry_action,
+    supervisor_blocked_pipe_sync_before_retry_requested,
+    supervisor_blocked_pipe_wait_has_ready_events, supervisor_blocked_retry_action,
     supervisor_blocked_retry_action_defer_passive_wait, supervisor_blocked_wait_retry_reason,
     supervisor_blocked_wait_retry_reason_default,
     supervisor_blocked_wait_retry_reason_passive_wait, supervisor_fd_control_kind_fd_closed,
@@ -115,9 +114,13 @@ fn blocked_read_resumes_eof_after_writer_close() {
     assert_eq!(t.vm.status, STATUS_PIPE_WAIT);
 
     let vm_ptr = &mut t.vm as *mut _ as u32;
+    assert_eq!(thread_blocked_pipe_read_ready(vm_ptr), 1);
+    assert_eq!(supervisor_blocked_pipe_wait_has_ready_events(vm_ptr), 1);
     assert_eq!(thread_resume_blocked_syscall(vm_ptr), 0);
     assert_eq!(t.vm.x[10], 0);
     assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.fault_addr, 0);
+    assert_eq!(t.vm.fault_pc, 0);
 }
 
 #[test]
@@ -193,7 +196,7 @@ fn supervisor_blocked_pipe_sync_before_retry_tracks_request_by_wait_signature() 
             vm_ptr,
             supervisor_blocked_pipe_sync_before_retry_flag_kernel_worker_available()
         ),
-        supervisor_blocked_pipe_sync_before_retry_action_request_sync() as i32
+        supervisor_blocked_pipe_sync_before_retry_action_request_sync_and_drain_output() as i32
     );
     assert_eq!(
         supervisor_blocked_pipe_sync_before_retry_requested(vm_ptr),
@@ -204,7 +207,7 @@ fn supervisor_blocked_pipe_sync_before_retry_tracks_request_by_wait_signature() 
             vm_ptr,
             supervisor_blocked_pipe_sync_before_retry_flag_kernel_worker_available()
         ),
-        supervisor_blocked_pipe_sync_before_retry_action_schedule_retry() as i32
+        supervisor_blocked_pipe_sync_before_retry_action_none() as i32
     );
     assert_eq!(supervisor_blocked_pipe_sync_before_retry_clear(vm_ptr), 0);
     assert_eq!(
@@ -406,6 +409,75 @@ fn blocked_read_resume_eof_uses_pinned_ofd_after_fd_close() {
 }
 
 #[test]
+fn blocked_read_state_restores_into_supervisor_with_a_canonical_ofd_pin() {
+    let mut t = TestVm::new();
+    let pipefd_addr = t.scratch + 0x1000;
+    assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) } as u64;
+    let buf_addr = t.scratch + 0x1100;
+    t.vm.status = STATUS_PIPE_WAIT;
+    t.vm.blocked_fd = 0;
+    t.vm.blocked_ofd_id = 0;
+    t.vm.blocked_syscall_nr = 0;
+    t.vm.blocked_syscall_args = [0; 6];
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+
+    assert_eq!(
+        tidemark_kernel::abi::thread_restore_blocked_syscall_state(
+            vm_ptr,
+            read_fd as u32,
+            1,
+            SYS_READ,
+            read_fd,
+            buf_addr,
+            16,
+            0,
+            0,
+            0,
+        ),
+        0,
+    );
+    assert_eq!(t.vm.blocked_fd, read_fd as u32);
+    assert_ne!(t.vm.blocked_ofd_id, 0);
+    assert_eq!(t.vm.blocked_syscall_nr, SYS_READ);
+    assert_eq!(t.vm.blocked_syscall_args, [read_fd, buf_addr, 16, 0, 0, 0]);
+}
+
+#[test]
+fn stale_blocked_read_resume_does_not_dispatch_after_status_ok() {
+    let mut t = TestVm::new();
+    let pipefd_addr = t.scratch + 0x1000;
+    assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) } as u64;
+    let write_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr + 4) } as i64;
+    let buf_addr = t.scratch + 0x1100;
+
+    t.vm.x[17] = SYS_READ;
+    t.vm.x[10] = read_fd;
+    t.vm.x[11] = buf_addr;
+    t.vm.x[12] = 16;
+    let status = tidemark_kernel::syscall::dispatch(&mut t.vm, t.base);
+    assert_eq!(status, STATUS_PIPE_WAIT);
+    assert_eq!(t.vm.status, STATUS_PIPE_WAIT);
+    assert_eq!(t.vm.blocked_syscall_nr, SYS_READ);
+
+    assert_eq!(t.sys_close(read_fd as i64), 0);
+    assert_eq!(t.sys_close(write_fd), 0);
+
+    t.vm.status = STATUS_OK;
+    t.vm.blocked_fd = 0;
+    t.vm.blocked_ofd_id = 0;
+    t.vm.x[10] = 1234;
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+
+    assert_eq!(thread_resume_blocked_syscall(vm_ptr), 1234);
+    assert_eq!(t.vm.x[10], 1234);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.blocked_syscall_nr, 0);
+    assert_eq!(t.vm.blocked_syscall_args, [0; 6]);
+}
+
+#[test]
 fn blocked_read_resume_eof_uses_pinned_ofd_when_saved_syscall_is_missing() {
     let mut t = TestVm::new();
     let pipefd_addr = t.scratch + 0x1000;
@@ -524,6 +596,7 @@ fn blocked_read_resume_eof_marker_uses_pinned_ofd_after_fd_close() {
 
     t.vm.blocked_syscall_nr = 0;
     t.vm.blocked_syscall_args = [0; 6];
+    t.vm.x[17] = SYS_GETPID;
     tidemark_kernel::fs::fd_table::store_process_fd_entry(
         t.base,
         t.vm.process_ptr,
@@ -539,6 +612,8 @@ fn blocked_read_resume_eof_marker_uses_pinned_ofd_after_fd_close() {
     assert_eq!(thread_resume_blocked_syscall(vm_ptr), 0);
     assert_eq!(t.vm.x[10], 0);
     assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.fault_addr, 0);
+    assert_eq!(t.vm.fault_pc, 0);
 }
 
 #[test]

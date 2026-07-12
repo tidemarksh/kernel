@@ -446,6 +446,22 @@ pub fn sys_ftruncate(vm: &mut ThreadState, base: u32, fd: u64, length: u64) -> i
     memfs::truncate(ofd.ino, length)
 }
 
+pub fn complete_submitted_ftruncate(
+    vm: &mut ThreadState,
+    base: u32,
+    fd: u64,
+    length: u64,
+    request_ino: u32,
+) -> i64 {
+    if request_ino == 0 {
+        return sys_ftruncate(vm, base, fd, length);
+    }
+    if (length as i64) < 0 {
+        return EINVAL;
+    }
+    memfs::truncate(request_ino, length)
+}
+
 /// fsync/fdatasync: flush dirty resident file data to the backing object.
 pub fn sys_fsync(vm: &mut ThreadState, base: u32, fd: u64) -> i64 {
     let ofd = match fd_table::get_ofd(base, vm, fd) {

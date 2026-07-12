@@ -3,6 +3,44 @@ fn blocked_wait_signal_pending(vm: &crate::types::ThreadState, base: u32) -> boo
         || vm.sig_pending != 0
 }
 
+pub(super) fn wait_word_mismatched(thread: &crate::types::ThreadState, addr: u64) -> bool {
+    if addr == 0 || (addr & 3) != 0 {
+        return true;
+    }
+    if !crate::syscall::memory::guest_range_permitted(
+        thread,
+        thread.guest_base,
+        addr,
+        4,
+        crate::abi::PROT_READ,
+    ) {
+        return true;
+    }
+    let current = unsafe { crate::guest_mem::read_u32(thread.guest_base, addr) };
+    current != thread.futex_wait_expected
+}
+
+pub(super) fn blocked_wait_word_mismatched(vm_ptr: u32) -> bool {
+    let Some(thread) = super::thread::state_from_ptr(vm_ptr) else {
+        return false;
+    };
+    if thread.status != crate::abi::STATUS_FUTEX_WAIT {
+        return false;
+    }
+    let blocked_addr = super::thread::thread_record_blocked_addr(thread, thread.guest_base);
+    blocked_addr != 0
+        && blocked_addr == thread.futex_wait_addr
+        && wait_word_mismatched(thread, blocked_addr)
+}
+
+pub(super) fn complete_wait_if_word_mismatched(vm_ptr: u32) -> bool {
+    if !blocked_wait_word_mismatched(vm_ptr) {
+        return false;
+    }
+    complete_wait(vm_ptr, super::SUPERVISOR_FUTEX_WAIT_COMPLETION_NOT_EQUAL)
+        == crate::abi::STATUS_OK
+}
+
 pub(super) fn blocked_wait_signal_decision(vm_ptr: u32) -> i32 {
     if vm_ptr == 0 {
         return crate::abi::EFAULT as i32;
@@ -90,6 +128,7 @@ pub(super) fn complete_wait(vm_ptr: u32, completion: u32) -> i32 {
 
     if let Some(result) = result {
         crate::syscall::thread::resume_futex_wait_result(vm, base, result);
+        super::event::clear_woken_futex_override(vm_ptr, tid as u32);
         if completion == super::SUPERVISOR_FUTEX_WAIT_COMPLETION_TIMED_OUT
             && vm.status == crate::abi::STATUS_OK
         {

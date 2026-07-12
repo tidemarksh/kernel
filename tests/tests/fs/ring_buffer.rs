@@ -1,7 +1,8 @@
-use tidemark_kernel::abi::{O_CREAT, O_RDONLY, O_RDWR};
+use tidemark_kernel::abi::{EAGAIN, O_CREAT, O_RDONLY, O_RDWR};
 use tidemark_kernel::fs::ring_buffer::{
-    FS_OP_FSYNC, FS_OP_MKDIR, FS_OP_RENAME, FS_OP_WRITE, HEADER_SIZE, REQ_SIZE, RESP_SIZE,
-    RING_BUFFER_SIZE, process_requests, read_completion, submit_request,
+    FS_OP_FSYNC, FS_OP_MKDIR, FS_OP_RENAME, FS_OP_WRITE, HEADER_SIZE, OFF_COMPLETE_HEAD,
+    OFF_CQ_LOCK, OFF_SQ_LOCK, OFF_SUBMIT_HEAD, REQ_SIZE, RESP_SIZE, RING_BUFFER_SIZE,
+    process_requests, read_completion, submit_request,
 };
 use tidemark_kernel::harness::TestVm;
 
@@ -11,6 +12,63 @@ fn ring_buffer_size() {
     assert_eq!(REQ_SIZE, 64);
     assert_eq!(RESP_SIZE, 16);
     assert_eq!(RING_BUFFER_SIZE, 32 + 64 * 64 + 64 * 16);
+}
+
+#[test]
+fn ring_buffer_retries_submit_while_submission_queue_is_locked() {
+    let mut t = TestVm::new();
+    let ring_base = unsafe { tidemark_kernel::alloc::alloc_zeroed(RING_BUFFER_SIZE as u32, 16) };
+    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
+
+    unsafe {
+        *((ring_base + OFF_SQ_LOCK) as *mut u32) = 1;
+    }
+    assert_eq!(
+        submit_request(ring_base, FS_OP_FSYNC, -1, 0, 0, 0, 0, 0, 0, vm_ptr, 0, 0,),
+        -1
+    );
+    assert_eq!(unsafe { *((ring_base + OFF_SUBMIT_HEAD) as *const u32) }, 0);
+}
+
+#[test]
+fn ring_buffer_retries_processing_and_consumption_while_completion_queue_is_locked() {
+    let mut t = TestVm::new();
+    let fd = t.sys_openat(b"/ring_lock.txt", O_CREAT | O_RDWR);
+    assert!(fd >= 3);
+    let ring_base = unsafe { tidemark_kernel::alloc::alloc_zeroed(RING_BUFFER_SIZE as u32, 16) };
+    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
+    assert!(
+        submit_request(
+            ring_base,
+            FS_OP_FSYNC,
+            fd as i32,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            vm_ptr,
+            0,
+            0,
+        ) >= 0
+    );
+
+    unsafe {
+        *((ring_base + OFF_CQ_LOCK) as *mut u32) = 1;
+    }
+    process_requests(ring_base, vm_ptr, t.base);
+    assert_eq!(
+        unsafe { *((ring_base + OFF_COMPLETE_HEAD) as *const u32) },
+        0
+    );
+    assert_eq!(read_completion(ring_base), EAGAIN);
+
+    unsafe {
+        *((ring_base + OFF_CQ_LOCK) as *mut u32) = 0;
+    }
+    process_requests(ring_base, vm_ptr, t.base);
+    assert_eq!(read_completion(ring_base), 0);
 }
 
 #[test]
@@ -41,6 +99,8 @@ fn ring_buffer_dispatch_write() {
         0,
         0,
         vm_ptr,
+        0,
+        0,
     );
     assert!(idx >= 0);
 
@@ -68,13 +128,64 @@ fn ring_buffer_dispatch_fsync() {
     assert!(ring_base != 0);
 
     let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
-    let idx = submit_request(ring_base, FS_OP_FSYNC, fd as i32, 0, 0, 0, 0, 0, 0, vm_ptr);
+    let idx = submit_request(
+        ring_base,
+        FS_OP_FSYNC,
+        fd as i32,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        vm_ptr,
+        0,
+        0,
+    );
     assert!(idx >= 0);
 
     process_requests(ring_base, vm_ptr, t.base);
 
     let result = read_completion(ring_base);
     assert_eq!(result, 0);
+}
+
+#[test]
+fn ring_buffer_processes_one_requested_vm_boundary_per_call() {
+    let mut t = TestVm::new();
+
+    let fd = t.sys_openat(b"/ring_boundary.txt", O_CREAT | O_RDWR);
+    assert!(fd >= 3);
+    let ring_base = unsafe { tidemark_kernel::alloc::alloc_zeroed(RING_BUFFER_SIZE as u32, 16) };
+    assert!(ring_base != 0);
+    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
+
+    for _ in 0..2 {
+        assert!(
+            submit_request(
+                ring_base,
+                FS_OP_FSYNC,
+                fd as i32,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                vm_ptr,
+                0,
+                0,
+            ) >= 0
+        );
+    }
+
+    process_requests(ring_base, vm_ptr, t.base);
+    assert_eq!(read_completion(ring_base), 0);
+    assert_eq!(read_completion(ring_base), EAGAIN);
+
+    process_requests(ring_base, vm_ptr, t.base);
+    assert_eq!(read_completion(ring_base), 0);
+    assert_eq!(read_completion(ring_base), EAGAIN);
 }
 
 #[test]
@@ -98,6 +209,8 @@ fn ring_buffer_dispatch_mkdir() {
         0,
         0o755,
         vm_ptr,
+        0,
+        0,
     );
     assert!(idx >= 0);
 
@@ -133,6 +246,8 @@ fn ring_buffer_dispatch_mkdir_respects_dirfd() {
         0,
         0o755,
         vm_ptr,
+        0,
+        0,
     );
     assert!(idx >= 0);
 
@@ -169,6 +284,8 @@ fn ring_buffer_dispatch_rename() {
         0,
         0,
         vm_ptr,
+        0,
+        0,
     );
     assert!(idx >= 0);
 

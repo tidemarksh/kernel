@@ -1,4 +1,12 @@
 use super::support::*;
+use tidemark_kernel::fs::fd_table;
+use tidemark_kernel::types::THREAD_DEAD;
+
+fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
+    let mut value = [0u8; 4];
+    value.copy_from_slice(&bytes[offset..offset + 4]);
+    u32::from_le_bytes(value)
+}
 
 #[test]
 fn contract_vfork_snapshots_and_suspends_parent() {
@@ -11,6 +19,47 @@ fn contract_vfork_snapshots_and_suspends_parent() {
     assert_eq!(t.vm.x[10], 0);
     assert_eq!(t.vm.status, STATUS_VFORK_WAIT);
     assert!(process_impl::vfork_child_pid() > 0);
+}
+
+#[test]
+fn contract_vfork_parent_fd_snapshot_is_distinct_from_child_fd_mutation() {
+    let mut t = TestVm::new();
+    let parent_process_ptr = t.vm.process_ptr;
+    fd_table::store_process_fd_entry(
+        t.base,
+        parent_process_ptr,
+        0,
+        FdEntry {
+            ofd_id: 7,
+            fd_flags: 3,
+        },
+    );
+    let parent_generation = fd_table::load_process_fd_generation(t.base, parent_process_ptr, 0);
+
+    assert_eq!(
+        process_impl::sys_vfork(&mut t.vm, t.base),
+        STATUS_VFORK_WAIT
+    );
+    fd_table::store_process_fd_entry(
+        t.base,
+        t.vm.process_ptr,
+        0,
+        FdEntry {
+            ofd_id: 9,
+            fd_flags: 5,
+        },
+    );
+
+    assert_eq!(process_impl::vfork_parent_fd_entry(0).ofd_id, 7);
+    assert_eq!(process_impl::vfork_parent_fd_entry(0).fd_flags, 3);
+    assert_eq!(
+        process_impl::vfork_parent_fd_generation(0),
+        parent_generation
+    );
+    assert_eq!(
+        fd_table::load_process_fd_entry(t.base, t.vm.process_ptr, 0).ofd_id,
+        9
+    );
 }
 
 #[test]
@@ -171,6 +220,165 @@ fn contract_vfork_from_secondary_thread_detaches_parent_thread_record_until_resu
 }
 
 #[test]
+fn supervisor_process_resume_selects_active_vfork_child_continuation() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+
+    let status = process_impl::sys_vfork(&mut t.vm, t.base);
+    let child_pid = process_impl::vfork_child_pid();
+    assert_eq!(status, STATUS_VFORK_WAIT);
+    assert!(child_pid > 0);
+    assert_eq!(process_impl::current_process_pid(&t.vm, t.base), child_pid);
+
+    let record_bytes = supervisor_resume_record_bytes();
+    assert_eq!(supervisor_process_resume(vm_ptr, 0, 0), record_bytes as i32);
+
+    let mut record = vec![0u8; record_bytes as usize];
+    assert_eq!(
+        supervisor_process_resume(vm_ptr, record.as_mut_ptr() as u32, record.len() as u32),
+        record_bytes as i32
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_resume_kind_runnable_thread()
+    );
+    assert_eq!(read_u32_le(&record, 24), vm_ptr);
+    assert_eq!(read_u32_le(&record, 36), STATUS_VFORK_WAIT as u32);
+
+    process_impl::vfork_parent_resume(&mut t.vm, child_pid);
+}
+
+#[test]
+fn supervisor_process_resume_selects_vfork_child_after_live_tid_pid_collision() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    let parent_process_ptr = t.vm.process_ptr;
+    let ps = unsafe { &mut *((t.base as u64 + parent_process_ptr as u64) as *mut ProcessState) };
+    ps.thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
+    ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, 0xCAFE_BABEu32, 0, 0);
+
+    let status = process_impl::sys_vfork(&mut t.vm, t.base);
+    let child_pid = process_impl::vfork_child_pid();
+    assert_eq!(status, STATUS_VFORK_WAIT);
+    assert!(child_pid > 2);
+    assert_eq!(process_impl::current_process_pid(&t.vm, t.base), child_pid);
+    assert_eq!(t.vm.tid, child_pid);
+    assert_eq!(
+        process_thread_tid(vm_ptr, (child_pid - 1) as u32),
+        child_pid
+    );
+    assert_eq!(
+        process_thread_vm_ptr(vm_ptr, (child_pid - 1) as u32),
+        vm_ptr
+    );
+
+    let record_bytes = supervisor_resume_record_bytes();
+    let mut record = vec![0u8; record_bytes as usize];
+    assert_eq!(
+        supervisor_process_resume(vm_ptr, record.as_mut_ptr() as u32, record.len() as u32),
+        record_bytes as i32
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_resume_kind_runnable_thread()
+    );
+    assert_eq!(read_u32_le(&record, 24), vm_ptr);
+    assert_eq!(read_u32_le(&record, 36), STATUS_VFORK_WAIT as u32);
+
+    process_impl::vfork_parent_resume(&mut t.vm, child_pid);
+}
+
+#[test]
+fn supervisor_process_resume_selects_vfork_child_with_transient_thread_tid_mismatch() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+
+    let status = process_impl::sys_vfork(&mut t.vm, t.base);
+    let child_pid = process_impl::vfork_child_pid();
+    assert_eq!(status, STATUS_VFORK_WAIT);
+    assert!(child_pid > 0);
+    assert_eq!(process_impl::current_process_pid(&t.vm, t.base), child_pid);
+    assert_eq!(
+        process_thread_tid(vm_ptr, (child_pid - 1) as u32),
+        child_pid
+    );
+    assert_eq!(
+        process_thread_vm_ptr(vm_ptr, (child_pid - 1) as u32),
+        vm_ptr
+    );
+
+    t.vm.tid = 0;
+
+    let record_bytes = supervisor_resume_record_bytes();
+    let mut record = vec![0u8; record_bytes as usize];
+    assert_eq!(
+        supervisor_process_resume(vm_ptr, record.as_mut_ptr() as u32, record.len() as u32),
+        record_bytes as i32
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_resume_kind_runnable_thread()
+    );
+    assert_eq!(read_u32_le(&record, 24), vm_ptr);
+    assert_eq!(read_u32_le(&record, 28), child_pid as u32);
+    assert_eq!(read_u32_le(&record, 36), STATUS_VFORK_WAIT as u32);
+
+    process_impl::vfork_parent_resume(&mut t.vm, child_pid);
+}
+
+#[test]
+fn supervisor_process_resume_selects_vfork_child_from_parent_process_table() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    let parent_process_ptr = t.vm.process_ptr;
+
+    let status = process_impl::sys_vfork(&mut t.vm, t.base);
+    let child_pid = process_impl::vfork_child_pid();
+    let child_process_ptr = t.vm.process_ptr;
+    assert_eq!(status, STATUS_VFORK_WAIT);
+    assert!(child_pid > 0 && child_pid as usize <= MAX_THREADS);
+    assert_ne!(child_process_ptr, parent_process_ptr);
+    assert_eq!(process_impl::current_process_pid(&t.vm, t.base), child_pid);
+
+    let parent_ps =
+        unsafe { &mut *((t.base as u64 + parent_process_ptr as u64) as *mut ProcessState) };
+    parent_ps
+        .thread_count
+        .store(1, core::sync::atomic::Ordering::Release);
+    parent_ps.threads[(child_pid - 1) as usize] =
+        ThreadRecord::new(child_pid, THREAD_RUNNING, vm_ptr, 0, 0);
+
+    let mut parent_owner: ThreadState = unsafe { core::mem::zeroed() };
+    parent_owner.guest_base = t.base;
+    parent_owner.process_ptr = parent_process_ptr;
+    parent_owner.tid = 1;
+    parent_owner.status = STATUS_OK;
+    let parent_owner_ptr = &mut parent_owner as *mut ThreadState as u32;
+
+    let record_bytes = supervisor_resume_record_bytes();
+    let mut record = vec![0u8; record_bytes as usize];
+    assert_eq!(
+        supervisor_process_resume(
+            parent_owner_ptr,
+            record.as_mut_ptr() as u32,
+            record.len() as u32
+        ),
+        record_bytes as i32
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_resume_kind_runnable_thread()
+    );
+    assert_eq!(read_u32_le(&record, 24), vm_ptr);
+    assert_eq!(read_u32_le(&record, 28), child_pid as u32);
+    assert_eq!(read_u32_le(&record, 32), child_process_ptr);
+    assert_eq!(read_u32_le(&record, 36), STATUS_VFORK_WAIT as u32);
+
+    process_impl::vfork_parent_resume(&mut t.vm, child_pid);
+}
+
+#[test]
 fn supervisor_blocked_retry_reason_process_gates_non_child_during_vfork() {
     let mut t = TestVm::new();
     let parent_process_ptr = t.vm.process_ptr;
@@ -179,6 +387,7 @@ fn supervisor_blocked_retry_reason_process_gates_non_child_during_vfork() {
     blocked_parent.process_ptr = parent_process_ptr;
     blocked_parent.tid = t.vm.tid;
     blocked_parent.status = STATUS_PIPE_WAIT;
+    blocked_parent.blocked_syscall_nr = SYS_PPOLL;
     blocked_parent.epoll_timeout_ms = 0;
     let blocked_parent_ptr = &mut blocked_parent as *mut ThreadState as u32;
 
@@ -227,6 +436,61 @@ fn supervisor_blocked_retry_reason_process_gates_non_child_during_vfork() {
 }
 
 #[test]
+fn supervisor_runnable_queues_defer_parent_sibling_until_vfork_child_finishes() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    let parent_process_ptr = t.vm.process_ptr;
+    let mut sibling: ThreadState = unsafe { core::mem::zeroed() };
+    sibling.guest_base = t.base;
+    sibling.process_ptr = parent_process_ptr;
+    sibling.tid = 2;
+    sibling.status = STATUS_OK;
+    let sibling_ptr = &mut sibling as *mut ThreadState as u32;
+
+    let parent_ps =
+        unsafe { &mut *((t.base as u64 + parent_process_ptr as u64) as *mut ProcessState) };
+    parent_ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, sibling_ptr, 0, 0);
+    parent_ps
+        .thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
+
+    assert_eq!(
+        process_impl::sys_vfork(&mut t.vm, t.base),
+        STATUS_VFORK_WAIT
+    );
+    let child_pid = process_impl::vfork_child_pid();
+    assert!(child_pid > 0);
+    assert!(tidemark_kernel::supervisor::enqueue_runnable_thread(
+        &sibling
+    ));
+
+    let mut resume = [0u8; 48];
+    assert_eq!(supervisor_next_resume(0, 0), 0);
+    assert_eq!(
+        supervisor_next_resume(resume.as_mut_ptr() as u32, resume.len() as u32),
+        0
+    );
+    assert_eq!(
+        supervisor_process_resume(sibling_ptr, resume.as_mut_ptr() as u32, resume.len() as u32,),
+        0
+    );
+
+    process_impl::vfork_parent_resume(&mut t.vm, child_pid);
+
+    assert_eq!(
+        supervisor_next_resume(0, 0),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(
+        supervisor_next_resume(resume.as_mut_ptr() as u32, resume.len() as u32),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&resume, 24), sibling_ptr);
+    assert_eq!(read_u32_le(&resume, 28), 2);
+}
+
+#[test]
 fn supervisor_vfork_child_owner_mismatch_identifies_active_child_owner() {
     let mut t = TestVm::new();
     let parent_pid = process_impl::current_process_pid(&t.vm, t.base);
@@ -253,9 +517,14 @@ fn supervisor_process_owner_matches_reports_current_process_owner() {
     assert!(parent_pid > 0);
     let vm_ptr = &mut t.vm as *mut ThreadState as u32;
     let parent_process_ptr = t.vm.process_ptr;
+    let fd_authority_vm_ptr = process_thread_vm_ptr(vm_ptr, 0);
     assert_eq!(supervisor_process_owner_matches(vm_ptr, parent_pid), 1);
     assert_eq!(supervisor_process_owner_mismatch(vm_ptr, parent_pid), 0);
     assert_eq!(supervisor_process_owner_live_matches(vm_ptr, parent_pid), 1);
+    assert_eq!(
+        supervisor_process_fd_authority_vm_ptr(vm_ptr, parent_pid),
+        fd_authority_vm_ptr
+    );
     assert_eq!(supervisor_process_owner_absent(vm_ptr), 0);
     assert_eq!(supervisor_process_owner_missing_or_invalid(vm_ptr), 0);
     assert_eq!(
@@ -277,6 +546,10 @@ fn supervisor_process_owner_matches_reports_current_process_owner() {
     assert_eq!(supervisor_process_owner_absent(vm_ptr), 1);
     assert_eq!(supervisor_process_owner_missing_or_invalid(vm_ptr), 1);
     assert_eq!(supervisor_process_owner_live_matches(vm_ptr, parent_pid), 0);
+    assert_eq!(
+        supervisor_process_fd_authority_vm_ptr(vm_ptr, parent_pid),
+        0
+    );
     t.vm.process_ptr = parent_process_ptr;
 
     process_impl::sys_vfork(&mut t.vm, t.base);
@@ -298,6 +571,36 @@ fn supervisor_process_owner_matches_reports_current_process_owner() {
     );
 
     process_impl::vfork_parent_resume(&mut t.vm, child_pid);
+}
+
+#[test]
+fn supervisor_process_fd_authority_resolves_a_live_sibling_from_a_stale_thread() {
+    let mut t = TestVm::new();
+    let pid = process_impl::current_process_pid(&t.vm, t.base);
+    let stale_vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    let process_ptr = t.vm.process_ptr;
+    let mut sibling: ThreadState = unsafe { core::mem::zeroed() };
+    sibling.guest_base = t.base;
+    sibling.process_ptr = process_ptr;
+    sibling.tid = 2;
+    sibling.status = STATUS_OK;
+    let sibling_vm_ptr = &mut sibling as *mut ThreadState as u32;
+    let ps = unsafe { &mut *((t.base as u64 + process_ptr as u64) as *mut ProcessState) };
+    ps.threads[0] = ThreadRecord::new(1, THREAD_DEAD, stale_vm_ptr, 0, 0);
+    ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, sibling_vm_ptr, 0, 0);
+    ps.thread_count
+        .store(1, core::sync::atomic::Ordering::Release);
+
+    assert_eq!(
+        supervisor_process_fd_authority_vm_ptr(stale_vm_ptr, pid),
+        sibling_vm_ptr
+    );
+
+    unsafe { core::ptr::addr_of_mut!(sibling.tid).write_volatile(0) };
+    assert_eq!(
+        supervisor_process_fd_authority_vm_ptr(stale_vm_ptr, pid),
+        stale_vm_ptr
+    );
 }
 
 #[test]

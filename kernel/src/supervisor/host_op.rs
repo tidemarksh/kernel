@@ -220,15 +220,23 @@ pub(super) fn complete_host_op(bytes: &[u8]) -> i32 {
     {
         return 0;
     }
-    if read_u32(bytes, 12) != Some(super::SUPERVISOR_HOST_OP_KIND_ARM_HOST_TIMER) {
-        return 0;
-    }
+    let kind = read_u32(bytes, 12).unwrap_or(0);
     if read_u32(bytes, 36) != Some(super::SUPERVISOR_HOST_COMPLETION_OUTCOME_SUCCESS) {
         return 0;
     }
     let parent_vm_ptr = read_u32(bytes, 24).unwrap_or(0);
-    let deadline_ticks = read_u64(bytes, 56).unwrap_or(0);
-    super::timer::complete_arm_host_timer(parent_vm_ptr, deadline_ticks)
+    match kind {
+        super::SUPERVISOR_HOST_OP_KIND_SPAWN_THREAD_WORKER => {
+            let child_vm_ptr = read_u32(bytes, 28).unwrap_or(0);
+            let tid = read_u32(bytes, 32).unwrap_or(0);
+            super::thread::complete_spawn_thread_worker(parent_vm_ptr, child_vm_ptr, tid)
+        }
+        super::SUPERVISOR_HOST_OP_KIND_ARM_HOST_TIMER => {
+            let deadline_ticks = read_u64(bytes, 56).unwrap_or(0);
+            super::timer::complete_arm_host_timer(parent_vm_ptr, deadline_ticks)
+        }
+        _ => 0,
+    }
 }
 
 fn encode_request(request: super::SupervisorHostOpRequest, out_ptr: u32) -> i32 {

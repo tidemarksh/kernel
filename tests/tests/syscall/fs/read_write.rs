@@ -176,6 +176,8 @@ fn syscall_dispatch_reads_regular_file_local_hit_without_fs_ring() {
     assert_eq!(t.vm.x[10] as i64, 3);
     assert_eq!(t.vm.status, STATUS_OK);
     assert_eq!(t.guest_mem(buf_addr, 3), b"abc".to_vec());
+    assert_eq!(t.vm.completed_pipe_read_guest_ptr, buf_addr);
+    assert_eq!(t.vm.completed_pipe_read_len, 3);
     assert_eq!(t.sys_lseek(fd, 0, 1), 3);
 }
 
@@ -276,7 +278,7 @@ fn syscall_dispatch_reads_external_partial_page_hit_via_fs_ring() {
     assert_eq!(read_u64_le(&record, 56), 0);
     assert_eq!(read_u64_le(&record, 64), 0);
     assert_eq!(read_u64_le(&record, 72), 8192);
-    assert_eq!(read_i64_le(&record, 80), ENOENT);
+    assert_eq!(read_i64_le(&record, 80), 4096);
     assert_eq!(read_u64_le(&record, 88), 0);
     assert_eq!(read_u64_le(&record, 96), 8192);
 }

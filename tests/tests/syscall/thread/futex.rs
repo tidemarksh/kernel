@@ -193,15 +193,9 @@ fn supervisor_next_resume_publishes_kernel_selected_futex_wake() {
     );
     assert_eq!(wake, 1);
     assert_eq!(supervisor_shadow_resume_enqueue_count(), 1);
-    assert_eq!(supervisor_next_resume(0, 0), 0);
-
     let vm_ptr = &mut t.vm as *mut ThreadState as u32;
-    assert_eq!(
-        supervisor_complete_futex_wait(vm_ptr, supervisor_futex_wait_completion_woken()),
-        STATUS_OK
-    );
-    assert_eq!(t.vm.status, STATUS_OK);
     assert_eq!(thread_impl::thread_record_blocked_addr(&t.vm, t.base), 0);
+    assert_eq!(t.vm.status, STATUS_FUTEX_WAIT);
     assert_eq!(
         supervisor_next_resume(0, 0),
         supervisor_resume_record_bytes() as i32
@@ -231,6 +225,315 @@ fn supervisor_next_resume_publishes_kernel_selected_futex_wake() {
     assert_eq!(read_u32_le(&record, 32), t.vm.process_ptr);
     assert_eq!(read_u32_le(&record, 36), STATUS_OK as u32);
     assert_eq!(read_u64_le(&record, 40), futex_addr as u64);
+    assert_eq!(supervisor_next_resume(0, 0), 0);
+    assert_eq!(
+        supervisor_complete_futex_wait(vm_ptr, supervisor_futex_wait_completion_woken()),
+        STATUS_OK
+    );
+    assert_eq!(t.vm.status, STATUS_OK);
+}
+
+#[test]
+fn supervisor_next_resume_skips_futex_wake_record_until_thread_record_unblocked() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    let blocked_addr = t.scratch + 0x130;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, blocked_addr, 13);
+    }
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+
+    let blocked_wait = thread_impl::sys_futex(
+        &mut t.vm,
+        t.base,
+        blocked_addr as u64,
+        FUTEX_WAIT as u64,
+        13,
+        0,
+        0,
+        0,
+    );
+    assert_eq!(blocked_wait, 0);
+    assert_eq!(t.vm.status, STATUS_FUTEX_WAIT);
+
+    let blocked_thread_ptr = (&mut t.vm as *mut ThreadState) as u32;
+    assert!(tidemark_kernel::supervisor::enqueue_futex_resume(
+        t.vm.process_ptr,
+        blocked_thread_ptr,
+        t.vm.tid,
+        blocked_addr as u64,
+    ));
+    assert_eq!(supervisor_shadow_resume_enqueue_count(), 1);
+    assert_eq!(supervisor_next_resume(0, 0), 0);
+
+    unsafe {
+        let ps = &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState);
+        assert_eq!(ps.threads[0].blocked_addr, blocked_addr as u64);
+    }
+
+    let mut ready_thread: ThreadState = unsafe { std::mem::zeroed() };
+    ready_thread.guest_base = t.base;
+    ready_thread.process_ptr = t.vm.process_ptr;
+    ready_thread.tid = 2;
+    ready_thread.status = STATUS_OK;
+    let ready_thread_ptr = (&mut ready_thread as *mut ThreadState) as u32;
+
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, ready_thread_ptr, 0, 0);
+        ps.thread_count
+            .store(2, std::sync::atomic::Ordering::Release);
+    }
+
+    let ready_addr = t.scratch + 0x134;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, ready_addr, 17);
+    }
+    let ready_wait = thread_impl::sys_futex(
+        &mut ready_thread,
+        t.base,
+        ready_addr as u64,
+        FUTEX_WAIT as u64,
+        17,
+        0,
+        0,
+        0,
+    );
+    assert_eq!(ready_wait, 0);
+    assert_eq!(ready_thread.status, STATUS_FUTEX_WAIT);
+    assert_eq!(
+        supervisor_complete_futex_wait(
+            ready_thread_ptr,
+            supervisor_futex_wait_completion_timed_out()
+        ),
+        STATUS_OK
+    );
+    assert_eq!(ready_thread.status, STATUS_OK);
+    assert_eq!(supervisor_shadow_resume_enqueue_count(), 2);
+    assert_eq!(
+        supervisor_next_resume(0, 0),
+        supervisor_resume_record_bytes() as i32
+    );
+
+    let mut record = [0u8; 48];
+    assert_eq!(
+        supervisor_next_resume(record.as_mut_ptr() as u32, record.len() as u32),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_resume_kind_futex_wake()
+    );
+    assert_eq!(read_u64_le(&record, 16), 2);
+    assert_eq!(read_u32_le(&record, 24), ready_thread_ptr);
+    assert_eq!(read_u32_le(&record, 28), ready_thread.tid as u32);
+    assert_eq!(read_u32_le(&record, 32), t.vm.process_ptr);
+    assert_eq!(read_u32_le(&record, 36), STATUS_OK as u32);
+    assert_eq!(read_u64_le(&record, 40), ready_addr as u64);
+    assert_eq!(supervisor_next_resume(0, 0), 0);
+
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[0] = ThreadRecord::new(t.vm.tid, THREAD_RUNNING, blocked_thread_ptr, 0, 0);
+    }
+    assert_eq!(thread_impl::thread_record_blocked_addr(&t.vm, t.base), 0);
+    assert_eq!(t.vm.status, STATUS_FUTEX_WAIT);
+    assert_eq!(
+        supervisor_next_resume(0, 0),
+        supervisor_resume_record_bytes() as i32
+    );
+
+    record.fill(0);
+    assert_eq!(
+        supervisor_next_resume(record.as_mut_ptr() as u32, record.len() as u32),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_resume_kind_futex_wake()
+    );
+    assert_eq!(read_u64_le(&record, 16), 1);
+    assert_eq!(read_u32_le(&record, 24), blocked_thread_ptr);
+    assert_eq!(read_u32_le(&record, 28), t.vm.tid as u32);
+    assert_eq!(read_u32_le(&record, 32), t.vm.process_ptr);
+    assert_eq!(read_u32_le(&record, 36), STATUS_OK as u32);
+    assert_eq!(read_u64_le(&record, 40), blocked_addr as u64);
+    assert_eq!(supervisor_next_resume(0, 0), 0);
+    assert_eq!(
+        supervisor_complete_futex_wait(
+            blocked_thread_ptr,
+            supervisor_futex_wait_completion_woken()
+        ),
+        STATUS_OK
+    );
+    assert_eq!(thread_impl::thread_record_blocked_addr(&t.vm, t.base), 0);
+}
+
+#[test]
+fn supervisor_next_resume_publishes_blocked_futex_wake_record_when_word_changes() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    let blocked_addr = t.scratch + 0x170;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, blocked_addr, 21);
+    }
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+
+    let wait = thread_impl::sys_futex(
+        &mut t.vm,
+        t.base,
+        blocked_addr as u64,
+        FUTEX_WAIT as u64,
+        21,
+        0,
+        0,
+        0,
+    );
+    assert_eq!(wait, 0);
+    assert_eq!(t.vm.status, STATUS_FUTEX_WAIT);
+
+    let vm_ptr = (&mut t.vm as *mut ThreadState) as u32;
+    assert!(tidemark_kernel::supervisor::enqueue_futex_resume(
+        t.vm.process_ptr,
+        vm_ptr,
+        t.vm.tid,
+        blocked_addr as u64,
+    ));
+    assert_eq!(supervisor_next_resume(0, 0), 0);
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, blocked_addr, 22);
+    }
+    assert_eq!(
+        supervisor_next_resume(0, 0),
+        supervisor_resume_record_bytes() as i32
+    );
+
+    let mut record = [0u8; 48];
+    assert_eq!(
+        supervisor_next_resume(record.as_mut_ptr() as u32, record.len() as u32),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&record, 12),
+        supervisor_resume_kind_futex_wake()
+    );
+    assert_eq!(read_u32_le(&record, 24), vm_ptr);
+    assert_eq!(read_u32_le(&record, 28), t.vm.tid as u32);
+    assert_eq!(read_u32_le(&record, 32), t.vm.process_ptr);
+    assert_eq!(read_u64_le(&record, 40), blocked_addr as u64);
+    assert_eq!(
+        supervisor_complete_futex_wait(vm_ptr, supervisor_futex_wait_completion_not_equal()),
+        STATUS_OK
+    );
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(thread_impl::thread_record_blocked_addr(&t.vm, t.base), 0);
+}
+
+#[test]
+fn supervisor_next_resume_defers_queued_runnable_while_thread_has_status_fs() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+    t.vm.status = STATUS_FS;
+
+    let mut thread2: ThreadState = unsafe { std::mem::zeroed() };
+    thread2.guest_base = t.base;
+    thread2.process_ptr = t.vm.process_ptr;
+    thread2.tid = 2;
+    thread2.status = STATUS_OK;
+    let thread2_ptr = (&mut thread2 as *mut ThreadState) as u32;
+
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, thread2_ptr, 0, 0);
+        ps.thread_count
+            .store(2, std::sync::atomic::Ordering::Release);
+    }
+
+    assert!(tidemark_kernel::supervisor::enqueue_runnable_thread(
+        &thread2
+    ));
+    assert_eq!(supervisor_shadow_resume_enqueue_count(), 1);
+    assert_eq!(supervisor_next_resume(0, 0), 0);
+
+    let mut resume = [0u8; 48];
+    assert_eq!(
+        supervisor_next_resume(resume.as_mut_ptr() as u32, resume.len() as u32),
+        0
+    );
+
+    t.vm.status = STATUS_OK;
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(
+        supervisor_next_resume(0, 0),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(
+        supervisor_next_resume(resume.as_mut_ptr() as u32, resume.len() as u32),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&resume, 12),
+        supervisor_resume_kind_runnable_thread()
+    );
+    assert_eq!(read_u32_le(&resume, 24), thread2_ptr);
+    assert_eq!(read_u32_le(&resume, 28), 2);
+}
+
+#[test]
+fn supervisor_next_resume_drops_stale_queued_runnable_after_thread_reblocks() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    let futex_addr = t.scratch + 0x190;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, futex_addr, 37);
+    }
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+    let vm_ptr = (&mut t.vm as *mut ThreadState) as u32;
+
+    assert!(tidemark_kernel::supervisor::enqueue_runnable_thread(&t.vm));
+    assert_eq!(supervisor_shadow_resume_enqueue_count(), 1);
+
+    let wait = thread_impl::sys_futex(
+        &mut t.vm,
+        t.base,
+        futex_addr as u64,
+        FUTEX_WAIT as u64,
+        37,
+        0,
+        0,
+        0,
+    );
+    assert_eq!(wait, 0);
+    assert_eq!(t.vm.status, STATUS_FUTEX_WAIT);
+    assert_eq!(
+        thread_impl::thread_record_blocked_addr(&t.vm, t.base),
+        futex_addr as u64
+    );
+
+    assert_eq!(supervisor_next_resume(0, 0), 0);
+    let mut resume = [0u8; 48];
+    assert_eq!(
+        supervisor_next_resume(resume.as_mut_ptr() as u32, resume.len() as u32),
+        0
+    );
+
+    t.vm.status = STATUS_OK;
+    t.vm.futex_wait_addr = 0;
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[0] = ThreadRecord::new(t.vm.tid, THREAD_RUNNING, vm_ptr, 0, 0);
+    }
+    assert_eq!(thread_impl::thread_record_blocked_addr(&t.vm, t.base), 0);
     assert_eq!(supervisor_next_resume(0, 0), 0);
 }
 
@@ -321,7 +624,7 @@ fn supervisor_thread_state_snapshot_applies_latest_thread_event_state() {
     thread2.guest_base = t.base;
     thread2.process_ptr = t.vm.process_ptr;
     thread2.tid = 2;
-    thread2.status = STATUS_OK;
+    thread2.status = STATUS_PIPE_WAIT;
     let thread2_ptr = (&mut thread2 as *mut ThreadState) as u32;
 
     unsafe {
@@ -367,6 +670,7 @@ fn supervisor_thread_state_snapshot_applies_latest_thread_event_state() {
     assert_eq!(read_u64_le(&snapshot, slot1 + 16), blocked_addr);
 
     event.fill(0);
+    thread2.status = STATUS_OK;
     write_thread_event_record(
         &mut event,
         supervisor_thread_event_kind_ready(),
@@ -471,6 +775,143 @@ fn supervisor_process_resume_publishes_kernel_selected_runnable_thread() {
 }
 
 #[test]
+fn supervisor_process_resume_promotes_mismatched_futex_waiter_after_runnable_timer() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+
+    let mut timer: ThreadState = unsafe { std::mem::zeroed() };
+    timer.guest_base = t.base;
+    timer.process_ptr = t.vm.process_ptr;
+    timer.tid = 2;
+    timer.status = STATUS_OK;
+    let timer_ptr = (&mut timer as *mut ThreadState) as u32;
+
+    let mut waiter: ThreadState = unsafe { std::mem::zeroed() };
+    waiter.guest_base = t.base;
+    waiter.process_ptr = t.vm.process_ptr;
+    waiter.tid = 3;
+    waiter.status = STATUS_OK;
+    let waiter_ptr = (&mut waiter as *mut ThreadState) as u32;
+    let futex_addr = t.scratch + 0x1c0;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, futex_addr, 0);
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[0].state = THREAD_BLOCKED_FUTEX;
+        ps.threads[0].blocked_addr = 0x6000;
+        ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, timer_ptr, 0, 0);
+        ps.threads[2] = ThreadRecord::new(3, THREAD_RUNNING, waiter_ptr, 0, 0);
+        ps.thread_count
+            .store(3, std::sync::atomic::Ordering::Release);
+    }
+    assert_eq!(
+        thread_impl::sys_futex(
+            &mut waiter,
+            t.base,
+            futex_addr as u64,
+            FUTEX_WAIT as u64,
+            0,
+            0,
+            0,
+            0,
+        ),
+        0
+    );
+    assert_eq!(waiter.status, STATUS_FUTEX_WAIT);
+
+    let mut event = [0u8; 80];
+    write_thread_event_record_with_detail(
+        &mut event,
+        supervisor_thread_event_kind_blocked(),
+        81,
+        waiter_ptr,
+        3,
+        STATUS_FUTEX_WAIT as u32,
+        futex_addr as u64,
+    );
+    assert_eq!(
+        supervisor_submit_thread_event(event.as_ptr() as u32, event.len() as u32),
+        0
+    );
+
+    let vm_ptr = (&mut t.vm as *mut ThreadState) as u32;
+    let mut resume = [0u8; 48];
+    assert_eq!(
+        supervisor_process_resume(vm_ptr, resume.as_mut_ptr() as u32, resume.len() as u32),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&resume, 24), timer_ptr);
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, futex_addr, 1);
+    }
+    resume.fill(0);
+    assert_eq!(
+        supervisor_process_resume(vm_ptr, 0, 0),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(
+        supervisor_process_resume(vm_ptr, resume.as_mut_ptr() as u32, resume.len() as u32),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&resume, 24), waiter_ptr);
+    assert_eq!(read_u32_le(&resume, 28), 3);
+    assert_eq!(read_u32_le(&resume, 36), STATUS_OK as u32);
+    assert_eq!(waiter.status, STATUS_OK);
+    assert_eq!(thread_impl::thread_record_blocked_addr(&waiter, t.base), 0);
+}
+
+#[test]
+fn supervisor_process_resume_defers_runnable_selection_while_thread_has_status_fs() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+    t.vm.status = STATUS_FS;
+
+    let mut thread2: ThreadState = unsafe { std::mem::zeroed() };
+    thread2.guest_base = t.base;
+    thread2.process_ptr = t.vm.process_ptr;
+    thread2.tid = 2;
+    thread2.status = STATUS_OK;
+    let thread2_ptr = (&mut thread2 as *mut ThreadState) as u32;
+
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[0].state = THREAD_BLOCKED_FUTEX;
+        ps.threads[0].blocked_addr = 0x6400;
+        ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, thread2_ptr, 0, 0);
+        ps.thread_count
+            .store(2, std::sync::atomic::Ordering::Release);
+    }
+
+    let vm_ptr = (&mut t.vm as *mut ThreadState) as u32;
+    assert_eq!(supervisor_process_resume(vm_ptr, 0, 0), 0);
+
+    let mut resume = [0u8; 48];
+    assert_eq!(
+        supervisor_process_resume(vm_ptr, resume.as_mut_ptr() as u32, resume.len() as u32,),
+        0
+    );
+
+    t.vm.status = STATUS_OK;
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(
+        supervisor_process_resume(vm_ptr, resume.as_mut_ptr() as u32, resume.len() as u32,),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&resume, 12),
+        supervisor_resume_kind_runnable_thread()
+    );
+    assert_eq!(read_u32_le(&resume, 24), thread2_ptr);
+    assert_eq!(read_u32_le(&resume, 28), 2);
+}
+
+#[test]
 fn supervisor_process_resume_honors_latest_thread_event_blocked_state() {
     supervisor_reset_shadow_log();
 
@@ -482,7 +923,7 @@ fn supervisor_process_resume_honors_latest_thread_event_blocked_state() {
     thread2.guest_base = t.base;
     thread2.process_ptr = t.vm.process_ptr;
     thread2.tid = 2;
-    thread2.status = STATUS_OK;
+    thread2.status = STATUS_FUTEX_WAIT;
     let thread2_ptr = (&mut thread2 as *mut ThreadState) as u32;
 
     let mut thread3: ThreadState = unsafe { std::mem::zeroed() };
@@ -531,6 +972,7 @@ fn supervisor_process_resume_honors_latest_thread_event_blocked_state() {
     assert_eq!(read_u32_le(&resume, 28), 3);
 
     event.fill(0);
+    thread2.status = STATUS_OK;
     write_thread_event_record(
         &mut event,
         supervisor_thread_event_kind_ready(),
@@ -557,6 +999,55 @@ fn supervisor_process_resume_honors_latest_thread_event_blocked_state() {
     assert_eq!(read_u32_le(&resume, 24), thread2_ptr);
     assert_eq!(read_u32_le(&resume, 28), 2);
     assert_eq!(supervisor_shadow_thread_event_count(), 2);
+}
+
+#[test]
+fn supervisor_process_resume_ignores_late_clone_spawn_event_after_parent_is_ready() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+
+    let mut parent: ThreadState = unsafe { std::mem::zeroed() };
+    parent.guest_base = t.base;
+    parent.process_ptr = t.vm.process_ptr;
+    parent.tid = 2;
+    parent.status = STATUS_OK;
+    let parent_ptr = (&mut parent as *mut ThreadState) as u32;
+
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[0].state = THREAD_BLOCKED_FUTEX;
+        ps.threads[0].blocked_addr = 0x6100;
+        ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, parent_ptr, 0, 0);
+        ps.thread_count
+            .store(2, std::sync::atomic::Ordering::Release);
+    }
+
+    let mut event = [0u8; 80];
+    write_thread_event_record(
+        &mut event,
+        supervisor_thread_event_kind_blocked(),
+        43,
+        parent_ptr,
+        2,
+        STATUS_CLONE_SPAWN as u32,
+    );
+    assert_eq!(
+        supervisor_submit_thread_event(event.as_ptr() as u32, event.len() as u32),
+        0
+    );
+
+    let vm_ptr = (&mut t.vm as *mut ThreadState) as u32;
+    let mut resume = [0u8; 48];
+    assert_eq!(
+        supervisor_process_resume(vm_ptr, resume.as_mut_ptr() as u32, resume.len() as u32),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&resume, 24), parent_ptr);
+    assert_eq!(read_u32_le(&resume, 28), 2);
+    assert_eq!(read_u32_le(&resume, 36), STATUS_OK as u32);
 }
 
 #[test]
@@ -615,6 +1106,88 @@ fn supervisor_process_resume_ready_event_overrides_stale_blocked_record() {
         supervisor_resume_kind_runnable_thread()
     );
     assert_eq!(read_u32_le(&resume, 24), thread2_ptr);
+    assert_eq!(read_u32_le(&resume, 28), 2);
+}
+
+#[test]
+fn supervisor_futex_wake_clears_stale_blocked_event_override() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+
+    let futex_addr = t.scratch + 0x1a0;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, futex_addr, 0);
+    }
+
+    let mut waiter: ThreadState = unsafe { std::mem::zeroed() };
+    waiter.guest_base = t.base;
+    waiter.process_ptr = t.vm.process_ptr;
+    waiter.tid = 2;
+    waiter.status = STATUS_FUTEX_WAIT;
+    waiter.futex_wait_addr = futex_addr as u64;
+    waiter.futex_wait_bitset = u32::MAX;
+    let waiter_ptr = (&mut waiter as *mut ThreadState) as u32;
+
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[0].state = THREAD_BLOCKED_FUTEX;
+        ps.threads[0].blocked_addr = 0x6100;
+        ps.threads[1] =
+            ThreadRecord::new(2, THREAD_BLOCKED_FUTEX, waiter_ptr, 0, futex_addr as u64);
+        ps.thread_count
+            .store(2, std::sync::atomic::Ordering::Release);
+    }
+
+    let mut event = [0u8; 80];
+    write_thread_event_record(
+        &mut event,
+        supervisor_thread_event_kind_blocked(),
+        71,
+        waiter_ptr,
+        2,
+        STATUS_FUTEX_WAIT as u32,
+    );
+    assert_eq!(
+        supervisor_submit_thread_event(event.as_ptr() as u32, event.len() as u32),
+        0
+    );
+
+    unsafe {
+        let ps = &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState);
+        assert_eq!(ps.threads[1].state, THREAD_BLOCKED_FUTEX);
+        assert_eq!(ps.threads[1].blocked_addr, futex_addr as u64);
+        assert_eq!(ps.threads[1].thread_ptr, waiter_ptr);
+    }
+
+    assert_eq!(
+        thread_impl::sys_futex(
+            &mut t.vm,
+            t.base,
+            futex_addr as u64,
+            FUTEX_WAKE as u64,
+            1,
+            0,
+            0,
+            0,
+        ),
+        1
+    );
+    thread_impl::resume_futex_wait(&mut waiter, t.base);
+
+    let vm_ptr = (&mut t.vm as *mut ThreadState) as u32;
+    let mut resume = [0u8; 48];
+    assert_eq!(
+        supervisor_process_resume(vm_ptr, resume.as_mut_ptr() as u32, resume.len() as u32,),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&resume, 12),
+        supervisor_resume_kind_runnable_thread()
+    );
+    assert_eq!(read_u32_le(&resume, 24), waiter_ptr);
     assert_eq!(read_u32_le(&resume, 28), 2);
 }
 

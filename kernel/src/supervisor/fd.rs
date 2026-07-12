@@ -1,7 +1,8 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use crate::abi::{
-    FD_TYPE_FILE, FD_TYPE_PIPE, FD_TYPE_PTY_MASTER, FD_TYPE_PTY_SLAVE, MAX_FDS, SYS_CLOSE,
+    FD_TYPE_DEVNULL, FD_TYPE_EPOLL, FD_TYPE_EVENTFD, FD_TYPE_FILE, FD_TYPE_PIPE,
+    FD_TYPE_PTY_MASTER, FD_TYPE_PTY_SLAVE, FD_TYPE_TIMERFD, MAX_FDS, MAX_PIPES, SYS_CLOSE,
     SYS_CLOSE_RANGE, SYS_EXECVE, SYS_LSEEK,
 };
 use crate::fs::fd_table;
@@ -266,6 +267,30 @@ fn fd_type_is_pipe_like(fd_type: i32) -> bool {
     )
 }
 
+fn fd_type_is_live_epoll_state(fd_type: i32) -> bool {
+    matches!(fd_type, FD_TYPE_EPOLL | FD_TYPE_EVENTFD | FD_TYPE_TIMERFD)
+}
+
+fn pipe_candidate_generation_matches(
+    candidate_type: i32,
+    candidate_ino: u32,
+    candidate_offset: i64,
+) -> bool {
+    if candidate_type != FD_TYPE_PIPE {
+        return true;
+    }
+    if candidate_ino == 0 || candidate_ino as usize >= MAX_PIPES {
+        return false;
+    }
+    if candidate_offset == 0 {
+        return true;
+    }
+    if candidate_offset < 0 || candidate_offset > u32::MAX as i64 {
+        return false;
+    }
+    crate::syscall::pipe::pipe_generation_matches(candidate_ino, candidate_offset as u32)
+}
+
 fn regular_file_ofds_share_identity(current: OpenFileDesc, candidate: OpenFileDesc) -> bool {
     current.fd_type == FD_TYPE_FILE
         && candidate.fd_type == FD_TYPE_FILE
@@ -359,6 +384,9 @@ pub fn ofd_slot_write_action(
     if candidate_host_fd != current.host_fd || candidate_ino != current.ino {
         return restore_skip();
     }
+    if !pipe_candidate_generation_matches(candidate_type, candidate_ino, candidate_offset) {
+        return restore_skip();
+    }
     if current.fd_type == FD_TYPE_FILE && candidate_offset < current.offset {
         return restore_skip();
     }
@@ -383,9 +411,24 @@ pub fn ofd_slot_restore_action(
     if current.fd_type == 0 || current.refcount <= 0 {
         return restore_apply();
     }
+    if !pipe_candidate_generation_matches(candidate_type, candidate_ino, candidate_offset) {
+        return restore_skip();
+    }
     let referenced_by_fd_entry =
         (flags & super::SUPERVISOR_OFD_SLOT_RESTORE_FLAG_REFERENCED_BY_FD_ENTRY) != 0;
-    if !referenced_by_fd_entry {
+    if referenced_by_fd_entry {
+        if candidate_type == 0 {
+            return restore_skip();
+        }
+        if candidate_type != current.fd_type
+            || current.fd_type != FD_TYPE_FILE
+            || candidate_type != FD_TYPE_FILE
+            || candidate_host_fd != current.host_fd
+            || candidate_ino != current.ino
+        {
+            return restore_skip();
+        }
+    } else {
         if candidate_type == 0 || candidate_type != current.fd_type {
             return restore_skip();
         }
@@ -456,6 +499,12 @@ pub fn fd_entry_restore_action(
     if fd as usize >= MAX_FDS {
         return restore_skip();
     }
+    if snapshot_ofd_id != 0
+        && (snapshot_ofd_id as usize >= MAX_FDS
+            || fd_table::get_ofd_by_id(snapshot_ofd_id).is_none())
+    {
+        return restore_skip();
+    }
     if syscall_may_clear_fd_entries(syscall_nr) {
         return restore_apply();
     }
@@ -471,15 +520,19 @@ pub fn fd_entry_restore_action(
         return restore_apply();
     }
     if (flags & super::SUPERVISOR_FD_ENTRY_RESTORE_FLAG_PRESERVE_LIVE_REGULAR_FILE) != 0
-        && fd_table::get_ofd_by_id(current_ofd_id)
-            .is_some_and(|ofd| ofd.fd_type == FD_TYPE_FILE && ofd.refcount > 0)
+        && fd_table::get_ofd_by_id(current_ofd_id).is_some_and(|ofd| {
+            matches!(ofd.fd_type, FD_TYPE_FILE | FD_TYPE_DEVNULL) && ofd.refcount > 0
+        })
     {
         return restore_skip();
     }
-    if (flags & super::SUPERVISOR_FD_ENTRY_RESTORE_FLAG_PRESERVE_LIVE_EPOLL_DEPENDENT) != 0
-        && super::epoll::process_epoll_depends_on_ofd(vm_ptr, current_ofd_id) != 0
-    {
-        return restore_skip();
+    if (flags & super::SUPERVISOR_FD_ENTRY_RESTORE_FLAG_PRESERVE_LIVE_EPOLL_DEPENDENT) != 0 {
+        if fd_table::get_ofd_by_id(current_ofd_id)
+            .is_some_and(|ofd| ofd.refcount > 0 && fd_type_is_live_epoll_state(ofd.fd_type))
+            || super::epoll::process_epoll_depends_on_ofd(vm_ptr, current_ofd_id) != 0
+        {
+            return restore_skip();
+        }
     }
     restore_apply()
 }

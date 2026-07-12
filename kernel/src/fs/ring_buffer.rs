@@ -8,7 +8,9 @@
 //!     complete_head: AtomicU32,         // offset 8   — kernel Worker writes
 //!     complete_tail: AtomicU32,         // offset 12  — thread-worker reads
 //!     notify:        AtomicI32,         // offset 16  — Atomics.wait/notify target
-//!     _pad:          [u8; 12],          // offset 20
+//!     request_clock: AtomicU32,         // offset 20
+//!     cq_lock:       AtomicU32,         // offset 24
+//!     sq_lock:       AtomicU32,         // offset 28
 //!     sq_entries:    [FsRequest; 64],   // offset 32  — submission queue
 //!     cq_entries:    [FsResponse; 64],  // offset 4128 — completion queue
 //! };
@@ -23,13 +25,15 @@
 //!     flags:   u32,                     // offset 40
 //!     mode:    u32,                     // offset 44
 //!     vm_ptr:  u32,                     // offset 48   — owning ThreadState
-//!     _pad:    [u8; 12],               // offset 52
+//!     ofd_id:  u32,                     // offset 52   — submitting fd's OFD id
+//!     ino:     u32,                     // offset 56   — submitting fd's inode
+//!     request_id: u32,                  // offset 60   — ring-local request identity
 //! };
 //!
 //! struct FsResponse {                   // 16 bytes total
 //!     result:  i64,                     // offset 0
 //!     vm_ptr:  u32,                     // offset 8    — owning ThreadState
-//!     _pad:    u32,                     // offset 12
+//!     request_id: u32,                  // offset 12   — completed request identity
 //! };
 
 use crate::abi::*;
@@ -65,6 +69,9 @@ pub const OFF_SUBMIT_TAIL: u32 = 4;
 pub const OFF_COMPLETE_HEAD: u32 = 8;
 pub const OFF_COMPLETE_TAIL: u32 = 12;
 pub const OFF_NOTIFY: u32 = 16;
+pub const OFF_REQUEST_CLOCK: u32 = 20;
+pub const OFF_CQ_LOCK: u32 = 24;
+pub const OFF_SQ_LOCK: u32 = 28;
 pub const OFF_SQ_BASE: u32 = HEADER_SIZE as u32;
 pub const OFF_CQ_BASE: u32 = (HEADER_SIZE + SQ_SIZE * REQ_SIZE) as u32;
 
@@ -78,6 +85,46 @@ pub fn ring_backed(ring_base: u32) -> bool {
     end <= crate::wasm::memory_size_bytes()
 }
 
+pub fn reset(ring_base: u32) {
+    if !ring_backed(ring_base) {
+        return;
+    }
+    unsafe {
+        use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
+
+        (*(ring_base as *const AtomicU32)).store(0, Ordering::Release);
+        (*((ring_base + OFF_SUBMIT_TAIL) as *const AtomicU32)).store(0, Ordering::Release);
+        (*((ring_base + OFF_COMPLETE_HEAD) as *const AtomicU32)).store(0, Ordering::Release);
+        (*((ring_base + OFF_COMPLETE_TAIL) as *const AtomicU32)).store(0, Ordering::Release);
+        (*((ring_base + OFF_NOTIFY) as *const AtomicI32)).store(0, Ordering::Release);
+        (*((ring_base + OFF_REQUEST_CLOCK) as *const AtomicU32)).store(0, Ordering::Release);
+        (*((ring_base + OFF_CQ_LOCK) as *const AtomicU32)).store(0, Ordering::Release);
+        (*((ring_base + OFF_SQ_LOCK) as *const AtomicU32)).store(0, Ordering::Release);
+    }
+}
+
+struct RingLockGuard(*const core::sync::atomic::AtomicU32);
+
+impl Drop for RingLockGuard {
+    fn drop(&mut self) {
+        unsafe {
+            (*self.0).store(0, core::sync::atomic::Ordering::Release);
+        }
+    }
+}
+
+unsafe fn try_ring_lock(ring_base: u32, offset: u32) -> Option<RingLockGuard> {
+    use core::sync::atomic::{AtomicU32, Ordering};
+
+    let lock = (ring_base + offset) as *const AtomicU32;
+    unsafe {
+        (*lock)
+            .compare_exchange(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .ok()
+            .map(|_| RingLockGuard(lock))
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct FsRequestInfo {
     pub opcode: u32,
@@ -89,6 +136,9 @@ pub struct FsRequestInfo {
     pub flags: u32,
     pub mode: u32,
     pub vm_ptr: u32,
+    pub ofd_id: u32,
+    pub ino: u32,
+    pub request_id: u32,
 }
 
 /// Submit a FS request to the ring buffer.
@@ -110,9 +160,15 @@ pub fn submit_request(
     flags: u32,
     mode: u32,
     vm_ptr: u32,
+    ofd_id: u32,
+    ino: u32,
 ) -> i32 {
     unsafe {
         use core::sync::atomic::{AtomicU32, Ordering};
+
+        let Some(_sq_guard) = try_ring_lock(ring_base, OFF_SQ_LOCK) else {
+            return -1;
+        };
 
         let head_ptr = ring_base as *const AtomicU32;
         let tail_ptr = (ring_base + OFF_SUBMIT_TAIL) as *const AtomicU32;
@@ -139,6 +195,14 @@ pub fn submit_request(
         (p.add(40) as *mut u32).write(flags);
         (p.add(44) as *mut u32).write(mode);
         (p.add(48) as *mut u32).write(vm_ptr);
+        (p.add(52) as *mut u32).write(ofd_id);
+        (p.add(56) as *mut u32).write(ino);
+        let clock_ptr = (ring_base + OFF_REQUEST_CLOCK) as *const AtomicU32;
+        let mut request_id = (*clock_ptr).fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+        if request_id == 0 {
+            request_id = (*clock_ptr).fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+        }
+        (p.add(60) as *mut u32).write(request_id);
 
         // Advance head
         (*head_ptr).store(head.wrapping_add(1), Ordering::Release);
@@ -152,6 +216,10 @@ pub fn submit_request(
 pub fn read_completion(ring_base: u32) -> i64 {
     unsafe {
         use core::sync::atomic::{AtomicU32, Ordering};
+
+        let Some(_cq_guard) = try_ring_lock(ring_base, OFF_CQ_LOCK) else {
+            return EAGAIN;
+        };
 
         let head_ptr = (ring_base + OFF_COMPLETE_HEAD) as *const AtomicU32;
         let tail_ptr = (ring_base + OFF_COMPLETE_TAIL) as *const AtomicU32;
@@ -179,6 +247,8 @@ pub fn read_completion_for_vm(ring_base: u32, vm_ptr: u32) -> Option<i64> {
     unsafe {
         use core::sync::atomic::{AtomicU32, Ordering};
 
+        let _cq_guard = try_ring_lock(ring_base, OFF_CQ_LOCK)?;
+
         let head_ptr = (ring_base + OFF_COMPLETE_HEAD) as *const AtomicU32;
         let tail_ptr = (ring_base + OFF_COMPLETE_TAIL) as *const AtomicU32;
 
@@ -188,34 +258,43 @@ pub fn read_completion_for_vm(ring_base: u32, vm_ptr: u32) -> Option<i64> {
             return None;
         }
 
-        let mut found = None;
+        let request_id = (*(vm_ptr as *const crate::types::ThreadState)).pending_fs_request_id;
+        if request_id == 0 {
+            return None;
+        }
+        let mut result = None;
         for pos in tail..head {
             let idx = (pos as usize) % CQ_SIZE;
             let entry_off = ring_base + OFF_CQ_BASE + (idx as u32) * (RESP_SIZE as u32);
             let entry_vm_ptr = *((entry_off as *const u8).add(8) as *const u32);
-            if entry_vm_ptr == vm_ptr {
-                found = Some(pos);
-                break;
+            let entry_request_id = *((entry_off as *const u8).add(12) as *const u32);
+            if entry_vm_ptr == vm_ptr && entry_request_id == request_id {
+                result = Some(*((entry_off as *const u8).add(0) as *const i64));
             }
         }
 
-        let Some(found_pos) = found else {
+        let Some(result) = result else {
             return None;
         };
 
-        let found_idx = (found_pos as usize) % CQ_SIZE;
-        let found_off = ring_base + OFF_CQ_BASE + (found_idx as u32) * (RESP_SIZE as u32);
-        let result = *((found_off as *const u8).add(0) as *const i64);
-
-        for pos in (found_pos + 1)..head {
+        let mut write_pos = tail;
+        for pos in tail..head {
             let src_idx = (pos as usize) % CQ_SIZE;
-            let dst_idx = ((pos - 1) as usize) % CQ_SIZE;
             let src_off = ring_base + OFF_CQ_BASE + (src_idx as u32) * (RESP_SIZE as u32);
+            let entry_vm_ptr = *((src_off as *const u8).add(8) as *const u32);
+            let entry_request_id = *((src_off as *const u8).add(12) as *const u32);
+            if entry_vm_ptr == vm_ptr && entry_request_id == request_id {
+                continue;
+            }
+            let dst_idx = (write_pos as usize) % CQ_SIZE;
             let dst_off = ring_base + OFF_CQ_BASE + (dst_idx as u32) * (RESP_SIZE as u32);
-            core::ptr::copy_nonoverlapping(src_off as *const u8, dst_off as *mut u8, RESP_SIZE);
+            if dst_off != src_off {
+                core::ptr::copy(src_off as *const u8, dst_off as *mut u8, RESP_SIZE);
+            }
+            write_pos = write_pos.wrapping_add(1);
         }
 
-        (*head_ptr).store(head.wrapping_sub(1), Ordering::Release);
+        (*head_ptr).store(write_pos, Ordering::Release);
         Some(result)
     }
 }
@@ -253,6 +332,9 @@ pub fn peek_request_info(ring_base: u32) -> Option<FsRequestInfo> {
             flags: *(p.add(40) as *const u32),
             mode: *(p.add(44) as *const u32),
             vm_ptr: *(p.add(48) as *const u32),
+            ofd_id: *(p.add(52) as *const u32),
+            ino: *(p.add(56) as *const u32),
+            request_id: *(p.add(60) as *const u32),
         })
     }
 }
@@ -284,6 +366,9 @@ pub fn peek_request_info_for_vm(ring_base: u32, vm_ptr: u32) -> Option<FsRequest
                 flags: *(p.add(40) as *const u32),
                 mode: *(p.add(44) as *const u32),
                 vm_ptr: *(p.add(48) as *const u32),
+                ofd_id: *(p.add(52) as *const u32),
+                ino: *(p.add(56) as *const u32),
+                request_id: *(p.add(60) as *const u32),
             };
             if request.vm_ptr == vm_ptr {
                 return Some(request);
@@ -316,6 +401,17 @@ pub fn process_requests(ring_base: u32, vm_ptr: u32, base: u32) {
                 break;
             } // no more requests
 
+            let Some(_cq_guard) = try_ring_lock(ring_base, OFF_CQ_LOCK) else {
+                break;
+            };
+
+            let cq_head = (*cq_head_ptr).load(Ordering::Relaxed);
+            let cq_tail =
+                (*((ring_base + OFF_COMPLETE_TAIL) as *const AtomicU32)).load(Ordering::Acquire);
+            if cq_head.wrapping_sub(cq_tail) as usize >= CQ_SIZE {
+                break;
+            }
+
             let idx = (tail as usize) % SQ_SIZE;
             let entry_off = ring_base + OFF_SQ_BASE + (idx as u32) * (REQ_SIZE as u32);
             let p = entry_off as *const u8;
@@ -328,6 +424,9 @@ pub fn process_requests(ring_base: u32, vm_ptr: u32, base: u32) {
             let path_ptr = *(p.add(32) as *const u64);
             let flags = *(p.add(40) as *const u32);
             let mode = *(p.add(44) as *const u32);
+            let request_ofd_id = *(p.add(52) as *const u32);
+            let request_ino = *(p.add(56) as *const u32);
+            let request_id = *(p.add(60) as *const u32);
 
             let request_vm_ptr = *(p.add(48) as *const u32);
             let target_vm_ptr = if request_vm_ptr != 0 {
@@ -338,22 +437,29 @@ pub fn process_requests(ring_base: u32, vm_ptr: u32, base: u32) {
             let vm = &mut *(target_vm_ptr as *mut crate::types::ThreadState);
 
             let result: i64 = match opcode {
-                FS_OP_READ => {
-                    if flags & FS_REQ_FLAG_PWRITE != 0 {
-                        crate::syscall::fs::sys_pread64(vm, base, fd as u64, buf_ptr, len, offset)
-                    } else {
-                        crate::syscall::fs::sys_read(vm, base, fd as u64, buf_ptr, len)
-                    }
-                }
-                FS_OP_WRITE => {
-                    if flags & FS_REQ_FLAG_PWRITE != 0 {
-                        crate::syscall::fs::sys_pwrite64(vm, base, fd as u64, buf_ptr, len, offset)
-                    } else if flags & FS_REQ_FLAG_WRITEV != 0 {
-                        crate::syscall::fs::sys_write(vm, base, fd as u64, buf_ptr, len, SYS_WRITEV)
-                    } else {
-                        crate::syscall::fs::sys_write(vm, base, fd as u64, buf_ptr, len, SYS_WRITE)
-                    }
-                }
+                FS_OP_READ => crate::syscall::fs::complete_submitted_regular_file_read(
+                    vm,
+                    base,
+                    fd as u64,
+                    buf_ptr,
+                    len,
+                    offset,
+                    flags & FS_REQ_FLAG_PWRITE != 0,
+                    request_ofd_id,
+                    request_ino,
+                ),
+                FS_OP_WRITE => crate::syscall::fs::complete_submitted_regular_file_write(
+                    vm,
+                    base,
+                    fd as u64,
+                    buf_ptr,
+                    len,
+                    offset,
+                    flags & FS_REQ_FLAG_PWRITE != 0,
+                    flags & FS_REQ_FLAG_WRITEV != 0,
+                    request_ofd_id,
+                    request_ino,
+                ),
                 FS_OP_OPENAT => {
                     if path_ptr == 0 {
                         EINVAL
@@ -415,14 +521,29 @@ pub fn process_requests(ring_base: u32, vm_ptr: u32, base: u32) {
                     if buf_ptr == 0 {
                         EINVAL
                     } else {
-                        crate::syscall::fs::sys_getdents64(vm, base, fd as u64, buf_ptr, len)
+                        crate::syscall::fs::complete_submitted_getdents64(
+                            vm,
+                            base,
+                            fd as u64,
+                            buf_ptr,
+                            len,
+                            offset,
+                            request_ofd_id,
+                            request_ino,
+                        )
                     }
                 }
                 FS_OP_TRUNCATE => {
                     if path_ptr != 0 {
                         crate::syscall::fs::sys_truncate(vm, base, path_ptr, offset)
                     } else {
-                        crate::syscall::fs::sys_ftruncate(vm, base, fd as u64, offset)
+                        crate::syscall::fs::complete_submitted_ftruncate(
+                            vm,
+                            base,
+                            fd as u64,
+                            offset,
+                            request_ino,
+                        )
                     }
                 }
                 FS_OP_LSEEK => {
@@ -467,15 +588,18 @@ pub fn process_requests(ring_base: u32, vm_ptr: u32, base: u32) {
             }
 
             // Write completion
-            let cq_head = (*cq_head_ptr).load(Ordering::Relaxed);
             let cq_idx = (cq_head as usize) % CQ_SIZE;
             let cq_off = ring_base + OFF_CQ_BASE + (cq_idx as u32) * (RESP_SIZE as u32);
             *((cq_off as *mut u8) as *mut i64) = result;
             *((cq_off as *mut u8).add(8) as *mut u32) = target_vm_ptr;
+            *((cq_off as *mut u8).add(12) as *mut u32) = request_id;
             (*cq_head_ptr).store(cq_head.wrapping_add(1), Ordering::Release);
 
             // Advance submit tail
             (*tail_ptr).store(tail.wrapping_add(1), Ordering::Release);
+            if target_vm_ptr == vm_ptr {
+                break;
+            }
         }
 
         // Notify waiting thread-worker

@@ -837,7 +837,7 @@ fn syscall_dispatch_routes_file_backed_mmap_through_fs_ring() {
     let data: Vec<u8> = (0..0x3000).map(|idx| ((idx * 17) % 251) as u8).collect();
     let ino = memfs::create_file(1, b"dispatch-mmap.bin", 0o644);
     assert!(ino > 0);
-    assert_eq!(memfs::write_file(ino, 0, &data), data.len() as i64);
+    assert_eq!(memfs::set_file_external(ino, data.len() as u64), 0);
 
     let fd = t.sys_openat(b"/dispatch-mmap.bin", O_RDONLY);
     assert!(fd >= 3);
@@ -871,6 +871,7 @@ fn syscall_dispatch_routes_file_backed_mmap_through_fs_ring() {
     );
     assert_eq!(supervisor_fs_pending_mmap_guest_write_ptr(vm_ptr), 0);
     assert_eq!(supervisor_fs_pending_mmap_guest_write_len(vm_ptr), len);
+    assert_eq!(memfs::write_file(ino, 0, &data), data.len() as i64);
     fs::process_pending_requests(vm_ptr, t.base);
     let mapped = fs::resume_from_fs(vm_ptr, t.base);
 

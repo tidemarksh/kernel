@@ -8,7 +8,9 @@ unsafe fn thread_block_cache(vm: &mut ThreadState, base: u32) -> Option<BlockCac
         return None;
     }
     let ps = unsafe { &*((base as u64 + vm.process_ptr as u64) as *const ProcessState) };
-    if ps.thread_count.load(Ordering::Acquire) != 1 {
+    if ps.thread_count.load(Ordering::Acquire) != 1
+        && crate::syscall::memory::has_writable_exec_seen()
+    {
         return None;
     }
     if vm.block_cache_ptr == 0 {
@@ -17,7 +19,11 @@ unsafe fn thread_block_cache(vm: &mut ThreadState, base: u32) -> Option<BlockCac
             return None;
         }
         let ptr = unsafe {
-            crate::alloc::alloc_zeroed(size as u32, core::mem::align_of::<BlockEntry>() as u32)
+            crate::alloc::alloc_zeroed_below(
+                size as u32,
+                core::mem::align_of::<BlockEntry>() as u32,
+                base,
+            )
         };
         if ptr == 0 {
             return None;
@@ -215,6 +221,46 @@ pub extern "C" fn thread_blocked_syscall_arg(vm_ptr: u32, index: u32) -> u64 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn thread_restore_blocked_syscall_state(
+    vm_ptr: u32,
+    blocked_fd: u32,
+    has_ofd_pin: i32,
+    syscall_nr: u64,
+    a0: u64,
+    a1: u64,
+    a2: u64,
+    a3: u64,
+    a4: u64,
+    a5: u64,
+) -> i32 {
+    if vm_ptr == 0 {
+        return -(EFAULT as i32);
+    }
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut ThreadState);
+        if !crate::fs::fd_table::blocked_status_uses_ofd_pin(vm.status) {
+            return -(EINVAL as i32);
+        }
+        if vm.blocked_syscall_nr != 0 {
+            return 0;
+        }
+
+        crate::fs::fd_table::clear_blocked_ofd_pin(vm);
+        if has_ofd_pin != 0 {
+            crate::fs::fd_table::pin_blocked_fd(vm.guest_base, vm, blocked_fd as u64);
+            if vm.blocked_ofd_id == 0 {
+                return -(EBADF as i32);
+            }
+        } else {
+            vm.blocked_fd = blocked_fd;
+        }
+        vm.blocked_syscall_nr = syscall_nr;
+        vm.blocked_syscall_args = [a0, a1, a2, a3, a4, a5];
+        0
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn thread_spawn_from_clone(parent_vm_ptr: u32) -> u32 {
     unsafe {
         let parent = &*(parent_vm_ptr as *const ThreadState);
@@ -284,6 +330,16 @@ pub extern "C" fn thread_take_completed_pipe_sync_write_slots(vm_ptr: u32) -> u6
         let vm = &mut *(vm_ptr as *mut ThreadState);
         let slots = vm.completed_pipe_sync_write_slots;
         vm.completed_pipe_sync_write_slots = 0;
+        slots
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_take_completed_pipe_sync_control_slots(vm_ptr: u32) -> u64 {
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut ThreadState);
+        let slots = vm.completed_pipe_sync_control_slots;
+        vm.completed_pipe_sync_control_slots = 0;
         slots
     }
 }
@@ -537,6 +593,11 @@ pub extern "C" fn thread_resume_fs(vm_ptr: u32) -> i64 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn thread_resume_fs_result(vm_ptr: u32, result: i64) -> i64 {
+    crate::syscall::fs::resume_from_fs_result(vm_ptr, result)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn thread_resume_wait4(vm_ptr: u32) -> i64 {
     unsafe {
         let vm = &*(vm_ptr as *const ThreadState);
@@ -618,20 +679,34 @@ pub extern "C" fn thread_poll_hup_sync_pending(vm_ptr: u32) -> i32 {
     }
 }
 
+fn pipe_read_fault_marker_ofd(vm: &ThreadState) -> Option<(u32, crate::types::OpenFileDesc)> {
+    if vm.fault_addr != crate::syscall::fs::PIPE_READ_EOF_SYNC_RETRY_MARKER {
+        return None;
+    }
+    let fd = vm.fault_pc;
+    let ofd_id = if vm.blocked_ofd_id != 0 {
+        vm.blocked_ofd_id
+    } else {
+        crate::fs::fd_table::get_ofd_id(vm.guest_base, vm, fd).unwrap_or(0)
+    };
+    let ofd = if vm.blocked_ofd_id != 0 {
+        crate::fs::fd_table::get_ofd_by_id(vm.blocked_ofd_id)
+    } else {
+        crate::fs::fd_table::get_ofd(vm.guest_base, vm, fd)
+    }?;
+    if ofd.fd_type != crate::abi::FD_TYPE_PIPE || !crate::fs::fd_table::is_pipe_read(&ofd) {
+        return None;
+    }
+    Some((ofd_id, ofd))
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn thread_blocked_pipe_buffered_len(vm_ptr: u32) -> u32 {
     unsafe {
         let vm = &*(vm_ptr as *const ThreadState);
-        if vm.fault_addr != crate::syscall::fs::PIPE_READ_EOF_SYNC_RETRY_MARKER {
-            return 0;
-        }
-        let fd = vm.fault_pc;
-        let Some(ofd) = crate::fs::fd_table::get_ofd(vm.guest_base, vm, fd) else {
+        let Some((_, ofd)) = pipe_read_fault_marker_ofd(vm) else {
             return 0;
         };
-        if ofd.fd_type != crate::abi::FD_TYPE_PIPE || !crate::fs::fd_table::is_pipe_read(&ofd) {
-            return 0;
-        }
         crate::syscall::pipe::pipe_buffered_len(ofd.ino)
     }
 }
@@ -640,16 +715,9 @@ pub extern "C" fn thread_blocked_pipe_buffered_len(vm_ptr: u32) -> u32 {
 pub extern "C" fn thread_blocked_pipe_write_open(vm_ptr: u32) -> i32 {
     unsafe {
         let vm = &*(vm_ptr as *const ThreadState);
-        if vm.fault_addr != crate::syscall::fs::PIPE_READ_EOF_SYNC_RETRY_MARKER {
-            return 0;
-        }
-        let fd = vm.fault_pc;
-        let Some(ofd) = crate::fs::fd_table::get_ofd(vm.guest_base, vm, fd) else {
+        let Some((_, ofd)) = pipe_read_fault_marker_ofd(vm) else {
             return 0;
         };
-        if ofd.fd_type != crate::abi::FD_TYPE_PIPE || !crate::fs::fd_table::is_pipe_read(&ofd) {
-            return 0;
-        }
         crate::syscall::pipe::debug_write_open(ofd.ino)
     }
 }
@@ -664,12 +732,12 @@ pub extern "C" fn thread_blocked_pipe_read_ready(vm_ptr: u32) -> i32 {
                 vm.guest_base,
             ));
         }
-        let fd = if vm.blocked_ofd_id != 0 {
-            vm.blocked_fd as u64
+        let ofd = if vm.blocked_ofd_id != 0 {
+            crate::fs::fd_table::get_ofd_by_id(vm.blocked_ofd_id)
         } else {
-            vm.x[10]
+            crate::fs::fd_table::get_ofd(vm.guest_base, vm, vm.x[10])
         };
-        if let Some(ofd) = crate::fs::fd_table::get_ofd(vm.guest_base, vm, fd) {
+        if let Some(ofd) = ofd {
             if ofd.fd_type == crate::abi::FD_TYPE_PIPE
                 && crate::fs::fd_table::is_pipe_read(&ofd)
                 && crate::syscall::pipe::pipe_peek(ofd.ino) != crate::abi::EAGAIN
@@ -685,12 +753,12 @@ pub extern "C" fn thread_blocked_pipe_read_ready(vm_ptr: u32) -> i32 {
 pub extern "C" fn thread_blocked_pipe_write_ready(vm_ptr: u32) -> i32 {
     unsafe {
         let vm = &*(vm_ptr as *const ThreadState);
-        let fd = if vm.blocked_ofd_id != 0 {
-            vm.blocked_fd as u64
+        let ofd = if vm.blocked_ofd_id != 0 {
+            crate::fs::fd_table::get_ofd_by_id(vm.blocked_ofd_id)
         } else {
-            vm.x[10]
+            crate::fs::fd_table::get_ofd(vm.guest_base, vm, vm.x[10])
         };
-        let Some(ofd) = crate::fs::fd_table::get_ofd(vm.guest_base, vm, fd) else {
+        let Some(ofd) = ofd else {
             return 0;
         };
         if ofd.fd_type != crate::abi::FD_TYPE_PIPE || !crate::fs::fd_table::is_pipe_write(&ofd) {
@@ -704,11 +772,7 @@ pub extern "C" fn thread_blocked_pipe_write_ready(vm_ptr: u32) -> i32 {
 pub extern "C" fn thread_resume_pipe_read_open_empty(vm_ptr: u32) -> i32 {
     unsafe {
         let vm = &mut *(vm_ptr as *mut ThreadState);
-        if vm.fault_addr != crate::syscall::fs::PIPE_READ_EOF_SYNC_RETRY_MARKER {
-            return 0;
-        }
-        let fd = vm.fault_pc;
-        let Some(ofd) = crate::fs::fd_table::get_ofd(vm.guest_base, vm, fd) else {
+        let Some((_, ofd)) = pipe_read_fault_marker_ofd(vm) else {
             return 0;
         };
         if ofd.fd_type != crate::abi::FD_TYPE_PIPE
@@ -954,6 +1018,10 @@ pub extern "C" fn thread_resume_poll_wait_timeout(vm_ptr: u32) {
 pub extern "C" fn thread_resume_blocked_syscall(vm_ptr: u32) -> i64 {
     unsafe {
         let vm = &mut *(vm_ptr as *mut ThreadState);
+        if vm.status == STATUS_OK {
+            crate::fs::fd_table::clear_blocked_ofd_pin(vm);
+            return vm.x[10] as i64;
+        }
         let resume_read_syscall = vm.blocked_syscall_nr == SYS_READ
             || (vm.blocked_syscall_nr == 0 && vm.x[17] == SYS_READ);
         if vm.status == STATUS_PIPE_WAIT && resume_read_syscall {
@@ -980,6 +1048,8 @@ pub extern "C" fn thread_resume_blocked_syscall(vm_ptr: u32) -> i64 {
                 {
                     crate::fs::fd_table::set_pipe_eof_synced(ofd_id, true);
                     crate::fs::fd_table::clear_blocked_ofd_pin(vm);
+                    vm.fault_addr = 0;
+                    vm.fault_pc = 0;
                     vm.x[10] = 0;
                     vm.status = STATUS_OK;
                     return 0;
@@ -989,20 +1059,14 @@ pub extern "C" fn thread_resume_blocked_syscall(vm_ptr: u32) -> i64 {
         if vm.status == STATUS_PIPE_WAIT
             && vm.fault_addr == crate::syscall::fs::PIPE_READ_EOF_SYNC_RETRY_MARKER
         {
-            let fd = vm.fault_pc;
-            let ofd_id = if vm.blocked_ofd_id != 0 {
-                vm.blocked_ofd_id
-            } else {
-                crate::fs::fd_table::get_ofd_id(vm.guest_base, vm, fd).unwrap_or(0)
-            };
-            if let Some(ofd) = crate::fs::fd_table::get_ofd(vm.guest_base, vm, fd) {
-                if ofd.fd_type == crate::abi::FD_TYPE_PIPE
-                    && crate::fs::fd_table::is_pipe_read(&ofd)
-                    && crate::syscall::pipe::pipe_buffered_len(ofd.ino) == 0
+            if let Some((ofd_id, ofd)) = pipe_read_fault_marker_ofd(vm) {
+                if crate::syscall::pipe::pipe_buffered_len(ofd.ino) == 0
                     && crate::syscall::pipe::debug_write_open(ofd.ino) <= 0
                 {
                     crate::fs::fd_table::set_pipe_eof_synced(ofd_id, true);
                     crate::fs::fd_table::clear_blocked_ofd_pin(vm);
+                    vm.fault_addr = 0;
+                    vm.fault_pc = 0;
                     vm.x[10] = 0;
                     vm.status = STATUS_OK;
                     return 0;
@@ -1345,4 +1409,19 @@ pub extern "C" fn thread_record_blocked_addr(vm_ptr: u32) -> u64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn thread_vfork_child_pid() -> i32 {
     crate::syscall::process::vfork_child_pid()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_vfork_parent_fd_ofd_id(fd: u32) -> u32 {
+    crate::syscall::process::vfork_parent_fd_entry(fd).ofd_id
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_vfork_parent_fd_flags(fd: u32) -> u32 {
+    crate::syscall::process::vfork_parent_fd_entry(fd).fd_flags
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_vfork_parent_fd_generation(fd: u32) -> u32 {
+    crate::syscall::process::vfork_parent_fd_generation(fd)
 }

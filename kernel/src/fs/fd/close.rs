@@ -52,6 +52,24 @@ pub fn release_ofd_id(ofd_id: u32) {
     }
 }
 
+fn release_ofd_id_without_backend_cleanup(ofd_id: u32) {
+    if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
+        return;
+    }
+    let slot = ofd_id as usize;
+    let ofd = &mut ofd_table()[slot];
+    if ofd.refcount <= 0 {
+        return;
+    }
+    ofd.refcount -= 1;
+    if ofd.refcount > 0 || is_ofd_reserved(ofd_id) {
+        return;
+    }
+
+    clear_ofd(ofd);
+    set_offset_floor_by_id(ofd_id, 0);
+}
+
 fn count_process_fd_refs(base: u32, vm: &ThreadState, ofd_id: u32) -> i32 {
     if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
         return 0;
@@ -100,12 +118,15 @@ fn pipe_control_details(ofd: OpenFileDesc) -> (u64, u64) {
 }
 
 pub(in crate::fs) fn record_fd_closed(
-    vm: &ThreadState,
+    vm: &mut ThreadState,
     base: u32,
     fd: u64,
     ofd_id: u32,
     ofd: OpenFileDesc,
 ) {
+    if ofd.fd_type == FD_TYPE_PIPE {
+        crate::syscall::mark_pipe_control_sync_effect(vm, ofd.ino);
+    }
     let (detail0, detail1) = pipe_control_details(ofd);
     crate::supervisor::record_fd_control(
         crate::supervisor::SUPERVISOR_FD_CONTROL_KIND_FD_CLOSED,
@@ -252,7 +273,7 @@ pub fn sys_close_range(vm: &mut ThreadState, base: u32, first: u64, last: u64, f
 }
 
 /// Drop every fd reference still held by this process.
-pub fn close_all_for_process(base: u32, vm: &ThreadState) {
+pub fn close_all_for_process(base: u32, vm: &mut ThreadState) {
     unsafe {
         let ps = get_process_state(base, vm);
         if ps.is_null() {
@@ -268,7 +289,12 @@ pub fn close_all_for_process(base: u32, vm: &ThreadState) {
             if ofd_id == 0 || ofd_idx >= MAX_FDS {
                 continue;
             }
-            release_ofd_id(ofd_id);
+            if let Some(cleanup) = release_ofd_id_deferred(ofd_id) {
+                if let BackendCleanup::Pipe { pipe_idx, .. } = cleanup {
+                    crate::syscall::mark_pipe_control_sync_effect(vm, pipe_idx);
+                }
+                backend_cleanup::run(cleanup);
+            }
         }
     }
 }
@@ -294,7 +320,7 @@ pub fn close_all_for_process_without_backend_cleanup(base: u32, vm: &ThreadState
             if ofd_id == 0 || ofd_idx >= MAX_FDS {
                 continue;
             }
-            let _ = release_ofd_id_deferred(ofd_id);
+            release_ofd_id_without_backend_cleanup(ofd_id);
         }
     }
 }

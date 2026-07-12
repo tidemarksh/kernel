@@ -504,6 +504,7 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
         child.completed_pipe_sync_slots = 0;
         child.completed_pipe_sync_read_slots = 0;
         child.completed_pipe_sync_write_slots = 0;
+        child.completed_pipe_sync_control_slots = 0;
         child.completed_pipe_fresh_slots = 0;
         child.completed_pipe_read_guest_ptr = 0;
         child.completed_pipe_read_len = 0;
@@ -542,7 +543,7 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
         let ps = &mut *((base as u64 + child.process_ptr as u64) as *mut ProcessState);
         ps.threads[(parent.clone_child_tid - 1) as usize] = ThreadRecord::new(
             parent.clone_child_tid,
-            THREAD_RUNNING,
+            THREAD_STARTING,
             child_ptr,
             child.clear_child_tid,
             0,
@@ -592,6 +593,48 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
 
         child_ptr
     }
+}
+
+pub(super) fn complete_spawn_thread_worker(parent_vm_ptr: u32, child_vm_ptr: u32, tid: u32) -> i32 {
+    let Some(parent) = state_from_ptr(parent_vm_ptr) else {
+        return EFAULT as i32;
+    };
+    let Some(child) = state_from_ptr(child_vm_ptr) else {
+        return EFAULT as i32;
+    };
+    if tid == 0
+        || tid as usize > MAX_THREADS
+        || child.tid != tid as i32
+        || child.guest_base != parent.guest_base
+        || child.process_ptr != parent.process_ptr
+    {
+        return EINVAL as i32;
+    }
+
+    unsafe {
+        let Some(record_ptr) = thread_record_ptr(parent.guest_base, parent.process_ptr, tid as i32)
+        else {
+            return ESRCH as i32;
+        };
+        let mut record = read_thread_record(record_ptr);
+        if record.tid != tid as i32 || !matches!(record.state, THREAD_STARTING | THREAD_RUNNING) {
+            record = ThreadRecord::new(
+                tid as i32,
+                THREAD_RUNNING,
+                child_vm_ptr,
+                child.clear_child_tid,
+                0,
+            );
+        } else {
+            record.state = THREAD_RUNNING;
+            record.thread_ptr = child_vm_ptr;
+            record.clear_child_tid = child.clear_child_tid;
+            record.blocked_addr = 0;
+        }
+        write_thread_record(record_ptr, record);
+    }
+    super::resume::enqueue_runnable_thread(child);
+    STATUS_OK
 }
 
 pub fn last_clone_spawn() -> (i32, u64, u64, u64, u64, u64, u64, u64, u64, u64) {

@@ -37,6 +37,69 @@ pub(super) enum AccessOutcome {
     Return,
 }
 
+const ACCESS_PERMIT_PROT_SLOTS: usize = 8;
+const ACCESS_PERMIT_WAYS: usize = 8;
+const ACCESS_PERMIT_SLOTS: usize = ACCESS_PERMIT_PROT_SLOTS * ACCESS_PERMIT_WAYS;
+
+pub(super) struct AccessPermitCache {
+    start: [u64; ACCESS_PERMIT_SLOTS],
+    end: [u64; ACCESS_PERMIT_SLOTS],
+    generation: [u32; ACCESS_PERMIT_SLOTS],
+}
+
+impl AccessPermitCache {
+    #[inline(always)]
+    pub(super) const fn new() -> Self {
+        Self {
+            start: [0; ACCESS_PERMIT_SLOTS],
+            end: [0; ACCESS_PERMIT_SLOTS],
+            generation: [0; ACCESS_PERMIT_SLOTS],
+        }
+    }
+
+    #[inline(always)]
+    fn slot(prot: i32) -> usize {
+        ((prot as usize) & (ACCESS_PERMIT_PROT_SLOTS - 1)) * ACCESS_PERMIT_WAYS
+    }
+
+    #[inline(always)]
+    fn permitted(&mut self, vm: &ThreadState, base: u32, addr: u64, width: u64, prot: i32) -> bool {
+        if width == 0 {
+            return false;
+        }
+        let Some(end) = addr.checked_add(width) else {
+            return false;
+        };
+        let generation = crate::syscall::memory::permit_cache_generation();
+        let slot = Self::slot(prot);
+        for i in slot..slot + ACCESS_PERMIT_WAYS {
+            if self.generation[i] == generation && addr >= self.start[i] && end <= self.end[i] {
+                if i != slot {
+                    self.start.swap(slot, i);
+                    self.end.swap(slot, i);
+                    self.generation.swap(slot, i);
+                }
+                return true;
+            }
+        }
+        let Some((cover_start, cover_end, cover_generation)) =
+            crate::syscall::memory::guest_range_permitted_cover(vm, base, addr, width, prot)
+        else {
+            self.generation[slot..slot + ACCESS_PERMIT_WAYS].fill(0);
+            return false;
+        };
+        for i in (slot + 1..slot + ACCESS_PERMIT_WAYS).rev() {
+            self.start[i] = self.start[i - 1];
+            self.end[i] = self.end[i - 1];
+            self.generation[i] = self.generation[i - 1];
+        }
+        self.start[slot] = cover_start;
+        self.end[slot] = cover_end;
+        self.generation[slot] = cover_generation;
+        true
+    }
+}
+
 /// Validate a guest memory access and deliver SIGSEGV on failure.
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
@@ -50,9 +113,9 @@ pub(super) unsafe fn ensure_guest_access(
     addr: u64,
     width: u64,
     prot: i32,
+    cache: &mut AccessPermitCache,
 ) -> AccessOutcome {
-    let permitted =
-        width != 0 && crate::syscall::memory::guest_range_permitted(vm, base, addr, width, prot);
+    let permitted = cache.permitted(vm, base, addr, width, prot);
     if !permitted {
         let in_bounds = width != 0 && guest_range_in_bounds(base, addr, width);
         let accerr = in_bounds

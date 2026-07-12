@@ -1,6 +1,6 @@
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use crate::abi::{EFAULT, FD_TYPE_FILE, FD_TYPE_PIPE, MAX_FDS};
+use crate::abi::{EFAULT, FD_TYPE_DIR, FD_TYPE_FILE, FD_TYPE_PIPE, MAX_FDS, O_CREAT, O_TRUNC};
 use crate::fs::{fd_table, memfs, ring_buffer};
 use crate::types::ThreadState;
 
@@ -26,8 +26,9 @@ static mut LAST_METADATA_SYNC_DECISION: MetadataSyncDecision = MetadataSyncDecis
 static BACKING_OBJECT_DECISION_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_BACKING_OBJECT_DECISION: BackingObjectDecision = BackingObjectDecision::empty();
 const MAX_SUPERVISOR_FS_INODES: u32 = 65_536;
-const DIRECT_BACKING_MMAP_MIN_BYTES: u64 = 16 * 1024 * 1024;
-const READ_BACKING_FILL_PREFETCH_BYTES: u64 = 1024 * 1024;
+const DIRECT_BACKING_MMAP_MIN_BYTES: u64 = 128 * 1024;
+const SMALL_READ_BACKING_FILL_PREFETCH_BYTES: u64 = 8 * 1024;
+const READ_BACKING_FILL_PREFETCH_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone, Copy)]
 struct DirtyPageDecision {
@@ -189,12 +190,31 @@ pub fn pending_ring_request(vm_ptr: u32) -> u32 {
     pending_fs_request(vm_ptr).is_some() as u32
 }
 
+pub(super) fn pending_process_wide_gate(vm_ptr: u32) -> bool {
+    let Some((_, request)) = pending_fs_request(vm_ptr) else {
+        return true;
+    };
+    match request.opcode {
+        ring_buffer::FS_OP_WRITE
+        | ring_buffer::FS_OP_CLOSE
+        | ring_buffer::FS_OP_MKDIR
+        | ring_buffer::FS_OP_UNLINK
+        | ring_buffer::FS_OP_RENAME
+        | ring_buffer::FS_OP_TRUNCATE
+        | ring_buffer::FS_OP_LSEEK
+        | ring_buffer::FS_OP_FSYNC => true,
+        ring_buffer::FS_OP_OPENAT => request.flags & ((O_CREAT | O_TRUNC) as u32) != 0,
+        _ => false,
+    }
+}
+
 fn pending_regular_file_request(vm_ptr: u32) -> Option<(i32, u32)> {
     let (vm, request) = pending_fs_request(vm_ptr)?;
     match request.opcode {
         ring_buffer::FS_OP_READ
         | ring_buffer::FS_OP_WRITE
         | ring_buffer::FS_OP_FSTAT
+        | ring_buffer::FS_OP_GETDENTS
         | ring_buffer::FS_OP_LSEEK
         | ring_buffer::FS_OP_MMAP => {}
         _ => return None,
@@ -202,12 +222,32 @@ fn pending_regular_file_request(vm_ptr: u32) -> Option<(i32, u32)> {
     if request.fd < 0 || request.fd as usize >= MAX_FDS {
         return None;
     }
+    if request.ofd_id > 0 && (request.ofd_id as usize) < MAX_FDS && request.ino > 0 {
+        let single_fd_only = match request.opcode {
+            ring_buffer::FS_OP_GETDENTS => {
+                matches!(memfs::stat(request.ino), Some(st) if dir_mode(st.mode))
+            }
+            ring_buffer::FS_OP_LSEEK => matches!(
+                memfs::stat(request.ino),
+                Some(st) if regular_mode(st.mode) || dir_mode(st.mode)
+            ),
+            _ => matches!(memfs::stat(request.ino), Some(st) if regular_mode(st.mode)),
+        };
+        return single_fd_only.then_some((request.fd, request.ofd_id));
+    }
     let entry = fd_table::load_process_fd_entry(vm.guest_base, vm.process_ptr, request.fd as usize);
     if entry.ofd_id == 0 || entry.ofd_id as usize >= MAX_FDS {
         return None;
     }
     let ofd = fd_table::get_ofd(vm.guest_base, vm, request.fd as u64)?;
-    (ofd.fd_type == FD_TYPE_FILE).then_some((request.fd, entry.ofd_id))
+    let single_fd_only = match request.opcode {
+        ring_buffer::FS_OP_GETDENTS => {
+            matches!(memfs::stat(ofd.ino), Some(st) if dir_mode(st.mode))
+        }
+        ring_buffer::FS_OP_LSEEK => ofd.fd_type == FD_TYPE_FILE || ofd.fd_type == FD_TYPE_DIR,
+        _ => ofd.fd_type == FD_TYPE_FILE,
+    };
+    single_fd_only.then_some((request.fd, entry.ofd_id))
 }
 
 pub fn pending_regular_file_fd(vm_ptr: u32) -> i32 {
@@ -263,6 +303,10 @@ fn pending_request_file_context(
     vm_ptr: u32,
     request: &ring_buffer::FsRequestInfo,
 ) -> Option<(u32, u32)> {
+    if request.ofd_id > 0 && request.ino > 0 {
+        return Some((request.ofd_id, request.ino));
+    }
+
     if request.opcode == ring_buffer::FS_OP_TRUNCATE && request.path_ptr != 0 {
         let ino = crate::syscall::fs::pending_request_target_ino(vm_ptr, vm.guest_base);
         return (ino > 0).then_some((0, ino));
@@ -326,7 +370,7 @@ fn pending_backing_fill_request(vm_ptr: u32) -> Option<PendingBackingFillRequest
         return None;
     }
 
-    let (ofd_id, ino) = pending_request_file_context(vm, vm_ptr, &request)?;
+    let (_ofd_id, ino) = pending_request_file_context(vm, vm_ptr, &request)?;
     let expected_size = memfs::stat(ino)?.size;
     if expected_size == 0 {
         return None;
@@ -347,13 +391,7 @@ fn pending_backing_fill_request(vm_ptr: u32) -> Option<PendingBackingFillRequest
         });
     }
 
-    let offset = if request.opcode == ring_buffer::FS_OP_MMAP
-        || (request.flags & ring_buffer::FS_REQ_FLAG_PWRITE) != 0
-    {
-        request.offset
-    } else {
-        fd_table::get_offset_by_id(ofd_id)
-    };
+    let offset = request.offset;
 
     if request.opcode == ring_buffer::FS_OP_WRITE && offset >= expected_size {
         return Some(PendingBackingFillRequest {
@@ -454,10 +492,12 @@ pub fn backing_fill_span_decision(
         } else if let Some(requested_end) = offset.checked_add(length) {
             let aligned_offset = offset / page_size * page_size;
             let fill_end = if opcode == ring_buffer::FS_OP_READ {
-                core::cmp::max(
-                    requested_end,
-                    aligned_offset.saturating_add(READ_BACKING_FILL_PREFETCH_BYTES),
-                )
+                let prefetch_bytes = if length <= page_size {
+                    SMALL_READ_BACKING_FILL_PREFETCH_BYTES
+                } else {
+                    READ_BACKING_FILL_PREFETCH_BYTES
+                };
+                core::cmp::max(requested_end, aligned_offset.saturating_add(prefetch_bytes))
             } else {
                 requested_end
             };
@@ -1115,7 +1155,6 @@ pub fn data_sync_decision(
                 || !regular_mode(published_mode)
                 || published_size <= 0
                 || !regular_mode(target_mode)
-                || target_size != published_size
             {
                 return super::SUPERVISOR_FS_SYNC_ACTION_NONE as i32;
             }

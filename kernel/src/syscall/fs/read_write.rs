@@ -307,7 +307,61 @@ fn read_regular_file_to_guest(
     if ofd.status_flags & fd_table::OPEN_ACCESS_MODE_MASK == O_WRONLY {
         return EBADF;
     }
-    if let Some(st) = memfs::stat(ofd.ino) {
+
+    let start_offset = offset.unwrap_or(ofd.offset as u64);
+    let total = read_regular_inode_to_guest(vm, base, ofd.ino, guest_buf, count, start_offset);
+    if total > 0 && offset.is_none() {
+        fd_table::advance_offset(base, vm, fd, total as u64);
+        mark_fork_shared_ofd_sync_effect(vm);
+    }
+    total
+}
+
+pub fn complete_submitted_regular_file_read(
+    vm: &mut ThreadState,
+    base: u32,
+    fd: u64,
+    guest_buf: u64,
+    count: u64,
+    request_offset: u64,
+    preserve_offset: bool,
+    request_ofd_id: u32,
+    request_ino: u32,
+) -> i64 {
+    if request_ino == 0 {
+        return if preserve_offset {
+            sys_pread64(vm, base, fd, guest_buf, count, request_offset)
+        } else {
+            sys_read(vm, base, fd, guest_buf, count)
+        };
+    }
+
+    let total =
+        read_regular_inode_to_guest(vm, base, request_ino, guest_buf, count, request_offset);
+    if total > 0 && !preserve_offset && request_ofd_id > 0 {
+        if let Some(ofd) = fd_table::get_ofd_by_id(request_ofd_id) {
+            if ofd.fd_type == FD_TYPE_FILE && ofd.ino == request_ino {
+                let next_offset = request_offset.saturating_add(total as u64);
+                fd_table::set_offset_by_id(
+                    request_ofd_id,
+                    next_offset.max(fd_table::get_offset_by_id(request_ofd_id)),
+                );
+                mark_fork_shared_ofd_sync_effect(vm);
+            }
+        }
+    }
+    total
+}
+
+fn read_regular_inode_to_guest(
+    vm: &mut ThreadState,
+    base: u32,
+    ino: u32,
+    guest_buf: u64,
+    count: u64,
+    start_offset: u64,
+) -> i64 {
+    if let Some(st) = memfs::stat(ino) {
         if st.mode & memfs::S_IFMT == memfs::S_IFDIR {
             return EISDIR;
         }
@@ -319,13 +373,43 @@ fn read_regular_file_to_guest(
         return EFAULT;
     }
 
-    let start_offset = offset.unwrap_or(ofd.offset as u64);
+    if let Some(st) = memfs::stat(ino) {
+        let file_remaining = st.size.saturating_sub(start_offset);
+        let direct_len = count.min(file_remaining).min(u32::MAX as u64);
+        if direct_len > 0
+            && memfs::can_read_file_to_ptr(ino)
+            && crate::syscall::memory::guest_range_accessible(base, guest_buf, direct_len)
+        {
+            let n = unsafe {
+                guest_mem::with_write_slice(base, guest_buf, direct_len as usize, |dst| {
+                    memfs::read_file_to_ptr(
+                        ino,
+                        start_offset,
+                        dst.as_mut_ptr() as usize,
+                        direct_len as u32,
+                    )
+                })
+            };
+            if n >= 0 {
+                if n > 0 {
+                    flush_shared_guest_write(vm, base, guest_buf, n as u64);
+                    vm.completed_pipe_read_guest_ptr = guest_buf;
+                    vm.completed_pipe_read_len = n as u32;
+                }
+                return n;
+            }
+            if n != EOPNOTSUPP {
+                return n;
+            }
+        }
+    }
+
     let mut tmp = [0u8; 4096];
     let mut total = 0u64;
 
     while total < count {
         let to_read = ((count - total) as usize).min(tmp.len());
-        let n = memfs::read_file(ofd.ino, start_offset + total, &mut tmp[..to_read]);
+        let n = memfs::read_file(ino, start_offset + total, &mut tmp[..to_read]);
         if n < 0 {
             if n == ENOENT && total > 0 {
                 return n;
@@ -334,7 +418,7 @@ fn read_regular_file_to_guest(
         }
         if n == 0 {
             if total > 0 {
-                if let Some(st) = memfs::stat(ofd.ino) {
+                if let Some(st) = memfs::stat(ino) {
                     if start_offset + total < st.size {
                         return ENOENT;
                     }
@@ -355,9 +439,9 @@ fn read_regular_file_to_guest(
         }
     }
 
-    if total > 0 && offset.is_none() {
-        fd_table::advance_offset(base, vm, fd, total);
-        mark_fork_shared_ofd_sync_effect(vm);
+    if total > 0 {
+        vm.completed_pipe_read_guest_ptr = guest_buf;
+        vm.completed_pipe_read_len = total.min(u32::MAX as u64) as u32;
     }
     total as i64
 }
@@ -449,6 +533,122 @@ fn write_regular_file_from_guest(
         total += n as u64;
         if (n as usize) < to_write {
             break;
+        }
+    }
+    total as i64
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn complete_submitted_regular_file_write(
+    vm: &mut ThreadState,
+    base: u32,
+    fd: u64,
+    guest_buf: u64,
+    count: u64,
+    request_offset: u64,
+    preserve_offset: bool,
+    is_writev: bool,
+    request_ofd_id: u32,
+    request_ino: u32,
+) -> i64 {
+    if request_ino == 0 {
+        return if preserve_offset {
+            sys_pwrite64(vm, base, fd, guest_buf, count, request_offset)
+        } else {
+            let nr = if is_writev { SYS_WRITEV } else { SYS_WRITE };
+            sys_write(vm, base, fd, guest_buf, count, nr)
+        };
+    }
+
+    let result = if is_writev {
+        write_regular_filev_from_guest(base, guest_buf, count, request_ino, request_offset)
+    } else {
+        write_regular_file_from_guest(base, guest_buf, count, request_ino, request_offset)
+    };
+
+    if result > 0 {
+        if !preserve_offset && request_ofd_id > 0 {
+            if let Some(ofd) = fd_table::get_ofd_by_id(request_ofd_id) {
+                if ofd.fd_type == FD_TYPE_FILE && ofd.ino == request_ino {
+                    let next_offset = request_offset.saturating_add(result as u64);
+                    fd_table::set_offset_by_id(
+                        request_ofd_id,
+                        next_offset.max(fd_table::get_offset_by_id(request_ofd_id)),
+                    );
+                    mark_fork_shared_ofd_sync_effect(vm);
+                }
+            }
+        }
+        mark_process_memfs_sync_effect(vm);
+    }
+
+    let mut trace = [0u8; 64];
+    let trace_bytes = if is_writev {
+        None
+    } else {
+        let to_trace = (count as usize).min(trace.len());
+        if to_trace > 0
+            && crate::syscall::memory::guest_range_accessible(base, guest_buf, to_trace as u64)
+        {
+            unsafe {
+                guest_mem::read_bytes(base, guest_buf, &mut trace[..to_trace]);
+            }
+        }
+        Some(&trace[..to_trace])
+    };
+    let status_flags = fd_table::get_ofd_by_id(request_ofd_id)
+        .filter(|ofd| ofd.fd_type == FD_TYPE_FILE && ofd.ino == request_ino)
+        .map(|ofd| ofd.status_flags)
+        .unwrap_or_default();
+    let nr = if is_writev { SYS_WRITEV } else { SYS_WRITE };
+    trace_write_attempt(
+        fd,
+        nr,
+        guest_buf,
+        count,
+        result,
+        request_ofd_id,
+        FD_TYPE_FILE,
+        request_ino,
+        status_flags,
+        0,
+        0,
+        trace_bytes,
+    )
+}
+
+fn write_regular_filev_from_guest(
+    base: u32,
+    iov_addr: u64,
+    iovcnt: u64,
+    ino: u32,
+    start_offset: u64,
+) -> i64 {
+    let validation = validate_writev_iovecs(base, iov_addr, iovcnt);
+    if validation < 0 {
+        return validation;
+    }
+
+    let mut total = 0u64;
+    for i in 0..iovcnt {
+        let iov_base = unsafe { guest_mem::read_u64(base, iov_addr + i * IOVEC_SIZE) };
+        let iov_len = unsafe { guest_mem::read_u64(base, iov_addr + i * IOVEC_SIZE + 8) };
+        if iov_len == 0 {
+            continue;
+        }
+        let n = write_regular_file_from_guest(
+            base,
+            iov_base,
+            iov_len,
+            ino,
+            start_offset.saturating_add(total),
+        );
+        if n < 0 {
+            return if total > 0 { total as i64 } else { n };
+        }
+        total += n as u64;
+        if (n as u64) < iov_len {
+            return total as i64;
         }
     }
     total as i64

@@ -39,6 +39,55 @@ fn unlink_file() {
 }
 
 #[test]
+fn lookup_cache_invalidates_after_unlink_and_recreate() {
+    let _t = TestVm::new();
+    let dir = memfs::create_dir(1, b"cache-dir", 0o755);
+    assert!(dir > 0);
+    let first = memfs::create_file(dir, b"target.rb", 0o644);
+    assert!(first > 0);
+
+    assert_eq!(memfs::lookup(dir, b"target.rb"), first);
+    assert_eq!(memfs::lookup(dir, b"target.rb"), first);
+    assert_eq!(memfs::unlink(dir, b"target.rb"), 0);
+    assert_eq!(memfs::lookup(dir, b"target.rb"), 0);
+
+    let second = memfs::create_file(dir, b"target.rb", 0o644);
+    assert!(second > first);
+    assert_eq!(memfs::lookup(dir, b"target.rb"), second);
+}
+
+#[test]
+fn lookup_cache_invalidates_negative_entry_after_create() {
+    let _t = TestVm::new();
+    let dir = memfs::create_dir(1, b"negative-cache", 0o755);
+    assert!(dir > 0);
+
+    assert_eq!(memfs::lookup(dir, b"later.rb"), 0);
+    assert_eq!(memfs::lookup(dir, b"later.rb"), 0);
+    let ino = memfs::create_file(dir, b"later.rb", 0o644);
+    assert!(ino > 0);
+    assert_eq!(memfs::lookup(dir, b"later.rb"), ino);
+}
+
+#[test]
+fn lookup_cache_invalidates_after_rename_replace() {
+    let _t = TestVm::new();
+    let dir = memfs::create_dir(1, b"rename-cache", 0o755);
+    assert!(dir > 0);
+    let old = memfs::create_file(dir, b"old.rb", 0o644);
+    let replacement = memfs::create_file(dir, b"replacement.rb", 0o644);
+    assert!(old > 0);
+    assert!(replacement > 0);
+
+    assert_eq!(memfs::lookup(dir, b"old.rb"), old);
+    assert_eq!(memfs::lookup(dir, b"replacement.rb"), replacement);
+    assert_eq!(memfs::rename(dir, b"old.rb", dir, b"replacement.rb"), 0);
+
+    assert_eq!(memfs::lookup(dir, b"old.rb"), 0);
+    assert_eq!(memfs::lookup(dir, b"replacement.rb"), old);
+}
+
+#[test]
 fn stat_file() {
     let _t = TestVm::new();
     let ino = memfs::create_file(1, b"data.bin", 0o644);

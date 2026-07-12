@@ -19,6 +19,13 @@ static QUEUE_HEAD: AtomicU32 = AtomicU32::new(0);
 static QUEUE_TAIL: AtomicU32 = AtomicU32::new(0);
 static mut QUEUE: [super::SupervisorResumeRecord; QUEUE_CAP] = [QUEUE_EMPTY; QUEUE_CAP];
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum RecordDisposition {
+    Ready,
+    Pending,
+    Drop,
+}
+
 fn with_queue_lock<T>(f: impl FnOnce() -> T) -> T {
     loop {
         if QUEUE_LOCK
@@ -97,58 +104,147 @@ pub(super) fn enqueue_runnable_thread(vm: &crate::types::ThreadState) -> bool {
     })
 }
 
-fn peek_record() -> Option<super::SupervisorResumeRecord> {
+fn has_ready_record() -> bool {
     with_queue_lock(|| unsafe {
         let head = QUEUE_HEAD.load(Ordering::Relaxed);
         let tail = QUEUE_TAIL.load(Ordering::Relaxed);
-        if head == tail {
-            return None;
-        }
-        let queue_ptr = core::ptr::addr_of!(QUEUE) as *const super::SupervisorResumeRecord;
-        Some(core::ptr::read(queue_ptr.add(head as usize)))
-    })
-}
-
-fn pop_record() -> Option<super::SupervisorResumeRecord> {
-    with_queue_lock(|| unsafe {
-        let head = QUEUE_HEAD.load(Ordering::Relaxed);
-        let tail = QUEUE_TAIL.load(Ordering::Relaxed);
-        if head == tail {
-            return None;
-        }
         let queue_ptr = core::ptr::addr_of_mut!(QUEUE) as *mut super::SupervisorResumeRecord;
-        let record = core::ptr::read(queue_ptr.add(head as usize));
-        core::ptr::write(queue_ptr.add(head as usize), QUEUE_EMPTY);
-        QUEUE_HEAD.store((head + 1) % QUEUE_CAP as u32, Ordering::Relaxed);
-        Some(record)
+        let mut read = head;
+        let mut write = head;
+        let mut has_ready = false;
+        let mut changed = false;
+
+        while read != tail {
+            let current = read;
+            let record = core::ptr::read(queue_ptr.add(current as usize));
+            read = (read + 1) % QUEUE_CAP as u32;
+            match record_disposition(record) {
+                RecordDisposition::Ready => {
+                    has_ready = true;
+                    core::ptr::write(queue_ptr.add(write as usize), record);
+                    write = (write + 1) % QUEUE_CAP as u32;
+                }
+                RecordDisposition::Pending => {
+                    core::ptr::write(queue_ptr.add(write as usize), record);
+                    write = (write + 1) % QUEUE_CAP as u32;
+                }
+                RecordDisposition::Drop => {
+                    changed = true;
+                }
+            }
+        }
+
+        if changed {
+            let mut clear = write;
+            while clear != tail {
+                core::ptr::write(queue_ptr.add(clear as usize), QUEUE_EMPTY);
+                clear = (clear + 1) % QUEUE_CAP as u32;
+            }
+            QUEUE_TAIL.store(write, Ordering::Relaxed);
+        }
+
+        has_ready
     })
 }
 
-fn thread_status_from_record(record: super::SupervisorResumeRecord) -> Option<i32> {
-    if record.vm_ptr == 0 {
+fn pop_ready_record() -> Option<super::SupervisorResumeRecord> {
+    with_queue_lock(|| unsafe {
+        let head = QUEUE_HEAD.load(Ordering::Relaxed);
+        let tail = QUEUE_TAIL.load(Ordering::Relaxed);
+        let queue_ptr = core::ptr::addr_of_mut!(QUEUE) as *mut super::SupervisorResumeRecord;
+        let mut read = head;
+        let mut write = head;
+        let mut selected = None;
+        let mut changed = false;
+
+        while read != tail {
+            let current = read;
+            let record = core::ptr::read(queue_ptr.add(current as usize));
+            read = (read + 1) % QUEUE_CAP as u32;
+            match record_disposition(record) {
+                RecordDisposition::Ready if selected.is_none() => {
+                    selected = Some(record);
+                    changed = true;
+                    continue;
+                }
+                RecordDisposition::Drop => {
+                    changed = true;
+                    continue;
+                }
+                RecordDisposition::Ready | RecordDisposition::Pending => {}
+            }
+            core::ptr::write(queue_ptr.add(write as usize), record);
+            write = (write + 1) % QUEUE_CAP as u32;
+        }
+
+        if changed {
+            let mut clear = write;
+            while clear != tail {
+                core::ptr::write(queue_ptr.add(clear as usize), QUEUE_EMPTY);
+                clear = (clear + 1) % QUEUE_CAP as u32;
+            }
+            QUEUE_TAIL.store(write, Ordering::Relaxed);
+        }
+
+        selected
+    })
+}
+
+fn thread_from_resume_record(
+    record: super::SupervisorResumeRecord,
+) -> Option<&'static crate::types::ThreadState> {
+    let thread = super::thread::state_from_ptr(record.vm_ptr)?;
+    if thread.process_ptr != record.process_ptr
+        || thread.tid <= 0
+        || thread.tid as u32 != record.tid
+    {
         return None;
     }
-    let align = core::mem::align_of::<crate::types::ThreadState>();
-    let absolute = record.vm_ptr as usize;
-    if (absolute & (align - 1)) != 0 {
-        return None;
-    }
-    let end = absolute.checked_add(core::mem::size_of::<crate::types::ThreadState>())?;
-    if end as u64 > crate::wasm::memory_size_bytes() {
-        return None;
-    }
-    let vm = unsafe { &*(record.vm_ptr as *const crate::types::ThreadState) };
-    Some(vm.status)
+    Some(thread)
 }
 
 fn futex_resume_record_ready(record: super::SupervisorResumeRecord) -> bool {
-    thread_status_from_record(record) != Some(crate::abi::STATUS_FUTEX_WAIT)
+    let Some(thread) = thread_from_resume_record(record) else {
+        return true;
+    };
+    if thread.status != crate::abi::STATUS_FUTEX_WAIT {
+        return true;
+    }
+    let blocked_addr = super::thread::thread_record_blocked_addr(thread, thread.guest_base);
+    if blocked_addr == 0 || blocked_addr != record.detail0 {
+        return true;
+    }
+    super::futex::wait_word_mismatched(thread, record.detail0)
 }
 
-fn record_ready(record: super::SupervisorResumeRecord) -> bool {
+fn runnable_resume_record_disposition(record: super::SupervisorResumeRecord) -> RecordDisposition {
+    let Some(thread) = thread_from_resume_record(record) else {
+        return RecordDisposition::Drop;
+    };
+    if super::blocked::vfork_process_gate_blocks(thread) {
+        return RecordDisposition::Pending;
+    }
+    if super::runnable::process_has_process_wide_fs_gate_for_thread(thread) {
+        return RecordDisposition::Pending;
+    }
+    match thread.status {
+        crate::abi::STATUS_OK | crate::abi::STATUS_VFORK_WAIT => RecordDisposition::Ready,
+        crate::abi::STATUS_FS => RecordDisposition::Pending,
+        _ => RecordDisposition::Drop,
+    }
+}
+
+fn record_disposition(record: super::SupervisorResumeRecord) -> RecordDisposition {
     match record.kind {
-        super::SUPERVISOR_RESUME_KIND_FUTEX_WAKE => futex_resume_record_ready(record),
-        _ => true,
+        super::SUPERVISOR_RESUME_KIND_FUTEX_WAKE => {
+            if futex_resume_record_ready(record) {
+                RecordDisposition::Ready
+            } else {
+                RecordDisposition::Pending
+            }
+        }
+        super::SUPERVISOR_RESUME_KIND_RUNNABLE_THREAD => runnable_resume_record_disposition(record),
+        _ => RecordDisposition::Ready,
     }
 }
 
@@ -187,19 +283,17 @@ fn validate_output(out_ptr: u32, out_len: u32) -> Result<(), i32> {
 
 pub(super) fn write_record(out_ptr: u32, out_len: u32) -> i32 {
     POLL_COUNT.fetch_add(1, Ordering::Relaxed);
-    let Some(peeked) = peek_record() else {
-        return 0;
-    };
-    if !record_ready(peeked) {
-        return 0;
-    }
     if out_len == 0 {
-        return super::SUPERVISOR_RESUME_RECORD_BYTES as i32;
+        return if has_ready_record() {
+            super::SUPERVISOR_RESUME_RECORD_BYTES as i32
+        } else {
+            0
+        };
     }
     if let Err(errno) = validate_output(out_ptr, out_len) {
         return errno;
     }
-    let Some(record) = pop_record() else {
+    let Some(record) = pop_ready_record() else {
         return 0;
     };
     write_encoded_record(record, out_ptr)

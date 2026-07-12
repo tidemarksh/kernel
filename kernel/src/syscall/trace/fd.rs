@@ -40,7 +40,25 @@ pub(crate) struct FdSyscallTraceEntry {
 }
 
 #[cfg(not(any(test, feature = "harness")))]
+#[derive(Clone, Copy)]
+pub(crate) struct PathSyscallTraceEntry {
+    pub vm_ptr: u32,
+    pub nr: u64,
+    pub dirfd: i64,
+    pub result: i64,
+    pub status: i32,
+    pub path_len: u32,
+    pub path: [u8; PATH_SYSCALL_TRACE_BYTES],
+}
+
+#[cfg(not(any(test, feature = "harness")))]
 const FD_SYSCALL_TRACE_CAP: usize = 1024;
+
+#[cfg(not(any(test, feature = "harness")))]
+const PATH_SYSCALL_TRACE_CAP: usize = 256;
+
+#[cfg(not(any(test, feature = "harness")))]
+const PATH_SYSCALL_TRACE_BYTES: usize = 224;
 
 #[cfg(not(any(test, feature = "harness")))]
 static mut FD_SYSCALL_TRACE: [FdSyscallTraceEntry; FD_SYSCALL_TRACE_CAP] = [FdSyscallTraceEntry {
@@ -71,6 +89,24 @@ static mut FD_SYSCALL_TRACE_LEN: u32 = 0;
 
 #[cfg(not(any(test, feature = "harness")))]
 static mut FD_SYSCALL_TRACE_NEXT: u32 = 0;
+
+#[cfg(not(any(test, feature = "harness")))]
+static mut PATH_SYSCALL_TRACE: [PathSyscallTraceEntry; PATH_SYSCALL_TRACE_CAP] =
+    [PathSyscallTraceEntry {
+        vm_ptr: 0,
+        nr: 0,
+        dirfd: 0,
+        result: 0,
+        status: 0,
+        path_len: 0,
+        path: [0; PATH_SYSCALL_TRACE_BYTES],
+    }; PATH_SYSCALL_TRACE_CAP];
+
+#[cfg(not(any(test, feature = "harness")))]
+static mut PATH_SYSCALL_TRACE_LEN: u32 = 0;
+
+#[cfg(not(any(test, feature = "harness")))]
+static mut PATH_SYSCALL_TRACE_NEXT: u32 = 0;
 
 #[cfg(not(any(test, feature = "harness")))]
 fn sample_process_pid_bytes(vm_ptr: u32) -> (u64, u64) {
@@ -115,6 +151,7 @@ pub(in crate::syscall) fn record(
             | SYS_WRITEV
             | SYS_PWRITEV
             | SYS_LSEEK
+            | SYS_EVENTFD2
             | SYS_EPOLL_CREATE1
             | SYS_EPOLL_CTL
             | SYS_EPOLL_PWAIT
@@ -255,5 +292,96 @@ pub(crate) fn entry(index: u32) -> FdSyscallTraceEntry {
         };
         let idx = ((start + index) as usize) % FD_SYSCALL_TRACE_CAP;
         FD_SYSCALL_TRACE[idx]
+    }
+}
+
+#[cfg(not(any(test, feature = "harness")))]
+fn empty_path_entry() -> PathSyscallTraceEntry {
+    PathSyscallTraceEntry {
+        vm_ptr: 0,
+        nr: 0,
+        dirfd: 0,
+        result: 0,
+        status: 0,
+        path_len: 0,
+        path: [0; PATH_SYSCALL_TRACE_BYTES],
+    }
+}
+
+#[cfg(not(any(test, feature = "harness")))]
+#[allow(dead_code)]
+pub(crate) fn record_path_syscall(
+    vm_ptr: u32,
+    nr: u64,
+    dirfd: i64,
+    path: &[u8],
+    result: i64,
+    status: i32,
+) {
+    let should_record = matches!(
+        nr,
+        SYS_OPENAT | SYS_NEWFSTATAT | SYS_FACCESSAT | SYS_READLINKAT | SYS_EXECVE | SYS_EXECVEAT
+    );
+    if !should_record {
+        return;
+    }
+
+    unsafe {
+        let idx = (PATH_SYSCALL_TRACE_NEXT as usize) % PATH_SYSCALL_TRACE_CAP;
+        let mut path_copy = [0u8; PATH_SYSCALL_TRACE_BYTES];
+        let path_len = path.len().min(PATH_SYSCALL_TRACE_BYTES);
+        path_copy[..path_len].copy_from_slice(&path[..path_len]);
+        PATH_SYSCALL_TRACE[idx] = PathSyscallTraceEntry {
+            vm_ptr,
+            nr,
+            dirfd,
+            result,
+            status,
+            path_len: path_len as u32,
+            path: path_copy,
+        };
+        PATH_SYSCALL_TRACE_NEXT = ((idx + 1) % PATH_SYSCALL_TRACE_CAP) as u32;
+        if PATH_SYSCALL_TRACE_LEN < PATH_SYSCALL_TRACE_CAP as u32 {
+            PATH_SYSCALL_TRACE_LEN += 1;
+        }
+    }
+}
+
+#[cfg(not(any(test, feature = "harness")))]
+pub(crate) fn path_len() -> u32 {
+    unsafe { PATH_SYSCALL_TRACE_LEN }
+}
+
+#[cfg(not(any(test, feature = "harness")))]
+pub(crate) fn path_entry(index: u32) -> PathSyscallTraceEntry {
+    unsafe {
+        let len = PATH_SYSCALL_TRACE_LEN.min(PATH_SYSCALL_TRACE_CAP as u32);
+        if index >= len {
+            return empty_path_entry();
+        }
+        let start = if len < PATH_SYSCALL_TRACE_CAP as u32 {
+            0
+        } else {
+            PATH_SYSCALL_TRACE_NEXT % PATH_SYSCALL_TRACE_CAP as u32
+        };
+        let idx = ((start + index) as usize) % PATH_SYSCALL_TRACE_CAP;
+        PATH_SYSCALL_TRACE[idx]
+    }
+}
+
+#[cfg(not(any(test, feature = "harness")))]
+pub(crate) fn path_ptr(index: u32) -> u32 {
+    unsafe {
+        let len = PATH_SYSCALL_TRACE_LEN.min(PATH_SYSCALL_TRACE_CAP as u32);
+        if index >= len {
+            return 0;
+        }
+        let start = if len < PATH_SYSCALL_TRACE_CAP as u32 {
+            0
+        } else {
+            PATH_SYSCALL_TRACE_NEXT % PATH_SYSCALL_TRACE_CAP as u32
+        };
+        let idx = ((start + index) as usize) % PATH_SYSCALL_TRACE_CAP;
+        core::ptr::addr_of!(PATH_SYSCALL_TRACE[idx].path) as u32
     }
 }

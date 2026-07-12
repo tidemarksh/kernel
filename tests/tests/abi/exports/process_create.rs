@@ -121,6 +121,28 @@ fn process_canonicalize_child_pid_export_rewrites_spawn_handoff() {
 }
 
 #[test]
+fn process_restore_current_identity_export_only_updates_process_identity() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
+    let process_ptr = t.vm.process_ptr;
+    let process_state = unsafe {
+        &mut *((t.base as u64 + process_ptr as u64) as *mut tidemark_kernel::types::ProcessState)
+    };
+    process_state.pid = 2;
+    process_state.ppid = 1;
+    t.vm.x[10] = 0xfeed;
+    t.vm.spawn_child_pid = 2;
+
+    process_restore_current_identity(vm_ptr, 6, 1, 9);
+
+    assert_eq!(process_current_pid(vm_ptr), 6);
+    assert_eq!(process_current_ppid(vm_ptr), 1);
+    assert!(process_next_pid() >= 9);
+    assert_eq!(t.vm.x[10], 0xfeed);
+    assert_eq!(t.vm.spawn_child_pid, 2);
+}
+
+#[test]
 fn target_address_profile_is_memory64() {
     let _t = TestVm::new();
     let memory64_profile = abi_guest_address_profile_memory64();

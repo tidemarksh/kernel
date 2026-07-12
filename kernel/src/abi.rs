@@ -834,10 +834,12 @@ pub use crate::supervisor::{
     supervisor_blocked_rpc_preserve_canonical_eof, supervisor_blocked_stale_retry_result_action,
     supervisor_blocked_stale_retry_result_action_handle_current_result,
     supervisor_blocked_stale_retry_result_action_handle_current_result_wait4,
-    supervisor_blocked_stale_retry_result_action_none, supervisor_blocked_status_is_connect_wait,
-    supervisor_blocked_status_is_epoll_wait, supervisor_blocked_status_is_host_wait,
-    supervisor_blocked_status_is_pipe_wait, supervisor_blocked_status_is_socket_wait,
-    supervisor_blocked_status_is_wait4, supervisor_blocked_status_needs_network_sidecar_restore,
+    supervisor_blocked_stale_retry_result_action_none,
+    supervisor_blocked_stale_retry_result_action_resume_wait4,
+    supervisor_blocked_status_is_connect_wait, supervisor_blocked_status_is_epoll_wait,
+    supervisor_blocked_status_is_host_wait, supervisor_blocked_status_is_pipe_wait,
+    supervisor_blocked_status_is_socket_wait, supervisor_blocked_status_is_wait4,
+    supervisor_blocked_status_needs_network_sidecar_restore,
     supervisor_blocked_status_syncs_socket_after_resume,
     supervisor_blocked_status_transition_action, supervisor_blocked_status_transition_action_block,
     supervisor_blocked_status_transition_action_sync_fork_shared,
@@ -1030,12 +1032,13 @@ pub use crate::supervisor::{
     supervisor_pipe_slot_snapshot_context_thread_step, supervisor_pipe_slot_snapshot_merge_action,
     supervisor_pipe_sync_ofd_candidate, supervisor_process_epoll_dependent_ofd,
     supervisor_process_epoll_dependent_sync_ofd, supervisor_process_epoll_depends_on_ofd,
-    supervisor_process_epoll_held_ofd, supervisor_process_fd_flags_for_fd,
-    supervisor_process_fd_is_open, supervisor_process_held_ofd_refcount,
-    supervisor_process_held_pipe_slot_mask, supervisor_process_holds_regular_file_ofd,
-    supervisor_process_host_op, supervisor_process_host_op_kind_spawn_process_worker,
-    supervisor_process_host_op_record_bytes, supervisor_process_host_op_record_magic,
-    supervisor_process_identity_matches, supervisor_process_lifecycle_kind_child_exit_published,
+    supervisor_process_epoll_held_ofd, supervisor_process_fd_authority_vm_ptr,
+    supervisor_process_fd_flags_for_fd, supervisor_process_fd_is_open,
+    supervisor_process_held_ofd_refcount, supervisor_process_held_pipe_slot_mask,
+    supervisor_process_holds_regular_file_ofd, supervisor_process_host_op,
+    supervisor_process_host_op_kind_spawn_process_worker, supervisor_process_host_op_record_bytes,
+    supervisor_process_host_op_record_magic, supervisor_process_identity_matches,
+    supervisor_process_lifecycle_kind_child_exit_published,
     supervisor_process_lifecycle_kind_wait4_completed, supervisor_process_lifecycle_record,
     supervisor_process_lifecycle_record_bytes, supervisor_process_lifecycle_record_magic,
     supervisor_process_memory_host_op, supervisor_process_ofd_for_fd,
@@ -1863,6 +1866,25 @@ pub extern "C" fn process_rewrite_child_pid(
     unsafe {
         let vm = &mut *(vm_ptr as *mut crate::types::ThreadState);
         crate::syscall::process::rewrite_child_pid(vm, vm.guest_base, old_pid, new_pid, next_pid);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn process_restore_current_identity(
+    vm_ptr: u32,
+    pid: i32,
+    ppid: i32,
+    next_pid: i32,
+) {
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut crate::types::ThreadState);
+        crate::supervisor::process_lifecycle::restore_current_process_identity(
+            vm,
+            vm.guest_base,
+            pid,
+            ppid,
+            next_pid,
+        );
     }
 }
 

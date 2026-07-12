@@ -709,6 +709,17 @@ fn blocked_pipe_read_syscall(vm: &ThreadState) -> bool {
     vm.blocked_syscall_nr == SYS_READ || (vm.blocked_syscall_nr == 0 && vm.x[17] == SYS_READ)
 }
 
+fn blocked_pipe_poll_timeout_syscall(vm: &ThreadState) -> bool {
+    matches!(
+        if vm.blocked_syscall_nr != 0 {
+            vm.blocked_syscall_nr
+        } else {
+            vm.x[17]
+        },
+        crate::abi::SYS_PPOLL | crate::abi::SYS_PSELECT6
+    )
+}
+
 fn blocked_pipe_directly_ready(vm_ptr: u32, vm: &ThreadState) -> bool {
     if crate::syscall::poll::wait_set_ready_count(vm, vm.guest_base) > 0 {
         return true;
@@ -765,7 +776,8 @@ pub fn blocked_pipe_sync_before_retry_action(vm_ptr: u32, flags: u32) -> i32 {
         & super::SUPERVISOR_BLOCKED_PIPE_SYNC_BEFORE_RETRY_FLAG_KERNEL_WORKER_AVAILABLE)
         != 0;
     let ready_count = crate::syscall::poll::wait_set_ready_count(vm, vm.guest_base);
-    let timed_no_ready_without_pending_sync = vm.epoll_timeout_ms >= 0
+    let timed_no_ready_without_pending_sync = blocked_pipe_poll_timeout_syscall(vm)
+        && vm.epoll_timeout_ms >= 0
         && ready_count <= 0
         && !pipe_sync_before_retry_readiness_sync_pending(vm);
 

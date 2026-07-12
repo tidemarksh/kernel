@@ -3,11 +3,11 @@ use tidemark_kernel::harness::TestVm;
 use tidemark_kernel::supervisor::{
     supervisor_abi_version, supervisor_complete_host_op, supervisor_host_op_kind_arm_host_timer,
     supervisor_host_op_record_bytes, supervisor_next_host_op, supervisor_next_resume,
-    supervisor_reset_shadow_log, supervisor_resume_kind_runnable_thread,
+    supervisor_process_resume, supervisor_reset_shadow_log, supervisor_resume_kind_runnable_thread,
     supervisor_resume_record_bytes,
 };
 use tidemark_kernel::syscall::time;
-use tidemark_kernel::types::ThreadState;
+use tidemark_kernel::types::{ProcessState, THREAD_RUNNING, ThreadRecord, ThreadState};
 
 const CLOCK_REALTIME: u64 = 0;
 const CLOCK_MONOTONIC: u64 = 1;
@@ -32,6 +32,17 @@ fn write_u32_le(bytes: &mut [u8], offset: usize, value: u32) {
 
 fn write_u64_le(bytes: &mut [u8], offset: usize, value: u64) {
     bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+fn install_current_thread_record(t: &mut TestVm) {
+    let vm_ptr = (&mut t.vm as *mut ThreadState) as u32;
+    let tid = t.vm.tid;
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[(tid - 1) as usize] = ThreadRecord::new(tid, THREAD_RUNNING, vm_ptr, 0, 0);
+        ps.thread_count
+            .store(1, std::sync::atomic::Ordering::Release);
+    }
 }
 
 fn assert_next_runnable_resume(vm: &ThreadState) {
@@ -514,6 +525,51 @@ fn sched_yield_publishes_runnable_resume_without_host_timer() {
     assert_eq!(t.vm.fault_pc, 0);
     assert_eq!(supervisor_next_host_op(0, 0), 0);
     assert_next_runnable_resume(&t.vm);
+}
+
+#[test]
+fn thread_step_sched_yield_keeps_vm_runnable_for_process_resume() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+
+    let code_addr = t.sys_mmap(
+        0,
+        4096,
+        abi::PROT_READ | abi::PROT_WRITE | abi::PROT_EXEC,
+        abi::MAP_ANONYMOUS | abi::MAP_PRIVATE,
+        -1,
+        0,
+    ) as u64;
+    assert!(code_addr > 0);
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, code_addr, 0x0000_0073); // ecall
+    }
+
+    t.vm.pc = code_addr;
+    t.vm.x[17] = abi::SYS_SCHED_YIELD;
+    t.vm.status = abi::STATUS_OK;
+
+    let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    let remaining = tidemark_kernel::abi::thread_step(vm_ptr, 1);
+
+    assert!(remaining >= 0);
+    assert_eq!(t.vm.status, abi::STATUS_OK);
+
+    let mut resume = vec![0u8; supervisor_resume_record_bytes() as usize];
+    assert_eq!(
+        supervisor_process_resume(vm_ptr, resume.as_mut_ptr() as u32, resume.len() as u32),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&resume, 12),
+        supervisor_resume_kind_runnable_thread()
+    );
+    assert_eq!(read_u32_le(&resume, 24), vm_ptr);
+    assert_eq!(read_u32_le(&resume, 28), t.vm.tid as u32);
+    assert_eq!(read_u32_le(&resume, 36), abi::STATUS_OK as u32);
 }
 
 #[test]

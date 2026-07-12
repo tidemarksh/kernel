@@ -11,7 +11,7 @@ use super::atomic::exec_amo;
 use super::block_cache::BlockCache;
 use super::block_exec::{BlockOutcome, exec_block};
 use super::decode;
-use super::fault::{AccessOutcome, ensure_guest_access};
+use super::fault::{AccessOutcome, AccessPermitCache, ensure_guest_access};
 use super::fp::{exec_fma, exec_load_fp, exec_op_fp, exec_store_fp};
 use super::integer::{
     exec_branch, exec_load, exec_op, exec_op_32, exec_op_imm, exec_op_imm_32, exec_store,
@@ -59,6 +59,7 @@ pub(super) unsafe fn exec_decoded(
     prev_sp: u64,
     prev_tp: u64,
     prev_s11: u64,
+    access_cache: &mut AccessPermitCache,
 ) -> StepOutcome {
     let opcode = decode::opcode(raw);
 
@@ -77,7 +78,18 @@ pub(super) unsafe fn exec_decoded(
                     3 => 8,
                     _ => 0,
                 };
-                match ensure_guest_access(vm, x, f, fcsr, pc, base, addr, width, abi::PROT_READ) {
+                match ensure_guest_access(
+                    vm,
+                    x,
+                    f,
+                    fcsr,
+                    pc,
+                    base,
+                    addr,
+                    width,
+                    abi::PROT_READ,
+                    access_cache,
+                ) {
                     AccessOutcome::Ok => {}
                     AccessOutcome::Restart => return StepOutcome::Restart,
                     AccessOutcome::Return => return StepOutcome::Return(*remaining),
@@ -93,7 +105,18 @@ pub(super) unsafe fn exec_decoded(
                     3 => 8,
                     _ => 0,
                 };
-                match ensure_guest_access(vm, x, f, fcsr, pc, base, addr, width, abi::PROT_WRITE) {
+                match ensure_guest_access(
+                    vm,
+                    x,
+                    f,
+                    fcsr,
+                    pc,
+                    base,
+                    addr,
+                    width,
+                    abi::PROT_WRITE,
+                    access_cache,
+                ) {
                     AccessOutcome::Ok => {}
                     AccessOutcome::Restart => return StepOutcome::Restart,
                     AccessOutcome::Return => return StepOutcome::Return(*remaining),
@@ -172,7 +195,17 @@ pub(super) unsafe fn exec_decoded(
                 {
                     let cost = blk.total_budget as i32;
                     if *remaining >= cost {
-                        match exec_block::<false>(blk, vm, x, f, fcsr, pc, base, remaining) {
+                        match exec_block::<false>(
+                            blk,
+                            vm,
+                            x,
+                            f,
+                            fcsr,
+                            pc,
+                            base,
+                            remaining,
+                            access_cache,
+                        ) {
                             BlockOutcome::Restart => {
                                 x[0] = 0;
                                 return StepOutcome::Restart;
@@ -209,6 +242,7 @@ pub(super) unsafe fn exec_decoded(
                     addr,
                     width,
                     abi::PROT_READ | abi::PROT_WRITE,
+                    access_cache,
                 ) {
                     AccessOutcome::Ok => {}
                     AccessOutcome::Restart => return StepOutcome::Restart,
@@ -223,7 +257,18 @@ pub(super) unsafe fn exec_decoded(
                     3 => 8,
                     _ => 0,
                 };
-                match ensure_guest_access(vm, x, f, fcsr, pc, base, addr, width, abi::PROT_READ) {
+                match ensure_guest_access(
+                    vm,
+                    x,
+                    f,
+                    fcsr,
+                    pc,
+                    base,
+                    addr,
+                    width,
+                    abi::PROT_READ,
+                    access_cache,
+                ) {
                     AccessOutcome::Ok => {}
                     AccessOutcome::Restart => return StepOutcome::Restart,
                     AccessOutcome::Return => return StepOutcome::Return(*remaining),
@@ -237,7 +282,18 @@ pub(super) unsafe fn exec_decoded(
                     3 => 8,
                     _ => 0,
                 };
-                match ensure_guest_access(vm, x, f, fcsr, pc, base, addr, width, abi::PROT_WRITE) {
+                match ensure_guest_access(
+                    vm,
+                    x,
+                    f,
+                    fcsr,
+                    pc,
+                    base,
+                    addr,
+                    width,
+                    abi::PROT_WRITE,
+                    access_cache,
+                ) {
                     AccessOutcome::Ok => {}
                     AccessOutcome::Restart => return StepOutcome::Restart,
                     AccessOutcome::Return => return StepOutcome::Return(*remaining),

@@ -154,6 +154,44 @@ pub(super) fn owner_live_matches(vm_ptr: u32, runtime_pid: i32) -> i32 {
     i32::from(pid == runtime_pid && thread_count > 0)
 }
 
+pub(super) fn fd_authority_vm_ptr(vm_ptr: u32, runtime_pid: i32) -> u32 {
+    if vm_ptr == 0 || runtime_pid <= 0 {
+        return 0;
+    }
+    let Some(vm) = super::thread::state_from_ptr(vm_ptr) else {
+        return 0;
+    };
+    let process_ptr = vm.process_ptr;
+    let Some((pid, thread_count, _)) = process_owner_fields(vm_ptr) else {
+        return 0;
+    };
+    if pid != runtime_pid || thread_count == 0 {
+        return 0;
+    }
+    let absolute = (vm.guest_base as u64).saturating_add(process_ptr as u64);
+    let ps = unsafe { &*(absolute as *const ProcessState) };
+    for record in ps.threads.iter() {
+        if record.thread_ptr == 0
+            || matches!(
+                record.state,
+                crate::types::THREAD_NONE | crate::types::THREAD_DEAD
+            )
+        {
+            continue;
+        }
+        let Some(candidate) = super::thread::state_from_ptr(record.thread_ptr) else {
+            continue;
+        };
+        if candidate.guest_base == vm.guest_base
+            && candidate.process_ptr == process_ptr
+            && candidate.tid == record.tid
+        {
+            return record.thread_ptr;
+        }
+    }
+    vm_ptr
+}
+
 pub(super) fn owner_missing_or_invalid(vm_ptr: u32) -> i32 {
     if vm_ptr == 0 {
         return 1;

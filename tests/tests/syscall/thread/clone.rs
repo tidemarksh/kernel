@@ -1,4 +1,5 @@
 use super::support::*;
+use tidemark_kernel::types::THREAD_STARTING;
 
 fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
     let mut value = [0u8; 4];
@@ -10,6 +11,14 @@ fn read_u64_le(bytes: &[u8], offset: usize) -> u64 {
     let mut value = [0u8; 8];
     value.copy_from_slice(&bytes[offset..offset + 8]);
     u64::from_le_bytes(value)
+}
+
+fn write_u32_le(bytes: &mut [u8], offset: usize, value: u32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_u64_le(bytes: &mut [u8], offset: usize, value: u64) {
+    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
 
 #[test]
@@ -111,10 +120,56 @@ fn contract_supervisor_host_op_spawns_clone_thread_state() {
     let threads_off = core::mem::offset_of!(ProcessState, threads) as u64;
     let record_size = core::mem::size_of::<ThreadRecord>() as u64;
     let record_off = ps_ptr + threads_off + ((ret as u64) - 1) * record_size;
-    let state = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, record_off) };
+    let record_tid = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, record_off) };
+    let state = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, record_off + 4) };
     let thread_ptr = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, record_off + 8) };
-    assert_eq!(state as i32, THREAD_RUNNING);
+    assert_eq!(record_tid, ret as u32);
+    assert_eq!(state as i32, THREAD_STARTING);
     assert_eq!(thread_ptr, child_ptr);
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, record_off, 0);
+        tidemark_kernel::guest_mem::write_u32(t.base, record_off + 4, THREAD_NONE as u32);
+        tidemark_kernel::guest_mem::write_u32(t.base, record_off + 8, 0);
+    }
+    let mut completion = [0u8; 64];
+    write_u32_le(
+        &mut completion,
+        0,
+        supervisor_host_completion_record_magic(),
+    );
+    write_u32_le(&mut completion, 4, supervisor_abi_version());
+    write_u32_le(
+        &mut completion,
+        8,
+        supervisor_host_completion_record_bytes(),
+    );
+    write_u32_le(
+        &mut completion,
+        12,
+        supervisor_host_op_kind_spawn_thread_worker(),
+    );
+    write_u64_le(&mut completion, 16, read_u64_le(&record, 16));
+    write_u32_le(&mut completion, 24, parent_vm_ptr);
+    write_u32_le(&mut completion, 28, child_ptr);
+    write_u32_le(&mut completion, 32, ret as u32);
+    write_u32_le(
+        &mut completion,
+        36,
+        supervisor_host_completion_outcome_success(),
+    );
+    assert_eq!(
+        supervisor_complete_host_op(completion.as_ptr() as u32, completion.len() as u32),
+        STATUS_OK
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, record_off + 4) } as i32,
+        THREAD_RUNNING
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, record_off + 8) },
+        child_ptr
+    );
 
     assert_eq!(t.vm.clone_pending, 0);
     assert_eq!(t.vm.clone_child_tid, 0);
@@ -316,9 +371,11 @@ fn contract_spawn_from_clone_initializes_child_thread_state() {
     let threads_off = core::mem::offset_of!(ProcessState, threads) as u64;
     let record_size = core::mem::size_of::<ThreadRecord>() as u64;
     let record_off = ps_ptr + threads_off + ((ret as u64) - 1) * record_size;
-    let state = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, record_off) };
+    let record_tid = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, record_off) };
+    let state = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, record_off + 4) };
     let thread_ptr = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, record_off + 8) };
-    assert_eq!(state as i32, THREAD_RUNNING);
+    assert_eq!(record_tid, ret as u32);
+    assert_eq!(state as i32, THREAD_STARTING);
     assert_eq!(thread_ptr, child_ptr);
 
     assert_eq!(t.vm.clone_pending, 0);

@@ -225,7 +225,18 @@ fn enqueue_poll_wait_timer(vm: &crate::types::ThreadState) -> bool {
 }
 
 fn poll_wait_timer_required(vm: &crate::types::ThreadState) -> bool {
-    vm.epoll_timeout_ms >= 0 && crate::syscall::poll::wait_set_ready_count(vm, vm.guest_base) <= 0
+    poll_wait_timer_syscall(vm)
+        && vm.epoll_timeout_ms >= 0
+        && crate::syscall::poll::wait_set_ready_count(vm, vm.guest_base) <= 0
+}
+
+fn poll_wait_timer_syscall(vm: &crate::types::ThreadState) -> bool {
+    let syscall = if vm.blocked_syscall_nr != 0 {
+        vm.blocked_syscall_nr
+    } else {
+        vm.x[17]
+    };
+    syscall == crate::abi::SYS_PPOLL || syscall == crate::abi::SYS_PSELECT6
 }
 
 fn enqueue_socket_wait_timer(vm: &crate::types::ThreadState) -> bool {

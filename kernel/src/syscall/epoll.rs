@@ -22,6 +22,18 @@ pub(crate) const EPOLL_CTL_ADD: u64 = 1;
 pub(crate) const EPOLL_CTL_DEL: u64 = 2;
 const EPOLL_CTL_MOD: u64 = 3;
 
+const EPOLL_CTL_FAILURE_MISSING_EPOLL_OFD_ID: u64 = 1;
+const EPOLL_CTL_FAILURE_MISSING_EPOLL_OFD: u64 = 2;
+const EPOLL_CTL_FAILURE_WRONG_EPOLL_TYPE: u64 = 3;
+const EPOLL_CTL_FAILURE_MISSING_WATCHED_OFD: u64 = 4;
+const EPOLL_CTL_FAILURE_UNSUPPORTED_WATCHED_TYPE: u64 = 5;
+const EPOLL_CTL_FAILURE_MISSING_WATCHED_OFD_ID: u64 = 6;
+const EPOLL_CTL_FAILURE_MISSING_INSTANCE: u64 = 7;
+const EPOLL_CTL_FAILURE_TABLE_FULL: u64 = 8;
+const EPOLL_CTL_FAILURE_DUPLICATE_ENTRY: u64 = 9;
+const EPOLL_CTL_FAILURE_MISSING_ENTRY: u64 = 10;
+const EPOLL_CTL_FAILURE_INVALID_OP: u64 = 11;
+
 pub(crate) const EPOLLIN: u32 = 0x001;
 const EPOLLOUT: u32 = 0x004;
 const EPOLLERR: u32 = 0x008;
@@ -161,6 +173,15 @@ fn epoll_supports_fd_type(fd_type: i32) -> bool {
     )
 }
 
+fn epoll_control_kind_for_op(op: u64) -> u32 {
+    match op {
+        EPOLL_CTL_ADD => crate::supervisor::SUPERVISOR_FD_CONTROL_KIND_EPOLL_CTL_ADD,
+        EPOLL_CTL_DEL => crate::supervisor::SUPERVISOR_FD_CONTROL_KIND_EPOLL_CTL_DEL,
+        EPOLL_CTL_MOD => crate::supervisor::SUPERVISOR_FD_CONTROL_KIND_EPOLL_CTL_MOD,
+        _ => crate::supervisor::SUPERVISOR_FD_CONTROL_KIND_EPOLL_CTL_ADD,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn record_epoll_control(
     kind: u32,
@@ -193,6 +214,40 @@ fn record_epoll_control(
         events as u64,
         data,
         count as u64,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_epoll_control_failure(
+    vm: &ThreadState,
+    base: u32,
+    epfd: u64,
+    op: u64,
+    fd: u64,
+    epoll_ofd_id: u32,
+    watched_ofd_id: u32,
+    watched_fd_type: i32,
+    epoll_idx: u32,
+    result: i64,
+    reason: u64,
+    detail: u64,
+) {
+    crate::supervisor::record_fd_control(
+        epoll_control_kind_for_op(op),
+        vm as *const ThreadState as u32,
+        vm.process_ptr,
+        crate::syscall::process::current_process_pid(vm, base),
+        epfd as u32,
+        fd as u32,
+        epoll_ofd_id,
+        watched_ofd_id,
+        watched_fd_type as u32,
+        epoll_idx,
+        0,
+        result,
+        op,
+        reason,
+        detail,
     );
 }
 
@@ -284,39 +339,173 @@ pub fn sys_epoll_ctl(
 ) -> i64 {
     let epoll_ofd_id = match fd_table::get_ofd_id(base, vm, epfd) {
         Some(id) => id,
-        None => return EBADF,
+        None => {
+            record_epoll_control_failure(
+                vm,
+                base,
+                epfd,
+                op,
+                fd,
+                0,
+                0,
+                FD_TYPE_NONE,
+                0,
+                EBADF,
+                EPOLL_CTL_FAILURE_MISSING_EPOLL_OFD_ID,
+                0,
+            );
+            return EBADF;
+        }
     };
     let epoll_ofd = match fd_table::get_ofd(base, vm, epfd) {
         Some(o) => o,
-        None => return EBADF,
+        None => {
+            record_epoll_control_failure(
+                vm,
+                base,
+                epfd,
+                op,
+                fd,
+                epoll_ofd_id,
+                0,
+                FD_TYPE_NONE,
+                0,
+                EBADF,
+                EPOLL_CTL_FAILURE_MISSING_EPOLL_OFD,
+                0,
+            );
+            return EBADF;
+        }
     };
     if epoll_ofd.fd_type != FD_TYPE_EPOLL {
+        record_epoll_control_failure(
+            vm,
+            base,
+            epfd,
+            op,
+            fd,
+            epoll_ofd_id,
+            0,
+            epoll_ofd.fd_type,
+            epoll_ofd.ino,
+            EINVAL,
+            EPOLL_CTL_FAILURE_WRONG_EPOLL_TYPE,
+            epoll_ofd.fd_type as u64,
+        );
         return EINVAL;
     }
     let watched_ofd = match fd_table::get_ofd(base, vm, fd) {
         Some(o) => o,
-        None => return EBADF,
+        None => {
+            record_epoll_control_failure(
+                vm,
+                base,
+                epfd,
+                op,
+                fd,
+                epoll_ofd_id,
+                0,
+                FD_TYPE_NONE,
+                epoll_ofd.ino,
+                EBADF,
+                EPOLL_CTL_FAILURE_MISSING_WATCHED_OFD,
+                epoll_ofd.ino as u64,
+            );
+            return EBADF;
+        }
     };
     if !epoll_supports_fd_type(watched_ofd.fd_type) {
+        record_epoll_control_failure(
+            vm,
+            base,
+            epfd,
+            op,
+            fd,
+            epoll_ofd_id,
+            0,
+            watched_ofd.fd_type,
+            epoll_ofd.ino,
+            EPERM,
+            EPOLL_CTL_FAILURE_UNSUPPORTED_WATCHED_TYPE,
+            watched_ofd.fd_type as u64,
+        );
         return EPERM;
     }
     let watched_ofd_id = match fd_table::get_ofd_id(base, vm, fd) {
         Some(id) => id,
-        None => return EBADF,
+        None => {
+            record_epoll_control_failure(
+                vm,
+                base,
+                epfd,
+                op,
+                fd,
+                epoll_ofd_id,
+                0,
+                watched_ofd.fd_type,
+                epoll_ofd.ino,
+                EBADF,
+                EPOLL_CTL_FAILURE_MISSING_WATCHED_OFD_ID,
+                epoll_ofd.ino as u64,
+            );
+            return EBADF;
+        }
     };
 
     let Some(inst) = validated_epoll_instance(epoll_ofd.ino as usize) else {
+        record_epoll_control_failure(
+            vm,
+            base,
+            epfd,
+            op,
+            fd,
+            epoll_ofd_id,
+            watched_ofd_id,
+            watched_ofd.fd_type,
+            epoll_ofd.ino,
+            EBADF,
+            EPOLL_CTL_FAILURE_MISSING_INSTANCE,
+            epoll_ofd.ino as u64,
+        );
         return EBADF;
     };
 
     match op {
         EPOLL_CTL_ADD => {
             if inst.count as usize >= MAX_EPOLL_ENTRIES {
+                record_epoll_control_failure(
+                    vm,
+                    base,
+                    epfd,
+                    op,
+                    fd,
+                    epoll_ofd_id,
+                    watched_ofd_id,
+                    watched_ofd.fd_type,
+                    epoll_ofd.ino,
+                    ENOMEM,
+                    EPOLL_CTL_FAILURE_TABLE_FULL,
+                    inst.count as u64,
+                );
                 return ENOMEM;
             }
             // Check for duplicate
             for i in 0..inst.count as usize {
                 if inst.entries[i].fd == fd as u32 && inst.entries[i].ofd_id == watched_ofd_id {
+                    record_epoll_control_failure(
+                        vm,
+                        base,
+                        epfd,
+                        op,
+                        fd,
+                        epoll_ofd_id,
+                        watched_ofd_id,
+                        watched_ofd.fd_type,
+                        epoll_ofd.ino,
+                        EEXIST,
+                        EPOLL_CTL_FAILURE_DUPLICATE_ENTRY,
+                        inst.count as u64,
+                    );
                     return EEXIST;
                 }
             }
@@ -371,6 +560,20 @@ pub fn sys_epoll_ctl(
                     return 0;
                 }
             }
+            record_epoll_control_failure(
+                vm,
+                base,
+                epfd,
+                op,
+                fd,
+                epoll_ofd_id,
+                watched_ofd_id,
+                watched_ofd.fd_type,
+                epoll_ofd.ino,
+                ENOENT,
+                EPOLL_CTL_FAILURE_MISSING_ENTRY,
+                inst.count as u64,
+            );
             ENOENT
         }
         EPOLL_CTL_MOD => {
@@ -400,9 +603,39 @@ pub fn sys_epoll_ctl(
                     return 0;
                 }
             }
+            record_epoll_control_failure(
+                vm,
+                base,
+                epfd,
+                op,
+                fd,
+                epoll_ofd_id,
+                watched_ofd_id,
+                watched_ofd.fd_type,
+                epoll_ofd.ino,
+                ENOENT,
+                EPOLL_CTL_FAILURE_MISSING_ENTRY,
+                inst.count as u64,
+            );
             ENOENT
         }
-        _ => EINVAL,
+        _ => {
+            record_epoll_control_failure(
+                vm,
+                base,
+                epfd,
+                op,
+                fd,
+                epoll_ofd_id,
+                watched_ofd_id,
+                watched_ofd.fd_type,
+                epoll_ofd.ino,
+                EINVAL,
+                EPOLL_CTL_FAILURE_INVALID_OP,
+                op,
+            );
+            EINVAL
+        }
     }
 }
 

@@ -10,7 +10,7 @@
 use super::atomic::exec_amo;
 use super::block_cache::BlockEntry;
 use super::decode;
-use super::fault::{AccessOutcome, ensure_guest_access};
+use super::fault::{AccessOutcome, AccessPermitCache, ensure_guest_access};
 use super::fp::{exec_fma, exec_op_fp};
 use super::integer::{div_i64, divu_64, mulh, mulhsu, mulhu, rem_i64, remu_64};
 use crate::abi;
@@ -57,6 +57,7 @@ pub(super) unsafe fn exec_simple_load_scan_loop<const FIRST_CONSUMED: bool>(
     pc: &mut u64,
     base: u32,
     remaining: &mut i32,
+    access_cache: &mut AccessPermitCache,
 ) -> BlockOutcome {
     let len = blk.len as usize;
     let mut cur_pc = blk.start_pc;
@@ -145,7 +146,18 @@ pub(super) unsafe fn exec_simple_load_scan_loop<const FIRST_CONSUMED: bool>(
                     };
                     *pc = cur_pc;
                     match unsafe {
-                        ensure_guest_access(vm, x, f, fcsr, pc, base, addr, width, abi::PROT_READ)
+                        ensure_guest_access(
+                            vm,
+                            x,
+                            f,
+                            fcsr,
+                            pc,
+                            base,
+                            addr,
+                            width,
+                            abi::PROT_READ,
+                            access_cache,
+                        )
                     } {
                         AccessOutcome::Ok => {}
                         AccessOutcome::Restart => {
@@ -238,6 +250,7 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
     pc: &mut u64,
     base: u32,
     remaining: &mut i32,
+    access_cache: &mut AccessPermitCache,
 ) -> BlockOutcome {
     let len = blk.len as usize;
     let mut cur_pc = blk.start_pc;
@@ -424,7 +437,18 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                 };
                 *pc = cur_pc;
                 match unsafe {
-                    ensure_guest_access(vm, x, f, fcsr, pc, base, addr, width, abi::PROT_READ)
+                    ensure_guest_access(
+                        vm,
+                        x,
+                        f,
+                        fcsr,
+                        pc,
+                        base,
+                        addr,
+                        width,
+                        abi::PROT_READ,
+                        access_cache,
+                    )
                 } {
                     AccessOutcome::Ok => {}
                     AccessOutcome::Restart => {
@@ -461,7 +485,18 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                 };
                 *pc = cur_pc;
                 match unsafe {
-                    ensure_guest_access(vm, x, f, fcsr, pc, base, addr, width, abi::PROT_WRITE)
+                    ensure_guest_access(
+                        vm,
+                        x,
+                        f,
+                        fcsr,
+                        pc,
+                        base,
+                        addr,
+                        width,
+                        abi::PROT_WRITE,
+                        access_cache,
+                    )
                 } {
                     AccessOutcome::Ok => {}
                     AccessOutcome::Restart => {
@@ -502,6 +537,7 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                         addr,
                         width,
                         abi::PROT_READ | abi::PROT_WRITE,
+                        access_cache,
                     )
                 } {
                     AccessOutcome::Ok => {}
@@ -525,7 +561,18 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                 };
                 *pc = cur_pc;
                 match unsafe {
-                    ensure_guest_access(vm, x, f, fcsr, pc, base, addr, width, abi::PROT_READ)
+                    ensure_guest_access(
+                        vm,
+                        x,
+                        f,
+                        fcsr,
+                        pc,
+                        base,
+                        addr,
+                        width,
+                        abi::PROT_READ,
+                        access_cache,
+                    )
                 } {
                     AccessOutcome::Ok => {}
                     AccessOutcome::Restart => {
@@ -557,7 +604,18 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                 };
                 *pc = cur_pc;
                 match unsafe {
-                    ensure_guest_access(vm, x, f, fcsr, pc, base, addr, width, abi::PROT_WRITE)
+                    ensure_guest_access(
+                        vm,
+                        x,
+                        f,
+                        fcsr,
+                        pc,
+                        base,
+                        addr,
+                        width,
+                        abi::PROT_WRITE,
+                        access_cache,
+                    )
                 } {
                     AccessOutcome::Ok => {}
                     AccessOutcome::Restart => {

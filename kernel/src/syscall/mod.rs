@@ -15,6 +15,7 @@ pub mod resource;
 pub mod signal;
 pub mod socket;
 mod sync_effects;
+pub(crate) use sync_effects::mark_pipe_control_sync_effect;
 pub mod thread;
 pub mod time;
 pub(crate) mod trace;
@@ -745,6 +746,10 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             (arg0_ofd_id, arg0_ofd_type) = trace::fd::snapshot(base, vm, left_fd as u64);
             (arg2_ofd_id, arg2_ofd_type) = trace::fd::snapshot(base, vm, right_fd as u64);
         }
+    } else if (nr == SYS_EVENTFD2 || nr == SYS_EPOLL_CREATE1) && result >= 0 {
+        (arg0_ofd_id, arg0_ofd_type) = trace::fd::snapshot(base, vm, result as u64);
+        arg2_ofd_id = 0;
+        arg2_ofd_type = 0;
     }
     crate::tracepoints::record_fd_syscall(
         vm as *const ThreadState as u32,

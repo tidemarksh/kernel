@@ -1,6 +1,6 @@
 //! Pre-decoded basic block cache.
 //!
-//! Direct-mapped, 8192 entries. Each entry holds a pre-decoded basic block
+//! Direct-mapped block cache. Each entry holds a pre-decoded basic block
 //! (up to MAX_BLOCK_OPS instructions) with packed fields for fast dispatch.
 //!
 //! JALR rs1==ra triggers a cache lookup for return prediction.
@@ -13,18 +13,58 @@ pub const CACHE_SIZE: usize = 8192;
 pub const MAX_BLOCK_OPS: usize = 32;
 pub const BLOCK_LOOP_SIMPLE_LOAD_SCAN: u16 = 1 << 0;
 
-#[inline(always)]
-fn block_fetch_permitted(vm: Option<&ThreadState>, guest_base: u32, pc: u64, width: u64) -> bool {
-    let Some(thread) = vm else {
-        return true;
-    };
-    crate::syscall::memory::guest_range_permitted(
-        thread,
-        guest_base,
-        pc,
-        width,
-        crate::abi::PROT_EXEC,
-    )
+struct BlockFetchPermitCache {
+    start: u64,
+    end: u64,
+    generation: u32,
+}
+
+impl BlockFetchPermitCache {
+    #[inline(always)]
+    const fn new() -> Self {
+        Self {
+            start: 0,
+            end: 0,
+            generation: 0,
+        }
+    }
+
+    #[inline(always)]
+    fn permitted(
+        &mut self,
+        vm: Option<&ThreadState>,
+        guest_base: u32,
+        pc: u64,
+        width: u64,
+    ) -> bool {
+        let Some(thread) = vm else {
+            return true;
+        };
+        let Some(end) = pc.checked_add(width) else {
+            self.generation = 0;
+            return false;
+        };
+        let generation = crate::syscall::memory::permit_cache_generation();
+        if self.generation == generation && pc >= self.start && end <= self.end {
+            return true;
+        }
+        let Some((cover_start, cover_end, cover_generation)) =
+            crate::syscall::memory::guest_range_permitted_cover(
+                thread,
+                guest_base,
+                pc,
+                width,
+                crate::abi::PROT_EXEC,
+            )
+        else {
+            self.generation = 0;
+            return false;
+        };
+        self.start = cover_start;
+        self.end = cover_end;
+        self.generation = cover_generation;
+        true
+    }
 }
 
 #[inline(always)]
@@ -279,9 +319,10 @@ impl BlockCache {
 
             let mut cur_pc = pc;
             let mut count = 0u16;
+            let mut permit_cache = BlockFetchPermitCache::new();
 
             while (count as usize) < MAX_BLOCK_OPS {
-                if !block_fetch_permitted(vm, guest_base, cur_pc, 2) {
+                if !permit_cache.permitted(vm, guest_base, cur_pc, 2) {
                     break;
                 }
                 let raw16 = guest_mem::read_u16(guest_base, cur_pc);
@@ -292,7 +333,7 @@ impl BlockCache {
                     } // unknown compressed
                     (expanded, 2u64)
                 } else {
-                    if !block_fetch_permitted(vm, guest_base, cur_pc, 4) {
+                    if !permit_cache.permitted(vm, guest_base, cur_pc, 4) {
                         break;
                     }
                     (guest_mem::read_u32(guest_base, cur_pc), 4u64)
