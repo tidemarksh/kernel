@@ -87,6 +87,8 @@ pub fn dispatch(vm: &mut ThreadState, base: u32) -> i32 {
             let status = time::sys_nanosleep(vm, base, a0, a1);
             return debug_return(vm, nr, a0, a1, a2, a3, a4, a5, vm.x[10] as i64, status);
         }
+        SYS_SCHED_GETSCHEDULER => time::sys_sched_getscheduler(vm, base, a0 as i64),
+        SYS_SCHED_GETPARAM => time::sys_sched_getparam(vm, base, a0 as i64, a1),
         SYS_SCHED_GETAFFINITY => time::sys_sched_getaffinity(vm, base, a0 as i64, a1, a2),
         SYS_SCHED_YIELD => {
             let status = time::sys_sched_yield(vm);

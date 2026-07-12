@@ -315,6 +315,85 @@ fn sched_getaffinity_accepts_large_cpuset_buffers() {
 }
 
 #[test]
+fn sched_getscheduler_reports_normal_policy_for_current_thread() {
+    let t = TestVm::new();
+
+    assert_eq!(
+        tidemark_kernel::syscall::time::sys_sched_getscheduler(&t.vm, t.base, 0),
+        0
+    );
+    assert_eq!(
+        tidemark_kernel::syscall::time::sys_sched_getscheduler(&t.vm, t.base, t.vm.tid as i64,),
+        0
+    );
+    assert_eq!(
+        tidemark_kernel::syscall::time::sys_sched_getscheduler(&t.vm, t.base, i64::MAX),
+        abi::ESRCH
+    );
+}
+
+#[test]
+fn sched_getparam_reports_zero_priority_for_current_thread() {
+    let t = TestVm::new();
+    let param_addr = t.scratch + 0x480;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, param_addr, u32::MAX);
+    }
+
+    assert_eq!(
+        tidemark_kernel::syscall::time::sys_sched_getparam(
+            &t.vm,
+            t.base,
+            t.vm.tid as i64,
+            param_addr,
+        ),
+        0
+    );
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, param_addr) },
+        0
+    );
+    assert_eq!(
+        tidemark_kernel::syscall::time::sys_sched_getparam(&t.vm, t.base, 0, 0),
+        abi::EFAULT
+    );
+    assert_eq!(
+        tidemark_kernel::syscall::time::sys_sched_getparam(&t.vm, t.base, i64::MAX, param_addr,),
+        abi::ESRCH
+    );
+}
+
+#[test]
+fn sched_query_dispatch_routes_scheduler_and_param() {
+    let mut t = TestVm::new();
+    let param_addr = t.scratch + 0x4c0;
+
+    t.vm.x[10] = 0;
+    t.vm.x[17] = abi::SYS_SCHED_GETSCHEDULER;
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        abi::STATUS_OK
+    );
+    assert_eq!(t.vm.x[10], 0);
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, param_addr, u32::MAX);
+    }
+    t.vm.x[10] = t.vm.tid as u64;
+    t.vm.x[11] = param_addr;
+    t.vm.x[17] = abi::SYS_SCHED_GETPARAM;
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        abi::STATUS_OK
+    );
+    assert_eq!(t.vm.x[10], 0);
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, param_addr) },
+        0
+    );
+}
+
+#[test]
 fn getcpu_reports_single_online_cpu_and_node() {
     let t = TestVm::new();
     let cpu_addr = t.scratch + 0x500;

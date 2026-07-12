@@ -794,6 +794,36 @@ fn suspend_with_supervisor_runnable_resume(vm: &mut ThreadState) -> i32 {
     abi::STATUS_SLEEP
 }
 
+fn sched_target_exists(vm: &ThreadState, base: u32, pid: i64) -> bool {
+    let self_pid = crate::syscall::signal::pid_from_vm(vm, base) as i64;
+    pid == 0 || pid == self_pid || pid == vm.tid as i64
+}
+
+/// sched_getscheduler: report the normal time-sharing policy used by Tidemark.
+/// https://man7.org/linux/man-pages/man2/sched_getscheduler.2.html
+pub fn sys_sched_getscheduler(vm: &ThreadState, base: u32, pid: i64) -> i64 {
+    if !sched_target_exists(vm, base, pid) {
+        return abi::ESRCH;
+    }
+    0 // SCHED_OTHER
+}
+
+/// sched_getparam: report priority 0 for the normal time-sharing policy.
+/// struct sched_param contains one 32-bit sched_priority field.
+/// https://man7.org/linux/man-pages/man2/sched_getparam.2.html
+pub fn sys_sched_getparam(vm: &ThreadState, base: u32, pid: i64, param_addr: u64) -> i64 {
+    if !sched_target_exists(vm, base, pid) {
+        return abi::ESRCH;
+    }
+    if param_addr == 0 || !crate::syscall::memory::guest_range_accessible(base, param_addr, 4) {
+        return abi::EFAULT;
+    }
+    unsafe {
+        guest_mem::write_u32(base, param_addr, 0);
+    }
+    0
+}
+
 /// sched_getaffinity: expose a single online CPU.
 /// The raw syscall returns the number of bytes written.
 /// https://man7.org/linux/man-pages/man2/sched_setaffinity.2.html
