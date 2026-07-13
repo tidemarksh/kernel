@@ -1122,9 +1122,7 @@ pub extern "C" fn thread_resume_blocked_syscall(vm_ptr: u32) -> i64 {
 pub extern "C" fn thread_resume_sleep(vm_ptr: u32) {
     unsafe {
         let vm = &mut *(vm_ptr as *mut ThreadState);
-        vm.fault_addr = 0;
-        vm.fault_pc = 0;
-        vm.status = STATUS_OK;
+        crate::syscall::time::complete_thread_sleep(vm);
     }
 }
 
@@ -1385,19 +1383,23 @@ pub extern "C" fn thread_resume_futex_wait_result(vm_ptr: u32, result: i64) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn thread_sleep_seconds(vm_ptr: u32) -> u64 {
-    unsafe { (*(vm_ptr as *const ThreadState)).fault_addr }
+    unsafe {
+        crate::syscall::time::thread_sleep_remaining_timespec(&*(vm_ptr as *const ThreadState)).0
+    }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn thread_sleep_nanoseconds(vm_ptr: u32) -> u64 {
-    unsafe { (*(vm_ptr as *const ThreadState)).fault_pc }
+    unsafe {
+        crate::syscall::time::thread_sleep_remaining_timespec(&*(vm_ptr as *const ThreadState)).1
+    }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn thread_sleep_deadline_ticks(vm_ptr: u32) -> u64 {
     unsafe {
-        let vm = &*(vm_ptr as *const ThreadState);
-        crate::syscall::time::sleep_deadline_ticks(vm.fault_addr, vm.fault_pc)
+        crate::syscall::time::thread_sleep_deadline_ticks(&*(vm_ptr as *const ThreadState))
+            .unwrap_or(0)
     }
 }
 

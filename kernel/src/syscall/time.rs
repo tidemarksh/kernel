@@ -36,6 +36,8 @@ const ITIMER_VIRTUAL: u64 = 1;
 const ITIMER_PROF: u64 = 2;
 const TICKS_PER_SEC: u64 = 100_000_000;
 const INITIAL_MONOTONIC_TICKS: u64 = TICKS_PER_SEC / 1_000;
+const SLEEP_DEADLINE_GUEST: u64 = 1;
+const SLEEP_DEADLINE_REALTIME: u64 = 2;
 
 #[derive(Clone, Copy)]
 struct ItimerState {
@@ -226,6 +228,57 @@ pub fn ticks_to_millis_ceil(ticks: u64) -> u64 {
 
 pub fn sleep_deadline_ticks(sec: u64, nsec: u64) -> u64 {
     monotonic_ticks().saturating_add(timespec_to_ticks_ceil(sec, nsec))
+}
+
+pub fn thread_sleep_deadline_ticks(vm: &ThreadState) -> Option<u64> {
+    if vm.status != abi::STATUS_SLEEP
+        || !matches!(vm.fault_pc, SLEEP_DEADLINE_GUEST | SLEEP_DEADLINE_REALTIME)
+    {
+        return None;
+    }
+    Some(vm.fault_addr)
+}
+
+pub fn thread_sleep_uses_realtime_timer(vm: &ThreadState) -> bool {
+    thread_sleep_deadline_ticks(vm).is_some() && vm.fault_pc == SLEEP_DEADLINE_REALTIME
+}
+
+pub fn thread_guest_sleep_deadline(vm: &ThreadState) -> Option<u64> {
+    if thread_sleep_deadline_ticks(vm).is_some() && vm.fault_pc == SLEEP_DEADLINE_GUEST {
+        Some(vm.fault_addr)
+    } else {
+        None
+    }
+}
+
+pub fn thread_sleep_remaining_timespec(vm: &ThreadState) -> (u64, u64) {
+    let remaining = thread_sleep_deadline_ticks(vm)
+        .unwrap_or(0)
+        .saturating_sub(monotonic_ticks());
+    ticks_to_timespec(remaining)
+}
+
+pub fn complete_thread_sleep(vm: &mut ThreadState) {
+    vm.fault_addr = 0;
+    vm.fault_pc = 0;
+    vm.status = abi::STATUS_OK;
+}
+
+fn suspend_until_deadline(vm: &mut ThreadState, sec: u64, nsec: u64, realtime: bool) -> i32 {
+    if sec == 0 && nsec == 0 {
+        return suspend_for_supervisor_reschedule(vm);
+    }
+    vm.fault_addr = sleep_deadline_ticks(sec, nsec);
+    vm.fault_pc = if realtime {
+        SLEEP_DEADLINE_REALTIME
+    } else {
+        SLEEP_DEADLINE_GUEST
+    };
+    vm.status = abi::STATUS_SLEEP;
+    if realtime {
+        crate::supervisor::enqueue_sleep_timer(vm);
+    }
+    abi::STATUS_SLEEP
 }
 
 fn base_time() -> (u64, u64) {
@@ -701,22 +754,18 @@ pub fn timerfd_read(base: u32, buf: u64, count: u64, timerfd_idx: u32) -> i64 {
 /// guest deadline expires.
 /// https://man7.org/linux/man-pages/man2/nanosleep.2.html
 pub fn sys_nanosleep(vm: &mut ThreadState, base: u32, req: u64, _rem: u64) -> i32 {
-    vm.fault_addr = 0;
-    vm.fault_pc = 0;
-    if req != 0 {
-        let sec = unsafe { guest_mem::read_u64(base, req) };
-        let nsec = unsafe { guest_mem::read_u64(base, req + 8) };
-        // Store sleep duration for runtime to read
-        vm.fault_addr = sec;
-        vm.fault_pc = nsec;
-    }
+    let (sec, nsec) = if req == 0 {
+        (0, 0)
+    } else {
+        unsafe {
+            (
+                guest_mem::read_u64(base, req),
+                guest_mem::read_u64(base, req + 8),
+            )
+        }
+    };
     vm.x[10] = 0; // return 0 on success
-    if vm.fault_addr == 0 && vm.fault_pc == 0 {
-        return suspend_for_supervisor_reschedule(vm);
-    }
-    vm.status = abi::STATUS_SLEEP;
-    crate::supervisor::enqueue_sleep_timer(vm);
-    abi::STATUS_SLEEP
+    suspend_until_deadline(vm, sec, nsec, false)
 }
 
 pub fn sys_clock_nanosleep(
@@ -772,15 +821,8 @@ pub fn sys_clock_nanosleep(
         (req_sec, req_nsec)
     };
 
-    vm.fault_addr = sleep_sec;
-    vm.fault_pc = sleep_nsec;
     vm.x[10] = 0;
-    if sleep_sec == 0 && sleep_nsec == 0 {
-        return suspend_for_supervisor_reschedule(vm);
-    }
-    vm.status = abi::STATUS_SLEEP;
-    crate::supervisor::enqueue_sleep_timer(vm);
-    abi::STATUS_SLEEP
+    suspend_until_deadline(vm, sleep_sec, sleep_nsec, clk_id == CLOCK_REALTIME)
 }
 
 /// sched_yield: cooperative yield point for the runtime scheduler.

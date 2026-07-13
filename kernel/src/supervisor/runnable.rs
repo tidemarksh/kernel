@@ -16,6 +16,15 @@ struct RunnableThreadSelection {
     process_ptr: u32,
 }
 
+#[derive(Clone, Copy)]
+struct GuestSleepSelection {
+    deadline: u64,
+    vm_ptr: u32,
+    tid: u32,
+    process_ptr: u32,
+    slot: u32,
+}
+
 pub(super) fn init() {
     SELECTION_COUNT.store(0, Ordering::Relaxed);
     SELECTION_CURSOR.store(0, Ordering::Relaxed);
@@ -37,6 +46,8 @@ fn find_from_supervisor_state(vm_ptr: u32, commit: bool) -> Result<Option<Runnab
         return Ok(None);
     }
     let cursor = SELECTION_CURSOR.load(Ordering::Relaxed) as usize % crate::abi::MAX_THREADS;
+    let now = crate::syscall::time::monotonic_ticks_current();
+    let mut earliest_guest_sleep: Option<GuestSleepSelection> = None;
     for step in 0..crate::abi::MAX_THREADS {
         let slot = (cursor + step) % crate::abi::MAX_THREADS;
         let mut record = ps.threads[slot];
@@ -66,8 +77,15 @@ fn find_from_supervisor_state(vm_ptr: u32, commit: bool) -> Result<Option<Runnab
         }
         let event_override =
             super::event::thread_state_override(record.thread_ptr, record.tid as u32);
+        let guest_sleep_deadline = super::thread::state_from_ptr(record.thread_ptr)
+            .and_then(crate::syscall::time::thread_guest_sleep_deadline);
+        let supervisor_manages_blocked_guest_sleep = guest_sleep_deadline.is_some()
+            && event_override
+                .as_ref()
+                .is_none_or(|event| event.status == crate::abi::STATUS_SLEEP as u32);
         match super::event::runnable_override(record.thread_ptr, record.tid as u32) {
-            Some(false) => continue,
+            Some(false) if !supervisor_manages_blocked_guest_sleep => continue,
+            Some(false) => {}
             Some(true) => {}
             None => {
                 if record.state != crate::types::THREAD_RUNNING {
@@ -83,8 +101,36 @@ fn find_from_supervisor_state(vm_ptr: u32, commit: bool) -> Result<Option<Runnab
         let Some(mut thread) = thread else {
             continue;
         };
-        if let Some(event) = event_override {
+        if let Some(ref event) = event_override {
             thread.status = event.status;
+        }
+        if supervisor_manages_blocked_guest_sleep
+            && thread.status == crate::abi::STATUS_SLEEP as u32
+        {
+            let Some(deadline) = guest_sleep_deadline else {
+                continue;
+            };
+            if deadline <= now {
+                if commit {
+                    let sleeping_thread =
+                        unsafe { &mut *(record.thread_ptr as *mut crate::types::ThreadState) };
+                    crate::syscall::time::complete_thread_sleep(sleeping_thread);
+                }
+                thread.status = crate::abi::STATUS_OK as u32;
+            } else {
+                let candidate = GuestSleepSelection {
+                    deadline,
+                    vm_ptr: record.thread_ptr,
+                    tid: record.tid as u32,
+                    process_ptr: thread.process_ptr,
+                    slot: slot as u32,
+                };
+                if earliest_guest_sleep.is_none_or(|current| candidate.deadline < current.deadline)
+                {
+                    earliest_guest_sleep = Some(candidate);
+                }
+                continue;
+            }
         }
         if thread.status != crate::abi::STATUS_OK as u32
             && thread.status != crate::abi::STATUS_VFORK_WAIT as u32
@@ -104,6 +150,25 @@ fn find_from_supervisor_state(vm_ptr: u32, commit: bool) -> Result<Option<Runnab
             process_ptr: thread.process_ptr,
             status: thread.status,
             slot: slot as u32,
+        }));
+    }
+    if let Some(sleep) = earliest_guest_sleep {
+        if commit {
+            crate::syscall::time::sync_monotonic_ticks_floor(sleep.deadline);
+            let sleeping_thread = unsafe { &mut *(sleep.vm_ptr as *mut crate::types::ThreadState) };
+            crate::syscall::time::complete_thread_sleep(sleeping_thread);
+            SELECTION_CURSOR.store(
+                ((sleep.slot as usize + 1) % crate::abi::MAX_THREADS) as u32,
+                Ordering::Relaxed,
+            );
+            SELECTION_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
+        return Ok(Some(RunnableSelection {
+            vm_ptr: sleep.vm_ptr,
+            tid: sleep.tid,
+            process_ptr: sleep.process_ptr,
+            status: crate::abi::STATUS_OK as u32,
+            slot: sleep.slot,
         }));
     }
     Ok(None)

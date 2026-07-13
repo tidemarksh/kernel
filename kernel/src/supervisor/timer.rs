@@ -6,9 +6,7 @@ pub(super) fn complete_arm_host_timer(parent_vm_ptr: u32, deadline_ticks: u64) -
     match vm.status {
         crate::abi::STATUS_SLEEP => {
             sync_completion_deadline(deadline_ticks);
-            vm.fault_addr = 0;
-            vm.fault_pc = 0;
-            vm.status = crate::abi::STATUS_OK;
+            crate::syscall::time::complete_thread_sleep(vm);
             super::resume::enqueue_runnable_thread(vm);
             crate::abi::STATUS_OK
         }
@@ -98,10 +96,10 @@ pub(super) fn enqueue_futex_wait_timer(vm: &crate::types::ThreadState) -> bool {
 }
 
 pub(super) fn enqueue_sleep_timer(vm: &crate::types::ThreadState) -> bool {
-    if vm.fault_addr == 0 && vm.fault_pc == 0 {
+    if !crate::syscall::time::thread_sleep_uses_realtime_timer(vm) {
         return false;
     }
-    let deadline_ticks = crate::syscall::time::sleep_deadline_ticks(vm.fault_addr, vm.fault_pc);
+    let deadline_ticks = crate::syscall::time::thread_sleep_deadline_ticks(vm).unwrap_or(0);
     let delay_ticks =
         deadline_ticks.saturating_sub(crate::syscall::time::monotonic_ticks_current());
     let delay_ms = crate::syscall::time::ticks_to_millis_ceil(delay_ticks);

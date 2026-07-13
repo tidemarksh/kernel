@@ -2316,8 +2316,9 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(sleep_zero_vm.vm.status, STATUS_OK);
     let mut sleep_timer_vm = TestVm::new();
     sleep_timer_vm.vm.status = STATUS_SLEEP;
-    sleep_timer_vm.vm.fault_addr = 0;
-    sleep_timer_vm.vm.fault_pc = 1_000_000;
+    sleep_timer_vm.vm.fault_addr =
+        tidemark_kernel::syscall::time::monotonic_ticks_current() + 100_000;
+    sleep_timer_vm.vm.fault_pc = 2;
     let sleep_timer_vm_ptr =
         &mut sleep_timer_vm.vm as *mut tidemark_kernel::types::ThreadState as u32;
     assert_eq!(

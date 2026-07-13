@@ -130,8 +130,12 @@ pub(super) fn worker_sleep_status_action(
         return crate::abi::EFAULT as i32;
     }
     let vm = unsafe { &mut *(vm_ptr as *mut crate::types::ThreadState) };
-    if vm.fault_addr != 0 || vm.fault_pc != 0 {
+    if crate::syscall::time::thread_sleep_uses_realtime_timer(vm) {
         return WORKER_SLEEP_STATUS_ACTION_ARM_HOST_TIMER as i32;
+    }
+
+    if crate::syscall::time::thread_guest_sleep_deadline(vm).is_some() {
+        return WORKER_SLEEP_STATUS_ACTION_YIELD as i32;
     }
 
     vm.status = crate::abi::STATUS_OK;

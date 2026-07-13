@@ -4,7 +4,10 @@ use tidemark_kernel::supervisor::{
     supervisor_abi_version, supervisor_complete_host_op, supervisor_host_op_kind_arm_host_timer,
     supervisor_host_op_record_bytes, supervisor_next_host_op, supervisor_next_resume,
     supervisor_process_resume, supervisor_reset_shadow_log, supervisor_resume_kind_runnable_thread,
-    supervisor_resume_record_bytes, supervisor_worker_sleep_status_action,
+    supervisor_resume_record_bytes, supervisor_submit_thread_event,
+    supervisor_thread_event_kind_blocked, supervisor_thread_event_record_bytes,
+    supervisor_thread_event_record_magic, supervisor_worker_sleep_status_action,
+    supervisor_worker_sleep_status_action_arm_host_timer,
     supervisor_worker_sleep_status_action_yield,
 };
 use tidemark_kernel::syscall::time;
@@ -33,6 +36,22 @@ fn write_u32_le(bytes: &mut [u8], offset: usize, value: u32) {
 
 fn write_u64_le(bytes: &mut [u8], offset: usize, value: u64) {
     bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+fn submit_blocked_thread_event(vm_ptr: u32, tid: u32, status: u32) {
+    let mut event = [0u8; 80];
+    write_u32_le(&mut event, 0, supervisor_thread_event_record_magic());
+    write_u32_le(&mut event, 4, supervisor_abi_version());
+    write_u32_le(&mut event, 8, supervisor_thread_event_record_bytes());
+    write_u32_le(&mut event, 12, supervisor_thread_event_kind_blocked());
+    write_u64_le(&mut event, 16, 1);
+    write_u64_le(&mut event, 24, vm_ptr as u64);
+    write_u32_le(&mut event, 36, tid);
+    write_u32_le(&mut event, 40, status);
+    assert_eq!(
+        supervisor_submit_thread_event(event.as_ptr() as u32, event.len() as u32),
+        0
+    );
 }
 
 fn install_current_thread_record(t: &mut TestVm) {
@@ -540,8 +559,11 @@ fn clock_nanosleep_relative_sets_sleep_status() {
         ),
         abi::STATUS_SLEEP
     );
-    assert_eq!(t.vm.fault_addr, 0);
-    assert_eq!(t.vm.fault_pc, 50_000_000);
+    assert!(time::thread_guest_sleep_deadline(&t.vm).is_some());
+    assert_eq!(
+        time::thread_sleep_remaining_timespec(&t.vm),
+        (0, 50_000_000)
+    );
 }
 
 #[test]
@@ -659,7 +681,7 @@ fn thread_step_sched_yield_allows_process_resume_to_select_next_runnable() {
 }
 
 #[test]
-fn supervisor_sleep_timeout_publishes_arm_host_timer_host_op() {
+fn supervisor_guest_sleep_stays_blocked_until_process_resume_advances_deadline() {
     supervisor_reset_shadow_log();
 
     let mut t = TestVm::new();
@@ -669,11 +691,121 @@ fn supervisor_sleep_timeout_publishes_arm_host_timer_host_op() {
         tidemark_kernel::guest_mem::write_u64(t.base, req + 8, 2_000_000);
     }
     t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+    let vm_ptr = &mut t.vm as *mut ThreadState as u32;
 
     assert_eq!(
         tidemark_kernel::syscall::time::sys_nanosleep(&mut t.vm, t.base, req, 0),
         abi::STATUS_SLEEP
     );
+    assert_eq!(
+        supervisor_worker_sleep_status_action(vm_ptr, abi::STATUS_SLEEP, 0),
+        supervisor_worker_sleep_status_action_yield() as i32
+    );
+    assert_eq!(t.vm.status, abi::STATUS_SLEEP);
+    assert_eq!(supervisor_next_host_op(0, 0), 0);
+    submit_blocked_thread_event(vm_ptr, t.vm.tid as u32, abi::STATUS_SLEEP as u32);
+
+    let deadline = time::thread_guest_sleep_deadline(&t.vm).unwrap();
+    let mut resume = vec![0u8; supervisor_resume_record_bytes() as usize];
+    assert_eq!(
+        supervisor_process_resume(vm_ptr, resume.as_mut_ptr() as u32, resume.len() as u32),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&resume, 24), vm_ptr);
+    assert_eq!(read_u32_le(&resume, 36), abi::STATUS_OK as u32);
+    assert_eq!(t.vm.status, abi::STATUS_OK);
+    assert!(time::monotonic_ticks_current() >= deadline);
+}
+
+#[test]
+fn supervisor_guest_sleep_does_not_advance_past_an_existing_runnable_thread() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    let req = t.scratch + 0x528;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, req, 0);
+        tidemark_kernel::guest_mem::write_u64(t.base, req + 8, 20_000_000);
+    }
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+
+    let mut sibling: ThreadState = unsafe { std::mem::zeroed() };
+    sibling.guest_base = t.base;
+    sibling.process_ptr = t.vm.process_ptr;
+    sibling.tid = 2;
+    sibling.status = abi::STATUS_OK;
+    let sibling_ptr = &mut sibling as *mut ThreadState as u32;
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, sibling_ptr, 0, 0);
+        ps.thread_count
+            .store(2, std::sync::atomic::Ordering::Release);
+    }
+
+    let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    assert_eq!(
+        time::sys_nanosleep(&mut t.vm, t.base, req, 0),
+        abi::STATUS_SLEEP
+    );
+    let deadline = time::thread_guest_sleep_deadline(&t.vm).unwrap();
+    assert_eq!(
+        supervisor_worker_sleep_status_action(vm_ptr, abi::STATUS_SLEEP, 0),
+        supervisor_worker_sleep_status_action_yield() as i32
+    );
+
+    let mut resume = vec![0u8; supervisor_resume_record_bytes() as usize];
+    assert_eq!(
+        supervisor_process_resume(vm_ptr, resume.as_mut_ptr() as u32, resume.len() as u32),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&resume, 24), sibling_ptr);
+    assert_eq!(t.vm.status, abi::STATUS_SLEEP);
+    assert!(time::monotonic_ticks_current() < deadline);
+
+    unsafe {
+        (*(sibling_ptr as *mut ThreadState)).status = abi::STATUS_PIPE_WAIT;
+    }
+    assert_eq!(
+        supervisor_process_resume(vm_ptr, resume.as_mut_ptr() as u32, resume.len() as u32),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&resume, 24), vm_ptr);
+    assert_eq!(t.vm.status, abi::STATUS_OK);
+    assert!(time::monotonic_ticks_current() >= deadline);
+}
+
+#[test]
+fn supervisor_realtime_sleep_timeout_publishes_arm_host_timer_host_op() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    let req = t.scratch + 0x520;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, req, 0);
+        tidemark_kernel::guest_mem::write_u64(t.base, req + 8, 2_000_000);
+    }
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+
+    assert_eq!(
+        tidemark_kernel::syscall::time::sys_clock_nanosleep(
+            &mut t.vm,
+            t.base,
+            CLOCK_REALTIME,
+            0,
+            req,
+            0,
+        ),
+        abi::STATUS_SLEEP
+    );
+    let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    assert_eq!(
+        supervisor_worker_sleep_status_action(vm_ptr, abi::STATUS_SLEEP, 0),
+        supervisor_worker_sleep_status_action_arm_host_timer() as i32
+    );
+    assert_eq!(supervisor_process_resume(vm_ptr, 0, 0), 0);
 
     let mut record = vec![0u8; supervisor_host_op_record_bytes() as usize];
     assert_eq!(
@@ -687,23 +819,20 @@ fn supervisor_sleep_timeout_publishes_arm_host_timer_host_op() {
         read_u32_le(&record, 12),
         supervisor_host_op_kind_arm_host_timer()
     );
-    assert_eq!(
-        read_u32_le(&record, 24),
-        &mut t.vm as *mut ThreadState as u32
-    );
+    assert_eq!(read_u32_le(&record, 24), vm_ptr);
     assert_eq!(read_u32_le(&record, 32), t.vm.tid as u32);
     assert_eq!(read_u32_le(&record, 36), t.vm.process_ptr);
     assert_eq!(read_u32_le(&record, 40), abi::STATUS_SLEEP as u32);
     assert_eq!(read_u64_le(&record, 48), 2);
     assert_eq!(
         read_u64_le(&record, 56),
-        tidemark_kernel::syscall::time::sleep_deadline_ticks(t.vm.fault_addr, t.vm.fault_pc)
+        tidemark_kernel::syscall::time::thread_sleep_deadline_ticks(&t.vm).unwrap()
     );
     assert_eq!(supervisor_next_host_op(0, 0), 0);
 }
 
 #[test]
-fn supervisor_sleep_timer_completion_resumes_and_publishes_runnable() {
+fn supervisor_realtime_sleep_timer_completion_resumes_and_publishes_runnable() {
     supervisor_reset_shadow_log();
 
     let mut t = TestVm::new();
@@ -715,8 +844,20 @@ fn supervisor_sleep_timer_completion_resumes_and_publishes_runnable() {
     t.vm.tid = 1;
 
     assert_eq!(
-        tidemark_kernel::syscall::time::sys_nanosleep(&mut t.vm, t.base, req, 0),
+        tidemark_kernel::syscall::time::sys_clock_nanosleep(
+            &mut t.vm,
+            t.base,
+            CLOCK_REALTIME,
+            0,
+            req,
+            0,
+        ),
         abi::STATUS_SLEEP
+    );
+    let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    assert_eq!(
+        supervisor_worker_sleep_status_action(vm_ptr, abi::STATUS_SLEEP, 0),
+        supervisor_worker_sleep_status_action_arm_host_timer() as i32
     );
 
     let mut host_op = vec![0u8; supervisor_host_op_record_bytes() as usize];
@@ -744,8 +885,7 @@ fn supervisor_sleep_timer_completion_resumes_and_publishes_runnable() {
         abi::STATUS_OK
     );
     assert_eq!(t.vm.status, abi::STATUS_OK);
-    assert_eq!(t.vm.fault_addr, 0);
-    assert_eq!(t.vm.fault_pc, 0);
+    assert_eq!(time::thread_sleep_deadline_ticks(&t.vm), None);
     assert!(tidemark_kernel::syscall::time::monotonic_ticks_current() >= read_u64_le(&host_op, 56));
 
     let mut resume = vec![0u8; supervisor_resume_record_bytes() as usize];
@@ -760,10 +900,7 @@ fn supervisor_sleep_timer_completion_resumes_and_publishes_runnable() {
         read_u32_le(&resume, 12),
         supervisor_resume_kind_runnable_thread()
     );
-    assert_eq!(
-        read_u32_le(&resume, 24),
-        &mut t.vm as *mut ThreadState as u32
-    );
+    assert_eq!(read_u32_le(&resume, 24), vm_ptr);
     assert_eq!(read_u32_le(&resume, 28), t.vm.tid as u32);
     assert_eq!(read_u32_le(&resume, 32), t.vm.process_ptr);
     assert_eq!(read_u32_le(&resume, 36), abi::STATUS_OK as u32);
@@ -799,6 +936,9 @@ fn clock_nanosleep_abstime_uses_deadline_delta() {
         ),
         abi::STATUS_SLEEP
     );
-    assert_eq!(t.vm.fault_addr, 0);
-    assert_eq!(t.vm.fault_pc, 30_000_000);
+    assert!(time::thread_guest_sleep_deadline(&t.vm).is_some());
+    assert_eq!(
+        time::thread_sleep_remaining_timespec(&t.vm),
+        (0, 30_000_000)
+    );
 }
