@@ -138,7 +138,7 @@ fn sync_monotonic_ticks_floor_only_moves_forward() {
 }
 
 #[test]
-fn clock_gettime_monotonic_is_nonzero_at_startup() {
+fn clock_gettime_monotonic_is_nonzero_at_millisecond_precision_at_startup() {
     let t = TestVm::new();
     let tp = t.scratch;
     assert_eq!(
@@ -147,7 +147,7 @@ fn clock_gettime_monotonic_is_nonzero_at_startup() {
     );
     let sec = unsafe { tidemark_kernel::guest_mem::read_u64(t.base, tp) };
     let nsec = unsafe { tidemark_kernel::guest_mem::read_u64(t.base, tp + 8) };
-    assert!(sec > 0 || nsec > 0);
+    assert!(sec.saturating_mul(1_000).saturating_add(nsec / 1_000_000) > 0);
 }
 
 #[test]

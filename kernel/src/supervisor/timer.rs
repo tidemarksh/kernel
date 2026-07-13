@@ -200,7 +200,9 @@ fn blocked_wait_timer_required(vm: &crate::types::ThreadState) -> bool {
 
 fn enqueue_epoll_wait_timer(vm: &crate::types::ThreadState) -> bool {
     if vm.epoll_timeout_ms >= 0 {
-        return enqueue_timer_request(vm, vm.epoll_timeout_ms as u64, 0);
+        let delay_ms = vm.epoll_timeout_ms as u64;
+        let deadline_ticks = crate::syscall::time::monotonic_deadline_after_millis(delay_ms);
+        return enqueue_timer_request(vm, delay_ms, deadline_ticks);
     }
     let deadline_ticks = crate::syscall::epoll::timerfd_deadline_ticks(vm, vm.guest_base);
     if deadline_ticks == 0 {

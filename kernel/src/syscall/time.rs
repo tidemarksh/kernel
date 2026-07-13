@@ -35,6 +35,7 @@ const ITIMER_REAL: u64 = 0;
 const ITIMER_VIRTUAL: u64 = 1;
 const ITIMER_PROF: u64 = 2;
 const TICKS_PER_SEC: u64 = 100_000_000;
+const INITIAL_MONOTONIC_TICKS: u64 = TICKS_PER_SEC / 1_000;
 
 #[derive(Clone, Copy)]
 struct ItimerState {
@@ -101,7 +102,7 @@ pub fn init() {
                 base_time_nsec: 0,
                 base_time_set: 0,
                 _pad: 0,
-                monotonic_ticks: 1,
+                monotonic_ticks: INITIAL_MONOTONIC_TICKS,
                 itimers: [[ItimerState {
                     interval_sec: 0,
                     interval_usec: 0,
@@ -164,6 +165,11 @@ fn monotonic_ticks() -> u64 {
 
 pub fn monotonic_ticks_current() -> u64 {
     monotonic_ticks()
+}
+
+pub fn monotonic_deadline_after_millis(millis: u64) -> u64 {
+    let duration_ticks = millis.saturating_mul(TICKS_PER_SEC).div_ceil(1_000);
+    monotonic_ticks().saturating_add(duration_ticks)
 }
 
 fn timespec_to_ticks_floor(sec: u64, nsec: u64) -> u64 {

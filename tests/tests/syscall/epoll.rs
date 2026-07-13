@@ -620,6 +620,7 @@ fn supervisor_epoll_timeout_host_op_resumes_and_publishes_runnable() {
     supervisor_reset_shadow_log();
 
     let mut t = TestVm::new();
+    let monotonic_before = tidemark_kernel::syscall::time::monotonic_ticks_current();
     t.vm.tid = 1;
     let pipefd_addr = t.scratch + 0x1000;
     assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
@@ -680,7 +681,8 @@ fn supervisor_epoll_timeout_host_op_resumes_and_publishes_runnable() {
     assert_eq!(read_u32_le(&host_op, 36), t.vm.process_ptr);
     assert_eq!(read_u32_le(&host_op, 40), STATUS_EPOLL_WAIT as u32);
     assert_eq!(read_u64_le(&host_op, 48), 10);
-    assert_eq!(read_u64_le(&host_op, 56), 0);
+    let deadline_ticks = read_u64_le(&host_op, 56);
+    assert!(deadline_ticks > monotonic_before);
     assert_eq!(supervisor_next_host_op(0, 0), 0);
 
     let mut completion = [0u8; 64];
@@ -705,6 +707,7 @@ fn supervisor_epoll_timeout_host_op_resumes_and_publishes_runnable() {
     assert_eq!(t.vm.x[10], 0);
     assert_eq!(t.vm.blocked_fd, 0);
     assert_eq!(t.vm.blocked_ofd_id, 0);
+    assert!(tidemark_kernel::syscall::time::monotonic_ticks_current() >= deadline_ticks);
 
     let mut resume = vec![0u8; supervisor_resume_record_bytes() as usize];
     assert_eq!(
