@@ -177,6 +177,38 @@ fn supervisor_process_host_op_records_vfork_execve_spawn_handoff() {
 }
 
 #[test]
+fn supervisor_execve_memory_plan_does_not_reserve_the_parent_live_stack() {
+    supervisor_reset_shadow_log();
+    let mut t = TestVm::new();
+    t.vm.process_max_memory_pages = 32768;
+    let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);
+    let path_addr = install_exec_file(&t, b"execve_memory_plan", &elf);
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+
+    assert_eq!(
+        process_impl::sys_vfork(&mut t.vm, t.base),
+        STATUS_VFORK_WAIT
+    );
+    t.vm.x[2] = 0x7000_0000;
+    let child_pid = process_impl::sys_execve(&mut t.vm, t.base, path_addr, 0, 0);
+    assert!(child_pid > 0);
+
+    let mut memory_record = vec![0u8; supervisor_host_op_record_bytes() as usize];
+    assert_eq!(
+        supervisor_process_memory_host_op(
+            vm_ptr,
+            0,
+            memory_record.as_mut_ptr() as u32,
+            memory_record.len() as u32
+        ),
+        supervisor_host_op_record_bytes() as i32
+    );
+    let initial_bytes = read_u64_le(&memory_record, 48);
+    assert!(initial_bytes >= 64 * 1024 * 1024);
+    assert!(initial_bytes < t.vm.guest_base as u64 + t.vm.x[2]);
+}
+
+#[test]
 fn syscall_dispatch_preserves_vfork_execve_fault_after_fs_ring() {
     let mut t = TestVm::new();
     let elf = build_test_elf(&[0x13, 0x05, 0x70, 0x00]);

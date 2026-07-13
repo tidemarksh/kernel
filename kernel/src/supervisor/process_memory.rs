@@ -8,7 +8,6 @@ const FORK_STACK_BELOW_SP_BYTES: u64 = 1024 * 1024;
 const FORK_STACK_COPY_WINDOW_BYTES: u64 = 8 * 1024 * 1024;
 const EXECVE_CHILD_MIN_MEMORY_BYTES: u64 = 64 * 1024 * 1024;
 const EXECVE_CHILD_HANDOFF_HEADROOM_BYTES: u64 = 0x10000;
-const EXECVE_CHILD_LIVE_STACK_WINDOW_BYTES: u64 = 8 * 1024 * 1024;
 const WASM_PAGE_BYTES: u64 = 65536;
 
 #[derive(Clone, Copy)]
@@ -264,17 +263,9 @@ fn child_initial_memory_bytes(vm: &ThreadState, ranges: &[MemoryRange]) -> u64 {
             let end = ranges.iter().map(|range| range.end).max().unwrap_or(0);
             (end + FORK_CHILD_EXECVE_HEADROOM_BYTES).max(vm.guest_base as u64)
         }
-        SPAWN_KIND_EXECVE => {
-            let live_stack_end = if vm.x[2] > 0 {
-                vm.guest_base as u64 + vm.x[2] + EXECVE_CHILD_LIVE_STACK_WINDOW_BYTES
-            } else {
-                0
-            };
-            EXECVE_CHILD_MIN_MEMORY_BYTES
-                .max(crate::alloc::heap_ptr() as u64)
-                .max(vm.guest_base as u64 + EXECVE_CHILD_HANDOFF_HEADROOM_BYTES)
-                .max(live_stack_end)
-        }
+        SPAWN_KIND_EXECVE => EXECVE_CHILD_MIN_MEMORY_BYTES
+            .max(crate::alloc::heap_ptr() as u64)
+            .max(vm.guest_base as u64 + EXECVE_CHILD_HANDOFF_HEADROOM_BYTES),
         _ => 0,
     }
 }
