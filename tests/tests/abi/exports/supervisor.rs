@@ -3862,6 +3862,55 @@ fn supervisor_ofd_slot_restore_rejects_stale_pipe_generation() {
 }
 
 #[test]
+fn supervisor_ofd_slot_restore_resets_offset_floor_for_reused_ofd_lifetime() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
+    let path = b"/ofd-slot-reused-lifetime";
+    let first_fd = t.sys_openat(path, O_CREAT | O_RDWR);
+    assert!(first_fd >= 3);
+    assert_eq!(t.sys_lseek(first_fd, 784, 0), 784);
+
+    let first_ofd = process_fd_ofd_id(vm_ptr, first_fd as u32);
+    let ino = kernel_ofd_ino(first_ofd);
+    assert_ne!(first_ofd, 0);
+    assert_ne!(ino, 0);
+    let referenced = supervisor_ofd_slot_restore_flag_referenced_by_fd_entry();
+    assert_eq!(
+        supervisor_ofd_slot_restore_action(
+            first_ofd,
+            FD_TYPE_FILE,
+            kernel_ofd_host_fd(first_ofd),
+            ino,
+            784,
+            u64::MAX,
+            referenced,
+        ),
+        supervisor_fd_entry_restore_action_apply() as i32
+    );
+    assert_eq!(t.sys_close(first_fd), 0);
+
+    let reopened_fd = t.sys_openat(path, O_RDONLY);
+    assert!(reopened_fd >= 3);
+    let reopened_ofd = process_fd_ofd_id(vm_ptr, reopened_fd as u32);
+    assert_eq!(reopened_ofd, first_ofd);
+    assert_eq!(kernel_ofd_ino(reopened_ofd), ino);
+    assert_eq!(kernel_ofd_offset(reopened_ofd), 0);
+
+    assert_eq!(
+        supervisor_ofd_slot_restore_action(
+            reopened_ofd,
+            FD_TYPE_FILE,
+            kernel_ofd_host_fd(reopened_ofd),
+            ino,
+            210,
+            u64::MAX,
+            referenced,
+        ),
+        supervisor_fd_entry_restore_action_apply() as i32
+    );
+}
+
+#[test]
 fn supervisor_fork_shared_ofd_identity_and_publish_policy_are_kernel_owned() {
     let mut t = TestVm::new();
     let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;

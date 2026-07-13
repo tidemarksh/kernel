@@ -12,30 +12,11 @@ static FD_CONTROL_COUNT: AtomicU64 = AtomicU64::new(0);
 static FD_CONTROL_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_FD_CONTROL: super::SupervisorFdControlRecord =
     super::SupervisorFdControlRecord::empty();
-static OFD_RESTORE_OFFSET_LOCK: AtomicU32 = AtomicU32::new(0);
-#[derive(Clone, Copy)]
-struct OfdRestoreOffsetFloor {
-    host_fd: i32,
-    ino: u32,
-    offset: i64,
-    valid: bool,
-}
-const EMPTY_OFD_RESTORE_OFFSET_FLOOR: OfdRestoreOffsetFloor = OfdRestoreOffsetFloor {
-    host_fd: 0,
-    ino: 0,
-    offset: 0,
-    valid: false,
-};
-static mut OFD_RESTORE_OFFSET_FLOORS: [OfdRestoreOffsetFloor; MAX_FDS] =
-    [EMPTY_OFD_RESTORE_OFFSET_FLOOR; MAX_FDS];
 
 pub(super) fn init() {
     FD_CONTROL_COUNT.store(0, Ordering::Relaxed);
     super::lock::with_spin_lock(&FD_CONTROL_LOCK, || unsafe {
         LAST_FD_CONTROL = super::SupervisorFdControlRecord::empty();
-    });
-    super::lock::with_spin_lock(&OFD_RESTORE_OFFSET_LOCK, || unsafe {
-        OFD_RESTORE_OFFSET_FLOORS = [EMPTY_OFD_RESTORE_OFFSET_FLOOR; MAX_FDS];
     });
 }
 
@@ -298,30 +279,10 @@ fn regular_file_ofds_share_identity(current: OpenFileDesc, candidate: OpenFileDe
         && current.ino == candidate.ino
 }
 
-fn ofd_restore_offset_floor(
-    ofd_id: u32,
-    host_fd: i32,
-    ino: u32,
-    current_offset: i64,
-    candidate_offset: i64,
-) -> i64 {
-    super::lock::with_spin_lock(&OFD_RESTORE_OFFSET_LOCK, || unsafe {
-        let floor = &mut OFD_RESTORE_OFFSET_FLOORS[ofd_id as usize];
-        if !floor.valid || floor.host_fd != host_fd || floor.ino != ino {
-            *floor = OfdRestoreOffsetFloor {
-                host_fd,
-                ino,
-                offset: current_offset,
-                valid: true,
-            };
-        }
-        let max_seen = floor.offset;
-        let next_max = current_offset.max(candidate_offset);
-        if next_max > floor.offset {
-            floor.offset = next_max;
-        }
-        max_seen
-    })
+fn ofd_restore_offset_floor(ofd_id: u32, current_offset: i64) -> i64 {
+    let lifecycle_floor =
+        i64::try_from(fd_table::get_offset_floor_by_id(ofd_id)).unwrap_or(i64::MAX);
+    current_offset.max(lifecycle_floor)
 }
 
 pub fn fd_entry_guest_write_action(
@@ -447,13 +408,7 @@ pub fn ofd_slot_restore_action(
     if candidate_host_fd != current.host_fd || candidate_ino != current.ino {
         return restore_apply();
     }
-    let max_seen = ofd_restore_offset_floor(
-        ofd_id,
-        current.host_fd,
-        current.ino,
-        current.offset,
-        candidate_offset,
-    );
+    let max_seen = ofd_restore_offset_floor(ofd_id, current.offset);
     if candidate_offset < max_seen {
         return restore_skip();
     }
