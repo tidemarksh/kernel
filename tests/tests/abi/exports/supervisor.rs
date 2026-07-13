@@ -2306,11 +2306,14 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_worker_sleep_status_action(sleep_zero_vm_ptr, STATUS_SLEEP, 0),
         supervisor_worker_sleep_status_action_yield() as i32
     );
+    assert_eq!(sleep_zero_vm.vm.status, STATUS_OK);
+    sleep_zero_vm.vm.status = STATUS_SLEEP;
     assert_eq!(
         supervisor_worker_sleep_status_action(sleep_zero_vm_ptr, STATUS_SLEEP, 1 << 0),
         (supervisor_worker_sleep_status_action_yield()
             | supervisor_worker_sleep_status_action_sync_pipe_before_yield_clear()) as i32
     );
+    assert_eq!(sleep_zero_vm.vm.status, STATUS_OK);
     let mut sleep_timer_vm = TestVm::new();
     sleep_timer_vm.vm.status = STATUS_SLEEP;
     sleep_timer_vm.vm.fault_addr = 0;

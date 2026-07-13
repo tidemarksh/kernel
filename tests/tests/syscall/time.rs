@@ -4,7 +4,8 @@ use tidemark_kernel::supervisor::{
     supervisor_abi_version, supervisor_complete_host_op, supervisor_host_op_kind_arm_host_timer,
     supervisor_host_op_record_bytes, supervisor_next_host_op, supervisor_next_resume,
     supervisor_process_resume, supervisor_reset_shadow_log, supervisor_resume_kind_runnable_thread,
-    supervisor_resume_record_bytes,
+    supervisor_resume_record_bytes, supervisor_worker_sleep_status_action,
+    supervisor_worker_sleep_status_action_yield,
 };
 use tidemark_kernel::syscall::time;
 use tidemark_kernel::types::{ProcessState, THREAD_RUNNING, ThreadRecord, ThreadState};
@@ -43,26 +44,6 @@ fn install_current_thread_record(t: &mut TestVm) {
         ps.thread_count
             .store(1, std::sync::atomic::Ordering::Release);
     }
-}
-
-fn assert_next_runnable_resume(vm: &ThreadState) {
-    let mut resume = vec![0u8; supervisor_resume_record_bytes() as usize];
-    assert_eq!(
-        supervisor_next_resume(resume.as_mut_ptr() as u32, resume.len() as u32),
-        supervisor_resume_record_bytes() as i32
-    );
-    assert_eq!(read_u32_le(&resume, 0), 0x5255_5354);
-    assert_eq!(read_u32_le(&resume, 4), supervisor_abi_version());
-    assert_eq!(read_u32_le(&resume, 8), supervisor_resume_record_bytes());
-    assert_eq!(
-        read_u32_le(&resume, 12),
-        supervisor_resume_kind_runnable_thread()
-    );
-    assert_eq!(read_u32_le(&resume, 24), vm as *const ThreadState as u32);
-    assert_eq!(read_u32_le(&resume, 28), vm.tid as u32);
-    assert_eq!(read_u32_le(&resume, 32), vm.process_ptr);
-    assert_eq!(read_u32_le(&resume, 36), abi::STATUS_OK as u32);
-    assert_eq!(supervisor_next_resume(0, 0), 0);
 }
 
 fn write_itimerspec(
@@ -564,7 +545,7 @@ fn clock_nanosleep_relative_sets_sleep_status() {
 }
 
 #[test]
-fn nanosleep_zero_duration_publishes_runnable_resume_without_host_timer() {
+fn nanosleep_zero_duration_requests_process_reschedule_without_host_timer() {
     supervisor_reset_shadow_log();
 
     let mut t = TestVm::new();
@@ -579,16 +560,16 @@ fn nanosleep_zero_duration_publishes_runnable_resume_without_host_timer() {
         tidemark_kernel::syscall::time::sys_nanosleep(&mut t.vm, t.base, req, 0),
         abi::STATUS_SLEEP
     );
-    assert_eq!(t.vm.status, abi::STATUS_OK);
+    assert_eq!(t.vm.status, abi::STATUS_SLEEP);
     assert_eq!(t.vm.x[10], 0);
     assert_eq!(t.vm.fault_addr, 0);
     assert_eq!(t.vm.fault_pc, 0);
     assert_eq!(supervisor_next_host_op(0, 0), 0);
-    assert_next_runnable_resume(&t.vm);
+    assert_eq!(supervisor_next_resume(0, 0), 0);
 }
 
 #[test]
-fn sched_yield_publishes_runnable_resume_without_host_timer() {
+fn sched_yield_requests_process_reschedule_without_host_timer() {
     supervisor_reset_shadow_log();
 
     let mut t = TestVm::new();
@@ -598,21 +579,34 @@ fn sched_yield_publishes_runnable_resume_without_host_timer() {
         tidemark_kernel::syscall::time::sys_sched_yield(&mut t.vm),
         abi::STATUS_SLEEP
     );
-    assert_eq!(t.vm.status, abi::STATUS_OK);
+    assert_eq!(t.vm.status, abi::STATUS_SLEEP);
     assert_eq!(t.vm.x[10], 0);
     assert_eq!(t.vm.fault_addr, 0);
     assert_eq!(t.vm.fault_pc, 0);
     assert_eq!(supervisor_next_host_op(0, 0), 0);
-    assert_next_runnable_resume(&t.vm);
+    assert_eq!(supervisor_next_resume(0, 0), 0);
 }
 
 #[test]
-fn thread_step_sched_yield_keeps_vm_runnable_for_process_resume() {
+fn thread_step_sched_yield_allows_process_resume_to_select_next_runnable() {
     supervisor_reset_shadow_log();
 
     let mut t = TestVm::new();
     t.vm.tid = 1;
     install_current_thread_record(&mut t);
+
+    let mut sibling: ThreadState = unsafe { std::mem::zeroed() };
+    sibling.guest_base = t.base;
+    sibling.process_ptr = t.vm.process_ptr;
+    sibling.tid = 2;
+    sibling.status = abi::STATUS_OK;
+    let sibling_ptr = &mut sibling as *mut ThreadState as u32;
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, sibling_ptr, 0, 0);
+        ps.thread_count
+            .store(2, std::sync::atomic::Ordering::Release);
+    }
 
     let code_addr = t.sys_mmap(
         0,
@@ -632,12 +626,25 @@ fn thread_step_sched_yield_keeps_vm_runnable_for_process_resume() {
     t.vm.status = abi::STATUS_OK;
 
     let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    let mut resume = vec![0u8; supervisor_resume_record_bytes() as usize];
+    assert_eq!(
+        supervisor_process_resume(vm_ptr, resume.as_mut_ptr() as u32, resume.len() as u32),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&resume, 24), vm_ptr);
+
     let remaining = tidemark_kernel::abi::thread_step(vm_ptr, 1);
 
     assert!(remaining >= 0);
+    assert_eq!(t.vm.status, abi::STATUS_SLEEP);
+    assert_eq!(supervisor_next_resume(0, 0), 0);
+
+    assert_eq!(
+        supervisor_worker_sleep_status_action(vm_ptr, abi::STATUS_SLEEP, 0),
+        supervisor_worker_sleep_status_action_yield() as i32
+    );
     assert_eq!(t.vm.status, abi::STATUS_OK);
 
-    let mut resume = vec![0u8; supervisor_resume_record_bytes() as usize];
     assert_eq!(
         supervisor_process_resume(vm_ptr, resume.as_mut_ptr() as u32, resume.len() as u32),
         supervisor_resume_record_bytes() as i32
@@ -646,8 +653,8 @@ fn thread_step_sched_yield_keeps_vm_runnable_for_process_resume() {
         read_u32_le(&resume, 12),
         supervisor_resume_kind_runnable_thread()
     );
-    assert_eq!(read_u32_le(&resume, 24), vm_ptr);
-    assert_eq!(read_u32_le(&resume, 28), t.vm.tid as u32);
+    assert_eq!(read_u32_le(&resume, 24), sibling_ptr);
+    assert_eq!(read_u32_le(&resume, 28), sibling.tid as u32);
     assert_eq!(read_u32_le(&resume, 36), abi::STATUS_OK as u32);
 }
 

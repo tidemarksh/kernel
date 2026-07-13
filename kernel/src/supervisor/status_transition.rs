@@ -129,11 +129,12 @@ pub(super) fn worker_sleep_status_action(
     if vm_ptr == 0 {
         return crate::abi::EFAULT as i32;
     }
-    let vm = unsafe { &*(vm_ptr as *const crate::types::ThreadState) };
+    let vm = unsafe { &mut *(vm_ptr as *mut crate::types::ThreadState) };
     if vm.fault_addr != 0 || vm.fault_pc != 0 {
         return WORKER_SLEEP_STATUS_ACTION_ARM_HOST_TIMER as i32;
     }
 
+    vm.status = crate::abi::STATUS_OK;
     let mut action = WORKER_SLEEP_STATUS_ACTION_YIELD;
     if (completed_sync_effects & super::sync_effects::SYNC_EFFECT_PIPE_STATE) != 0 {
         action |= WORKER_SLEEP_STATUS_ACTION_SYNC_PIPE_BEFORE_YIELD_CLEAR;
