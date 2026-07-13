@@ -12,6 +12,7 @@ const ROBUST_LIST_LIMIT: u32 = 2048;
 
 static THREAD_EXIT_CLEANUP_COUNT: AtomicU64 = AtomicU64::new(0);
 static THREAD_EXIT_CLEANUP_LOCK: AtomicU32 = AtomicU32::new(0);
+static LAST_GROUP_EXIT_SOURCE_VM_PTR: AtomicU32 = AtomicU32::new(0);
 static mut LAST_THREAD_EXIT_CLEANUP: super::SupervisorThreadExitCleanupRecord =
     super::SupervisorThreadExitCleanupRecord::empty();
 
@@ -46,9 +47,25 @@ impl RobustCleanupStats {
 
 pub(super) fn init() {
     THREAD_EXIT_CLEANUP_COUNT.store(0, Ordering::Relaxed);
+    LAST_GROUP_EXIT_SOURCE_VM_PTR.store(0, Ordering::Relaxed);
     super::lock::with_spin_lock(&THREAD_EXIT_CLEANUP_LOCK, || unsafe {
         LAST_THREAD_EXIT_CLEANUP = super::SupervisorThreadExitCleanupRecord::empty();
     });
+}
+
+pub(super) fn group_exit_source_vm_ptr(vm: &ThreadState) -> u32 {
+    let source_vm_ptr = LAST_GROUP_EXIT_SOURCE_VM_PTR.load(Ordering::Acquire);
+    let Some(source) = super::thread::state_from_ptr(source_vm_ptr) else {
+        return 0;
+    };
+    if source.guest_base != vm.guest_base
+        || source.process_ptr != vm.process_ptr
+        || source.exit_code != vm.exit_code
+        || source.term_signal != vm.term_signal
+    {
+        return 0;
+    }
+    source_vm_ptr
 }
 
 pub fn thread_exit_cleanup_count() -> u64 {
@@ -239,6 +256,7 @@ pub fn complete_thread_group_exit(
     exit_code: i32,
     term_signal: i32,
 ) {
+    LAST_GROUP_EXIT_SOURCE_VM_PTR.store(vm as *mut ThreadState as u32, Ordering::Release);
     let process_ptr = vm.process_ptr;
     unsafe {
         if process_ptr == 0 {

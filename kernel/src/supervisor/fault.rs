@@ -35,6 +35,13 @@ fn select_decision(vm_ptr: u32) -> Result<super::SupervisorFaultExitDecision, i3
     let mut selected_vm_ptr = vm_ptr;
     let mut selected = vm;
     let mut selected_priority = exit_priority(vm);
+    if let Some(source) =
+        super::thread::state_from_ptr(super::thread_exit::group_exit_source_vm_ptr(vm))
+    {
+        selected_vm_ptr = source as *const crate::types::ThreadState as u32;
+        selected = source;
+        selected_priority = u32::MAX;
+    }
     for record in ps.threads.iter() {
         if record.thread_ptr == 0 {
             continue;

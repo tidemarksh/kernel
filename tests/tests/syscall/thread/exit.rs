@@ -187,6 +187,49 @@ fn supervisor_fault_exit_decision_reports_process_exit_when_no_threads_remain() 
 }
 
 #[test]
+fn supervisor_fault_exit_decision_preserves_thread_group_exit_source() {
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    install_current_thread_record(&mut t);
+    let observer_vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    let source_ptr = unsafe {
+        tidemark_kernel::alloc::alloc_zeroed(
+            core::mem::size_of::<ThreadState>() as u32,
+            core::mem::align_of::<ThreadState>() as u32,
+        )
+    };
+    assert_ne!(source_ptr, 0);
+    let source = unsafe { &mut *(source_ptr as *mut ThreadState) };
+    source.tid = 2;
+    source.guest_base = t.base;
+    source.process_ptr = t.vm.process_ptr;
+    source.status = STATUS_OK;
+
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    ps.thread_count.store(2, Ordering::Release);
+    ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, source_ptr, 0, 0);
+
+    assert_eq!(
+        thread_impl::terminate_process(source, t.base, 139, 11),
+        STATUS_FAULT,
+    );
+
+    let mut record = [0u8; 88];
+    assert_eq!(
+        supervisor_fault_exit_decision(
+            observer_vm_ptr,
+            record.as_mut_ptr() as u32,
+            record.len() as u32,
+        ),
+        supervisor_fault_exit_decision_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&record, 28), source_ptr);
+    assert_eq!(read_u32_le(&record, 32), 2);
+    assert_eq!(read_i32_le(&record, 48), 139);
+    assert_eq!(read_i32_le(&record, 52), 11);
+}
+
+#[test]
 fn supervisor_fault_exit_decision_reports_process_exit_when_tidless_runtime_fault_event_is_only_live_thread()
  {
     let mut t = TestVm::new();
