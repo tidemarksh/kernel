@@ -2,7 +2,7 @@ use tidemark_kernel::abi::*;
 use tidemark_kernel::fs::fd_table;
 use tidemark_kernel::harness::TestVm;
 use tidemark_kernel::syscall::socket;
-use tidemark_kernel::syscall::{epoll, fs, pipe, time};
+use tidemark_kernel::syscall::{epoll, fs, pipe, signal, time};
 use tidemark_kernel::types::ProcessState;
 
 const EPOLL_CTL_ADD: u64 = 1;
@@ -782,6 +782,43 @@ fn epoll_pwait_resume_reports_ready_events_with_ok_status() {
         unsafe { tidemark_kernel::guest_mem::read_u64(t.base, out_addr + 8) },
         0x77
     );
+}
+
+#[test]
+fn epoll_pwait_resume_delivers_caught_signal_with_sa_restart_as_eintr() {
+    const SA_RESTART: u64 = 0x10000000;
+    const HANDLER: u64 = 0x88_000;
+
+    let mut t = TestVm::new();
+    let epfd = epoll::sys_epoll_create1(&mut t.vm, t.base, 0);
+    let out_addr = t.scratch + 0x3000;
+    let act_addr = t.scratch + 0x3800;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, act_addr, HANDLER);
+        tidemark_kernel::guest_mem::write_u64(t.base, act_addr + 8, SA_RESTART);
+        tidemark_kernel::guest_mem::write_u64(t.base, act_addr + 16, 0);
+    }
+    assert_eq!(
+        signal::sys_rt_sigaction(&mut t.vm, t.base, SIGCHLD as u64, act_addr, 0, 8),
+        0
+    );
+    t.vm.pc = 0x40_000;
+    t.vm.x[2] = t.scratch + 0x8000;
+
+    assert_eq!(
+        epoll::sys_epoll_pwait(&mut t.vm, t.base, epfd as u64, out_addr, 1, -1, 0),
+        0
+    );
+    assert_eq!(t.vm.status, STATUS_EPOLL_WAIT);
+    signal::queue_process_signal(42, SIGCHLD);
+
+    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
+    assert_eq!(thread_resume_blocked_syscall(vm_ptr), EINTR);
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.pc, HANDLER);
+    assert_eq!(t.vm.x[10], SIGCHLD as u64);
+    assert_eq!(t.vm.blocked_fd, 0);
+    assert_eq!(t.vm.blocked_ofd_id, 0);
 }
 
 #[test]

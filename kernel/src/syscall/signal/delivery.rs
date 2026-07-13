@@ -74,7 +74,7 @@ pub fn pending_signal_interrupts_blocked_syscall(vm: &ThreadState, base: u32) ->
     match action.handler {
         SIG_IGN => false,
         SIG_DFL => defaults::default_action_interrupts_blocked_syscall(sig),
-        _ => (action.flags & SA_RESTART) == 0,
+        _ => vm.status == STATUS_EPOLL_WAIT || (action.flags & SA_RESTART) == 0,
     }
 }
 

@@ -148,6 +148,30 @@ fn blocked_process_pending_signal_stays_process_pending_until_unblocked_thread_d
 }
 
 #[test]
+fn caught_signal_interrupts_epoll_wait_even_with_sa_restart() {
+    const SA_RESTART: u64 = 0x10000000;
+
+    let mut t = TestVm::new();
+    let act_addr = t.scratch + 0x100;
+    write_sigaction(t.base, act_addr, 0x12345, SA_RESTART, 0);
+    assert_eq!(
+        signal::sys_rt_sigaction(&mut t.vm, t.base, SIGCHLD as u64, act_addr, 0, 8),
+        0
+    );
+
+    signal::queue_process_signal(42, SIGCHLD);
+    t.vm.status = abi::STATUS_PIPE_WAIT;
+    assert!(!signal::pending_signal_interrupts_blocked_syscall(
+        &t.vm, t.base
+    ));
+
+    t.vm.status = abi::STATUS_EPOLL_WAIT;
+    assert!(signal::pending_signal_interrupts_blocked_syscall(
+        &t.vm, t.base
+    ));
+}
+
+#[test]
 fn kill_sig_zero_for_current_pid_checks_without_queuing_signal() {
     let mut t = TestVm::new();
     let pid = signal::pid_from_vm(&t.vm, t.base);
