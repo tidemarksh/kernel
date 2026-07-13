@@ -675,7 +675,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_getdents64_runs_memfs_directory_locally() {
+    fn dispatch_getdents64_runs_through_kernel_worker_and_advances_offset() {
         let mut vm = TestVm::new();
         assert_eq!(vm.sys_mkdirat(b"/getdents-dir"), 0);
         let fd_a = vm.sys_openat(b"/getdents-dir/a", O_CREAT | O_WRONLY);
@@ -693,7 +693,12 @@ mod tests {
 
         let result = dispatch_getdents64(&mut vm.vm, vm.base, dir_fd as u64, buf_addr, 24);
 
-        assert_eq!(result, 24);
+        assert_eq!(result, 0);
+        assert_eq!(vm.vm.status, STATUS_FS);
+        assert_eq!(fd_table::get_offset(vm.base, &vm.vm, dir_fd as u64), 0);
+        let vm_ptr = &mut vm.vm as *mut _ as u32;
+        process_pending_requests(vm_ptr, vm.base);
+        assert_eq!(resume_from_fs(vm_ptr, vm.base), 24);
         assert_eq!(vm.vm.status, STATUS_OK);
         assert_eq!(fd_table::get_offset(vm.base, &vm.vm, dir_fd as u64), 1);
         assert_eq!(
@@ -1757,7 +1762,27 @@ pub fn dispatch_getdents64(
     buf: u64,
     buf_size: u64,
 ) -> i64 {
-    crate::syscall::fs::sys_getdents64(vm, base, fd, buf, buf_size)
+    let ofd = match fd_table::get_ofd(base, vm, fd) {
+        Some(ofd) => ofd,
+        None => return EBADF,
+    };
+    if !matches!(memfs::stat(ofd.ino), Some(st) if st.mode & memfs::S_IFMT == memfs::S_IFDIR) {
+        return ENOTDIR;
+    }
+    let ofd_id = fd_table::get_ofd_id(base, vm, fd).unwrap_or(0);
+    let offset = fd_table::get_offset_by_id(ofd_id).max(fd_table::get_offset_floor_by_id(ofd_id));
+    submit_fs_request(
+        vm,
+        base,
+        ring_buffer::FS_OP_GETDENTS,
+        fd as i32,
+        offset,
+        buf_size,
+        buf,
+        0,
+        0,
+        0,
+    )
 }
 
 pub fn dispatch_lseek(vm: &mut ThreadState, base: u32, fd: u64, offset: i64, whence: u64) -> i64 {

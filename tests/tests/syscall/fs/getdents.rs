@@ -22,6 +22,39 @@ fn getdents64_advances_directory_offset() {
 }
 
 #[test]
+fn getdents64_dispatches_through_fs_ring_and_preserves_shared_offset() {
+    let mut t = TestVm::new();
+
+    assert_eq!(t.sys_mkdirat(b"/dispatch-dir"), 0);
+    for name in [b"/dispatch-dir/a".as_slice(), b"/dispatch-dir/b".as_slice()] {
+        let fd = t.sys_openat(name, O_CREAT | O_RDWR);
+        assert!(fd >= 3);
+        assert_eq!(t.sys_close(fd), 0);
+    }
+    let dir_fd = t.sys_openat(b"/dispatch-dir", O_RDONLY);
+    assert!(dir_fd >= 3);
+    let dents_buf = t.scratch + 0x5200;
+    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
+
+    for expected in [24, 24, 0] {
+        t.vm.x[10] = dir_fd as u64;
+        t.vm.x[11] = dents_buf;
+        t.vm.x[12] = 24;
+        t.vm.x[17] = SYS_GETDENTS64;
+
+        assert_eq!(
+            tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+            STATUS_FS
+        );
+        fs::process_pending_requests(vm_ptr, t.base);
+        assert_eq!(fs::resume_from_fs(vm_ptr, t.base), expected);
+        assert_eq!(t.vm.status, STATUS_OK);
+    }
+
+    assert_eq!(fd_table::get_offset(t.base, &t.vm, dir_fd as u64), 2);
+}
+
+#[test]
 fn getdents64_on_regular_file_returns_enotdir() {
     let mut t = TestVm::new();
 
