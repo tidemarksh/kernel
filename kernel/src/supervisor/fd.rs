@@ -88,12 +88,32 @@ pub fn process_held_ofd_refcount(vm_ptr: u32, ofd_id: u32) -> i32 {
     if ofd_id == 0 || ofd_id as usize >= MAX_FDS {
         return 0;
     }
+    let Some(vm) = super::thread::state_from_ptr(vm_ptr) else {
+        return 0;
+    };
+    let Some(ps) = process_state_from_vm_ptr(vm_ptr) else {
+        return 0;
+    };
+
     let mut refcount = 0i32;
-    for_each_process_held_ofd(vm_ptr, |held_ofd_id, _| {
-        if held_ofd_id == ofd_id {
+    for fd in 0..MAX_FDS {
+        let entry = fd_table::load_process_fd_entry(vm.guest_base, vm.process_ptr, fd);
+        if entry.ofd_id == ofd_id {
             refcount = refcount.saturating_add(1);
         }
-    });
+    }
+    for thread in ps.threads.iter() {
+        let Some(thread_vm) = super::thread::state_from_ptr(thread.thread_ptr) else {
+            continue;
+        };
+        if thread_vm.guest_base == vm.guest_base
+            && thread_vm.process_ptr == vm.process_ptr
+            && thread_vm.tid == thread.tid
+            && thread_vm.blocked_ofd_id == ofd_id
+        {
+            refcount = refcount.saturating_add(1);
+        }
+    }
     refcount
 }
 

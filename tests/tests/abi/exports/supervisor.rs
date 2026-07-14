@@ -3536,12 +3536,21 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
 fn supervisor_process_fd_table_coherence_requires_live_ofds() {
     let mut t = TestVm::new();
     let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
+    let dangling_ofd = (MAX_FDS - 1) as u32;
 
     assert_eq!(supervisor_process_fd_table_is_coherent(vm_ptr), 1);
-    process_set_fd_entry(vm_ptr, 5, (MAX_FDS - 1) as u32, 0);
+    process_set_fd_entry(vm_ptr, 5, dangling_ofd, 0);
     assert_eq!(supervisor_process_fd_table_is_coherent(vm_ptr), 0);
+    assert_eq!(
+        supervisor_process_held_ofd_refcount(vm_ptr, dangling_ofd),
+        1
+    );
     process_set_fd_entry(vm_ptr, 5, 0, 0);
     assert_eq!(supervisor_process_fd_table_is_coherent(vm_ptr), 1);
+    assert_eq!(
+        supervisor_process_held_ofd_refcount(vm_ptr, dangling_ofd),
+        0
+    );
 }
 
 fn set_blocked_resume_syscall(
