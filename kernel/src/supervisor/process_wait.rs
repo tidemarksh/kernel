@@ -74,6 +74,24 @@ fn parent_has_exited_child(parent_pid: i32) -> bool {
         .any(|child| child.pid > 0 && child.parent_pid == parent_pid && child.exited)
 }
 
+pub(super) fn blocked_wait_has_exited_child(vm: &ThreadState) -> bool {
+    if vm.status != STATUS_WAIT4 {
+        return false;
+    }
+    let parent_pid = crate::syscall::signal::pid_from_vm(vm, vm.guest_base);
+    if parent_pid <= 0 {
+        return false;
+    }
+    children().iter().any(|child| {
+        child.exited
+            && if vm.wait_kind == WAIT_KIND_WAITID {
+                child_matches_waitid_target(parent_pid, child, vm.wait_idtype, vm.wait_pid)
+            } else {
+                child_matches_wait_target(parent_pid, child, vm.wait_pid)
+            }
+    })
+}
+
 fn discard_sigchld_if_no_other_exited_child(parent_pid: i32) {
     if !parent_has_exited_child(parent_pid) {
         crate::syscall::signal::clear_process_signal(parent_pid, SIGCHLD);

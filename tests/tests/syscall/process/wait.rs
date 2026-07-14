@@ -295,6 +295,37 @@ fn supervisor_process_has_active_child_tracks_kernel_child_table() {
 }
 
 #[test]
+fn supervisor_wait4_reaps_matching_exited_child_before_parking_for_an_active_child() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+
+    let exited_child = process_impl::sys_fork(&mut t.vm, t.base, 0, 0, 0, 0, 0) as i32;
+    assert!(exited_child > 0);
+    t.vm.status = STATUS_OK;
+    let active_child = process_impl::sys_fork(&mut t.vm, t.base, 0, 0, 0, 0, 0) as i32;
+    assert!(active_child > 0);
+    t.vm.status = STATUS_OK;
+
+    assert_eq!(process_impl::sys_wait4(&mut t.vm, t.base, -1, 0, 0, 0), 0);
+    assert_eq!(t.vm.status, STATUS_WAIT4);
+
+    process_impl::record_child_exit(exited_child, 7 << 8);
+    assert_eq!(
+        tidemark_kernel::abi::process_active_child_pid(process_impl::current_process_pid(
+            &t.vm, t.base
+        )),
+        active_child
+    );
+    assert_eq!(supervisor_blocked_wait_active_child_pid(vm_ptr), 0);
+    assert_eq!(
+        supervisor_blocked_retry_action(vm_ptr, 0),
+        supervisor_blocked_retry_action_resume_wait4() as i32
+    );
+    assert_eq!(thread_resume_wait4(vm_ptr), exited_child as i64);
+    assert_eq!(t.vm.status, STATUS_OK);
+}
+
+#[test]
 fn supervisor_process_lifecycle_records_child_exit_before_wait4_completion() {
     supervisor_reset_shadow_log();
 

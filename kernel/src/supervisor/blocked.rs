@@ -231,6 +231,9 @@ fn active_child_pid_for_blocked_wait(vm: &ThreadState) -> i32 {
             crate::supervisor::process_lifecycle::active_child_pid(parent_pid)
         }
         crate::abi::STATUS_WAIT4 => {
+            if super::process_wait::blocked_wait_has_exited_child(vm) {
+                return 0;
+            }
             let parent_pid = crate::syscall::signal::pid_from_vm(vm, vm.guest_base);
             crate::supervisor::process_lifecycle::active_child_pid(parent_pid)
         }
