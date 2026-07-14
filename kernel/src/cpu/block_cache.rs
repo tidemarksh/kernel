@@ -1,6 +1,6 @@
 //! Pre-decoded basic block cache.
 //!
-//! Direct-mapped block cache. Each entry holds a pre-decoded basic block
+//! Set-associative block cache. Each entry holds a pre-decoded basic block
 //! (up to MAX_BLOCK_OPS instructions) with packed fields for fast dispatch.
 //!
 //! JALR rs1==ra triggers a cache lookup for return prediction.
@@ -10,6 +10,8 @@ use crate::guest_mem;
 use crate::types::ThreadState;
 
 pub const CACHE_SIZE: usize = 8192;
+const CACHE_WAYS: usize = 2;
+const CACHE_SET_COUNT: usize = CACHE_SIZE / CACHE_WAYS;
 pub const MAX_BLOCK_OPS: usize = 32;
 pub const BLOCK_LOOP_SIMPLE_LOAD_SCAN: u16 = 1 << 0;
 
@@ -232,10 +234,11 @@ fn classify_loop_flags(ops: &[PackedOp; MAX_BLOCK_OPS], len: u16, start_pc: u64)
     }
 }
 
-/// The block cache (direct-mapped, indexed by PC).
+/// The block cache (two-way set-associative, indexed by PC).
 /// Heap-allocated due to large size (~2.2MB for 8192 entries).
 pub struct BlockCache {
     entries: *mut BlockEntry,
+    next_victim: *mut u8,
 }
 
 impl BlockCache {
@@ -243,26 +246,60 @@ impl BlockCache {
     /// of at least `CACHE_SIZE * size_of::<BlockEntry>()` bytes.
     ///
     /// # Safety
-    /// `base_ptr` must be valid and zeroed.
+    /// `base_ptr` must cover `allocation_size()` bytes and be valid and zeroed.
     pub unsafe fn from_ptr(base_ptr: *mut BlockEntry) -> Self {
-        Self { entries: base_ptr }
+        Self {
+            entries: base_ptr,
+            next_victim: unsafe { base_ptr.add(CACHE_SIZE).cast::<u8>() },
+        }
     }
 
     /// Size in bytes needed for the cache allocation.
     pub const fn allocation_size() -> usize {
-        CACHE_SIZE * core::mem::size_of::<BlockEntry>()
+        CACHE_SIZE * core::mem::size_of::<BlockEntry>() + CACHE_SET_COUNT
+    }
+
+    #[inline(always)]
+    fn set_base(pc: u64) -> usize {
+        (((pc >> 1) as usize) & (CACHE_SET_COUNT - 1)) * CACHE_WAYS
+    }
+
+    #[inline(always)]
+    fn find_index(&self, pc: u64) -> Option<usize> {
+        let base = Self::set_base(pc);
+        for way in 0..CACHE_WAYS {
+            let idx = base + way;
+            let entry = unsafe { &*self.entries.add(idx) };
+            if entry.start_pc == pc && entry.len > 0 {
+                return Some(idx);
+            }
+        }
+        None
+    }
+
+    #[inline(always)]
+    fn replacement_index(&mut self, pc: u64) -> usize {
+        let base = Self::set_base(pc);
+        for way in 0..CACHE_WAYS {
+            let idx = base + way;
+            let entry = unsafe { &*self.entries.add(idx) };
+            if entry.start_pc == 0 || entry.len == 0 {
+                return idx;
+            }
+        }
+
+        let set = base / CACHE_WAYS;
+        let victim = unsafe { &mut *self.next_victim.add(set) };
+        let way = (*victim as usize) & (CACHE_WAYS - 1);
+        *victim = ((way + 1) & (CACHE_WAYS - 1)) as u8;
+        base + way
     }
 
     /// Look up a block by PC. Returns None if not cached or tag mismatch.
     #[inline(always)]
     pub fn get(&self, pc: u64) -> Option<&BlockEntry> {
-        let idx = ((pc >> 1) as usize) & (CACHE_SIZE - 1);
-        let entry = unsafe { &*self.entries.add(idx) };
-        if entry.start_pc == pc && entry.len > 0 {
-            Some(entry)
-        } else {
-            None
-        }
+        self.find_index(pc)
+            .map(|idx| unsafe { &*self.entries.add(idx) })
     }
 
     /// Build a block starting at `pc` by decoding instructions from guest memory.
@@ -272,7 +309,8 @@ impl BlockCache {
     /// `guest_base` must point at readable guest memory containing instructions for
     /// every byte touched while decoding the block rooted at `pc`.
     pub unsafe fn build_block(&mut self, pc: u64, guest_base: u32) -> Option<&BlockEntry> {
-        unsafe { self.build_block_inner(None, pc, guest_base) }
+        let idx = self.replacement_index(pc);
+        unsafe { self.build_block_inner(None, pc, guest_base, idx) }
     }
 
     /// Look up a block or build it after verifying each fetched instruction has
@@ -284,14 +322,14 @@ impl BlockCache {
         pc: u64,
         guest_base: u32,
     ) -> Option<&BlockEntry> {
-        let idx = ((pc >> 1) as usize) & (CACHE_SIZE - 1);
-        let entry = unsafe { &*self.entries.add(idx) };
-        if entry.start_pc == pc && entry.len > 0 {
+        if let Some(idx) = self.find_index(pc) {
             crate::tracepoints::record_block_cache_hit();
-            return Some(entry);
+            return Some(unsafe { &*self.entries.add(idx) });
         }
+        let idx = self.replacement_index(pc);
+        let entry = unsafe { &*self.entries.add(idx) };
         crate::tracepoints::record_block_cache_miss(pc, idx as u32, entry.start_pc);
-        let built = unsafe { self.build_block_inner(Some(vm), pc, guest_base) };
+        let built = unsafe { self.build_block_inner(Some(vm), pc, guest_base, idx) };
         if let Some(entry) = built {
             crate::tracepoints::record_block_cache_build(
                 entry.len as u32,
@@ -308,9 +346,9 @@ impl BlockCache {
         vm: Option<&ThreadState>,
         pc: u64,
         guest_base: u32,
+        idx: usize,
     ) -> Option<&BlockEntry> {
         unsafe {
-            let idx = ((pc >> 1) as usize) & (CACHE_SIZE - 1);
             let entry = &mut *self.entries.add(idx);
             entry.start_pc = pc;
             entry.len = 0;
@@ -412,6 +450,7 @@ impl BlockCache {
             entry.start_pc = 0;
             entry.len = 0;
         }
+        unsafe { core::ptr::write_bytes(self.next_victim, 0, CACHE_SET_COUNT) };
     }
 
     /// Invalidate entries whose PC range overlaps [start, end).
