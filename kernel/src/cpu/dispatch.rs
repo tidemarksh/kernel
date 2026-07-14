@@ -60,6 +60,7 @@ pub(super) unsafe fn exec_decoded(
     prev_tp: u64,
     prev_s11: u64,
     access_cache: &mut AccessPermitCache,
+    memory_is_multi_threaded: bool,
 ) -> StepOutcome {
     let opcode = decode::opcode(raw);
 
@@ -205,6 +206,7 @@ pub(super) unsafe fn exec_decoded(
                             base,
                             remaining,
                             access_cache,
+                            memory_is_multi_threaded,
                         ) {
                             BlockOutcome::Restart => {
                                 x[0] = 0;

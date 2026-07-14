@@ -192,6 +192,7 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
     let mut exec_permit_end = 0u64;
     let mut exec_permit_generation = 0u32;
     let mut access_permit_cache = AccessPermitCache::new();
+    let memory_is_multi_threaded = unsafe { guest_mem::memory_is_multi_threaded() };
     loop {
         if *remaining <= 0 {
             let prev_sp = x[2];
@@ -305,6 +306,7 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
                             base,
                             remaining,
                             &mut access_permit_cache,
+                            memory_is_multi_threaded,
                         )
                     }
                 } else {
@@ -319,6 +321,7 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
                             base,
                             remaining,
                             &mut access_permit_cache,
+                            memory_is_multi_threaded,
                         )
                     }
                 };
@@ -445,6 +448,7 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
                 prev_tp,
                 prev_s11,
                 &mut access_permit_cache,
+                memory_is_multi_threaded,
             )
         } {
             StepOutcome::Advance => {}

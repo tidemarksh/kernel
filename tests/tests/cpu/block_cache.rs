@@ -1,3 +1,4 @@
+use core::sync::atomic::Ordering;
 use tidemark_kernel::cpu::block_cache::{BlockCache, BlockEntry, CACHE_SIZE, PackedOp};
 use tidemark_kernel::harness::TestVm;
 use tidemark_kernel::{abi, guest_mem};
@@ -45,6 +46,23 @@ fn encode_op_fp(funct7: u32, rd: u32, rs1: u32, rs2: u32, funct3: u32) -> u32 {
 
 fn encode_fma(opcode: u32, rd: u32, rs1: u32, rs2: u32, rs3: u32, fmt: u32, rm: u32) -> u32 {
     (rs3 << 27) | (fmt << 25) | (rs2 << 20) | (rs1 << 15) | (rm << 12) | (rd << 7) | opcode
+}
+
+fn encode_branch(rs1: u32, rs2: u32, imm: i32, funct3: u32) -> u32 {
+    let imm = imm as u32;
+    ((imm >> 12) & 1) << 31
+        | ((imm >> 5) & 0x3f) << 25
+        | (rs2 << 20)
+        | (rs1 << 15)
+        | (funct3 << 12)
+        | ((imm >> 1) & 0x0f) << 8
+        | ((imm >> 11) & 1) << 7
+        | 0x63
+}
+
+fn encode_store(rs2: u32, rs1: u32, imm: i32, funct3: u32) -> u32 {
+    let imm = imm as u32 & 0x0fff;
+    ((imm >> 5) << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | ((imm & 0x1f) << 7) | 0x23
 }
 
 #[test]
@@ -254,6 +272,135 @@ fn checked_block_cache_executes_amo_block() {
     assert_eq!(with_cache.3, 0xffff_ffff_8000_0001);
     assert_eq!(with_cache.4, 15);
     assert_eq!(with_cache.5, 0x1234_5678);
+}
+
+#[test]
+fn checked_block_cache_executes_self_backedge_with_exact_budget() {
+    fn run(use_cache: bool) -> (i32, u64, u64) {
+        let mut t = TestVm::new();
+        let code_addr = mmap_exec(&mut t, 4096);
+
+        unsafe {
+            guest_mem::write_u32(t.base, code_addr, 0x0012_8293); // addi t0,t0,1
+            guest_mem::write_u32(
+                t.base,
+                code_addr + 4,
+                encode_branch(5, 6, -4, 4), // blt t0,t1,loop
+            );
+        }
+
+        t.vm.pc = code_addr;
+        t.vm.x[5] = 0;
+        t.vm.x[6] = 5;
+        t.vm.status = abi::STATUS_OK;
+
+        let remaining = if use_cache {
+            let mut cache = alloc_block_cache();
+            unsafe {
+                tidemark_kernel::cpu::exec_at_base(
+                    &mut t.vm,
+                    10,
+                    t.base,
+                    Some(&mut cache),
+                    None,
+                    None,
+                    None,
+                )
+            }
+        } else {
+            unsafe {
+                tidemark_kernel::cpu::exec_at_base(&mut t.vm, 10, t.base, None, None, None, None)
+            }
+        };
+
+        (remaining, t.vm.pc - code_addr, t.vm.x[5])
+    }
+
+    let no_cache = run(false);
+    let with_cache = run(true);
+    assert_eq!(with_cache, no_cache);
+    assert_eq!(with_cache, (0, 8, 5));
+}
+
+#[test]
+fn checked_block_cache_preserves_multithreaded_seqlock_loads() {
+    let mut t = TestVm::new();
+    let code_addr = mmap_exec(&mut t, 4096);
+    let data_addr = code_addr + 512;
+    let process = unsafe {
+        &*((t.base as u64 + t.vm.process_ptr as u64) as *const tidemark_kernel::types::ProcessState)
+    };
+
+    unsafe {
+        guest_mem::write_u32(t.base, code_addr, 0x0005_3283); // ld t0,0(a0)
+        guest_mem::write_u64(t.base, data_addr, 0x1122_3344_5566_7788);
+    }
+    process.thread_count.store(2, Ordering::Release);
+    unsafe {
+        guest_mem::init(
+            core::ptr::addr_of!(process.reservation_gen) as *const _,
+            core::ptr::addr_of!(process.reservation_lock) as *const _,
+            core::ptr::addr_of!(process.thread_count),
+        );
+    }
+
+    t.vm.pc = code_addr;
+    t.vm.x[10] = data_addr;
+    t.vm.status = abi::STATUS_OK;
+    let mut cache = alloc_block_cache();
+    let remaining = unsafe {
+        tidemark_kernel::cpu::exec_at_base(&mut t.vm, 1, t.base, Some(&mut cache), None, None, None)
+    };
+
+    assert_eq!(remaining, 0);
+    assert_eq!(t.vm.pc, code_addr + 4);
+    assert_eq!(t.vm.x[5], 0x1122_3344_5566_7788);
+}
+
+#[test]
+fn checked_block_cache_preserves_multithreaded_seqlock_stores() {
+    let mut t = TestVm::new();
+    let code_addr = mmap_exec(&mut t, 4096);
+    let data_addr = code_addr + 512;
+    let process = unsafe {
+        &*((t.base as u64 + t.vm.process_ptr as u64) as *const tidemark_kernel::types::ProcessState)
+    };
+
+    unsafe {
+        guest_mem::write_u32(t.base, code_addr, encode_store(6, 10, 0, 3)); // sd t1,0(a0)
+        guest_mem::write_u64(t.base, data_addr, 0);
+    }
+    process.thread_count.store(2, Ordering::Release);
+    unsafe {
+        guest_mem::init(
+            core::ptr::addr_of!(process.reservation_gen) as *const _,
+            core::ptr::addr_of!(process.reservation_lock) as *const _,
+            core::ptr::addr_of!(process.thread_count),
+        );
+    }
+
+    let slot = ((data_addr >> 3) & 63) as usize;
+    let generation_before = process.reservation_gen[slot].load(Ordering::Acquire);
+    t.vm.pc = code_addr;
+    t.vm.x[6] = 0x1122_3344_5566_7788;
+    t.vm.x[10] = data_addr;
+    t.vm.status = abi::STATUS_OK;
+    let mut cache = alloc_block_cache();
+    let remaining = unsafe {
+        tidemark_kernel::cpu::exec_at_base(&mut t.vm, 1, t.base, Some(&mut cache), None, None, None)
+    };
+
+    assert_eq!(remaining, 0);
+    assert_eq!(t.vm.pc, code_addr + 4);
+    assert_eq!(
+        unsafe { guest_mem::read_u64(t.base, data_addr) },
+        0x1122_3344_5566_7788
+    );
+    assert_eq!(
+        process.reservation_gen[slot].load(Ordering::Acquire),
+        generation_before.wrapping_add(2),
+    );
+    assert_eq!(process.reservation_lock[slot].load(Ordering::Acquire), 0);
 }
 
 #[test]

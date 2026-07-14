@@ -126,6 +126,11 @@ unsafe fn is_multi_threaded() -> bool {
 }
 
 #[inline(always)]
+pub(crate) unsafe fn memory_is_multi_threaded() -> bool {
+    unsafe { is_multi_threaded() }
+}
+
+#[inline(always)]
 unsafe fn is_multi_threaded_with(thread_count: *const AtomicU32) -> bool {
     !thread_count.is_null() && unsafe { (*thread_count).load(Ordering::Relaxed) } > 1
 }
@@ -712,12 +717,23 @@ pub unsafe fn write_u8(base: u32, addr: u64, val: u8) {
 /// linear memory.
 #[inline(always)]
 pub(crate) unsafe fn write_u8_unchecked(base: u32, addr: u64, val: u8) {
+    let memory_is_multi_threaded = unsafe { is_multi_threaded() };
+    unsafe { write_u8_unchecked_for_mode(base, addr, val, memory_is_multi_threaded) };
+}
+
+#[inline(always)]
+pub(crate) unsafe fn write_u8_unchecked_for_mode(
+    base: u32,
+    addr: u64,
+    val: u8,
+    memory_is_multi_threaded: bool,
+) {
     record_access(addr, 1, ACCESS_WRITE);
     let ptr = unchecked_addr(base, addr, "guest_mem::write_u8_unchecked") as *mut u8;
     if crate::tracepoints::guest_write_overlap_enabled() {
         crate::tracepoints::record_guest_write_overlap(addr, 1, WRITE_OP_U8, val as u64, 1);
     }
-    if unsafe { is_multi_threaded() } {
+    if memory_is_multi_threaded {
         let slot = ((addr >> 3) & 63) as usize;
         unsafe { lock_slot(slot) };
         unsafe { bump_gen(slot) }; // odd  → write-in-progress
@@ -745,12 +761,23 @@ pub unsafe fn write_u16(base: u32, addr: u64, val: u16) {
 /// `base + addr..base + addr + 2` must be writable guest memory.
 #[inline(always)]
 pub(crate) unsafe fn write_u16_unchecked(base: u32, addr: u64, val: u16) {
+    let memory_is_multi_threaded = unsafe { is_multi_threaded() };
+    unsafe { write_u16_unchecked_for_mode(base, addr, val, memory_is_multi_threaded) };
+}
+
+#[inline(always)]
+pub(crate) unsafe fn write_u16_unchecked_for_mode(
+    base: u32,
+    addr: u64,
+    val: u16,
+    memory_is_multi_threaded: bool,
+) {
     record_access(addr, 2, ACCESS_WRITE);
     let ptr = unchecked_addr(base, addr, "guest_mem::write_u16_unchecked") as *mut u16;
     if crate::tracepoints::guest_write_overlap_enabled() {
         crate::tracepoints::record_guest_write_overlap(addr, 2, WRITE_OP_U16, val as u64, 2);
     }
-    if unsafe { is_multi_threaded() } {
+    if memory_is_multi_threaded {
         let mask = stripe_mask(addr, 2);
         unsafe { lock_mask(mask) };
         unsafe { seqlock_begin_mask(mask) };
@@ -778,12 +805,23 @@ pub unsafe fn write_u32(base: u32, addr: u64, val: u32) {
 /// `base + addr..base + addr + 4` must be writable guest memory.
 #[inline(always)]
 pub(crate) unsafe fn write_u32_unchecked(base: u32, addr: u64, val: u32) {
+    let memory_is_multi_threaded = unsafe { is_multi_threaded() };
+    unsafe { write_u32_unchecked_for_mode(base, addr, val, memory_is_multi_threaded) };
+}
+
+#[inline(always)]
+pub(crate) unsafe fn write_u32_unchecked_for_mode(
+    base: u32,
+    addr: u64,
+    val: u32,
+    memory_is_multi_threaded: bool,
+) {
     record_access(addr, 4, ACCESS_WRITE);
     let ptr = unchecked_addr(base, addr, "guest_mem::write_u32_unchecked") as *mut u32;
     if crate::tracepoints::guest_write_overlap_enabled() {
         crate::tracepoints::record_guest_write_overlap(addr, 4, WRITE_OP_U32, val as u64, 4);
     }
-    if unsafe { is_multi_threaded() } {
+    if memory_is_multi_threaded {
         let mask = stripe_mask(addr, 4);
         unsafe { lock_mask(mask) };
         unsafe { seqlock_begin_mask(mask) };
@@ -811,12 +849,23 @@ pub unsafe fn write_u64(base: u32, addr: u64, val: u64) {
 /// `base + addr..base + addr + 8` must be writable guest memory.
 #[inline(always)]
 pub(crate) unsafe fn write_u64_unchecked(base: u32, addr: u64, val: u64) {
+    let memory_is_multi_threaded = unsafe { is_multi_threaded() };
+    unsafe { write_u64_unchecked_for_mode(base, addr, val, memory_is_multi_threaded) };
+}
+
+#[inline(always)]
+pub(crate) unsafe fn write_u64_unchecked_for_mode(
+    base: u32,
+    addr: u64,
+    val: u64,
+    memory_is_multi_threaded: bool,
+) {
     record_access(addr, 8, ACCESS_WRITE);
     let ptr = unchecked_addr(base, addr, "guest_mem::write_u64_unchecked") as *mut u64;
     if crate::tracepoints::guest_write_overlap_enabled() {
         crate::tracepoints::record_guest_write_overlap(addr, 8, WRITE_OP_U64, val, 8);
     }
-    if unsafe { is_multi_threaded() } {
+    if memory_is_multi_threaded {
         let mask = stripe_mask(addr, 8);
         unsafe { lock_mask(mask) };
         unsafe { seqlock_begin_mask(mask) };
