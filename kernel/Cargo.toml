@@ -13,3 +13,4 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 libm = "0.2"
+wasm-encoder = { version = "0.244", default-features = false }

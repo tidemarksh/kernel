@@ -7,6 +7,7 @@ build = "build.rs"
 
 [dependencies]
 tidemark-kernel = { path = "../kernel", features = ["harness"] }
+wasmparser = { version = "0.244", default-features = false, features = ["features", "validate"] }
 
 [[test]]
 name = "abi_exports"
@@ -75,6 +76,10 @@ path = "tests/net/ring_buffer.rs"
 [[test]]
 name = "cpu_block_cache"
 path = "tests/cpu/block_cache.rs"
+
+[[test]]
+name = "jit_tests"
+path = "tests/jit.rs"
 
 [[test]]
 name = "riscv_tests"
