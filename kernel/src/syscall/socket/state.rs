@@ -149,6 +149,16 @@ pub(super) fn empty_socket_slot() -> SocketSlot {
     }
 }
 
+fn clear_socket_read_debug(idx: usize) {
+    let debug = &mut state().read_debug;
+    debug.count[idx] = 0;
+    debug.bytes[idx] = 0;
+    debug.last_fd[idx] = 0;
+    debug.last_result[idx] = 0;
+    debug.last_before[idx] = 0;
+    debug.last_after[idx] = 0;
+}
+
 pub fn socket_table_ptr() -> u32 {
     core::ptr::addr_of_mut!(state().table) as u32
 }
@@ -208,6 +218,7 @@ pub(super) fn alloc_socket_slot() -> Option<u32> {
         if used & (1u32 << i) == 0 {
             state().used = used | (1u32 << i);
             socket_table()[i] = empty_socket_slot();
+            clear_socket_read_debug(i);
             return Some(i as u32);
         }
     }
@@ -277,6 +288,7 @@ pub(super) fn alloc_socket_slot_excluding(excluded_idx: u32) -> Option<u32> {
         if used & (1u32 << i) == 0 {
             state().used = used | (1u32 << i);
             socket_table()[i] = empty_socket_slot();
+            clear_socket_read_debug(i);
             return Some(i as u32);
         }
     }
@@ -1191,6 +1203,42 @@ mod tests {
             socket_table()[new_peer_idx as usize].recv_buf_idx,
             recv_buf_idx,
         );
+    }
+
+    #[test]
+    fn reused_socket_slot_starts_with_fresh_read_debug_state() {
+        let mut t = TestVm::new();
+        let first_fd = sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
+        assert!(first_fd >= 0);
+
+        let sockaddr: [u8; 16] = [2, 0, 0x1f, 0x90, 127, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
+        let addr = t.scratch + 0x960;
+        t.write_mem(addr, &sockaddr);
+        assert_eq!(sys_connect(&mut t.vm, t.base, first_fd as u64, addr, 16), 0);
+        resume_connect_result(&mut t.vm, t.base, 0);
+        assert_eq!(
+            inject_external_inbound_for_fd(t.base, &t.vm, first_fd as u64, b"previous"),
+            8
+        );
+        let mut payload = [0u8; 8];
+        assert_eq!(t.sys_read(first_fd, &mut payload), 8);
+
+        let first_idx = fd_table::get_ofd(t.base, &t.vm, first_fd as u64)
+            .expect("first socket OFD should exist")
+            .ino;
+        assert_eq!(debug_socket_read_count(first_idx), 1);
+        assert_eq!(debug_socket_read_bytes(first_idx), 8);
+        assert_eq!(t.sys_close(first_fd), 0);
+
+        let second_fd = sys_socket(&mut t.vm, t.base, AF_INET as u64, SOCK_STREAM as u64, 0);
+        assert!(second_fd >= 0);
+        let second_idx = fd_table::get_ofd(t.base, &t.vm, second_fd as u64)
+            .expect("second socket OFD should exist")
+            .ino;
+        assert_eq!(second_idx, first_idx);
+        assert_eq!(debug_socket_read_count(second_idx), 0);
+        assert_eq!(debug_socket_read_bytes(second_idx), 0);
+        assert_eq!(debug_socket_read_last_result(second_idx), 0);
     }
 
     #[test]
