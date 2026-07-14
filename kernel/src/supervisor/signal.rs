@@ -35,6 +35,14 @@ pub(super) fn boundary_check(vm_ptr: u32) -> i32 {
     ))
 }
 
+pub(super) fn take_process_pending_for_transport(pid: i32) -> u64 {
+    crate::syscall::signal::take_process_pending_for_transport(pid)
+}
+
+pub(super) fn merge_process_pending_from_transport(pid: i32, pending: u64) -> i32 {
+    crate::syscall::signal::merge_process_pending_from_transport(pid, pending)
+}
+
 pub(super) fn first_signal_from_bits(bits: u64) -> u32 {
     if bits == 0 {
         0

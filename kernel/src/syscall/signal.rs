@@ -50,10 +50,10 @@ pub(crate) use pending::{
     restore_process_pending_state_from,
 };
 pub use pending::{
-    attach_process_pending_state, clear_process_signal, pid_from_vm, process_pending_bytes,
-    process_pending_ptr, queue_process_signal, queue_sigill, queue_sigsegv, send_signal,
-    send_signal_to_pid, send_signal_to_tid, send_signal_with_code, sys_rt_sigpending,
-    sys_rt_sigprocmask,
+    attach_process_pending_state, clear_process_signal, merge_process_pending_from_transport,
+    pid_from_vm, process_pending_bytes, process_pending_ptr, queue_process_signal, queue_sigill,
+    queue_sigsegv, send_signal, send_signal_to_pid, send_signal_to_tid, send_signal_with_code,
+    sys_rt_sigpending, sys_rt_sigprocmask, take_process_pending_for_transport,
 };
 pub use signalfd::{
     attach_signalfd_state, close_signalfd, signalfd_is_readable, signalfd_read,

@@ -59,6 +59,21 @@ pub fn attach_process_pending_state(process_pending_ptr: u32) {
     }
 }
 
+pub fn take_process_pending_for_transport(pid: i32) -> u64 {
+    if pid <= 0 || pid as usize > MAX_PROCESSES {
+        return 0;
+    }
+    core::mem::take(&mut process_pending()[(pid - 1) as usize])
+}
+
+pub fn merge_process_pending_from_transport(pid: i32, pending: u64) -> i32 {
+    if pid <= 0 || pid as usize > MAX_PROCESSES {
+        return crate::abi::ESRCH as i32;
+    }
+    process_pending()[(pid - 1) as usize] |= pending;
+    0
+}
+
 #[cfg(any(test, feature = "harness"))]
 pub(crate) fn capture_process_pending_state_into(image: &mut ProcessPendingStateImage) {
     image.process_pending = *process_pending();

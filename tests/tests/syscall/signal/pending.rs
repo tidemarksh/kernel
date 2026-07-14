@@ -112,6 +112,26 @@ fn send_signal_to_pid_queues_process_pending_signal() {
 }
 
 #[test]
+fn supervisor_transport_moves_process_pending_bits_without_losing_target_bits() {
+    let _t = TestVm::new();
+    signal::queue_process_signal(42, SIGALRM);
+
+    let transported = signal::take_process_pending_for_transport(42);
+    assert_eq!(transported, 1u64 << (SIGALRM - 1));
+    assert_eq!(signal::take_process_pending_for_transport(42), 0);
+
+    signal::queue_process_signal(42, SIGURG);
+    assert_eq!(
+        signal::merge_process_pending_from_transport(42, transported),
+        0
+    );
+    assert_eq!(
+        signal::take_process_pending_for_transport(42),
+        (1u64 << (SIGALRM - 1)) | (1u64 << (SIGURG - 1))
+    );
+}
+
+#[test]
 fn blocked_process_pending_signal_stays_process_pending_until_unblocked_thread_delivers() {
     let mut t = TestVm::new();
     let sigchld_bit = 1u64 << (SIGCHLD - 1);

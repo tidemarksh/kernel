@@ -1311,6 +1311,16 @@ pub extern "C" fn supervisor_signal_boundary_check(vm_ptr: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_signal_transport_take(pid: i32) -> u64 {
+    super::signal::take_process_pending_for_transport(pid)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn supervisor_signal_transport_merge(pid: i32, pending: u64) -> i32 {
+    super::signal::merge_process_pending_from_transport(pid, pending)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_resume_blocked_syscall(vm_ptr: u32, flags: u32) -> i64 {
     super::blocked::resume_blocked_syscall(vm_ptr, flags)
 }

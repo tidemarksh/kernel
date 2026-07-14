@@ -1097,6 +1097,7 @@ pub use crate::supervisor::{
     supervisor_signal_control_kind_boundary_check, supervisor_signal_control_kind_signal_delivered,
     supervisor_signal_control_record, supervisor_signal_control_record_bytes,
     supervisor_signal_control_record_magic, supervisor_signal_pending_for_blocked_wait,
+    supervisor_signal_transport_merge, supervisor_signal_transport_take,
     supervisor_socket_bridge_active_fd, supervisor_socket_close_external_peer,
     supervisor_socket_commit_external_connect_result, supervisor_socket_connect_fd,
     supervisor_socket_connect_peer_addr, supervisor_socket_connect_peer_addr_for_fd,
