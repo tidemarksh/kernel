@@ -216,7 +216,7 @@ pub(super) fn runnable_override(vm_ptr: u32, tid: u32) -> Option<bool> {
     }
 }
 
-pub(super) fn clear_woken_futex_override(vm_ptr: u32, tid: u32) {
+pub(super) fn clear_blocked_override(vm_ptr: u32, tid: u32, status: u32) {
     if vm_ptr == 0 || tid == 0 {
         return;
     }
@@ -228,13 +228,17 @@ pub(super) fn clear_woken_futex_override(vm_ptr: u32, tid: u32) {
                 continue;
             }
             if current.event_kind == super::SUPERVISOR_THREAD_EVENT_KIND_BLOCKED
-                && current.status == crate::abi::STATUS_FUTEX_WAIT as u32
+                && current.status == status
             {
                 core::ptr::write(table.add(idx), ThreadEventState::empty());
             }
             return;
         }
     });
+}
+
+pub(super) fn clear_woken_futex_override(vm_ptr: u32, tid: u32) {
+    clear_blocked_override(vm_ptr, tid, crate::abi::STATUS_FUTEX_WAIT as u32);
 }
 
 pub(super) fn init_state() {

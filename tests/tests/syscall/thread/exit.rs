@@ -1,5 +1,6 @@
 use super::support::*;
 use core::sync::atomic::Ordering;
+use tidemark_kernel::syscall::pipe;
 
 fn read_u32_le(bytes: &[u8], offset: usize) -> u32 {
     let mut value = [0u8; 4];
@@ -364,6 +365,96 @@ fn contract_exit_group_terminates_sibling_thread_state_and_blocks_future_steps()
     assert_eq!(child.status, STATUS_FAULT);
     assert_eq!(child.exit_code, 9);
     assert_eq!(child.term_signal, 0);
+}
+
+#[test]
+fn contract_exit_group_publishes_pending_pipe_effects_from_every_thread() {
+    let mut t = TestVm::new();
+    let child_ptr = unsafe {
+        tidemark_kernel::alloc::alloc_zeroed(
+            core::mem::size_of::<ThreadState>() as u32,
+            core::mem::align_of::<ThreadState>() as u32,
+        )
+    };
+    assert_ne!(child_ptr, 0);
+    let child = unsafe { &mut *(child_ptr as *mut ThreadState) };
+    child.tid = 2;
+    child.guest_base = t.base;
+    child.process_ptr = t.vm.process_ptr;
+    child.completed_sync_effects = 0x40;
+    child.completed_pipe_sync_slots = 1 << 2;
+    child.completed_pipe_sync_write_slots = 1 << 2;
+    child.completed_pipe_sync_control_slots = 1 << 3;
+
+    t.vm.completed_sync_effects = 0x80;
+    t.vm.completed_pipe_sync_slots = 1 << 1;
+    t.vm.completed_pipe_sync_read_slots = 1 << 1;
+    t.vm.completed_pipe_fresh_slots = 1 << 4;
+
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    ps.thread_count
+        .store(2, core::sync::atomic::Ordering::Release);
+    ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, child_ptr, 0, 0);
+
+    assert_eq!(
+        thread_impl::sys_exit_group(&mut t.vm, t.base, 9),
+        STATUS_FAULT
+    );
+
+    for thread in [&t.vm, &*child] {
+        assert_eq!(thread.completed_sync_effects & 0xc0, 0xc0);
+        assert_eq!(thread.completed_pipe_sync_slots & 0x06, 0x06);
+        assert_eq!(thread.completed_pipe_sync_read_slots & 0x02, 0x02);
+        assert_eq!(thread.completed_pipe_sync_write_slots & 0x04, 0x04);
+        assert_eq!(thread.completed_pipe_sync_control_slots & 0x08, 0x08);
+        assert_eq!(thread.completed_pipe_fresh_slots & 0x10, 0x10);
+    }
+}
+
+#[test]
+fn contract_exit_group_publishes_final_fd_close_pipe_effects_to_every_thread() {
+    let mut t = TestVm::new();
+    let pipefd_addr = 0x4300u64;
+    assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) };
+    let pipe_slot =
+        supervisor_process_pipe_slot_for_fd(&mut t.vm as *mut ThreadState as u32, read_fd);
+    assert_ne!(pipe_slot, 0);
+
+    t.vm.completed_sync_effects = 0;
+    t.vm.completed_pipe_sync_slots = 0;
+    t.vm.completed_pipe_sync_read_slots = 0;
+    t.vm.completed_pipe_sync_write_slots = 0;
+    t.vm.completed_pipe_sync_control_slots = 0;
+    t.vm.completed_pipe_fresh_slots = 0;
+
+    let child_ptr = unsafe {
+        tidemark_kernel::alloc::alloc_zeroed(
+            core::mem::size_of::<ThreadState>() as u32,
+            core::mem::align_of::<ThreadState>() as u32,
+        )
+    };
+    assert_ne!(child_ptr, 0);
+    let child = unsafe { &mut *(child_ptr as *mut ThreadState) };
+    child.tid = 2;
+    child.guest_base = t.base;
+    child.process_ptr = t.vm.process_ptr;
+
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    ps.thread_count.store(2, Ordering::Release);
+    ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, child_ptr, 0, 0);
+
+    assert_eq!(
+        thread_impl::sys_exit_group(&mut t.vm, t.base, 9),
+        STATUS_FAULT
+    );
+
+    let pipe_bit = 1u64 << pipe_slot;
+    for thread in [&t.vm, &*child] {
+        assert_ne!(thread.completed_sync_effects & 1, 0);
+        assert_ne!(thread.completed_pipe_sync_slots & pipe_bit, 0);
+        assert_ne!(thread.completed_pipe_sync_control_slots & pipe_bit, 0);
+    }
 }
 
 #[test]

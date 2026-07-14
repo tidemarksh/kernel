@@ -1,5 +1,5 @@
 use super::entry::{find_free_fd, get_fd_entry, get_process_state, store_process_fd_entry_ptr};
-use super::ofd::table as ofd_table;
+use super::ofd::{table as ofd_table, with_allocation_lock};
 use crate::abi::*;
 use crate::guest_mem;
 use crate::types::{FdEntry, ThreadState};
@@ -58,7 +58,7 @@ fn flock_conflicts(held_mode: u32, requested_mode: u32) -> bool {
 pub fn sys_fcntl(vm: &mut ThreadState, base: u32, fd: u64, cmd: u64, arg: u64) -> i64 {
     unsafe {
         match cmd {
-            F_DUPFD => {
+            F_DUPFD => with_allocation_lock(|| {
                 let entry = match get_fd_entry(base, vm, fd) {
                     Some(entry) => entry,
                     None => return EBADF,
@@ -78,8 +78,8 @@ pub fn sys_fcntl(vm: &mut ThreadState, base: u32, fd: u64, cmd: u64, arg: u64) -
                     },
                 );
                 newfd as i64
-            }
-            F_DUPFD_CLOEXEC => {
+            }),
+            F_DUPFD_CLOEXEC => with_allocation_lock(|| {
                 let entry = match get_fd_entry(base, vm, fd) {
                     Some(entry) => entry,
                     None => return EBADF,
@@ -99,7 +99,7 @@ pub fn sys_fcntl(vm: &mut ThreadState, base: u32, fd: u64, cmd: u64, arg: u64) -
                     },
                 );
                 newfd as i64
-            }
+            }),
             F_GETFD => match get_fd_entry(base, vm, fd) {
                 Some(entry) => entry.fd_flags as i64,
                 None => EBADF,

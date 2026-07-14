@@ -695,6 +695,9 @@ pub fn attach_memfs_ptr(ptr: u32) {
     unsafe {
         core::ptr::write(core::ptr::addr_of_mut!(MEMFS_PTR), ptr as *mut MemFsHeader);
     }
+    // Runtime state attachment may follow an out-of-band metadata table copy.
+    // The pointer can stay stable while dentries change underneath the cache.
+    reset_lookup_cache_for_ptr(ptr as usize);
 }
 
 fn inodes() -> &'static mut [Inode] {
@@ -1830,6 +1833,22 @@ mod tests {
         let ino = create_file(dir, b"later.rb", 0o644);
         assert!(ino > 0);
         assert_eq!(lookup(dir, b"later.rb"), ino);
+    }
+
+    #[test]
+    fn lookup_cache_invalidates_when_same_memfs_state_is_reattached() {
+        let _t = TestVm::new();
+
+        let ino = create_dir(1, b"before", 0o755);
+        assert!(ino > 0);
+        assert_eq!(lookup(1, b"after"), 0);
+
+        let entry = &mut dir_entries()[1];
+        entry.name[..5].copy_from_slice(b"after");
+        entry.name_len = 5;
+
+        attach_memfs_ptr(memfs_ptr());
+        assert_eq!(lookup(1, b"after"), ino);
     }
 
     #[test]

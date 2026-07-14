@@ -1,6 +1,6 @@
 use super::close::release_ofd_id;
 use super::entry::{find_free_fd, get_process_state, store_process_fd_entry_ptr};
-use super::ofd::{alloc as alloc_ofd, table as ofd_table};
+use super::ofd::{alloc as alloc_ofd, table as ofd_table, with_allocation_lock};
 use crate::abi::*;
 use crate::fs::fd_table::FD_CLOEXEC;
 use crate::types::{FdEntry, ThreadState};
@@ -42,7 +42,7 @@ pub fn open_pipe(
     is_read_end: bool,
     flags: i32,
 ) -> i64 {
-    unsafe {
+    with_allocation_lock(|| unsafe {
         let fd_type = FD_TYPE_PIPE;
         let access_mode = if is_read_end { O_RDONLY } else { O_WRONLY };
         let host_fd = if is_read_end {
@@ -63,12 +63,12 @@ pub fn open_pipe(
             Some(fd) => fd as i64,
             None => EMFILE,
         }
-    }
+    })
 }
 
 /// Open a socket FD. `socket_idx` is the index into the socket table.
 pub fn open_socket(vm: &mut ThreadState, base: u32, socket_idx: u32, flags: i32) -> i64 {
-    unsafe {
+    with_allocation_lock(|| unsafe {
         let ofd_id = alloc_ofd(FD_TYPE_SOCKET, O_RDWR | (flags & O_NONBLOCK));
         if ofd_id == 0 {
             return EMFILE;
@@ -79,12 +79,12 @@ pub fn open_socket(vm: &mut ThreadState, base: u32, socket_idx: u32, flags: i32)
             Some(fd) => fd as i64,
             None => EMFILE,
         }
-    }
+    })
 }
 
 /// Open an epoll FD. epoll_idx is the index into the epoll instance table.
 pub fn open_epoll(vm: &mut ThreadState, base: u32, epoll_idx: u32, flags: i32) -> i64 {
-    unsafe {
+    with_allocation_lock(|| unsafe {
         let ofd_id = alloc_ofd(FD_TYPE_EPOLL, O_RDWR);
         if ofd_id == 0 {
             return EMFILE;
@@ -95,13 +95,13 @@ pub fn open_epoll(vm: &mut ThreadState, base: u32, epoll_idx: u32, flags: i32) -
             Some(fd) => fd as i64,
             None => EMFILE,
         }
-    }
+    })
 }
 
 /// Open an eventfd FD backed by the OFD table. The counter lives in `offset`
 /// so dup/fork continue to share the same eventfd object.
 pub fn open_eventfd(vm: &mut ThreadState, base: u32, initval: u64, flags: i32) -> i64 {
-    unsafe {
+    with_allocation_lock(|| unsafe {
         let ofd_id = alloc_ofd(FD_TYPE_EVENTFD, O_RDWR | (flags & O_NONBLOCK));
         if ofd_id == 0 {
             return EMFILE;
@@ -113,12 +113,12 @@ pub fn open_eventfd(vm: &mut ThreadState, base: u32, initval: u64, flags: i32) -
             Some(fd) => fd as i64,
             None => EMFILE,
         }
-    }
+    })
 }
 
 /// Open a timerfd FD backed by the shared timerfd table.
 pub fn open_timerfd(vm: &mut ThreadState, base: u32, timerfd_idx: u32, flags: i32) -> i64 {
-    unsafe {
+    with_allocation_lock(|| unsafe {
         let ofd_id = alloc_ofd(FD_TYPE_TIMERFD, O_RDONLY | (flags & O_NONBLOCK));
         if ofd_id == 0 {
             return EMFILE;
@@ -129,12 +129,12 @@ pub fn open_timerfd(vm: &mut ThreadState, base: u32, timerfd_idx: u32, flags: i3
             Some(fd) => fd as i64,
             None => EMFILE,
         }
-    }
+    })
 }
 
 /// Open a signalfd FD backed by the shared signalfd table.
 pub fn open_signalfd(vm: &mut ThreadState, base: u32, signalfd_idx: u32, flags: i32) -> i64 {
-    unsafe {
+    with_allocation_lock(|| unsafe {
         let ofd_id = alloc_ofd(FD_TYPE_SIGNALFD, O_RDONLY | (flags & O_NONBLOCK));
         if ofd_id == 0 {
             return EMFILE;
@@ -145,12 +145,12 @@ pub fn open_signalfd(vm: &mut ThreadState, base: u32, signalfd_idx: u32, flags: 
             Some(fd) => fd as i64,
             None => EMFILE,
         }
-    }
+    })
 }
 
 /// Open `/dev/null` as a synthetic character device.
 pub fn open_devnull(vm: &mut ThreadState, base: u32, flags: i32) -> i64 {
-    unsafe {
+    with_allocation_lock(|| unsafe {
         let ofd_id = alloc_ofd(
             FD_TYPE_DEVNULL,
             flags & (OPEN_ACCESS_MODE_MASK | O_APPEND | O_NONBLOCK),
@@ -163,11 +163,11 @@ pub fn open_devnull(vm: &mut ThreadState, base: u32, flags: i32) -> i64 {
             Some(fd) => fd as i64,
             None => EMFILE,
         }
-    }
+    })
 }
 
 pub fn open_pty_slave(vm: &mut ThreadState, base: u32, pty_idx: u32, flags: i32) -> i64 {
-    unsafe {
+    with_allocation_lock(|| unsafe {
         let access_mode = flags & OPEN_ACCESS_MODE_MASK;
         if access_mode != O_RDONLY && access_mode != O_WRONLY && access_mode != O_RDWR {
             return EINVAL;
@@ -190,11 +190,11 @@ pub fn open_pty_slave(vm: &mut ThreadState, base: u32, pty_idx: u32, flags: i32)
                 EMFILE
             }
         }
-    }
+    })
 }
 
 pub fn open_pty_master(vm: &mut ThreadState, base: u32, pty_idx: u32, flags: i32) -> i64 {
-    unsafe {
+    with_allocation_lock(|| unsafe {
         let access_mode = flags & OPEN_ACCESS_MODE_MASK;
         if access_mode != O_RDONLY && access_mode != O_WRONLY && access_mode != O_RDWR {
             return EINVAL;
@@ -217,12 +217,12 @@ pub fn open_pty_master(vm: &mut ThreadState, base: u32, pty_idx: u32, flags: i32
                 EMFILE
             }
         }
-    }
+    })
 }
 
 /// Open a file by inode number. Allocates OFD and FD. Returns FD or error.
 pub fn open_file(vm: &mut ThreadState, base: u32, ino: u32, flags: i32) -> i64 {
-    unsafe {
+    with_allocation_lock(|| unsafe {
         let fd_type = FD_TYPE_FILE;
         let ofd_id = alloc_ofd(
             fd_type,
@@ -237,5 +237,5 @@ pub fn open_file(vm: &mut ThreadState, base: u32, ino: u32, flags: i32) -> i64 {
             Some(fd) => fd as i64,
             None => EMFILE,
         }
-    }
+    })
 }

@@ -144,6 +144,28 @@ pub fn process_fd_is_open(vm_ptr: u32, fd: u32) -> i32 {
     i32::from(process_ofd_for_fd(vm_ptr, fd) != 0)
 }
 
+pub fn process_fd_table_is_coherent(vm_ptr: u32) -> i32 {
+    let Some(vm) = super::thread::state_from_ptr(vm_ptr) else {
+        return 0;
+    };
+    if process_state_from_vm_ptr(vm_ptr).is_none() {
+        return 0;
+    }
+
+    for fd in 0..MAX_FDS {
+        let entry = fd_table::load_process_fd_entry(vm.guest_base, vm.process_ptr, fd);
+        if entry.ofd_id == 0 {
+            continue;
+        }
+        if entry.ofd_id as usize >= MAX_FDS
+            || fd_table::get_ofd_by_id(entry.ofd_id).is_none_or(|ofd| ofd.refcount <= 0)
+        {
+            return 0;
+        }
+    }
+    1
+}
+
 pub(super) fn process_fd_ofd(vm_ptr: u32, fd: u32) -> Option<(u32, OpenFileDesc)> {
     let ofd_id = process_ofd_for_fd(vm_ptr, fd);
     if ofd_id == 0 {

@@ -938,6 +938,7 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(supervisor_process_ofd_for_fd(0, 1), 0);
     assert_eq!(supervisor_process_fd_flags_for_fd(0, 1), 0);
     assert_eq!(supervisor_process_fd_is_open(0, 1), 0);
+    assert_eq!(supervisor_process_fd_table_is_coherent(0), 0);
     assert_eq!(supervisor_ofd_fd_type(0), 0);
     assert_eq!(supervisor_ofd_host_fd(0), -1);
     assert_eq!(supervisor_ofd_status_flags(0), 0);
@@ -1240,8 +1241,8 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         0
     );
     assert_eq!(supervisor_fs_backing_fill_span_offset(), 0);
-    assert_eq!(supervisor_fs_backing_fill_span_end(), 8 * 1024);
-    assert_eq!(supervisor_fs_backing_fill_span_length(), 8 * 1024);
+    assert_eq!(supervisor_fs_backing_fill_span_end(), 64 * 1024);
+    assert_eq!(supervisor_fs_backing_fill_span_length(), 64 * 1024);
     assert_eq!(
         supervisor_fs_backing_fill_span_decision(
             tidemark_kernel::fs::ring_buffer::FS_OP_READ,
@@ -1271,6 +1272,17 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
             | supervisor_fs_response_flag_apply_local_metadata()
             | supervisor_fs_response_flag_clear_tombstones()
             | supervisor_fs_response_flag_process_owner_matches()
+    );
+    assert_ne!(
+        supervisor_fs_response_disposition(
+            0,
+            7,
+            tidemark_kernel::fs::ring_buffer::FS_OP_READ,
+            1,
+            0,
+            0,
+        ) & supervisor_fs_response_flag_queue_thread_worker_writes(),
+        0,
     );
     assert_ne!(
         supervisor_fs_response_disposition(
@@ -1400,6 +1412,19 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
             0,
         ),
         0
+    );
+    assert_eq!(
+        supervisor_fs_completion_decision(
+            0,
+            tidemark_kernel::fs::ring_buffer::FS_OP_READ,
+            0,
+            1,
+            0,
+            0,
+            1,
+            1,
+        ),
+        supervisor_fs_completion_flag_regular_file_request()
     );
     assert_eq!(
         supervisor_fs_dirty_page_decision(
@@ -1539,6 +1564,25 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
     assert_eq!(
         supervisor_fs_dirty_prepare_decision(
             2,
+            supervisor_fs_dirty_page_op_write(),
+            3,
+            1,
+            6,
+            2,
+            0,
+            1,
+            2,
+            1,
+        ),
+        0
+    );
+    assert_eq!(
+        supervisor_fs_dirty_prepare_publish_mode(),
+        supervisor_fs_dirty_prepare_publish_none()
+    );
+    assert_eq!(
+        supervisor_fs_dirty_prepare_decision(
+            2,
             supervisor_fs_dirty_page_op_truncate(),
             6,
             0,
@@ -1619,6 +1663,24 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
             64,
             0,
             1,
+            0,
+            0,
+        ),
+        supervisor_fs_sync_action_externalize() as i32
+    );
+    assert_eq!(
+        supervisor_fs_data_sync_decision(
+            supervisor_fs_data_sync_kind_restore(),
+            2,
+            0,
+            0,
+            0,
+            0,
+            1,
+            tidemark_kernel::fs::memfs::S_IFREG | 0o644,
+            64,
+            7,
+            0,
             0,
             0,
         ),
@@ -3468,6 +3530,18 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_debug_snapshot(too_small.as_mut_ptr() as u32, too_small.len() as u32),
         ENOSPC as i32
     );
+}
+
+#[test]
+fn supervisor_process_fd_table_coherence_requires_live_ofds() {
+    let mut t = TestVm::new();
+    let vm_ptr = &mut t.vm as *mut tidemark_kernel::types::ThreadState as u32;
+
+    assert_eq!(supervisor_process_fd_table_is_coherent(vm_ptr), 1);
+    process_set_fd_entry(vm_ptr, 5, (MAX_FDS - 1) as u32, 0);
+    assert_eq!(supervisor_process_fd_table_is_coherent(vm_ptr), 0);
+    process_set_fd_entry(vm_ptr, 5, 0, 0);
+    assert_eq!(supervisor_process_fd_table_is_coherent(vm_ptr), 1);
 }
 
 fn set_blocked_resume_syscall(

@@ -477,9 +477,8 @@ pub fn terminate_process_with_reason(
         return STATUS_FAULT;
     }
 
-    crate::supervisor::complete_thread_group_exit(vm, base, exit_code, term_signal);
-
     crate::fs::fd_table::close_all_for_process(base, vm);
+    crate::supervisor::complete_thread_group_exit(vm, base, exit_code, term_signal);
     crate::fs::fd_table::clear_blocked_ofd_pin(vm);
 
     vm.status = STATUS_FAULT;

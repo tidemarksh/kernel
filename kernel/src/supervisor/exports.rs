@@ -2328,6 +2328,11 @@ pub extern "C" fn supervisor_process_fd_is_open(vm_ptr: u32, fd: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn supervisor_process_fd_table_is_coherent(vm_ptr: u32) -> i32 {
+    super::fd::process_fd_table_is_coherent(vm_ptr)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn supervisor_ofd_fd_type(ofd_id: u32) -> i32 {
     super::fd::ofd_fd_type(ofd_id)
 }

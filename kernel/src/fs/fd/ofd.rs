@@ -5,6 +5,7 @@ use super::entry::{
 };
 use crate::abi::*;
 use crate::types::{FdEntry, OpenFileDesc, ThreadState};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 const OFD_PIPE_EPIPE_SYNCED: u32 = 1 << 31;
 const OFD_PIPE_EOF_SYNCED: u32 = 1 << 30;
@@ -15,6 +16,7 @@ struct OfdState {
     table: [OpenFileDesc; MAX_FDS],
     reserved: [u64; OFD_RESERVED_WORDS],
     offset_floor: [u64; MAX_FDS],
+    allocation_lock: AtomicU32,
 }
 
 /// Pointer to OFD state in kernel Worker linear memory.
@@ -31,6 +33,19 @@ pub(in crate::fs) fn table() -> &'static mut [OpenFileDesc; MAX_FDS] {
     &mut state().table
 }
 
+pub(in crate::fs) fn with_allocation_lock<T>(f: impl FnOnce() -> T) -> T {
+    let lock = &state().allocation_lock;
+    while lock
+        .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        core::hint::spin_loop();
+    }
+    let result = f();
+    lock.store(0, Ordering::Release);
+    result
+}
+
 pub fn ofd_table_ptr() -> u32 {
     core::ptr::addr_of_mut!(state().table) as u32
 }
@@ -44,7 +59,7 @@ pub fn ofd_state_ptr() -> u32 {
 }
 
 pub fn ofd_state_bytes() -> u32 {
-    core::mem::size_of::<OfdState>() as u32
+    core::mem::offset_of!(OfdState, allocation_lock) as u32
 }
 
 pub fn attach_ofd_state_ptr(ptr: u32) {
@@ -414,7 +429,15 @@ pub fn set_offset_by_id(ofd_id: u32, offset: u64) {
 /// Get the current offset of the OFD associated with fd.
 pub fn get_offset(base: u32, vm: &ThreadState, fd: u64) -> u64 {
     unsafe {
-        get_fd_entry(base, vm, fd).map_or(0, |entry| table()[entry.ofd_id as usize].offset as u64)
+        get_fd_entry(base, vm, fd).map_or(0, |entry| {
+            let ofd = table()[entry.ofd_id as usize];
+            let offset = ofd.offset as u64;
+            if ofd.fd_type == FD_TYPE_FILE {
+                offset.max(get_offset_floor_by_id(entry.ofd_id))
+            } else {
+                offset
+            }
+        })
     }
 }
 

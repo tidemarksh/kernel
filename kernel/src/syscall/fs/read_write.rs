@@ -308,7 +308,7 @@ fn read_regular_file_to_guest(
         return EBADF;
     }
 
-    let start_offset = offset.unwrap_or(ofd.offset as u64);
+    let start_offset = offset.unwrap_or_else(|| fd_table::get_offset(base, vm, fd));
     let total = read_regular_inode_to_guest(vm, base, ofd.ino, guest_buf, count, start_offset);
     if total > 0 && offset.is_none() {
         fd_table::advance_offset(base, vm, fd, total as u64);

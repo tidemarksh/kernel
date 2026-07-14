@@ -27,7 +27,6 @@ static BACKING_OBJECT_DECISION_LOCK: AtomicU32 = AtomicU32::new(0);
 static mut LAST_BACKING_OBJECT_DECISION: BackingObjectDecision = BackingObjectDecision::empty();
 const MAX_SUPERVISOR_FS_INODES: u32 = 65_536;
 const DIRECT_BACKING_MMAP_MIN_BYTES: u64 = 128 * 1024;
-const SMALL_READ_BACKING_FILL_PREFETCH_BYTES: u64 = 8 * 1024;
 const READ_BACKING_FILL_PREFETCH_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone, Copy)]
@@ -492,12 +491,10 @@ pub fn backing_fill_span_decision(
         } else if let Some(requested_end) = offset.checked_add(length) {
             let aligned_offset = offset / page_size * page_size;
             let fill_end = if opcode == ring_buffer::FS_OP_READ {
-                let prefetch_bytes = if length <= page_size {
-                    SMALL_READ_BACKING_FILL_PREFETCH_BYTES
-                } else {
-                    READ_BACKING_FILL_PREFETCH_BYTES
-                };
-                core::cmp::max(requested_end, aligned_offset.saturating_add(prefetch_bytes))
+                core::cmp::max(
+                    requested_end,
+                    aligned_offset.saturating_add(READ_BACKING_FILL_PREFETCH_BYTES),
+                )
             } else {
                 requested_end
             };
@@ -1097,7 +1094,7 @@ pub fn dirty_prepare_decision(
                 super::SUPERVISOR_FS_DIRTY_PREPARE_PUBLISH_MISSING
             } else if op == super::SUPERVISOR_FS_DIRTY_PAGE_OP_WRITE
                 && source_is_regular != 0
-                && published_size != expected_size
+                && expected_size > published_size
             {
                 super::SUPERVISOR_FS_DIRTY_PREPARE_PUBLISH_SIZE_UPDATE
             } else {
@@ -1151,10 +1148,11 @@ pub fn data_sync_decision(
             }
         }
         super::SUPERVISOR_FS_DATA_SYNC_KIND_RESTORE => {
+            let target_type = target_mode & memfs::S_IFMT;
             if published_present == 0
                 || !regular_mode(published_mode)
                 || published_size <= 0
-                || !regular_mode(target_mode)
+                || (target_type != 0 && !regular_mode(target_mode))
             {
                 return super::SUPERVISOR_FS_SYNC_ACTION_NONE as i32;
             }
@@ -1350,7 +1348,7 @@ pub fn completion_decision(
     result: i64,
     host_memfs_mutated: u32,
     host_ofd_state_changed: u32,
-    pending_ring_request: u32,
+    _pending_ring_request: u32,
     regular_file_request: u32,
 ) -> u32 {
     let fs_succeeded = result >= 0;
@@ -1364,17 +1362,13 @@ pub fn completion_decision(
     let ofd_state_may_change = (effects & crate::syscall::fs::FS_EFFECT_SHARED_OFD_STATE) != 0;
 
     let mut flags = 0u32;
-    if host_memfs_mutated != 0
-        || (fs_succeeded && (memfs_state_may_change || pending_ring_request != 0))
-    {
+    if host_memfs_mutated != 0 || (fs_succeeded && memfs_state_may_change) {
         flags |= super::SUPERVISOR_FS_COMPLETION_FLAG_MEMFS_DIRTY;
     }
     if fs_succeeded && memfs_publish_may_be_ready {
         flags |= super::SUPERVISOR_FS_COMPLETION_FLAG_MEMFS_PUBLISH_READY;
     }
-    if host_ofd_state_changed != 0
-        || (fs_succeeded && (ofd_state_may_change || pending_ring_request != 0))
-    {
+    if host_ofd_state_changed != 0 || (fs_succeeded && ofd_state_may_change) {
         flags |= super::SUPERVISOR_FS_COMPLETION_FLAG_OFD_STATE_CHANGED;
     }
     if regular_file_request != 0 {
@@ -1405,6 +1399,8 @@ pub fn response_disposition(
             || owner_async_status == crate::abi::STATUS_EXECVE_SPAWN
             || last_status == crate::abi::STATUS_EXECVE_SPAWN);
 
+    let response_writes_are_already_shared = opcode == ring_buffer::FS_OP_MMAP
+        || (opcode == ring_buffer::FS_OP_READ && pending_regular_file_request(vm_ptr).is_some());
     let mut flags = 0u32;
     if process_owner_matches {
         flags |= super::SUPERVISOR_FS_RESPONSE_FLAG_PROCESS_OWNER_MATCHES;
@@ -1419,7 +1415,7 @@ pub fn response_disposition(
     if !failed_execve_child_owner && process_owner_matches {
         flags |= super::SUPERVISOR_FS_RESPONSE_FLAG_APPLY_LOCAL_METADATA;
     }
-    if !failed_execve_child_owner && opcode != ring_buffer::FS_OP_MMAP {
+    if !failed_execve_child_owner && !response_writes_are_already_shared {
         flags |= super::SUPERVISOR_FS_RESPONSE_FLAG_QUEUE_THREAD_WORKER_WRITES;
     }
     if opcode == ring_buffer::FS_OP_CLOSE || opcode == ring_buffer::FS_OP_EXECVE {

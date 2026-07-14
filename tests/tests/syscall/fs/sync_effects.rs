@@ -1,4 +1,5 @@
 use super::support::*;
+use tidemark_kernel::syscall::fs::FS_EFFECT_SHARED_OFD_STATE;
 
 fn encode_i(opcode: u32, rd: u32, funct3: u32, rs1: u32, imm: i32) -> u32 {
     (((imm as u32) & 0x0fff) << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode
@@ -26,7 +27,7 @@ fn resume_from_fs_rejects_unbacked_fs_ring_base() {
 }
 
 #[test]
-fn thread_step_defers_openat_boundary_and_preserves_fork_shared_sync_effect() {
+fn thread_step_defers_openat_to_fs_control_before_resuming_remaining_ops() {
     let mut t = TestVm::new();
     t.memfs.create_file(b"shared-open.txt", b"contents");
     let path_addr = t.write_path(0x5800, b"/shared-open.txt");
@@ -61,15 +62,25 @@ fn thread_step_defers_openat_boundary_and_preserves_fork_shared_sync_effect() {
     let vm_ptr = &mut t.vm as *mut _ as u32;
     let remaining = tidemark_kernel::abi::thread_step(vm_ptr, 3);
 
-    assert_eq!(remaining, 0);
+    assert_eq!(remaining, 2);
+    assert_eq!(t.vm.status, STATUS_FS);
+    assert_eq!(t.vm.pc, code_addr + 4);
+    assert_eq!(t.vm.x[5], 0);
+    assert_eq!(t.vm.x[17], SYS_OPENAT);
+    assert_eq!(
+        fs::pending_request_effects(vm_ptr, t.base),
+        FS_EFFECT_SHARED_OFD_STATE
+    );
+
+    fs::process_pending_requests(vm_ptr, t.base);
+    let fd = fs::resume_from_fs(vm_ptr, t.base);
+    assert!(fd >= 3);
+    assert_eq!(tidemark_kernel::abi::thread_step(vm_ptr, remaining), 0);
     assert_eq!(t.vm.status, STATUS_OK);
     assert_eq!(t.vm.pc, code_addr + 12);
-    assert!(t.vm.x[10] as i64 >= 3);
+    assert_eq!(t.vm.x[10] as i64, fd);
     assert_eq!(t.vm.x[5], 7);
     assert_eq!(t.vm.x[17], SYS_NEWFSTATAT);
-    let effects =
-        tidemark_kernel::abi::supervisor_thread_take_completed_sync_effects(vm_ptr, t.vm.status);
-    assert_ne!(effects & SYNC_EFFECT_FORK_SHARED_OFD_STATE, 0);
 }
 
 #[test]
@@ -228,7 +239,7 @@ fn dispatch_mmap_falls_back_to_fs_ring_on_external_file_miss() {
 }
 
 #[test]
-fn dispatch_openat_marks_fork_shared_ofd_sync_effect_without_harness_trace() {
+fn dispatch_openat_exposes_fork_shared_ofd_effect_to_fs_control() {
     let mut t = TestVm::new();
     t.memfs.create_file(b"shared-open.txt", b"contents");
     let path_addr = t.write_path(0x5800, b"/shared-open.txt");
@@ -241,13 +252,16 @@ fn dispatch_openat_marks_fork_shared_ofd_sync_effect_without_harness_trace() {
 
     assert_eq!(
         tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
-        STATUS_OK
+        STATUS_FS
     );
-    assert!(t.vm.x[10] as i64 >= 3);
-    assert_ne!(
-        t.vm.completed_sync_effects & SYNC_EFFECT_FORK_SHARED_OFD_STATE,
-        0
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    assert_eq!(
+        fs::pending_request_effects(vm_ptr, t.base),
+        FS_EFFECT_SHARED_OFD_STATE
     );
+    fs::process_pending_requests(vm_ptr, t.base);
+    let fd = fs::resume_from_fs(vm_ptr, t.base);
+    assert!(fd >= 3);
 }
 
 #[test]

@@ -210,6 +210,19 @@ fn syscall_dispatch_reads_external_partial_page_hit_via_fs_ring() {
     assert_eq!(supervisor_shadow_fs_control_count(), 1);
     let vm_ptr = &mut t.vm as *mut _ as u32;
     assert_eq!(supervisor_fs_pending_ring_request(vm_ptr), 1);
+    let pending_effects = thread_pending_fs_effects(vm_ptr);
+    assert_eq!(
+        pending_effects & tidemark_kernel::syscall::fs::FS_EFFECT_MEMFS_MUTATION,
+        0
+    );
+    assert_eq!(
+        pending_effects & tidemark_kernel::syscall::fs::FS_EFFECT_MEMFS_FILE_DATA,
+        0
+    );
+    assert_ne!(
+        pending_effects & tidemark_kernel::syscall::fs::FS_EFFECT_SHARED_OFD_STATE,
+        0
+    );
     assert_eq!(i64::from(supervisor_fs_pending_regular_file_fd(vm_ptr)), fd);
     assert_ne!(supervisor_fs_pending_regular_file_ofd(vm_ptr), 0);
     assert_eq!(supervisor_fs_pending_backing_fill_ino(vm_ptr), ino);
@@ -228,14 +241,14 @@ fn syscall_dispatch_reads_external_partial_page_hit_via_fs_ring() {
     let completion_decision = supervisor_fs_completion_decision(
         vm_ptr,
         thread_pending_fs_opcode(vm_ptr),
-        thread_pending_fs_effects(vm_ptr),
+        pending_effects,
         8192,
         0,
         0,
         supervisor_fs_pending_ring_request(vm_ptr),
         1,
     );
-    assert_ne!(
+    assert_eq!(
         completion_decision & supervisor_fs_completion_flag_memfs_dirty(),
         0
     );

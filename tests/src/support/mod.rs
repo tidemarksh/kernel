@@ -3177,16 +3177,8 @@ pub(crate) fn consume_relative_futex_timeout(
 }
 
 pub(crate) fn consume_sleep_duration(vm: &ThreadState) -> Result<(), String> {
-    if vm.fault_pc >= 1_000_000_000 {
-        return Err(format!(
-            "invalid sleep duration timespec: sec={} nsec={}",
-            vm.fault_addr, vm.fault_pc
-        ));
-    }
-    tidemark_kernel::syscall::time::advance_monotonic_duration(Duration::new(
-        vm.fault_addr,
-        vm.fault_pc as u32,
-    ));
+    let (sec, nsec) = tidemark_kernel::syscall::time::thread_sleep_remaining_timespec(vm);
+    tidemark_kernel::syscall::time::advance_monotonic_duration(Duration::new(sec, nsec as u32));
     Ok(())
 }
 

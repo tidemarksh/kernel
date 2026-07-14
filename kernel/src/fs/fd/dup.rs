@@ -2,7 +2,7 @@ use super::entry::{
     clear_process_fd_entry_ptr, find_free_fd, get_fd_entry, get_process_state, load_fd_entry_ptr,
     store_process_fd_entry_ptr,
 };
-use super::ofd::table as ofd_table;
+use super::ofd::{table as ofd_table, with_allocation_lock};
 use crate::abi::*;
 use crate::types::{FdEntry, ThreadState};
 
@@ -39,7 +39,7 @@ fn record_fd_duplicated(
 
 /// dup(oldfd) -> newfd
 pub fn sys_dup(vm: &mut ThreadState, base: u32, oldfd: u64) -> i64 {
-    unsafe {
+    with_allocation_lock(|| unsafe {
         let entry = match get_fd_entry(base, vm, oldfd) {
             Some(entry) => entry,
             None => return EBADF,
@@ -60,12 +60,12 @@ pub fn sys_dup(vm: &mut ThreadState, base: u32, oldfd: u64) -> i64 {
         );
         record_fd_duplicated(vm, base, oldfd, newfd as u64, entry.ofd_id, 0);
         newfd as i64
-    }
+    })
 }
 
 /// dup3(oldfd, newfd, flags) -> newfd
 pub fn sys_dup3(vm: &mut ThreadState, base: u32, oldfd: u64, newfd: u64, flags: u64) -> i64 {
-    unsafe {
+    with_allocation_lock(|| unsafe {
         if flags & !(O_CLOEXEC as u64) != 0 {
             return EINVAL;
         }
@@ -117,5 +117,5 @@ pub fn sys_dup3(vm: &mut ThreadState, base: u32, oldfd: u64, newfd: u64, flags: 
         );
         record_fd_duplicated(vm, base, oldfd, newfd, entry.ofd_id, cloexec);
         newfd as i64
-    }
+    })
 }

@@ -278,6 +278,7 @@ pub fn resume_wait4(vm_ptr: u32, base: u32) -> i64 {
 
         vm.x[10] = result as u64;
         vm.status = STATUS_OK;
+        super::event::clear_blocked_override(vm_ptr, vm.tid as u32, STATUS_WAIT4 as u32);
         crate::syscall::signal::check_pending(vm, base);
         result
     }

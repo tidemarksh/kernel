@@ -14,6 +14,41 @@ fn read_u64_le(bytes: &[u8], offset: usize) -> u64 {
     u64::from_le_bytes(value)
 }
 
+fn write_u32_le(bytes: &mut [u8], offset: usize, value: u32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_u64_le(bytes: &mut [u8], offset: usize, value: u64) {
+    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+fn submit_wait4_blocked_event(vm_ptr: u32, tid: u32) {
+    let mut event = [0u8; 80];
+    write_u32_le(&mut event, 0, supervisor_thread_event_record_magic());
+    write_u32_le(&mut event, 4, supervisor_abi_version());
+    write_u32_le(&mut event, 8, supervisor_thread_event_record_bytes());
+    write_u32_le(&mut event, 12, supervisor_thread_event_kind_blocked());
+    write_u64_le(&mut event, 16, 1);
+    write_u64_le(&mut event, 24, vm_ptr as u64);
+    write_u32_le(&mut event, 36, tid);
+    write_u32_le(&mut event, 40, STATUS_WAIT4 as u32);
+    assert_eq!(
+        supervisor_submit_thread_event(event.as_ptr() as u32, event.len() as u32),
+        0
+    );
+}
+
+fn install_current_thread_record(t: &mut TestVm) {
+    let vm_ptr = (&mut t.vm as *mut ThreadState) as u32;
+    let tid = t.vm.tid;
+    unsafe {
+        let ps = &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState);
+        ps.threads[(tid - 1) as usize] = ThreadRecord::new(tid, THREAD_RUNNING, vm_ptr, 0, 0);
+        ps.thread_count
+            .store(1, std::sync::atomic::Ordering::Release);
+    }
+}
+
 #[test]
 fn semantics_waitid_wnowait_reports_without_reaping() {
     let mut t = TestVm::new();
@@ -64,6 +99,41 @@ fn semantics_waitid_wnowait_reports_without_reaping() {
         0,
     );
     assert_eq!(ret, ECHILD);
+}
+
+#[test]
+fn resume_wait4_clears_stale_blocked_supervisor_event() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    install_current_thread_record(&mut t);
+    let vm_ptr = (&mut t.vm as *mut ThreadState) as u32;
+    let child = process_impl::sys_fork(&mut t.vm, t.base, 0, 0, 0, 0, 0) as i32;
+    assert!(child > 0);
+    t.vm.status = STATUS_OK;
+
+    assert_eq!(
+        process_impl::sys_wait4(&mut t.vm, t.base, child as i64, 0, 0, 0),
+        0
+    );
+    assert_eq!(t.vm.status, STATUS_WAIT4);
+    submit_wait4_blocked_event(vm_ptr, t.vm.tid as u32);
+    process_impl::record_child_exit(child, 0);
+
+    assert_eq!(process_impl::resume_wait4(vm_ptr, t.base), child as i64);
+    assert_eq!(t.vm.status, STATUS_OK);
+
+    let mut snapshot = vec![0u8; supervisor_thread_state_snapshot_bytes() as usize];
+    assert_eq!(
+        supervisor_thread_state_snapshot(
+            vm_ptr,
+            snapshot.as_mut_ptr() as u32,
+            snapshot.len() as u32,
+        ),
+        supervisor_thread_state_snapshot_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&snapshot, 32 + 4), THREAD_RUNNING as u32);
+    assert_eq!(read_u32_le(&snapshot, 32 + 12), STATUS_OK as u32);
 }
 
 #[test]

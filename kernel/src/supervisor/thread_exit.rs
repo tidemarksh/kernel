@@ -258,6 +258,12 @@ pub fn complete_thread_group_exit(
 ) {
     LAST_GROUP_EXIT_SOURCE_VM_PTR.store(vm as *mut ThreadState as u32, Ordering::Release);
     let process_ptr = vm.process_ptr;
+    let mut completed_sync_effects = vm.completed_sync_effects;
+    let mut completed_pipe_sync_slots = vm.completed_pipe_sync_slots;
+    let mut completed_pipe_sync_read_slots = vm.completed_pipe_sync_read_slots;
+    let mut completed_pipe_sync_write_slots = vm.completed_pipe_sync_write_slots;
+    let mut completed_pipe_sync_control_slots = vm.completed_pipe_sync_control_slots;
+    let mut completed_pipe_fresh_slots = vm.completed_pipe_fresh_slots;
     unsafe {
         if process_ptr == 0 {
             vm.exit_code = exit_code;
@@ -268,8 +274,19 @@ pub fn complete_thread_group_exit(
             vm.clear_child_tid = 0;
             return;
         }
-
         let ps = &mut *((base as u64 + process_ptr as u64) as *mut ProcessState);
+        for record in ps.threads.iter() {
+            let Some(thread_vm) = thread_state_from_record_ptr(record.thread_ptr) else {
+                continue;
+            };
+            let thread_vm = &*thread_vm;
+            completed_sync_effects |= thread_vm.completed_sync_effects;
+            completed_pipe_sync_slots |= thread_vm.completed_pipe_sync_slots;
+            completed_pipe_sync_read_slots |= thread_vm.completed_pipe_sync_read_slots;
+            completed_pipe_sync_write_slots |= thread_vm.completed_pipe_sync_write_slots;
+            completed_pipe_sync_control_slots |= thread_vm.completed_pipe_sync_control_slots;
+            completed_pipe_fresh_slots |= thread_vm.completed_pipe_fresh_slots;
+        }
         for record in ps.threads.iter_mut() {
             if record.state == THREAD_NONE || record.state == THREAD_DEAD {
                 continue;
@@ -310,6 +327,16 @@ pub fn complete_thread_group_exit(
                 crate::fs::fd_table::clear_blocked_ofd_pin(thread_vm);
             }
 
+            if let Some(thread_vm) = thread_vm_ptr {
+                let thread_vm = &mut *thread_vm;
+                thread_vm.completed_sync_effects = completed_sync_effects;
+                thread_vm.completed_pipe_sync_slots = completed_pipe_sync_slots;
+                thread_vm.completed_pipe_sync_read_slots = completed_pipe_sync_read_slots;
+                thread_vm.completed_pipe_sync_write_slots = completed_pipe_sync_write_slots;
+                thread_vm.completed_pipe_sync_control_slots = completed_pipe_sync_control_slots;
+                thread_vm.completed_pipe_fresh_slots = completed_pipe_fresh_slots;
+            }
+
             if clear_child_tid != 0 {
                 clear_tid_and_wake(process_ptr, base, clear_child_tid);
             }
@@ -325,6 +352,12 @@ pub fn complete_thread_group_exit(
     vm.robust_list_head = 0;
     vm.robust_list_len = 0;
     vm.clear_child_tid = 0;
+    vm.completed_sync_effects |= completed_sync_effects;
+    vm.completed_pipe_sync_slots |= completed_pipe_sync_slots;
+    vm.completed_pipe_sync_read_slots |= completed_pipe_sync_read_slots;
+    vm.completed_pipe_sync_write_slots |= completed_pipe_sync_write_slots;
+    vm.completed_pipe_sync_control_slots |= completed_pipe_sync_control_slots;
+    vm.completed_pipe_fresh_slots |= completed_pipe_fresh_slots;
 }
 
 #[allow(clippy::too_many_arguments)]

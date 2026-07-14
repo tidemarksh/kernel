@@ -303,14 +303,14 @@ unsafe fn repair_odd_generations_for_locked_mask(mask: u64) {
     if p.is_null() {
         return;
     }
-    for slot in 0..64 {
-        if mask & (1u64 << slot) == 0 {
-            continue;
-        }
+    let mut pending = mask;
+    while pending != 0 {
+        let slot = pending.trailing_zeros() as usize;
         let generation = unsafe { (*p.add(slot)).load(Ordering::Acquire) };
         if generation & 1 != 0 {
             unsafe { (*p.add(slot)).fetch_add(1, Ordering::SeqCst) };
         }
+        pending &= pending - 1;
     }
 }
 
@@ -570,10 +570,11 @@ unsafe fn lock_mask(mask: u64) {
 
 #[inline(always)]
 unsafe fn lock_mask_with(reservation_lock: *const AtomicU32, mask: u64) {
-    for slot in 0..64 {
-        if mask & (1u64 << slot) != 0 {
-            unsafe { lock_slot_with(reservation_lock, slot) };
-        }
+    let mut pending = mask;
+    while pending != 0 {
+        let slot = pending.trailing_zeros() as usize;
+        unsafe { lock_slot_with(reservation_lock, slot) };
+        pending &= pending - 1;
     }
 }
 
@@ -584,10 +585,11 @@ unsafe fn unlock_mask(mask: u64) {
 
 #[inline(always)]
 unsafe fn unlock_mask_with(reservation_lock: *const AtomicU32, mask: u64) {
-    for slot in (0..64).rev() {
-        if mask & (1u64 << slot) != 0 {
-            unsafe { unlock_slot_with(reservation_lock, slot) };
-        }
+    let mut pending = mask;
+    while pending != 0 {
+        let slot = 63 - pending.leading_zeros() as usize;
+        unsafe { unlock_slot_with(reservation_lock, slot) };
+        pending &= !(1u64 << slot);
     }
 }
 
@@ -598,10 +600,11 @@ unsafe fn seqlock_begin_mask(mask: u64) {
 
 #[inline(always)]
 unsafe fn seqlock_begin_mask_with(reservation_gen: *const AtomicU32, mask: u64) {
-    for slot in 0..64 {
-        if mask & (1u64 << slot) != 0 {
-            unsafe { bump_gen_with(reservation_gen, slot) };
-        }
+    let mut pending = mask;
+    while pending != 0 {
+        let slot = pending.trailing_zeros() as usize;
+        unsafe { bump_gen_with(reservation_gen, slot) };
+        pending &= pending - 1;
     }
 }
 
@@ -612,10 +615,11 @@ unsafe fn seqlock_end_mask(mask: u64) {
 
 #[inline(always)]
 unsafe fn seqlock_end_mask_with(reservation_gen: *const AtomicU32, mask: u64) {
-    for slot in 0..64 {
-        if mask & (1u64 << slot) != 0 {
-            unsafe { bump_gen_with(reservation_gen, slot) };
-        }
+    let mut pending = mask;
+    while pending != 0 {
+        let slot = pending.trailing_zeros() as usize;
+        unsafe { bump_gen_with(reservation_gen, slot) };
+        pending &= pending - 1;
     }
 }
 

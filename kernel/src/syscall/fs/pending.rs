@@ -108,6 +108,13 @@ fn with_pending_request<T>(
 
 fn classify_pending_request_effects(request: &ring_buffer::FsRequestInfo) -> u32 {
     match request.opcode {
+        ring_buffer::FS_OP_READ => {
+            if request.flags & ring_buffer::FS_REQ_FLAG_PWRITE == 0 {
+                FS_EFFECT_SHARED_OFD_STATE
+            } else {
+                0
+            }
+        }
         ring_buffer::FS_OP_OPENAT => {
             let mut effects = FS_EFFECT_SHARED_OFD_STATE;
             if request.flags & (O_CREAT as u32) != 0 {
@@ -133,11 +140,6 @@ fn classify_pending_request_effects(request: &ring_buffer::FsRequestInfo) -> u32
         }
         _ => 0,
     }
-}
-
-fn openat_can_run_locally(flags: u32) -> bool {
-    let access_mode = (flags as i32) & fd_table::OPEN_ACCESS_MODE_MASK;
-    access_mode == O_RDONLY && flags & ((O_CREAT | O_TRUNC) as u32) == 0
 }
 
 fn openat_targets_kernel_local_device(base: u32, path_addr: u64) -> bool {
@@ -456,7 +458,7 @@ pub fn dispatch_openat(
     flags: u64,
     mode: u64,
 ) -> i64 {
-    if openat_can_run_locally(flags as u32) || openat_targets_kernel_local_device(base, path_addr) {
+    if openat_targets_kernel_local_device(base, path_addr) {
         return crate::syscall::fs::sys_openat(vm, base, dirfd, path_addr, flags, mode);
     }
 
@@ -477,9 +479,10 @@ pub fn dispatch_openat(
 #[cfg(test)]
 mod tests {
     use super::{
-        dispatch_ftruncate, dispatch_getdents64, dispatch_lseek, dispatch_mmap, dispatch_openat,
-        dispatch_pread64, dispatch_read, dispatch_write, pending_request_target_ino,
-        process_fs_ring_base, process_pending_requests, resume_from_fs, resume_from_fs_result,
+        FS_EFFECT_SHARED_OFD_STATE, dispatch_ftruncate, dispatch_getdents64, dispatch_lseek,
+        dispatch_mmap, dispatch_openat, dispatch_pread64, dispatch_read, dispatch_write,
+        pending_request_effects, pending_request_target_ino, process_fs_ring_base,
+        process_pending_requests, resume_from_fs, resume_from_fs_result,
     };
     use crate::abi::{
         AF_UNIX, CLONE_THREAD, CLONE_VM, EAGAIN, EINVAL, ENOENT, MAP_PRIVATE, O_APPEND, O_CREAT,
@@ -490,17 +493,17 @@ mod tests {
     use crate::harness::TestVm;
     use crate::syscall::fd_table;
     use crate::syscall::socket::sys_socketpair;
-    use crate::types::ThreadState;
+    use crate::types::{OpenFileDesc, ThreadState};
 
     const SYNC_EFFECT_FORK_SHARED_OFD_STATE: u32 = 1 << 6;
 
     #[test]
-    fn dispatch_openat_runs_read_only_existing_files_locally() {
+    fn dispatch_openat_routes_read_only_existing_files_through_fs_control() {
         let mut vm = TestVm::new();
         vm.memfs.create_file(b"hello.txt", b"hello");
         let path_addr = vm.write_path(0x400, b"/hello.txt");
 
-        let fd = dispatch_openat(
+        let result = dispatch_openat(
             &mut vm.vm,
             vm.base,
             (-100i64) as u64,
@@ -509,8 +512,13 @@ mod tests {
             0,
         );
 
+        assert_eq!(result, 0);
+        assert_eq!(vm.vm.status, STATUS_FS);
+
+        let vm_ptr = &mut vm.vm as *mut _ as u32;
+        process_pending_requests(vm_ptr, vm.base);
+        let fd = resume_from_fs(vm_ptr, vm.base);
         assert!(fd >= 3);
-        assert_eq!(vm.vm.status, STATUS_OK);
 
         let mut buf = [0u8; 5];
         assert_eq!(vm.sys_read(fd, &mut buf), 5);
@@ -534,6 +542,38 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_read_uses_offset_floor_after_stale_ofd_snapshot() {
+        let mut vm = TestVm::new();
+        vm.memfs.create_file(b"resident.txt", b"abcdef");
+        let fd = vm.sys_openat(b"/resident.txt", O_RDONLY);
+        assert!(fd >= 3);
+        let ofd_id = fd_table::get_ofd_id(vm.base, &vm.vm, fd as u64).unwrap();
+        let buf_addr = vm.scratch + 0x5000;
+
+        assert_eq!(
+            dispatch_read(&mut vm.vm, vm.base, fd as u64, buf_addr, 3),
+            3
+        );
+        unsafe {
+            let table = fd_table::ofd_table_ptr() as *mut OpenFileDesc;
+            (*table.add(ofd_id as usize)).offset = 0;
+        }
+
+        assert_eq!(
+            dispatch_read(&mut vm.vm, vm.base, fd as u64, buf_addr, 3),
+            3
+        );
+        assert_eq!(vm.guest_mem(buf_addr, 3), b"def".to_vec());
+
+        assert_eq!(vm.sys_lseek(fd, 1, 0), 1);
+        assert_eq!(
+            dispatch_read(&mut vm.vm, vm.base, fd as u64, buf_addr, 2),
+            2
+        );
+        assert_eq!(vm.guest_mem(buf_addr, 2), b"bc".to_vec());
+    }
+
+    #[test]
     fn dispatch_read_falls_back_to_fs_ring_on_external_file_miss() {
         let mut vm = TestVm::new();
         let ino = memfs::create_file(1, b"external.txt", 0o644);
@@ -548,6 +588,11 @@ mod tests {
 
         assert_eq!(result, 0);
         assert_eq!(vm.vm.status, STATUS_FS);
+        let vm_ptr = &mut vm.vm as *mut _ as u32;
+        assert_eq!(
+            pending_request_effects(vm_ptr, vm.base),
+            FS_EFFECT_SHARED_OFD_STATE
+        );
     }
 
     #[test]
@@ -836,6 +881,8 @@ mod tests {
 
         assert_eq!(result, 0);
         assert_eq!(vm.vm.status, STATUS_FS);
+        let vm_ptr = &mut vm.vm as *mut _ as u32;
+        assert_eq!(pending_request_effects(vm_ptr, vm.base), 0);
         assert_eq!(vm.sys_lseek(fd, 0, 1), 0);
     }
 
