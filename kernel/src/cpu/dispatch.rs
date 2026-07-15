@@ -53,9 +53,9 @@ pub(super) unsafe fn exec_decoded(
     pc: &mut u64,
     remaining: &mut i32,
     cache: Option<&mut BlockCache>,
-    hot_counts: Option<&mut HotCounts>,
+    mut hot_counts: Option<&mut HotCounts>,
     jit_bitmap: Option<&JitBitmap>,
-    trace_buf: Option<&mut TraceBuffer>,
+    mut trace_buf: Option<&mut TraceBuffer>,
     prev_sp: u64,
     prev_tp: u64,
     prev_s11: u64,
@@ -207,6 +207,9 @@ pub(super) unsafe fn exec_decoded(
                             remaining,
                             access_cache,
                             memory_is_multi_threaded,
+                            hot_counts.as_deref_mut(),
+                            jit_bitmap,
+                            trace_buf.as_deref_mut(),
                         ) {
                             BlockOutcome::Restart => {
                                 x[0] = 0;

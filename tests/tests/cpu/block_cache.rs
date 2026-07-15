@@ -1,5 +1,6 @@
 use core::sync::atomic::Ordering;
 use tidemark_kernel::cpu::block_cache::{BlockCache, BlockEntry, CACHE_SIZE, PackedOp};
+use tidemark_kernel::cpu::trace::{HOT_THRESHOLD, HotCounts, JitBitmap, TraceBuffer};
 use tidemark_kernel::harness::TestVm;
 use tidemark_kernel::{abi, guest_mem};
 
@@ -1148,4 +1149,54 @@ fn cached_exec_revalidates_pc_tags_after_index_collision() {
         assert_eq!(t.vm.pc, pc + 4);
         assert_eq!(t.vm.x[10], expected);
     }
+}
+
+#[test]
+fn cached_backedge_starts_and_completes_a_jit_trace() {
+    let mut t = TestVm::new();
+    let mut cache = alloc_block_cache();
+    let mut hot_counts = HotCounts::new();
+    let jit_bitmap = JitBitmap::new();
+    let mut trace = TraceBuffer::new();
+    let start = mmap_exec(&mut t, 4096);
+    unsafe {
+        // addi t0, t0, 1; beq zero, zero, -4
+        guest_mem::write_u32(t.base, start, 0x0012_8293);
+        guest_mem::write_u32(t.base, start + 4, 0xfe00_0ee3);
+    }
+    t.vm.pc = start;
+    t.vm.status = abi::STATUS_OK;
+
+    unsafe {
+        tidemark_kernel::cpu::exec_at_base(
+            &mut t.vm,
+            i32::from(HOT_THRESHOLD) * 2 + 2,
+            t.base,
+            Some(&mut cache),
+            Some(&mut hot_counts),
+            Some(&jit_bitmap),
+            Some(&mut trace),
+        );
+    }
+    assert_eq!(trace.recording, 1);
+    assert_eq!(trace.start_pc, start);
+    assert_eq!(t.vm.pc, start);
+
+    unsafe {
+        tidemark_kernel::cpu::exec_at_base(
+            &mut t.vm,
+            4,
+            t.base,
+            Some(&mut cache),
+            Some(&mut hot_counts),
+            Some(&jit_bitmap),
+            Some(&mut trace),
+        );
+    }
+    assert_eq!(t.vm.status, abi::STATUS_JIT_READY);
+    assert_eq!(t.vm.pc, start);
+    assert_eq!(trace.recording, 0);
+    assert_eq!(trace.count, 2);
+    assert_eq!(trace.entries[0].pc, start);
+    assert_eq!(trace.entries[1].pc, start + 4);
 }

@@ -13,6 +13,7 @@ use super::decode;
 use super::fault::{AccessOutcome, AccessPermitCache, ensure_guest_access};
 use super::fp::{exec_fma, exec_op_fp};
 use super::integer::{div_i64, divu_64, mulh, mulhsu, mulhu, rem_i64, remu_64};
+use super::trace::{HotCounts, JitBitmap, TraceBuffer};
 use crate::abi;
 use crate::guest_mem;
 use crate::types::ThreadState;
@@ -41,6 +42,42 @@ pub(super) enum BlockOutcome {
     Restart,
     Return,
     Unsupported,
+}
+
+enum JitBackedgeOutcome {
+    None,
+    StartTrace,
+    Compiled,
+}
+
+fn observe_jit_backedge(
+    vm: &mut ThreadState,
+    x: &[u64; 32],
+    f: &[u64; 32],
+    pc: u64,
+    target: u64,
+    hot_counts: Option<&mut HotCounts>,
+    jit_bitmap: Option<&JitBitmap>,
+    trace_buf: Option<&mut TraceBuffer>,
+) -> JitBackedgeOutcome {
+    if target >= pc {
+        return JitBackedgeOutcome::None;
+    }
+    if jit_bitmap.is_some_and(|bitmap| bitmap.is_ready(target)) {
+        vm.x = *x;
+        vm.f = *f;
+        vm.pc = target;
+        vm.status = abi::STATUS_JIT_READY;
+        return JitBackedgeOutcome::Compiled;
+    }
+    if hot_counts.is_some_and(|counts| counts.increment(target))
+        && let Some(trace) = trace_buf
+        && trace.recording == 0
+    {
+        trace.start(target);
+        return JitBackedgeOutcome::StartTrace;
+    }
+    JitBackedgeOutcome::None
 }
 
 #[inline(always)]
@@ -79,6 +116,9 @@ pub(super) unsafe fn exec_simple_load_scan_loop<const FIRST_CONSUMED: bool>(
     remaining: &mut i32,
     access_cache: &mut AccessPermitCache,
     memory_is_multi_threaded: bool,
+    mut hot_counts: Option<&mut HotCounts>,
+    jit_bitmap: Option<&JitBitmap>,
+    mut trace_buf: Option<&mut TraceBuffer>,
 ) -> BlockOutcome {
     let len = blk.len as usize;
     let mut cur_pc = blk.start_pc;
@@ -249,6 +289,24 @@ pub(super) unsafe fn exec_simple_load_scan_loop<const FIRST_CONSUMED: bool>(
                     };
                     if taken {
                         let target = (cur_pc as i64 + imm) as u64;
+                        match observe_jit_backedge(
+                            vm,
+                            x,
+                            f,
+                            cur_pc,
+                            target,
+                            hot_counts.as_deref_mut(),
+                            jit_bitmap,
+                            trace_buf.as_deref_mut(),
+                        ) {
+                            JitBackedgeOutcome::Compiled => return BlockOutcome::Return,
+                            JitBackedgeOutcome::StartTrace => {
+                                *pc = target;
+                                crate::tracepoints::record_block_exec_ops(charged_ops);
+                                return BlockOutcome::Restart;
+                            }
+                            JitBackedgeOutcome::None => {}
+                        }
                         if target == blk.start_pc && index + 1 == len && *remaining >= len as i32 {
                             *remaining -= len as i32;
                             charged_ops = charged_ops.saturating_add(len as u32);
@@ -304,6 +362,9 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
     remaining: &mut i32,
     access_cache: &mut AccessPermitCache,
     memory_is_multi_threaded: bool,
+    mut hot_counts: Option<&mut HotCounts>,
+    jit_bitmap: Option<&JitBitmap>,
+    mut trace_buf: Option<&mut TraceBuffer>,
 ) -> BlockOutcome {
     let len = blk.len as usize;
     let mut cur_pc = blk.start_pc;
@@ -813,6 +874,25 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                     } else {
                         cur_pc + step
                     };
+                    if taken {
+                        match observe_jit_backedge(
+                            vm,
+                            x,
+                            f,
+                            cur_pc,
+                            target,
+                            hot_counts.as_deref_mut(),
+                            jit_bitmap,
+                            trace_buf.as_deref_mut(),
+                        ) {
+                            JitBackedgeOutcome::Compiled => return BlockOutcome::Return,
+                            JitBackedgeOutcome::StartTrace => {
+                                *pc = target;
+                                return BlockOutcome::Restart;
+                            }
+                            JitBackedgeOutcome::None => {}
+                        }
+                    }
                     if target == blk.start_pc && index + 1 == len && *remaining >= len as i32 {
                         *remaining -= len as i32;
                         crate::tracepoints::record_block_exec_ops(len as u32);

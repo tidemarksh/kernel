@@ -286,9 +286,7 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
             }
             continue;
         }
-        if trace_buf.is_none()
-            && hot_counts.is_none()
-            && jit_bitmap.is_none()
+        if !trace_buf.as_ref().is_some_and(|trace| trace.recording != 0)
             && let Some(ref mut bc) = cache
             && let Some(blk) = unsafe { bc.get_or_build_checked(vm, *pc, base) }
         {
@@ -307,6 +305,9 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
                             remaining,
                             &mut access_permit_cache,
                             memory_is_multi_threaded,
+                            hot_counts.as_deref_mut(),
+                            jit_bitmap,
+                            trace_buf.as_deref_mut(),
                         )
                     }
                 } else {
@@ -322,6 +323,9 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
                             remaining,
                             &mut access_permit_cache,
                             memory_is_multi_threaded,
+                            hot_counts.as_deref_mut(),
+                            jit_bitmap,
+                            trace_buf.as_deref_mut(),
                         )
                     }
                 };
