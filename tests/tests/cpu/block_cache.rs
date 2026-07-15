@@ -127,7 +127,7 @@ fn block_cache_populate_and_get() {
 }
 
 #[test]
-fn block_cache_retains_two_blocks_that_map_to_the_same_set() {
+fn block_cache_replaces_a_colliding_block() {
     let t = TestVm::new();
     let first = t.scratch;
     let second = first + (CACHE_SIZE as u64 * 2);
@@ -142,8 +142,9 @@ fn block_cache_retains_two_blocks_that_map_to_the_same_set() {
 
     let mut cache = alloc_block_cache();
     assert!(unsafe { cache.build_block(first, t.base) }.is_some());
-    assert!(unsafe { cache.build_block(second, t.base) }.is_some());
     assert_eq!(cache.get(first).map(|block| block.ops[0].imm()), Some(1));
+    assert!(unsafe { cache.build_block(second, t.base) }.is_some());
+    assert!(cache.get(first).is_none());
     assert_eq!(cache.get(second).map(|block| block.ops[0].imm()), Some(2));
 }
 
