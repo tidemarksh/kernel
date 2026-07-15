@@ -221,7 +221,9 @@ fn enqueue_poll_wait_timer(vm: &crate::types::ThreadState) -> bool {
     if !poll_wait_timer_required(vm) {
         return false;
     }
-    enqueue_timer_request(vm, vm.epoll_timeout_ms as u64, 0)
+    let delay_ms = vm.epoll_timeout_ms as u64;
+    let deadline_ticks = crate::syscall::time::monotonic_deadline_after_millis(delay_ms);
+    enqueue_timer_request(vm, delay_ms, deadline_ticks)
 }
 
 fn poll_wait_timer_required(vm: &crate::types::ThreadState) -> bool {

@@ -11,14 +11,15 @@ use tidemark_kernel::supervisor::{
     supervisor_blocked_pipe_sync_before_retry_requested,
     supervisor_blocked_pipe_wait_has_ready_events, supervisor_blocked_retry_action,
     supervisor_blocked_retry_action_defer_passive_wait, supervisor_blocked_wait_retry_reason,
-    supervisor_blocked_wait_retry_reason_default,
-    supervisor_blocked_wait_retry_reason_passive_wait, supervisor_fd_control_kind_fd_closed,
-    supervisor_fd_control_kind_pipe_created, supervisor_fd_control_record,
-    supervisor_fd_control_record_bytes, supervisor_ofd_fd_type, supervisor_ofd_host_fd,
-    supervisor_ofd_ino, supervisor_ofd_offset, supervisor_ofd_pipe_generation_slot,
-    supervisor_ofd_pipe_slot_mask, supervisor_ofd_pipe_slot_mode,
-    supervisor_ofd_reconcile_refcount, supervisor_ofd_refcount, supervisor_ofd_status_flags,
-    supervisor_pipe_reconcile_control, supervisor_pipe_slot_mode_read,
+    supervisor_blocked_wait_retry_reason_passive_wait, supervisor_complete_host_op,
+    supervisor_fd_control_kind_fd_closed, supervisor_fd_control_kind_pipe_created,
+    supervisor_fd_control_record, supervisor_fd_control_record_bytes,
+    supervisor_host_op_kind_arm_host_timer, supervisor_host_op_record_bytes,
+    supervisor_next_host_op, supervisor_next_resume, supervisor_ofd_fd_type,
+    supervisor_ofd_host_fd, supervisor_ofd_ino, supervisor_ofd_offset,
+    supervisor_ofd_pipe_generation_slot, supervisor_ofd_pipe_slot_mask,
+    supervisor_ofd_pipe_slot_mode, supervisor_ofd_reconcile_refcount, supervisor_ofd_refcount,
+    supervisor_ofd_status_flags, supervisor_pipe_reconcile_control, supervisor_pipe_slot_mode_read,
     supervisor_pipe_slot_mode_write, supervisor_process_fd_flags_for_fd,
     supervisor_process_fd_is_open, supervisor_process_held_ofd_refcount,
     supervisor_process_held_pipe_slot_mask, supervisor_process_ofd_for_fd,
@@ -27,8 +28,9 @@ use tidemark_kernel::supervisor::{
     supervisor_process_pipe_slot_mode, supervisor_process_pipe_used_mask,
     supervisor_process_pipe_write_open_count, supervisor_process_private_pipe_slot_mask,
     supervisor_process_private_pipe_source_mode, supervisor_process_private_pipe_target_mode,
-    supervisor_reset_shadow_log, supervisor_shadow_fd_control_count,
-    supervisor_stdio_pipe_read_progress_action, supervisor_stdio_pipe_read_progress_action_none,
+    supervisor_reset_shadow_log, supervisor_resume_record_bytes,
+    supervisor_shadow_fd_control_count, supervisor_stdio_pipe_read_progress_action,
+    supervisor_stdio_pipe_read_progress_action_none,
     supervisor_stdio_pipe_read_progress_action_snapshot,
 };
 use tidemark_kernel::syscall::pipe::{self, PipeCloseOutcome};
@@ -52,6 +54,14 @@ fn read_u64_le(bytes: &[u8], offset: usize) -> u64 {
     let mut value = [0u8; 8];
     value.copy_from_slice(&bytes[offset..offset + 8]);
     u64::from_le_bytes(value)
+}
+
+fn write_u32_le(bytes: &mut [u8], offset: usize, value: u32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_u64_le(bytes: &mut [u8], offset: usize, value: u64) {
+    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
 
 #[test]
@@ -257,6 +267,79 @@ fn supervisor_blocked_pipe_sync_before_retry_requests_drain_for_passive_poll_wai
         supervisor_blocked_retry_action(vm_ptr, 0),
         supervisor_blocked_retry_action_defer_passive_wait() as i32
     );
+}
+
+#[test]
+fn supervisor_pselect_timeout_advances_monotonic_and_publishes_runnable() {
+    supervisor_reset_shadow_log();
+
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    let pipefd_addr = t.scratch + 0x1000;
+    assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) } as u64;
+    let readfds = t.scratch + 0x1100;
+    let timeout = t.scratch + 0x1200;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u64(t.base, readfds, 1u64 << read_fd);
+        tidemark_kernel::guest_mem::write_u64(t.base, timeout, 0);
+        tidemark_kernel::guest_mem::write_u64(t.base, timeout + 8, 10_000_000);
+    }
+    t.vm.x[10] = read_fd + 1;
+    t.vm.x[11] = readfds;
+    t.vm.x[12] = 0;
+    t.vm.x[13] = 0;
+    t.vm.x[14] = timeout;
+    t.vm.x[15] = 0;
+    t.vm.x[17] = SYS_PSELECT6;
+    let monotonic_before = tidemark_kernel::syscall::time::monotonic_ticks_current();
+
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        STATUS_PIPE_WAIT
+    );
+
+    let mut host_op = vec![0u8; supervisor_host_op_record_bytes() as usize];
+    assert_eq!(
+        supervisor_next_host_op(host_op.as_mut_ptr() as u32, host_op.len() as u32),
+        supervisor_host_op_record_bytes() as i32
+    );
+    assert_eq!(
+        read_u32_le(&host_op, 12),
+        supervisor_host_op_kind_arm_host_timer()
+    );
+    assert_eq!(read_u64_le(&host_op, 48), 10);
+    let deadline_ticks = read_u64_le(&host_op, 56);
+    assert!(deadline_ticks > monotonic_before);
+
+    let mut completion = [0u8; 64];
+    write_u32_le(&mut completion, 0, 0x4348_5354);
+    write_u32_le(&mut completion, 4, supervisor_abi_version());
+    write_u32_le(&mut completion, 8, 64);
+    write_u32_le(&mut completion, 12, read_u32_le(&host_op, 12));
+    write_u64_le(&mut completion, 16, read_u64_le(&host_op, 16));
+    write_u32_le(&mut completion, 24, read_u32_le(&host_op, 24));
+    write_u32_le(&mut completion, 28, read_u32_le(&host_op, 28));
+    write_u32_le(&mut completion, 32, read_u32_le(&host_op, 32));
+    write_u32_le(&mut completion, 36, 1);
+    write_u64_le(&mut completion, 48, read_u64_le(&host_op, 48));
+    write_u64_le(&mut completion, 56, deadline_ticks);
+
+    assert_eq!(
+        supervisor_complete_host_op(completion.as_ptr() as u32, completion.len() as u32),
+        STATUS_OK
+    );
+    assert_eq!(t.vm.status, STATUS_OK);
+    assert_eq!(t.vm.x[10], 0);
+    assert!(tidemark_kernel::syscall::time::monotonic_ticks_current() >= deadline_ticks);
+
+    let mut resume = vec![0u8; supervisor_resume_record_bytes() as usize];
+    assert_eq!(
+        supervisor_next_resume(resume.as_mut_ptr() as u32, resume.len() as u32),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&resume, 24), &mut t.vm as *mut _ as u32);
+    assert_eq!(read_u32_le(&resume, 36), STATUS_OK as u32);
 }
 
 #[test]
@@ -720,7 +803,7 @@ fn pselect_pipe_read_ready_ignores_unwatched_readable_pipe() {
     assert_eq!(thread_blocked_pipe_read_ready(vm_ptr), 0);
     assert_eq!(
         supervisor_blocked_wait_retry_reason(vm_ptr, 0),
-        supervisor_blocked_wait_retry_reason_default() as i32
+        supervisor_blocked_wait_retry_reason_passive_wait() as i32
     );
 }
 

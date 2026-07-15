@@ -526,9 +526,6 @@ fn pipe_wait_should_remain_passive(vm_ptr: u32, vm: &ThreadState) -> bool {
     if crate::syscall::poll::wait_set_has_socket(vm, vm.guest_base) {
         return false;
     }
-    if !crate::syscall::poll::wait_set_has_no_watched_fds(vm, vm.guest_base) {
-        return false;
-    }
     if crate::syscall::poll::wait_set_ready_count(vm, vm.guest_base) > 0 {
         return false;
     }

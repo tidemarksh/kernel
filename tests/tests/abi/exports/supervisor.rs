@@ -3563,6 +3563,39 @@ fn set_blocked_resume_syscall(
 }
 
 #[test]
+fn supervisor_indefinite_pipe_poll_waits_passively_for_state_sync() {
+    let mut t = TestVm::new();
+    let vm_ptr = (&mut t.vm as *mut tidemark_kernel::types::ThreadState) as u32;
+    let pipefd_addr = t.scratch + 0x900;
+    assert_eq!(
+        tidemark_kernel::syscall::pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0),
+        0,
+    );
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) };
+    let pollfd = t.scratch + 0x980;
+    write_pollfd(&mut t, pollfd, read_fd as i32, 0x001);
+    t.vm.status = STATUS_PIPE_WAIT;
+    t.vm.epoll_timeout_ms = -1;
+    set_blocked_resume_syscall(&mut t.vm, SYS_PPOLL, [pollfd, 1, 0, 0, 0, 0]);
+
+    assert_eq!(supervisor_blocked_pipe_wait_has_ready_events(vm_ptr), 0);
+    assert_eq!(
+        supervisor_blocked_wait_retry_reason(vm_ptr, 0),
+        supervisor_blocked_wait_retry_reason_passive_wait() as i32,
+    );
+    let retry_flags = supervisor_blocked_retry_action_flag_kernel_worker_available()
+        | supervisor_blocked_retry_action_flag_pipe_state_kernel_worker_owns();
+    assert_eq!(
+        supervisor_blocked_retry_action(vm_ptr, retry_flags),
+        supervisor_blocked_retry_action_request_pipe_sync_and_drain_output() as i32,
+    );
+    assert_eq!(
+        supervisor_blocked_retry_action(vm_ptr, retry_flags),
+        supervisor_blocked_retry_action_defer_passive_wait() as i32,
+    );
+}
+
+#[test]
 fn supervisor_blocked_resume_writeback_ranges_follow_blocked_syscall() {
     let mut vm: tidemark_kernel::types::ThreadState = unsafe { core::mem::zeroed() };
     let vm_ptr = &mut vm as *mut tidemark_kernel::types::ThreadState as u32;
