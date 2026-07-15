@@ -37,9 +37,7 @@ pub(super) enum AccessOutcome {
     Return,
 }
 
-const ACCESS_PERMIT_PROT_SLOTS: usize = 8;
-const ACCESS_PERMIT_WAYS: usize = 8;
-const ACCESS_PERMIT_SLOTS: usize = ACCESS_PERMIT_PROT_SLOTS * ACCESS_PERMIT_WAYS;
+const ACCESS_PERMIT_SLOTS: usize = 64;
 
 pub(super) struct AccessPermitCache {
     start: [u64; ACCESS_PERMIT_SLOTS],
@@ -58,8 +56,8 @@ impl AccessPermitCache {
     }
 
     #[inline(always)]
-    fn slot(prot: i32) -> usize {
-        ((prot as usize) & (ACCESS_PERMIT_PROT_SLOTS - 1)) * ACCESS_PERMIT_WAYS
+    fn slot(addr: u64, prot: i32) -> usize {
+        (((addr >> 12) as usize) ^ (prot as usize).wrapping_mul(17)) & (ACCESS_PERMIT_SLOTS - 1)
     }
 
     #[inline(always)]
@@ -71,28 +69,17 @@ impl AccessPermitCache {
             return false;
         };
         let generation = crate::syscall::memory::permit_cache_generation();
-        let slot = Self::slot(prot);
-        for i in slot..slot + ACCESS_PERMIT_WAYS {
-            if self.generation[i] == generation && addr >= self.start[i] && end <= self.end[i] {
-                if i != slot {
-                    self.start.swap(slot, i);
-                    self.end.swap(slot, i);
-                    self.generation.swap(slot, i);
-                }
-                return true;
-            }
+        let slot = Self::slot(addr, prot);
+        if self.generation[slot] == generation && addr >= self.start[slot] && end <= self.end[slot]
+        {
+            return true;
         }
         let Some((cover_start, cover_end, cover_generation)) =
             crate::syscall::memory::guest_range_permitted_cover(vm, base, addr, width, prot)
         else {
-            self.generation[slot..slot + ACCESS_PERMIT_WAYS].fill(0);
+            self.generation[slot] = 0;
             return false;
         };
-        for i in (slot + 1..slot + ACCESS_PERMIT_WAYS).rev() {
-            self.start[i] = self.start[i - 1];
-            self.end[i] = self.end[i - 1];
-            self.generation[i] = self.generation[i - 1];
-        }
         self.start[slot] = cover_start;
         self.end[slot] = cover_end;
         self.generation[slot] = cover_generation;
