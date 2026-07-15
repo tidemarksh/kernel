@@ -6,6 +6,26 @@ use core::sync::atomic::Ordering;
 
 const JIT_MIN_RETAINED_INSTRUCTIONS: u32 = 64;
 
+unsafe fn synchronize_instruction_cache(vm: &mut ThreadState, base: u32) {
+    if vm.process_ptr == 0 {
+        return;
+    }
+    let ps = unsafe { &*((base as u64 + vm.process_ptr as u64) as *const ProcessState) };
+    let generation = ps.instruction_cache_generation.load(Ordering::Acquire);
+    if vm.instruction_cache_generation == generation {
+        return;
+    }
+    if vm.block_cache_ptr != 0 {
+        let mut cache = unsafe { BlockCache::from_ptr(vm.block_cache_ptr as *mut BlockEntry) };
+        cache.clear();
+    }
+    if vm.jit_state_ptr != 0 {
+        let jit = unsafe { &mut *(vm.jit_state_ptr as *mut JitState) };
+        jit.clear();
+    }
+    vm.instruction_cache_generation = generation;
+}
+
 unsafe fn thread_block_cache(vm: &mut ThreadState, base: u32) -> Option<BlockCache> {
     if vm.process_ptr == 0 {
         return None;
@@ -94,6 +114,7 @@ unsafe fn thread_step_with_modes(
             let tc_ptr = core::ptr::addr_of!(ps.thread_count);
             crate::guest_mem::init(gen_ptr, lock_ptr, tc_ptr);
         }
+        synchronize_instruction_cache(vm, base);
         crate::tracepoints::record_thread_step_phase(vm, 2, budget, 0);
         if !crate::syscall::thread::thread_may_step(vm, base) {
             crate::tracepoints::record_thread_step_phase(vm, 3, budget, budget);

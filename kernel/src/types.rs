@@ -198,6 +198,8 @@ pub struct ThreadState {
     _pad_execve_backing_miss: u32,
     /// Kernel-owned per-thread JIT controller state. 0 = inactive/unallocated.
     pub jit_state_ptr: u32,
+    /// Process instruction-cache generation observed by this thread.
+    pub instruction_cache_generation: u32,
 }
 
 // =============================================================================
@@ -256,6 +258,8 @@ pub struct ProcessState {
     pub umask: u32,
     /// Thread registry
     pub threads: [ThreadRecord; MAX_THREADS],
+    /// Process-wide instruction visibility generation for per-thread code caches.
+    pub instruction_cache_generation: AtomicU32,
 }
 
 // =============================================================================

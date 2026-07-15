@@ -46,6 +46,7 @@ fn reset_process_runtime_sync_state(ps: &mut ProcessState) {
     for generation in ps.reservation_gen.iter() {
         generation.store(0, Ordering::Release);
     }
+    ps.instruction_cache_generation.store(0, Ordering::Release);
 }
 
 fn process_idx(pid: i32) -> Option<usize> {
@@ -540,6 +541,7 @@ pub fn prepare_fork_child_after_handoff(vm: &mut ThreadState, base: u32, pid: i3
     vm.completed_pipe_read_len = 0;
     vm.block_cache_ptr = 0;
     vm.jit_state_ptr = 0;
+    vm.instruction_cache_generation = 0;
     vm.execve_backing_miss_ino = 0;
     vm.execve_backing_miss_len = 0;
     vm.execve_backing_miss_offset = 0;
@@ -609,6 +611,7 @@ pub fn restore_fork_parent_after_handoff(
     vm.completed_pipe_read_len = 0;
     vm.block_cache_ptr = 0;
     vm.jit_state_ptr = 0;
+    vm.instruction_cache_generation = 0;
     vm.execve_backing_miss_ino = 0;
     vm.execve_backing_miss_len = 0;
     vm.execve_backing_miss_offset = 0;

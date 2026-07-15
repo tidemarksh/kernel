@@ -322,11 +322,13 @@ pub fn sys_riscv_hwprobe(
 /// https://github.com/torvalds/linux/blob/v6.12/arch/riscv/include/uapi/asm/unistd.h
 /// https://man7.org/linux/man-pages/man2/cacheflush.2.html
 ///
-/// Tidemark does not model per-core I-cache state, so this is a Linux-shaped no-op.
-/// The address range and flags are accepted and ignored.
+/// Tidemark does not model per-core I-cache state. Instead, it invalidates the
+/// calling thread immediately and advances a process generation so peer-thread
+/// code caches are cleared before their next step. Flags remain accepted for
+/// compatibility; a local flush may therefore invalidate more cache than Linux.
 pub fn sys_riscv_flush_icache(
     vm: &mut ThreadState,
-    _base: u32,
+    base: u32,
     start: u64,
     end: u64,
     _flags: u64,
@@ -348,6 +350,15 @@ pub fn sys_riscv_flush_icache(
         cache.invalidate_range(start, invalidate_end);
     }
     crate::jit::invalidate_thread_code(vm, start, invalidate_end);
+    if vm.process_ptr != 0 {
+        let ps = unsafe {
+            &*((base as u64 + vm.process_ptr as u64) as *const crate::types::ProcessState)
+        };
+        let previous = ps
+            .instruction_cache_generation
+            .fetch_add(1, core::sync::atomic::Ordering::AcqRel);
+        vm.instruction_cache_generation = previous.wrapping_add(1);
+    }
     0
 }
 

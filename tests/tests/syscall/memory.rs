@@ -820,6 +820,72 @@ fn flush_icache_length_form_invalidates_cached_generated_code() {
 }
 
 #[test]
+fn flush_icache_invalidates_peer_thread_cached_generated_code() {
+    let mut t = TestVm::new();
+    let code = t.sys_mmap(
+        0,
+        PAGE_SIZE,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    );
+    assert!(code > 0, "code={code}");
+    let code = code as u64;
+
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, code, 0x0010_0513);
+        tidemark_kernel::guest_mem::write_u32(t.base, code + 4, 0x0000_8067);
+        tidemark_kernel::guest_mem::write_u16(t.base, code + 8, 0x0001);
+    }
+    assert_eq!(t.sys_mprotect(code, PAGE_SIZE, PROT_READ | PROT_EXEC), 0);
+    let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+    ps.thread_count
+        .store(1, core::sync::atomic::Ordering::Release);
+
+    let mut peer = unsafe { core::ptr::read(&t.vm) };
+    let cache_size = tidemark_kernel::cpu::block_cache::BlockCache::allocation_size() as u32;
+    peer.block_cache_ptr = unsafe { tidemark_kernel::alloc::alloc(cache_size, 8) };
+    assert_ne!(peer.block_cache_ptr, 0);
+    peer.jit_state_ptr = 0;
+    peer.pc = code;
+    peer.x[1] = code + 8;
+    peer.x[10] = 0;
+    peer.status = STATUS_OK;
+    assert_eq!(
+        tidemark_kernel::abi::thread_step(&mut peer as *mut _ as u32, 2),
+        0
+    );
+    assert_eq!(peer.x[10], 1);
+
+    assert_eq!(t.sys_mprotect(code, PAGE_SIZE, PROT_READ | PROT_WRITE), 0);
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, code, 0x02a0_0513);
+    }
+    assert_eq!(
+        tidemark_kernel::syscall::identity::sys_riscv_flush_icache(
+            &mut t.vm,
+            t.base,
+            code,
+            code + 8,
+            0,
+        ),
+        0
+    );
+    assert_eq!(t.sys_mprotect(code, PAGE_SIZE, PROT_READ | PROT_EXEC), 0);
+
+    peer.pc = code;
+    peer.x[1] = code + 8;
+    peer.x[10] = 0;
+    peer.status = STATUS_OK;
+    assert_eq!(
+        tidemark_kernel::abi::thread_step(&mut peer as *mut _ as u32, 2),
+        0
+    );
+    assert_eq!(peer.x[10], 42);
+}
+
+#[test]
 fn mmap_rejects_invalid_fd_for_file_backed() {
     let mut t = TestVm::new();
     let ret = t.sys_mmap(0, 4096, PROT_READ, MAP_PRIVATE, -1, 0);

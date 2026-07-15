@@ -240,7 +240,7 @@ fn rseq_reports_enosys_for_no_rseq_posture() {
 }
 
 #[test]
-fn riscv_flush_icache_is_linux_shaped_noop_success() {
+fn riscv_flush_icache_accepts_linux_shaped_requests() {
     let mut t = TestVm::new();
     t.vm.x[17] = tidemark_kernel::abi::SYS_RISCV_FLUSH_ICACHE;
     t.vm.x[10] = 0x1000;
