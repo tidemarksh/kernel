@@ -1,5 +1,6 @@
 use crate::abi::*;
 use crate::cpu::block_cache::{BlockCache, BlockEntry};
+use crate::jit::JitState;
 use crate::types::{ProcessState, ThreadState};
 use core::sync::atomic::Ordering;
 
@@ -33,18 +34,50 @@ unsafe fn thread_block_cache(vm: &mut ThreadState, base: u32) -> Option<BlockCac
     Some(unsafe { BlockCache::from_ptr(vm.block_cache_ptr as *mut BlockEntry) })
 }
 
+unsafe fn thread_jit_state_ptr(vm: &mut ThreadState, base: u32) -> *mut JitState {
+    if vm.jit_state_ptr == 0 {
+        let size = core::mem::size_of::<JitState>();
+        if size > u32::MAX as usize {
+            return core::ptr::null_mut();
+        }
+        let ptr = unsafe {
+            crate::alloc::alloc_zeroed_below(
+                size as u32,
+                core::mem::align_of::<JitState>() as u32,
+                base,
+            )
+        };
+        if ptr == 0 {
+            return core::ptr::null_mut();
+        }
+        unsafe { (ptr as *mut JitState).write(JitState::new()) };
+        vm.jit_state_ptr = ptr;
+    }
+    vm.jit_state_ptr as *mut JitState
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn thread_step(vm_ptr: u32, budget: i32) -> i32 {
-    unsafe { thread_step_with_cache_mode(vm_ptr, budget, true) }
+    unsafe { thread_step_with_modes(vm_ptr, budget, true, false) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_step_jit(vm_ptr: u32, budget: i32) -> i32 {
+    unsafe { thread_step_with_modes(vm_ptr, budget, true, true) }
 }
 
 #[cfg(any(test, feature = "harness"))]
 #[unsafe(no_mangle)]
 pub extern "C" fn debug_thread_step_no_block_cache(vm_ptr: u32, budget: i32) -> i32 {
-    unsafe { thread_step_with_cache_mode(vm_ptr, budget, false) }
+    unsafe { thread_step_with_modes(vm_ptr, budget, false, false) }
 }
 
-unsafe fn thread_step_with_cache_mode(vm_ptr: u32, budget: i32, use_block_cache: bool) -> i32 {
+unsafe fn thread_step_with_modes(
+    vm_ptr: u32,
+    budget: i32,
+    use_block_cache: bool,
+    use_jit: bool,
+) -> i32 {
     unsafe {
         let vm = &mut *(vm_ptr as *mut ThreadState);
         let base = vm.guest_base;
@@ -79,11 +112,124 @@ unsafe fn thread_step_with_cache_mode(vm_ptr: u32, budget: i32, use_block_cache:
         } else {
             None
         };
-        let remaining = crate::cpu::exec(vm, budget, cache.as_mut(), None, None, None);
+        let jit_state_ptr = if use_jit {
+            thread_jit_state_ptr(vm, base)
+        } else {
+            core::ptr::null_mut()
+        };
+        let remaining = if !jit_state_ptr.is_null() {
+            let jit = &mut *jit_state_ptr;
+            let remaining = crate::cpu::exec(
+                vm,
+                budget,
+                cache.as_mut(),
+                Some(&mut jit.hot_counts),
+                Some(&jit.ready),
+                Some(&mut jit.trace),
+            );
+            if vm.status == STATUS_JIT_READY && jit.trace.count != 0 {
+                let max_instructions = budget.max(1) as u32;
+                if jit
+                    .compile_completed_trace(max_instructions, vm.process_max_memory_pages as u64)
+                    .is_err()
+                {
+                    jit.clear_pending();
+                    vm.status = STATUS_OK;
+                }
+            }
+            remaining
+        } else {
+            crate::cpu::exec(vm, budget, cache.as_mut(), None, None, None)
+        };
         crate::tracepoints::record_thread_step_phase(vm, 4, budget, remaining);
         crate::tracepoints::record_thread_step_trace(vm, budget, remaining);
         crate::tracepoints::record_thread_step_phase(vm, 5, budget, remaining);
         remaining
+    }
+}
+
+unsafe fn existing_thread_jit_state(vm_ptr: u32) -> Option<&'static mut JitState> {
+    if vm_ptr == 0 {
+        return None;
+    }
+    let vm = unsafe { &mut *(vm_ptr as *mut ThreadState) };
+    if vm.jit_state_ptr == 0 {
+        return None;
+    }
+    Some(unsafe { &mut *(vm.jit_state_ptr as *mut JitState) })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_jit_module_ptr(vm_ptr: u32) -> u32 {
+    unsafe {
+        existing_thread_jit_state(vm_ptr)
+            .and_then(|jit| jit.pending_bytes())
+            .map_or(0, |bytes| bytes.as_ptr() as usize as u32)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_jit_module_len(vm_ptr: u32) -> u32 {
+    unsafe {
+        existing_thread_jit_state(vm_ptr)
+            .and_then(|jit| jit.pending_bytes())
+            .and_then(|bytes| u32::try_from(bytes.len()).ok())
+            .unwrap_or(0)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_jit_module_entry_pc(vm_ptr: u32) -> u64 {
+    unsafe {
+        existing_thread_jit_state(vm_ptr)
+            .and_then(|jit| jit.pending_entry_pc())
+            .unwrap_or(0)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_jit_install(vm_ptr: u32, module_id: u32) -> i32 {
+    unsafe {
+        let Some(jit) = existing_thread_jit_state(vm_ptr) else {
+            return 0;
+        };
+        if !jit.pending_matches_generation(crate::syscall::memory::permit_cache_generation()) {
+            jit.clear_pending();
+            (*(vm_ptr as *mut ThreadState)).status = STATUS_OK;
+            return 0;
+        }
+        if !jit.install_pending(module_id) {
+            return 0;
+        }
+        (*(vm_ptr as *mut ThreadState)).status = STATUS_OK;
+        1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_jit_compiled_id(vm_ptr: u32) -> u32 {
+    unsafe {
+        let Some(jit) = existing_thread_jit_state(vm_ptr) else {
+            return 0;
+        };
+        let pc = (*(vm_ptr as *const ThreadState)).pc;
+        jit.compiled_id(pc, crate::syscall::memory::permit_cache_generation())
+            .unwrap_or(0)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn thread_jit_clear_pending(vm_ptr: u32) {
+    unsafe {
+        if let Some(jit) = existing_thread_jit_state(vm_ptr) {
+            jit.clear_pending();
+        }
+        if vm_ptr != 0 {
+            let vm = &mut *(vm_ptr as *mut ThreadState);
+            if vm.status == STATUS_JIT_READY {
+                vm.status = STATUS_OK;
+            }
+        }
     }
 }
 

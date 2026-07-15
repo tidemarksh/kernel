@@ -1498,6 +1498,7 @@ fn complete_execve_in_place_inner(
     vm.completed_pipe_read_guest_ptr = 0;
     vm.completed_pipe_read_len = 0;
     vm.block_cache_ptr = 0;
+    vm.jit_state_ptr = 0;
     vm.execve_backing_miss_ino = 0;
     vm.execve_backing_miss_len = 0;
     vm.execve_backing_miss_offset = 0;

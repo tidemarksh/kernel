@@ -545,6 +545,7 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
         child.completed_pipe_read_guest_ptr = 0;
         child.completed_pipe_read_len = 0;
         child.block_cache_ptr = 0;
+        child.jit_state_ptr = 0;
         child.execve_backing_miss_ino = 0;
         child.execve_backing_miss_len = 0;
         child.execve_backing_miss_offset = 0;

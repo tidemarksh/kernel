@@ -13,7 +13,7 @@ impl AddressRange {
         (start < end).then_some(Self { start, end })
     }
 
-    fn overlaps(self, other: Self) -> bool {
+    pub(crate) fn overlaps(self, other: Self) -> bool {
         self.start < other.end && other.start < self.end
     }
 }
@@ -24,6 +24,8 @@ pub struct CompiledRegion {
     pub id: u32,
     /// PC accepted by the module's `run` entry point.
     pub entry_pc: u64,
+    /// Kernel VMA permit generation captured when this module was emitted.
+    pub permit_generation: u32,
     /// Guest executable byte ranges represented by this module.
     pub code_ranges: Vec<AddressRange>,
 }

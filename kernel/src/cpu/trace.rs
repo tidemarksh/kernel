@@ -135,6 +135,11 @@ impl HotCounts {
         self.counts[idx] >= HOT_THRESHOLD
     }
 
+    pub fn reset(&mut self, pc: u64) {
+        let idx = (pc >> 1) as usize & (HOT_TABLE_SIZE - 1);
+        self.counts[idx] = 0;
+    }
+
     pub fn clear(&mut self) {
         self.counts = [0; HOT_TABLE_SIZE];
     }
@@ -146,31 +151,43 @@ impl Default for HotCounts {
     }
 }
 
-/// JIT readiness bitmap. Set by JS when a compiled module is available.
+/// Exact-PC JIT readiness table. Updated after Runtime installs a compiled module.
 pub struct JitBitmap {
     bits: [u8; HOT_TABLE_SIZE / 8],
+    pcs: [u64; HOT_TABLE_SIZE],
 }
 
 impl JitBitmap {
     pub const fn new() -> Self {
         Self {
             bits: [0; HOT_TABLE_SIZE / 8],
+            pcs: [0; HOT_TABLE_SIZE],
         }
     }
 
     #[inline(always)]
     pub fn is_ready(&self, pc: u64) -> bool {
         let idx = (pc >> 1) as usize & (HOT_TABLE_SIZE - 1);
-        self.bits[idx / 8] & (1 << (idx % 8)) != 0
+        self.bits[idx / 8] & (1 << (idx % 8)) != 0 && self.pcs[idx] == pc
     }
 
     pub fn mark_ready(&mut self, pc: u64) {
         let idx = (pc >> 1) as usize & (HOT_TABLE_SIZE - 1);
+        self.pcs[idx] = pc;
         self.bits[idx / 8] |= 1 << (idx % 8);
+    }
+
+    pub fn unmark_ready(&mut self, pc: u64) {
+        let idx = (pc >> 1) as usize & (HOT_TABLE_SIZE - 1);
+        if self.pcs[idx] == pc {
+            self.bits[idx / 8] &= !(1 << (idx % 8));
+            self.pcs[idx] = 0;
+        }
     }
 
     pub fn clear(&mut self) {
         self.bits = [0; HOT_TABLE_SIZE / 8];
+        self.pcs = [0; HOT_TABLE_SIZE];
     }
 }
 
@@ -192,6 +209,8 @@ mod tests {
         }
         assert!(hc.increment(0x1000), "should fire at threshold");
         assert!(!hc.increment(0x1000), "should not fire again");
+        hc.reset(0x1000);
+        assert!(!hc.is_hot(0x1000));
     }
 
     #[test]
@@ -230,5 +249,11 @@ mod tests {
         assert!(!bm.is_ready(0x2000));
         bm.mark_ready(0x2000);
         assert!(bm.is_ready(0x2000));
+        assert!(
+            !bm.is_ready(0x2800),
+            "hash collisions must not report ready"
+        );
+        bm.unmark_ready(0x2000);
+        assert!(!bm.is_ready(0x2000));
     }
 }

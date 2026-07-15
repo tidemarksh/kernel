@@ -1,10 +1,12 @@
 use tidemark_kernel::cpu::trace::TraceEntry;
+use tidemark_kernel::harness::TestVm;
 use tidemark_kernel::jit::cache::{AddressRange, CompiledRegion, RegionCache};
 use tidemark_kernel::jit::wasm_gen::{
     JitCompileError, JitMemoryPermit, JitModuleConfig, Region, RegionBlock, RegionInstruction,
     compile_region,
 };
-use tidemark_kernel::jit::{TraceRegionError, region_from_trace};
+use tidemark_kernel::jit::{JitState, TraceRegionError, region_from_trace};
+use tidemark_kernel::{abi, guest_mem};
 use wasmparser::{Imports, Operator, Parser, Payload, Validator, WasmFeatures};
 
 fn instruction(pc: u64, raw: u32) -> RegionInstruction {
@@ -52,6 +54,19 @@ fn jal(pc: u64, target: u64, rd: u32) -> u32 {
         | ((imm >> 12 & 0xff) << 12)
         | (rd << 7)
         | 0x6f
+}
+
+fn mmap_exec(t: &mut TestVm, len: u64) -> u64 {
+    let addr = t.sys_mmap(
+        0,
+        len,
+        abi::PROT_READ | abi::PROT_WRITE | abi::PROT_EXEC,
+        abi::MAP_ANONYMOUS | abi::MAP_PRIVATE,
+        -1,
+        0,
+    );
+    assert!(addr > 0, "mmap failed: {addr}");
+    addr as u64
 }
 
 fn diamond_region() -> Region {
@@ -308,10 +323,70 @@ fn memory_ops_require_a_vma_generation_address() {
     );
 }
 
+#[test]
+fn thread_jit_handoff_compiles_installs_and_invalidates_a_hot_region() {
+    let mut t = TestVm::new();
+    let code = mmap_exec(&mut t, 4096);
+    unsafe {
+        guest_mem::write_u32(t.base, code, addi(5, 5, 1));
+        guest_mem::write_u32(t.base, code + 4, branch(code + 4, code, 5, 6, 1));
+    }
+    let jit_ptr = unsafe { tidemark_kernel::alloc::alloc_type::<JitState>() };
+    assert_ne!(jit_ptr, 0);
+    unsafe { (jit_ptr as *mut JitState).write(JitState::new()) };
+    t.vm.jit_state_ptr = jit_ptr;
+    t.vm.process_max_memory_pages = 32_768;
+    t.vm.pc = code;
+    t.vm.x[6] = 1_000;
+    t.vm.status = abi::STATUS_OK;
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+
+    let remaining = abi::thread_step_jit(vm_ptr, 256);
+    assert!(
+        remaining > 0,
+        "trace completion should return before budget exhaustion"
+    );
+    assert_eq!(t.vm.status, abi::STATUS_JIT_READY);
+    assert_eq!(abi::thread_jit_module_entry_pc(vm_ptr), code);
+    let module_ptr = abi::thread_jit_module_ptr(vm_ptr);
+    let module_len = abi::thread_jit_module_len(vm_ptr);
+    assert_ne!(module_ptr, 0);
+    assert_ne!(module_len, 0);
+    let bytes =
+        unsafe { core::slice::from_raw_parts(module_ptr as *const u8, module_len as usize) };
+    Validator::new_with_features(WasmFeatures::default() | WasmFeatures::THREADS)
+        .validate_all(bytes)
+        .expect("handoff module validates");
+
+    assert_eq!(abi::thread_jit_install(vm_ptr, 41), 1);
+    assert_eq!(t.vm.status, abi::STATUS_OK);
+    assert_eq!(abi::thread_jit_module_len(vm_ptr), 0);
+    assert_eq!(abi::thread_jit_compiled_id(vm_ptr), 41);
+
+    tidemark_kernel::syscall::identity::sys_riscv_flush_icache(
+        &mut t.vm,
+        t.base,
+        code,
+        code + 8,
+        0,
+    );
+    assert_eq!(abi::thread_jit_compiled_id(vm_ptr), 0);
+
+    assert!(abi::thread_step_jit(vm_ptr, 256) > 0);
+    assert_eq!(t.vm.status, abi::STATUS_JIT_READY);
+    assert_ne!(abi::thread_jit_module_len(vm_ptr), 0);
+    mmap_exec(&mut t, 4096);
+    assert_eq!(abi::thread_jit_install(vm_ptr, 42), 0);
+    assert_eq!(t.vm.status, abi::STATUS_OK);
+    assert_eq!(abi::thread_jit_module_len(vm_ptr), 0);
+    assert_eq!(abi::thread_jit_compiled_id(vm_ptr), 0);
+}
+
 fn cached_region(id: u32, entry_pc: u64, ranges: &[(u64, u64)]) -> CompiledRegion {
     CompiledRegion {
         id,
         entry_pc,
+        permit_generation: 1,
         code_ranges: ranges
             .iter()
             .map(|&(start, end)| AddressRange::new(start, end).unwrap())

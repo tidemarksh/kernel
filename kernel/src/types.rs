@@ -196,6 +196,8 @@ pub struct ThreadState {
     /// Expected full file size for the pending execve backing miss.
     pub execve_backing_miss_expected_size: u32,
     _pad_execve_backing_miss: u32,
+    /// Kernel-owned per-thread JIT controller state. 0 = inactive/unallocated.
+    pub jit_state_ptr: u32,
 }
 
 // =============================================================================
