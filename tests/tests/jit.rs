@@ -1,3 +1,4 @@
+use core::sync::atomic::Ordering;
 use tidemark_kernel::cpu::trace::TraceEntry;
 use tidemark_kernel::harness::TestVm;
 use tidemark_kernel::jit::cache::{AddressRange, CompiledRegion, RegionCache};
@@ -327,9 +328,18 @@ fn memory_ops_require_a_vma_generation_address() {
 fn thread_jit_handoff_compiles_installs_and_invalidates_a_hot_region() {
     let mut t = TestVm::new();
     let code = mmap_exec(&mut t, 4096);
+    let data = t.sys_mmap(
+        0,
+        4096,
+        abi::PROT_READ | abi::PROT_WRITE,
+        abi::MAP_ANONYMOUS | abi::MAP_PRIVATE,
+        -1,
+        0,
+    ) as u64;
     unsafe {
-        guest_mem::write_u32(t.base, code, addi(5, 5, 1));
-        guest_mem::write_u32(t.base, code + 4, branch(code + 4, code, 5, 6, 1));
+        guest_mem::write_u32(t.base, code, store(5, 0, 0, 3));
+        guest_mem::write_u32(t.base, code + 4, addi(5, 5, 8));
+        guest_mem::write_u32(t.base, code + 8, branch(code + 8, code, 5, 6, 1));
     }
     let jit_ptr = unsafe { tidemark_kernel::alloc::alloc_type::<JitState>() };
     assert_ne!(jit_ptr, 0);
@@ -337,7 +347,8 @@ fn thread_jit_handoff_compiles_installs_and_invalidates_a_hot_region() {
     t.vm.jit_state_ptr = jit_ptr;
     t.vm.process_max_memory_pages = 32_768;
     t.vm.pc = code;
-    t.vm.x[6] = 1_000;
+    t.vm.x[5] = data;
+    t.vm.x[6] = data + 1_000;
     t.vm.status = abi::STATUS_OK;
     let vm_ptr = &mut t.vm as *mut _ as u32;
 
@@ -376,12 +387,49 @@ fn thread_jit_handoff_compiles_installs_and_invalidates_a_hot_region() {
     assert_eq!(t.vm.status, abi::STATUS_OK);
     assert_eq!(abi::thread_jit_module_len(vm_ptr), 0);
     assert_eq!(abi::thread_jit_compiled_id(vm_ptr), 41);
+    let process = unsafe {
+        &*((t.base as u64 + t.vm.process_ptr as u64) as *const tidemark_kernel::types::ProcessState)
+    };
+    process.thread_count.store(2, Ordering::Release);
+    t.vm.pc = code;
+    assert_eq!(abi::thread_step_jit(vm_ptr, 3), 0);
+    assert_eq!(t.vm.status, abi::STATUS_OK);
+    assert_eq!(t.vm.pc, code);
+    process.thread_count.store(1, Ordering::Release);
     let ticks = abi::monotonic_ticks_current();
     t.vm.status = abi::STATUS_JIT_READY;
     assert_eq!(abi::thread_jit_complete(vm_ptr, 7), abi::STATUS_OK);
     assert_eq!(t.vm.status, abi::STATUS_OK);
     assert_eq!(abi::monotonic_ticks_current(), ticks + 7);
     assert_eq!(abi::thread_jit_compiled_id(vm_ptr), 0);
+}
+
+#[test]
+fn dynamic_jit_rejects_non_zero_fill_loops() {
+    let mut t = TestVm::new();
+    let code = mmap_exec(&mut t, 4096);
+    unsafe {
+        guest_mem::write_u32(t.base, code, addi(5, 5, 1));
+        guest_mem::write_u32(t.base, code + 4, branch(code + 4, code, 5, 6, 1));
+    }
+    let jit_ptr = unsafe { tidemark_kernel::alloc::alloc_type::<JitState>() };
+    assert_ne!(jit_ptr, 0);
+    unsafe { (jit_ptr as *mut JitState).write(JitState::new()) };
+    t.vm.jit_state_ptr = jit_ptr;
+    t.vm.process_max_memory_pages = 32_768;
+    t.vm.pc = code;
+    t.vm.x[6] = 1_000;
+    t.vm.status = abi::STATUS_OK;
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+
+    let remaining = abi::thread_step_jit(vm_ptr, 64);
+    assert!(remaining > 0 && remaining < 64);
+    assert_eq!(t.vm.status, abi::STATUS_OK);
+    assert_eq!(abi::thread_jit_module_len(vm_ptr), 0);
+
+    assert_eq!(abi::thread_step_jit(vm_ptr, remaining), 0);
+    assert_eq!(t.vm.status, abi::STATUS_OK);
+    assert_eq!(abi::thread_jit_module_len(vm_ptr), 0);
 }
 
 fn cached_region(id: u32, entry_pc: u64, ranges: &[(u64, u64)]) -> CompiledRegion {

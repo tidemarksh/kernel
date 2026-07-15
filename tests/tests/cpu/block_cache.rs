@@ -1200,3 +1200,57 @@ fn cached_backedge_starts_and_completes_a_jit_trace() {
     assert_eq!(trace.entries[0].pc, start);
     assert_eq!(trace.entries[1].pc, start + 4);
 }
+
+#[test]
+fn cached_jit_backedge_publishes_the_compiled_region_entry_pc() {
+    let mut t = TestVm::new();
+    let mut cache = alloc_block_cache();
+    let mut jit_bitmap = JitBitmap::new();
+    let start = mmap_exec(&mut t, 4096);
+    unsafe {
+        guest_mem::write_u32(t.base, start, 0x0000_0013);
+        guest_mem::write_u32(t.base, start + 4, 0x0012_8293);
+        guest_mem::write_u32(t.base, start + 8, 0xfe00_0ce3);
+    }
+    jit_bitmap.mark_ready(start);
+    t.vm.pc = start + 4;
+    t.vm.status = abi::STATUS_OK;
+
+    unsafe {
+        tidemark_kernel::cpu::exec_at_base(
+            &mut t.vm,
+            4,
+            t.base,
+            Some(&mut cache),
+            None,
+            Some(&jit_bitmap),
+            None,
+        );
+    }
+    assert_eq!(t.vm.status, abi::STATUS_JIT_READY);
+    assert_eq!(t.vm.pc, start);
+}
+
+#[test]
+fn jit_hot_counts_replace_a_colliding_pc_instead_of_staying_saturated() {
+    let mut hot_counts = HotCounts::new();
+    let first = 0x1000;
+    let colliding = first + (tidemark_kernel::cpu::trace::HOT_TABLE_SIZE as u64 * 2);
+    for _ in 0..HOT_THRESHOLD {
+        hot_counts.increment(first);
+    }
+    assert!(hot_counts.is_hot(first));
+
+    assert!(!hot_counts.increment(colliding));
+    assert!(!hot_counts.is_hot(first));
+    assert!(!hot_counts.is_hot(colliding));
+    for _ in 1..HOT_THRESHOLD {
+        hot_counts.increment(colliding);
+    }
+    assert!(hot_counts.is_hot(colliding));
+
+    hot_counts.reset(first);
+    assert!(hot_counts.is_hot(colliding));
+    hot_counts.reset(colliding);
+    assert!(!hot_counts.is_hot(colliding));
+}

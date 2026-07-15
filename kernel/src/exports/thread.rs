@@ -114,7 +114,7 @@ unsafe fn thread_step_with_modes(
         } else {
             None
         };
-        let jit_state_ptr = if use_jit {
+        let jit_state_ptr = if use_jit && !crate::guest_mem::memory_is_multi_threaded() {
             thread_jit_state_ptr(vm, base)
         } else {
             core::ptr::null_mut()

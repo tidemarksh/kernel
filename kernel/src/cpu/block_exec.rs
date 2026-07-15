@@ -299,7 +299,10 @@ pub(super) unsafe fn exec_simple_load_scan_loop<const FIRST_CONSUMED: bool>(
                             jit_bitmap,
                             trace_buf.as_deref_mut(),
                         ) {
-                            JitBackedgeOutcome::Compiled => return BlockOutcome::Return,
+                            JitBackedgeOutcome::Compiled => {
+                                *pc = target;
+                                return BlockOutcome::Return;
+                            }
                             JitBackedgeOutcome::StartTrace => {
                                 *pc = target;
                                 crate::tracepoints::record_block_exec_ops(charged_ops);
@@ -885,7 +888,10 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                             jit_bitmap,
                             trace_buf.as_deref_mut(),
                         ) {
-                            JitBackedgeOutcome::Compiled => return BlockOutcome::Return,
+                            JitBackedgeOutcome::Compiled => {
+                                *pc = target;
+                                return BlockOutcome::Return;
+                            }
                             JitBackedgeOutcome::StartTrace => {
                                 *pc = target;
                                 return BlockOutcome::Restart;

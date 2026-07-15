@@ -106,12 +106,14 @@ impl Default for TraceBuffer {
 /// Indexed by (pc >> 1) & (HOT_TABLE_SIZE - 1).
 pub struct HotCounts {
     counts: [u8; HOT_TABLE_SIZE],
+    pcs: [u64; HOT_TABLE_SIZE],
 }
 
 impl HotCounts {
     pub const fn new() -> Self {
         Self {
             counts: [0; HOT_TABLE_SIZE],
+            pcs: [0; HOT_TABLE_SIZE],
         }
     }
 
@@ -120,6 +122,10 @@ impl HotCounts {
     #[inline(always)]
     pub fn increment(&mut self, target_pc: u64) -> bool {
         let idx = (target_pc >> 1) as usize & (HOT_TABLE_SIZE - 1);
+        if self.counts[idx] != 0 && self.pcs[idx] != target_pc {
+            self.counts[idx] = 0;
+        }
+        self.pcs[idx] = target_pc;
         let c = self.counts[idx];
         if c >= HOT_THRESHOLD {
             return false;
@@ -132,16 +138,20 @@ impl HotCounts {
     #[inline(always)]
     pub fn is_hot(&self, pc: u64) -> bool {
         let idx = (pc >> 1) as usize & (HOT_TABLE_SIZE - 1);
-        self.counts[idx] >= HOT_THRESHOLD
+        self.pcs[idx] == pc && self.counts[idx] >= HOT_THRESHOLD
     }
 
     pub fn reset(&mut self, pc: u64) {
         let idx = (pc >> 1) as usize & (HOT_TABLE_SIZE - 1);
-        self.counts[idx] = 0;
+        if self.pcs[idx] == pc {
+            self.counts[idx] = 0;
+            self.pcs[idx] = 0;
+        }
     }
 
     pub fn clear(&mut self) {
         self.counts = [0; HOT_TABLE_SIZE];
+        self.pcs = [0; HOT_TABLE_SIZE];
     }
 }
 

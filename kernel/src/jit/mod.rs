@@ -53,6 +53,11 @@ impl JitState {
         let count = self.trace.count as usize;
         let region = region_from_trace(&self.trace.entries[..count], max_instructions)
             .map_err(TraceCompileError::Trace)?;
+        if !is_zero_fill_loop(&region) {
+            return Err(TraceCompileError::Trace(
+                TraceRegionError::UnsupportedDynamicShape(region.entry_pc),
+            ));
+        }
         let snapshot = crate::syscall::memory::jit_memory_snapshot();
         let bytes = compile_region(
             &region,
@@ -192,6 +197,7 @@ pub enum TraceRegionError {
     Empty,
     InvalidStep(u64),
     DuplicatePc(u64),
+    UnsupportedDynamicShape(u64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -282,4 +288,33 @@ fn is_control(raw: u32) -> bool {
         decode::opcode(raw),
         decode::OP_BRANCH | decode::OP_JAL | decode::OP_JALR | decode::OP_SYSTEM
     )
+}
+
+fn is_zero_fill_loop(region: &Region) -> bool {
+    let [block] = region.blocks.as_slice() else {
+        return false;
+    };
+    let Some((branch, body)) = block.instructions.split_last() else {
+        return false;
+    };
+    if decode::opcode(branch.raw) != decode::OP_BRANCH
+        || branch.pc.wrapping_add_signed(decode::imm_b(branch.raw)) != region.entry_pc
+    {
+        return false;
+    }
+
+    let mut has_zero_store = false;
+    for instruction in body {
+        match decode::opcode(instruction.raw) {
+            decode::OP_STORE if decode::rs2(instruction.raw) == 0 => {
+                has_zero_store = true;
+            }
+            decode::OP_OP_IMM
+                if decode::funct3(instruction.raw) == 0
+                    && decode::rd(instruction.raw) != 0
+                    && decode::rd(instruction.raw) == decode::rs1(instruction.raw) => {}
+            _ => return false,
+        }
+    }
+    has_zero_store
 }
