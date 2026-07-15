@@ -341,7 +341,7 @@ fn thread_jit_handoff_compiles_installs_and_invalidates_a_hot_region() {
     t.vm.status = abi::STATUS_OK;
     let vm_ptr = &mut t.vm as *mut _ as u32;
 
-    let remaining = abi::thread_step_jit(vm_ptr, 256);
+    let remaining = abi::thread_step_jit(vm_ptr, 8192);
     assert!(
         remaining > 0,
         "trace completion should return before budget exhaustion"
@@ -357,14 +357,30 @@ fn thread_jit_handoff_compiles_installs_and_invalidates_a_hot_region() {
     Validator::new_with_features(WasmFeatures::default() | WasmFeatures::THREADS)
         .validate_all(bytes)
         .expect("handoff module validates");
+    let mut has_region_instruction_limit = false;
+    for payload in Parser::new(0).parse_all(bytes) {
+        if let Payload::CodeSectionEntry(body) = payload.expect("module parses") {
+            let mut operators = body.get_operators_reader().expect("operators parse");
+            while !operators.eof() {
+                if let Operator::I32Const { value } = operators.read().expect("operator parses")
+                    && value == tidemark_kernel::jit::REGION_EXECUTION_INSTRUCTION_LIMIT as i32
+                {
+                    has_region_instruction_limit = true;
+                }
+            }
+        }
+    }
+    assert!(has_region_instruction_limit);
 
     assert_eq!(abi::thread_jit_install(vm_ptr, 41), 1);
     assert_eq!(t.vm.status, abi::STATUS_OK);
     assert_eq!(abi::thread_jit_module_len(vm_ptr), 0);
     assert_eq!(abi::thread_jit_compiled_id(vm_ptr), 41);
     let ticks = abi::monotonic_ticks_current();
-    assert_eq!(abi::thread_jit_complete(vm_ptr, 0), abi::STATUS_OK);
-    assert_eq!(abi::monotonic_ticks_current(), ticks);
+    t.vm.status = abi::STATUS_JIT_READY;
+    assert_eq!(abi::thread_jit_complete(vm_ptr, 7), abi::STATUS_OK);
+    assert_eq!(t.vm.status, abi::STATUS_OK);
+    assert_eq!(abi::monotonic_ticks_current(), ticks + 7);
     assert_eq!(abi::thread_jit_compiled_id(vm_ptr), 0);
 }
 

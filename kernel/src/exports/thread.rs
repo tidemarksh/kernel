@@ -4,6 +4,8 @@ use crate::jit::JitState;
 use crate::types::{ProcessState, ThreadState};
 use core::sync::atomic::Ordering;
 
+const JIT_MIN_RETAINED_INSTRUCTIONS: u32 = 64;
+
 unsafe fn thread_block_cache(vm: &mut ThreadState, base: u32) -> Option<BlockCache> {
     if vm.process_ptr == 0 {
         return None;
@@ -225,8 +227,12 @@ pub extern "C" fn thread_jit_complete(vm_ptr: u32, executed: u32) -> i32 {
     }
     unsafe {
         let vm = &mut *(vm_ptr as *mut ThreadState);
-        if executed == 0 && vm.jit_state_ptr != 0 {
-            (&mut *(vm.jit_state_ptr as *mut JitState)).suppress_zero_progress(vm.pc);
+        if vm.jit_state_ptr != 0 {
+            (&mut *(vm.jit_state_ptr as *mut JitState))
+                .complete(executed, JIT_MIN_RETAINED_INSTRUCTIONS);
+        }
+        if vm.status == STATUS_JIT_READY {
+            vm.status = STATUS_OK;
         }
         crate::syscall::time::advance_monotonic(executed as u64);
         crate::syscall::signal::check_pending_at_boundary(

@@ -14,6 +14,8 @@ use wasm_gen::{
 pub mod cache;
 pub mod wasm_gen;
 
+pub const REGION_EXECUTION_INSTRUCTION_LIMIT: u32 = 4096;
+
 struct PendingRegion {
     bytes: Vec<u8>,
     entry_pc: u64,
@@ -27,6 +29,7 @@ pub struct JitState {
     pub(crate) trace: TraceBuffer,
     cache: RegionCache,
     pending: Option<PendingRegion>,
+    active_entry_pc: u64,
 }
 
 impl JitState {
@@ -37,6 +40,7 @@ impl JitState {
             trace: TraceBuffer::new(),
             cache: RegionCache::new(),
             pending: None,
+            active_entry_pc: 0,
         }
     }
 
@@ -45,6 +49,7 @@ impl JitState {
         max_instructions: u32,
         memory_max_pages: u64,
     ) -> Result<(), TraceCompileError> {
+        let max_instructions = max_instructions.min(REGION_EXECUTION_INSTRUCTION_LIMIT);
         let count = self.trace.count as usize;
         let region = region_from_trace(&self.trace.entries[..count], max_instructions)
             .map_err(TraceCompileError::Trace)?;
@@ -116,12 +121,14 @@ impl JitState {
             code_ranges: pending.code_ranges,
         });
         self.ready.mark_ready(entry_pc);
+        self.active_entry_pc = entry_pc;
         true
     }
 
     pub fn compiled_id(&mut self, pc: u64, permit_generation: u32) -> Option<u32> {
         let region = self.cache.get(pc)?;
         if region.permit_generation == permit_generation {
+            self.active_entry_pc = pc;
             return Some(region.id);
         }
         self.cache.clear();
@@ -144,9 +151,13 @@ impl JitState {
         }
     }
 
-    pub fn suppress_zero_progress(&mut self, pc: u64) {
-        if self.cache.remove(pc).is_some() {
-            self.ready.unmark_ready(pc);
+    pub fn complete(&mut self, executed: u32, minimum_retained_instructions: u32) {
+        let entry_pc = core::mem::take(&mut self.active_entry_pc);
+        if executed < minimum_retained_instructions
+            && entry_pc != 0
+            && self.cache.remove(entry_pc).is_some()
+        {
+            self.ready.unmark_ready(entry_pc);
         }
     }
 
@@ -156,6 +167,7 @@ impl JitState {
         self.trace = TraceBuffer::new();
         self.cache.clear();
         self.pending = None;
+        self.active_entry_pc = 0;
     }
 }
 
