@@ -1,7 +1,9 @@
+use tidemark_kernel::cpu::trace::TraceEntry;
 use tidemark_kernel::jit::cache::{AddressRange, CompiledRegion, RegionCache};
 use tidemark_kernel::jit::wasm_gen::{
     JitCompileError, JitModuleConfig, Region, RegionBlock, RegionInstruction, compile_region,
 };
+use tidemark_kernel::jit::{TraceRegionError, region_from_trace};
 use wasmparser::{Imports, Operator, Parser, Payload, Validator, WasmFeatures};
 
 fn instruction(pc: u64, raw: u32) -> RegionInstruction {
@@ -275,4 +277,61 @@ fn exec_replacement_clears_all_region_metadata() {
     let cleared = cache.clear();
     assert_eq!(cleared.len(), 2);
     assert!(cache.is_empty());
+}
+
+#[test]
+fn completed_loop_trace_becomes_multiple_linked_blocks() {
+    let entries = [
+        TraceEntry {
+            pc: 0x1000,
+            raw_insn: addi(3, 3, 1),
+            step: 4,
+        },
+        TraceEntry {
+            pc: 0x1004,
+            raw_insn: branch(0x1004, 0x1010, 1, 2, 0),
+            step: 4,
+        },
+        TraceEntry {
+            pc: 0x1008,
+            raw_insn: addi(4, 4, 1),
+            step: 4,
+        },
+        TraceEntry {
+            pc: 0x100c,
+            raw_insn: jal(0x100c, 0x1000, 0),
+            step: 4,
+        },
+    ];
+    let region = region_from_trace(&entries, 64).expect("trace becomes a region");
+    assert_eq!(region.entry_pc, 0x1000);
+    assert_eq!(
+        region
+            .blocks
+            .iter()
+            .map(|block| block.start_pc)
+            .collect::<Vec<_>>(),
+        vec![0x1000, 0x1008]
+    );
+    compile(&region).expect("trace-derived region compiles");
+}
+
+#[test]
+fn trace_region_rejects_repeated_inner_loop_pc() {
+    let entries = [
+        TraceEntry {
+            pc: 0x1000,
+            raw_insn: addi(3, 3, 1),
+            step: 4,
+        },
+        TraceEntry {
+            pc: 0x1000,
+            raw_insn: addi(3, 3, 1),
+            step: 4,
+        },
+    ];
+    assert_eq!(
+        region_from_trace(&entries, 64),
+        Err(TraceRegionError::DuplicatePc(0x1000))
+    );
 }

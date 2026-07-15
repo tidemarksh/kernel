@@ -9,6 +9,13 @@ pub const TRACE_MAX_ENTRIES: usize = 128;
 pub const HOT_THRESHOLD: u8 = 8;
 pub const HOT_TABLE_SIZE: usize = 1024;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TraceRecordOutcome {
+    Recorded,
+    LoopComplete,
+    Full,
+}
+
 /// A single recorded trace entry.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -65,6 +72,21 @@ impl TraceBuffer {
             self.count += 1;
         }
         self.count as usize >= TRACE_MAX_ENTRIES
+    }
+
+    /// Record until the loop head is reached again or the fixed buffer fills.
+    #[inline(always)]
+    pub fn record_until_loop(&mut self, pc: u64, raw: u32, step: u32) -> TraceRecordOutcome {
+        if self.count != 0 && pc == self.start_pc {
+            self.stop();
+            return TraceRecordOutcome::LoopComplete;
+        }
+        if self.record(pc, raw, step) {
+            self.stop();
+            TraceRecordOutcome::Full
+        } else {
+            TraceRecordOutcome::Recorded
+        }
     }
 
     /// Stop recording.
@@ -180,6 +202,26 @@ mod tests {
         assert!(!tb.record(0x1000, 0x00000013, 4));
         assert_eq!(tb.count, 1);
         assert_eq!(tb.entries[0].pc, 0x1000);
+    }
+
+    #[test]
+    fn trace_buffer_completes_before_recording_loop_head_twice() {
+        let mut tb = TraceBuffer::new();
+        tb.start(0x1000);
+        assert_eq!(
+            tb.record_until_loop(0x1000, 0x0000_0013, 4),
+            TraceRecordOutcome::Recorded
+        );
+        assert_eq!(
+            tb.record_until_loop(0x1004, 0xfe00_0ee3, 4),
+            TraceRecordOutcome::Recorded
+        );
+        assert_eq!(
+            tb.record_until_loop(0x1000, 0x0000_0013, 4),
+            TraceRecordOutcome::LoopComplete
+        );
+        assert_eq!(tb.count, 2);
+        assert_eq!(tb.recording, 0);
     }
 
     #[test]

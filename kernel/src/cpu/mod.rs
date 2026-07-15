@@ -25,7 +25,7 @@ use self::block_cache::{BLOCK_LOOP_SIMPLE_LOAD_SCAN, BlockCache};
 use self::block_exec::{BlockOutcome, exec_block, exec_simple_load_scan_loop};
 use self::dispatch::{StepOutcome, exec_decoded};
 use self::fault::{AccessPermitCache, deliver_sync_sigsegv, guest_range_in_bounds};
-use self::trace::{HotCounts, JitBitmap, TraceBuffer};
+use self::trace::{HotCounts, JitBitmap, TraceBuffer, TraceRecordOutcome};
 use crate::abi;
 use crate::guest_mem;
 use crate::types::ThreadState;
@@ -394,14 +394,17 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
         };
         if let Some(ref mut tb) = trace_buf
             && tb.recording != 0
-            && tb.record(*pc, raw, step as u32)
         {
-            tb.stop();
-            vm.x = *x;
-            vm.f = *f;
-            vm.pc = *pc;
-            vm.status = abi::STATUS_JIT_READY;
-            return *remaining;
+            match tb.record_until_loop(*pc, raw, step as u32) {
+                TraceRecordOutcome::Recorded => {}
+                TraceRecordOutcome::LoopComplete | TraceRecordOutcome::Full => {
+                    vm.x = *x;
+                    vm.f = *f;
+                    vm.pc = *pc;
+                    vm.status = abi::STATUS_JIT_READY;
+                    return *remaining;
+                }
+            }
         }
         crate::tracepoints::record_exec_trace(
             vm as *const ThreadState as u32,
