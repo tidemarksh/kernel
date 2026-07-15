@@ -144,6 +144,12 @@ impl JitState {
         }
     }
 
+    pub fn suppress_zero_progress(&mut self, pc: u64) {
+        if self.cache.remove(pc).is_some() {
+            self.ready.unmark_ready(pc);
+        }
+    }
+
     pub fn clear(&mut self) {
         self.hot_counts.clear();
         self.ready.clear();

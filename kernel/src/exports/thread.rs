@@ -225,6 +225,9 @@ pub extern "C" fn thread_jit_complete(vm_ptr: u32, executed: u32) -> i32 {
     }
     unsafe {
         let vm = &mut *(vm_ptr as *mut ThreadState);
+        if executed == 0 && vm.jit_state_ptr != 0 {
+            (&mut *(vm.jit_state_ptr as *mut JitState)).suppress_zero_progress(vm.pc);
+        }
         crate::syscall::time::advance_monotonic(executed as u64);
         crate::syscall::signal::check_pending_at_boundary(
             vm,

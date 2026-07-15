@@ -58,6 +58,14 @@ impl RegionCache {
         self.regions.iter().find(|region| region.entry_pc == pc)
     }
 
+    pub fn remove(&mut self, pc: u64) -> Option<CompiledRegion> {
+        let index = self
+            .regions
+            .iter()
+            .position(|region| region.entry_pc == pc)?;
+        Some(self.regions.remove(index))
+    }
+
     /// Remove regions whose executable bytes overlap an address-space rewrite.
     pub fn invalidate_range(&mut self, range: AddressRange) -> Vec<CompiledRegion> {
         let mut invalidated = Vec::new();
