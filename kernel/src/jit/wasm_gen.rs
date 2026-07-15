@@ -56,24 +56,41 @@ pub enum JitCompileError {
 
 #[derive(Clone, Copy)]
 enum Decoded {
-    Addi {
+    OpImm {
         rd: usize,
         rs1: usize,
+        kind: u32,
         imm: i64,
+        alternate: bool,
     },
-    Add {
+    OpImm32 {
+        rd: usize,
+        rs1: usize,
+        kind: u32,
+        imm: i64,
+        alternate: bool,
+    },
+    Op {
         rd: usize,
         rs1: usize,
         rs2: usize,
+        kind: u32,
+        alternate: bool,
     },
-    Sub {
+    Op32 {
         rd: usize,
         rs1: usize,
         rs2: usize,
+        kind: u32,
+        alternate: bool,
     },
     Lui {
         rd: usize,
         imm: i64,
+    },
+    Auipc {
+        rd: usize,
+        value: u64,
     },
     Branch {
         kind: u32,
@@ -226,26 +243,41 @@ fn decode_instruction(instruction: RegionInstruction) -> Result<Decoded, JitComp
     let raw = instruction.raw;
     let fallthrough = instruction.pc.wrapping_add(instruction.step as u64);
     match decode::opcode(raw) {
-        decode::OP_OP_IMM if decode::funct3(raw) == 0 => Ok(Decoded::Addi {
+        decode::OP_OP_IMM if valid_immediate_alu(raw, false) => Ok(Decoded::OpImm {
             rd: decode::rd(raw),
             rs1: decode::rs1(raw),
+            kind: decode::funct3(raw),
             imm: decode::imm_i(raw),
+            alternate: decode::funct3(raw) == 5 && (raw >> 30) & 1 != 0,
         }),
-        decode::OP_OP if decode::funct3(raw) == 0 && decode::funct7(raw) == 0 => Ok(Decoded::Add {
+        decode::OP_OP_IMM_32 if valid_immediate_alu(raw, true) => Ok(Decoded::OpImm32 {
+            rd: decode::rd(raw),
+            rs1: decode::rs1(raw),
+            kind: decode::funct3(raw),
+            imm: decode::imm_i(raw),
+            alternate: decode::funct3(raw) == 5 && (raw >> 30) & 1 != 0,
+        }),
+        decode::OP_OP if valid_register_alu(raw, false) => Ok(Decoded::Op {
             rd: decode::rd(raw),
             rs1: decode::rs1(raw),
             rs2: decode::rs2(raw),
+            kind: decode::funct3(raw),
+            alternate: decode::funct7(raw) == 0x20,
         }),
-        decode::OP_OP if decode::funct3(raw) == 0 && decode::funct7(raw) == 0x20 => {
-            Ok(Decoded::Sub {
-                rd: decode::rd(raw),
-                rs1: decode::rs1(raw),
-                rs2: decode::rs2(raw),
-            })
-        }
+        decode::OP_OP_32 if valid_register_alu(raw, true) => Ok(Decoded::Op32 {
+            rd: decode::rd(raw),
+            rs1: decode::rs1(raw),
+            rs2: decode::rs2(raw),
+            kind: decode::funct3(raw),
+            alternate: decode::funct7(raw) == 0x20,
+        }),
         decode::OP_LUI => Ok(Decoded::Lui {
             rd: decode::rd(raw),
             imm: decode::imm_u(raw),
+        }),
+        decode::OP_AUIPC => Ok(Decoded::Auipc {
+            rd: decode::rd(raw),
+            value: instruction.pc.wrapping_add_signed(decode::imm_u(raw)),
         }),
         decode::OP_BRANCH if !matches!(decode::funct3(raw), 2 | 3) => Ok(Decoded::Branch {
             kind: decode::funct3(raw),
@@ -260,6 +292,37 @@ fn decode_instruction(instruction: RegionInstruction) -> Result<Decoded, JitComp
             fallthrough,
         }),
         _ => Err(JitCompileError::UnsupportedInstruction(instruction.pc, raw)),
+    }
+}
+
+fn valid_immediate_alu(raw: u32, word: bool) -> bool {
+    match decode::funct3(raw) {
+        0 => true,
+        1 => {
+            if word {
+                decode::funct7(raw) == 0
+            } else {
+                raw >> 26 == 0
+            }
+        }
+        5 => {
+            if word {
+                matches!(decode::funct7(raw), 0 | 0x20)
+            } else {
+                matches!(raw >> 26, 0 | 0x10)
+            }
+        }
+        2..=4 | 6..=7 => !word,
+        _ => false,
+    }
+}
+
+fn valid_register_alu(raw: u32, word: bool) -> bool {
+    match (decode::funct3(raw), decode::funct7(raw)) {
+        (0 | 5, 0 | 0x20) => true,
+        (1, 0) => true,
+        (2..=4 | 6..=7, 0) => !word,
+        _ => false,
     }
 }
 
@@ -352,28 +415,99 @@ fn emit_block(
 
 fn emit_instruction(function: &mut Function, decoded: Decoded) {
     match decoded {
-        Decoded::Addi { rd, rs1, imm } => {
+        Decoded::OpImm {
+            rd,
+            rs1,
+            kind,
+            imm,
+            alternate,
+        } => {
             function.instruction(&Instruction::LocalGet(rs1 as u32 + 1));
             function.instruction(&Instruction::I64Const(imm));
-            function.instruction(&Instruction::I64Add);
+            emit_i64_alu(function, kind, alternate);
             set_register(function, rd);
         }
-        Decoded::Add { rd, rs1, rs2 } | Decoded::Sub { rd, rs1, rs2 } => {
+        Decoded::OpImm32 {
+            rd,
+            rs1,
+            kind,
+            imm,
+            alternate,
+        } => {
+            function.instruction(&Instruction::LocalGet(rs1 as u32 + 1));
+            function.instruction(&Instruction::I32WrapI64);
+            function.instruction(&Instruction::I32Const(imm as i32));
+            emit_i32_word_alu(function, kind, alternate);
+            function.instruction(&Instruction::I64ExtendI32S);
+            set_register(function, rd);
+        }
+        Decoded::Op {
+            rd,
+            rs1,
+            rs2,
+            kind,
+            alternate,
+        } => {
             function.instruction(&Instruction::LocalGet(rs1 as u32 + 1));
             function.instruction(&Instruction::LocalGet(rs2 as u32 + 1));
-            function.instruction(&if matches!(decoded, Decoded::Add { .. }) {
-                Instruction::I64Add
-            } else {
-                Instruction::I64Sub
-            });
+            emit_i64_alu(function, kind, alternate);
+            set_register(function, rd);
+        }
+        Decoded::Op32 {
+            rd,
+            rs1,
+            rs2,
+            kind,
+            alternate,
+        } => {
+            function.instruction(&Instruction::LocalGet(rs1 as u32 + 1));
+            function.instruction(&Instruction::I32WrapI64);
+            function.instruction(&Instruction::LocalGet(rs2 as u32 + 1));
+            function.instruction(&Instruction::I32WrapI64);
+            emit_i32_word_alu(function, kind, alternate);
+            function.instruction(&Instruction::I64ExtendI32S);
             set_register(function, rd);
         }
         Decoded::Lui { rd, imm } => {
             function.instruction(&Instruction::I64Const(imm));
             set_register(function, rd);
         }
+        Decoded::Auipc { rd, value } => {
+            function.instruction(&Instruction::I64Const(value as i64));
+            set_register(function, rd);
+        }
         Decoded::Branch { .. } | Decoded::Jal { .. } => {}
     }
+}
+
+fn emit_i64_alu(function: &mut Function, kind: u32, alternate: bool) {
+    function.instruction(&match (kind, alternate) {
+        (0, false) => Instruction::I64Add,
+        (0, true) => Instruction::I64Sub,
+        (1, false) => Instruction::I64Shl,
+        (2, false) => Instruction::I64LtS,
+        (3, false) => Instruction::I64LtU,
+        (4, false) => Instruction::I64Xor,
+        (5, false) => Instruction::I64ShrU,
+        (5, true) => Instruction::I64ShrS,
+        (6, false) => Instruction::I64Or,
+        (7, false) => Instruction::I64And,
+        _ => unreachable!(),
+    });
+    if matches!(kind, 2 | 3) {
+        function.instruction(&Instruction::I64ExtendI32U);
+    }
+}
+
+fn emit_i32_word_alu(function: &mut Function, kind: u32, alternate: bool) {
+    function.instruction(&match (kind, alternate) {
+        (0, false) => Instruction::I32Add,
+        (0, true) => Instruction::I32Sub,
+        (1, false) => Instruction::I32Shl,
+        (5, false) => Instruction::I32ShrU,
+        (5, true) => Instruction::I32ShrS,
+        _ => unreachable!(),
+    });
 }
 
 fn emit_branch_condition(function: &mut Function, kind: u32, rs1: usize, rs2: usize) {

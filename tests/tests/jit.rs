@@ -12,6 +12,14 @@ fn addi(rd: u32, rs1: u32, imm: i32) -> u32 {
     ((imm as u32 & 0xfff) << 20) | (rs1 << 15) | (rd << 7) | 0x13
 }
 
+fn op_imm(rd: u32, rs1: u32, imm: u32, funct3: u32) -> u32 {
+    ((imm & 0xfff) << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | 0x13
+}
+
+fn op(rd: u32, rs1: u32, rs2: u32, funct3: u32, funct7: u32) -> u32 {
+    (funct7 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | 0x33
+}
+
 fn branch(pc: u64, target: u64, rs1: u32, rs2: u32, funct3: u32) -> u32 {
     let imm = target.wrapping_sub(pc) as u32;
     ((imm >> 12 & 1) << 31)
@@ -160,6 +168,46 @@ fn rejects_an_unusable_memory_import_maximum() {
         ),
         Err(JitCompileError::InvalidMemoryMaximum(0))
     );
+}
+
+#[test]
+fn emits_rv64_integer_alu_and_word_operators() {
+    let mut region = diamond_region();
+    region.blocks[1].instructions = vec![
+        instruction(0x1004, op_imm(3, 4, 7, 6)),
+        instruction(0x1008, op_imm(5, 6, 3, 1)),
+        instruction(0x100c, op(7, 8, 9, 5, 0x20)),
+        instruction(0x1010, 0x0010_019b), // addiw x3, x0, 1
+        instruction(0x1014, 0x0042_11bb), // sllw x3, x4, x4
+        instruction(0x1018, jal(0x1018, 0x1020, 0)),
+    ];
+    region.blocks.remove(2);
+
+    let bytes = compile(&region).expect("integer region compiles");
+    Validator::new_with_features(WasmFeatures::default() | WasmFeatures::THREADS)
+        .validate_all(&bytes)
+        .expect("integer region module validates");
+    let mut saw_or = false;
+    let mut saw_shl = false;
+    let mut saw_sar = false;
+    let mut saw_i32_add = false;
+    let mut saw_i32_shl = false;
+    for payload in Parser::new(0).parse_all(&bytes) {
+        if let Payload::CodeSectionEntry(body) = payload.expect("module parses") {
+            let mut operators = body.get_operators_reader().expect("operators parse");
+            while !operators.eof() {
+                match operators.read().expect("operator parses") {
+                    Operator::I64Or => saw_or = true,
+                    Operator::I64Shl => saw_shl = true,
+                    Operator::I64ShrS => saw_sar = true,
+                    Operator::I32Add => saw_i32_add = true,
+                    Operator::I32Shl => saw_i32_shl = true,
+                    _ => {}
+                }
+            }
+        }
+    }
+    assert!(saw_or && saw_shl && saw_sar && saw_i32_add && saw_i32_shl);
 }
 
 fn cached_region(id: u32, entry_pc: u64, ranges: &[(u64, u64)]) -> CompiledRegion {
