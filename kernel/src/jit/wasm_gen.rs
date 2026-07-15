@@ -7,17 +7,39 @@ use wasm_encoder::{
 };
 
 use crate::cpu::decode;
+use crate::types::{ProcessState, ThreadState};
 
 const REGISTER_COUNT: u32 = 32;
 const LOCAL_DISPATCH: u32 = 33;
 const LOCAL_COUNT: u32 = 34;
-const LOCAL_PC: u32 = 35;
+const LOCAL_PROCESS_PTR: u32 = 35;
+const LOCAL_PC: u32 = 36;
+const LOCAL_GUEST_BASE: u32 = 37;
+const LOCAL_ADDRESS: u32 = 38;
 const MAX_MEMORY64_PAGES: u64 = 1 << 48;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct JitModuleConfig {
+pub struct JitMemoryPermit {
+    pub start: u64,
+    pub end: u64,
+    pub prot: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JitMemorySnapshot {
+    pub generation_address: u64,
+    pub generation: u32,
+    pub permits: Vec<JitMemoryPermit>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JitModuleConfig<'a> {
     /// Maximum pages declared by the process shared WebAssembly.Memory.
     pub memory_max_pages: u64,
+    /// Absolute shared-memory address of Kernel's VMA permit generation.
+    pub permit_generation_address: u64,
+    pub permit_generation: u32,
+    pub memory_permits: &'a [JitMemoryPermit],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,6 +74,8 @@ pub enum JitCompileError {
     ControlBeforeBlockEnd(u64),
     UnsupportedInstruction(u64, u32),
     InvalidMemoryMaximum(u64),
+    MissingPermitGeneration,
+    InvalidMemoryPermit(u64, u64),
 }
 
 #[derive(Clone, Copy)]
@@ -92,6 +116,18 @@ enum Decoded {
         rd: usize,
         value: u64,
     },
+    Load {
+        rd: usize,
+        rs1: usize,
+        kind: u32,
+        imm: i64,
+    },
+    Store {
+        rs1: usize,
+        rs2: usize,
+        kind: u32,
+        imm: i64,
+    },
     Branch {
         kind: u32,
         rs1: usize,
@@ -114,7 +150,7 @@ impl Decoded {
 
 pub fn compile_region(
     region: &Region,
-    config: JitModuleConfig,
+    config: JitModuleConfig<'_>,
 ) -> Result<Vec<u8>, JitCompileError> {
     if config.memory_max_pages == 0 || config.memory_max_pages > MAX_MEMORY64_PAGES {
         return Err(JitCompileError::InvalidMemoryMaximum(
@@ -122,6 +158,21 @@ pub fn compile_region(
         ));
     }
     let decoded = validate_region(region)?;
+    let has_memory = decoded
+        .iter()
+        .flatten()
+        .any(|instruction| matches!(instruction, Decoded::Load { .. } | Decoded::Store { .. }));
+    if has_memory && config.permit_generation_address == 0 {
+        return Err(JitCompileError::MissingPermitGeneration);
+    }
+    for permit in config.memory_permits {
+        if permit.start >= permit.end {
+            return Err(JitCompileError::InvalidMemoryPermit(
+                permit.start,
+                permit.end,
+            ));
+        }
+    }
     let mut module = Module::new();
 
     let mut types = TypeSection::new();
@@ -152,8 +203,8 @@ pub fn compile_region(
 
     let mut function = Function::new([
         (REGISTER_COUNT, ValType::I64),
-        (2, ValType::I32),
-        (1, ValType::I64),
+        (3, ValType::I32),
+        (3, ValType::I64),
     ]);
     emit_preamble(&mut function);
     function.instruction(&Instruction::I32Const(
@@ -183,6 +234,7 @@ pub fn compile_region(
             &region.blocks[block_index],
             &decoded[block_index],
             block_index as u32,
+            config,
         );
     }
     function.instruction(&Instruction::End);
@@ -279,6 +331,18 @@ fn decode_instruction(instruction: RegionInstruction) -> Result<Decoded, JitComp
             rd: decode::rd(raw),
             value: instruction.pc.wrapping_add_signed(decode::imm_u(raw)),
         }),
+        decode::OP_LOAD if decode::funct3(raw) <= 6 => Ok(Decoded::Load {
+            rd: decode::rd(raw),
+            rs1: decode::rs1(raw),
+            kind: decode::funct3(raw),
+            imm: decode::imm_i(raw),
+        }),
+        decode::OP_STORE if decode::funct3(raw) <= 3 => Ok(Decoded::Store {
+            rs1: decode::rs1(raw),
+            rs2: decode::rs2(raw),
+            kind: decode::funct3(raw),
+            imm: decode::imm_s(raw),
+        }),
         decode::OP_BRANCH if !matches!(decode::funct3(raw), 2 | 3) => Ok(Decoded::Branch {
             kind: decode::funct3(raw),
             rs1: decode::rs1(raw),
@@ -339,6 +403,21 @@ fn emit_preamble(function: &mut Function) {
     function.instruction(&Instruction::I64ExtendI32U);
     function.instruction(&Instruction::I64Load(memarg(REGISTER_COUNT as u64 * 8)));
     function.instruction(&Instruction::LocalSet(LOCAL_PC));
+    function.instruction(&Instruction::LocalGet(0));
+    function.instruction(&Instruction::I64ExtendI32U);
+    function.instruction(&Instruction::I32Load(memarg_with_align(
+        core::mem::offset_of!(ThreadState, guest_base) as u64,
+        2,
+    )));
+    function.instruction(&Instruction::I64ExtendI32U);
+    function.instruction(&Instruction::LocalSet(LOCAL_GUEST_BASE));
+    function.instruction(&Instruction::LocalGet(0));
+    function.instruction(&Instruction::I64ExtendI32U);
+    function.instruction(&Instruction::I32Load(memarg_with_align(
+        core::mem::offset_of!(ThreadState, process_ptr) as u64,
+        2,
+    )));
+    function.instruction(&Instruction::LocalSet(LOCAL_PROCESS_PTR));
 }
 
 fn emit_epilogue(function: &mut Function) {
@@ -360,6 +439,7 @@ fn emit_block(
     block: &RegionBlock,
     decoded: &[Decoded],
     outer_block_count: u32,
+    config: JitModuleConfig<'_>,
 ) {
     for (instruction, decoded) in block.instructions.iter().zip(decoded.iter().copied()) {
         emit_budget_guard(
@@ -368,6 +448,9 @@ fn emit_block(
             instruction.pc,
             outer_block_count,
         );
+        if matches!(decoded, Decoded::Load { .. } | Decoded::Store { .. }) {
+            emit_memory_guards(function, decoded, instruction.pc, outer_block_count, config);
+        }
         emit_instruction(function, decoded);
         function.instruction(&Instruction::LocalGet(LOCAL_COUNT));
         function.instruction(&Instruction::I32Const(1));
@@ -476,7 +559,154 @@ fn emit_instruction(function: &mut Function, decoded: Decoded) {
             function.instruction(&Instruction::I64Const(value as i64));
             set_register(function, rd);
         }
+        Decoded::Load { rd, kind, .. } => {
+            emit_guest_memory_address(function);
+            function.instruction(&match kind {
+                0 => Instruction::I64Load8S(memarg_with_align(0, 0)),
+                1 => Instruction::I64Load16S(memarg_with_align(0, 1)),
+                2 => Instruction::I64Load32S(memarg_with_align(0, 2)),
+                3 => Instruction::I64Load(memarg_with_align(0, 3)),
+                4 => Instruction::I64Load8U(memarg_with_align(0, 0)),
+                5 => Instruction::I64Load16U(memarg_with_align(0, 1)),
+                6 => Instruction::I64Load32U(memarg_with_align(0, 2)),
+                _ => unreachable!(),
+            });
+            set_register(function, rd);
+        }
+        Decoded::Store { rs2, kind, .. } => {
+            emit_guest_memory_address(function);
+            function.instruction(&Instruction::LocalGet(rs2 as u32 + 1));
+            function.instruction(&match kind {
+                0 => Instruction::I64Store8(memarg_with_align(0, 0)),
+                1 => Instruction::I64Store16(memarg_with_align(0, 1)),
+                2 => Instruction::I64Store32(memarg_with_align(0, 2)),
+                3 => Instruction::I64Store(memarg_with_align(0, 3)),
+                _ => unreachable!(),
+            });
+        }
         Decoded::Branch { .. } | Decoded::Jal { .. } => {}
+    }
+}
+
+fn emit_memory_guards(
+    function: &mut Function,
+    decoded: Decoded,
+    pc: u64,
+    outer_block_count: u32,
+    config: JitModuleConfig<'_>,
+) {
+    let (rs1, imm, width, prot) = match decoded {
+        Decoded::Load { rs1, imm, kind, .. } => {
+            (rs1, imm, memory_width(kind), crate::abi::PROT_READ)
+        }
+        Decoded::Store { rs1, imm, kind, .. } => {
+            (rs1, imm, memory_width(kind), crate::abi::PROT_WRITE)
+        }
+        _ => unreachable!(),
+    };
+    function.instruction(&Instruction::LocalGet(rs1 as u32 + 1));
+    function.instruction(&Instruction::I64Const(imm));
+    function.instruction(&Instruction::I64Add);
+    function.instruction(&Instruction::LocalSet(LOCAL_ADDRESS));
+
+    emit_generation_guard(function, pc, outer_block_count, config);
+    emit_single_thread_guard(function, pc, outer_block_count);
+    emit_permit_guard(
+        function,
+        pc,
+        outer_block_count,
+        width,
+        prot,
+        config.memory_permits,
+    );
+}
+
+fn emit_generation_guard(
+    function: &mut Function,
+    pc: u64,
+    outer_block_count: u32,
+    config: JitModuleConfig<'_>,
+) {
+    function.instruction(&Instruction::I64Const(
+        config.permit_generation_address as i64,
+    ));
+    function.instruction(&Instruction::I32AtomicLoad(memarg_with_align(0, 2)));
+    function.instruction(&Instruction::I32Const(config.permit_generation as i32));
+    function.instruction(&Instruction::I32Ne);
+    emit_side_exit_if(function, pc, outer_block_count);
+}
+
+fn emit_single_thread_guard(function: &mut Function, pc: u64, outer_block_count: u32) {
+    function.instruction(&Instruction::LocalGet(LOCAL_PROCESS_PTR));
+    function.instruction(&Instruction::I32Eqz);
+    emit_side_exit_if(function, pc, outer_block_count);
+
+    function.instruction(&Instruction::LocalGet(LOCAL_GUEST_BASE));
+    function.instruction(&Instruction::LocalGet(LOCAL_PROCESS_PTR));
+    function.instruction(&Instruction::I64ExtendI32U);
+    function.instruction(&Instruction::I64Add);
+    function.instruction(&Instruction::I32AtomicLoad(memarg_with_align(
+        core::mem::offset_of!(ProcessState, thread_count) as u64,
+        2,
+    )));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Ne);
+    emit_side_exit_if(function, pc, outer_block_count);
+}
+
+fn emit_permit_guard(
+    function: &mut Function,
+    pc: u64,
+    outer_block_count: u32,
+    width: u64,
+    prot: i32,
+    permits: &[JitMemoryPermit],
+) {
+    let mut emitted = false;
+    for permit in permits {
+        if permit.prot & prot != prot || permit.end - permit.start < width {
+            continue;
+        }
+        function.instruction(&Instruction::LocalGet(LOCAL_ADDRESS));
+        function.instruction(&Instruction::I64Const(permit.start as i64));
+        function.instruction(&Instruction::I64GeU);
+        function.instruction(&Instruction::LocalGet(LOCAL_ADDRESS));
+        function.instruction(&Instruction::I64Const((permit.end - width) as i64));
+        function.instruction(&Instruction::I64LeU);
+        function.instruction(&Instruction::I32And);
+        if emitted {
+            function.instruction(&Instruction::I32Or);
+        }
+        emitted = true;
+    }
+    if !emitted {
+        function.instruction(&Instruction::I32Const(0));
+    }
+    function.instruction(&Instruction::I32Eqz);
+    emit_side_exit_if(function, pc, outer_block_count);
+}
+
+fn emit_side_exit_if(function: &mut Function, pc: u64, outer_block_count: u32) {
+    function.instruction(&Instruction::If(BlockType::Empty));
+    function.instruction(&Instruction::I64Const(pc as i64));
+    function.instruction(&Instruction::LocalSet(LOCAL_PC));
+    function.instruction(&Instruction::Br(outer_block_count + 2));
+    function.instruction(&Instruction::End);
+}
+
+fn emit_guest_memory_address(function: &mut Function) {
+    function.instruction(&Instruction::LocalGet(LOCAL_GUEST_BASE));
+    function.instruction(&Instruction::LocalGet(LOCAL_ADDRESS));
+    function.instruction(&Instruction::I64Add);
+}
+
+fn memory_width(kind: u32) -> u64 {
+    match kind {
+        0 | 4 => 1,
+        1 | 5 => 2,
+        2 | 6 => 4,
+        3 => 8,
+        _ => unreachable!(),
     }
 }
 
@@ -560,9 +790,13 @@ fn block_index(region: &Region, pc: u64) -> Option<usize> {
 }
 
 fn memarg(offset: u64) -> MemArg {
+    memarg_with_align(offset, 3)
+}
+
+fn memarg_with_align(offset: u64, align: u32) -> MemArg {
     MemArg {
         offset,
-        align: 3,
+        align,
         memory_index: 0,
     }
 }

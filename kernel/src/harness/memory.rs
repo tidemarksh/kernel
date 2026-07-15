@@ -76,3 +76,32 @@ pub fn debug_vma_fd(index: u32) -> i32 {
 pub fn debug_vma_offset(index: u32) -> u64 {
     crate::syscall::memory::address_space_vma_offset(index)
 }
+
+pub fn debug_jit_memory_snapshot_generation() -> u32 {
+    crate::syscall::memory::jit_memory_snapshot().generation
+}
+
+pub fn debug_jit_memory_permit_len() -> u32 {
+    crate::syscall::memory::jit_memory_snapshot().permits.len() as u32
+}
+
+pub fn debug_jit_memory_permit_start(index: u32) -> u64 {
+    crate::syscall::memory::jit_memory_snapshot()
+        .permits
+        .get(index as usize)
+        .map_or(0, |permit| permit.start)
+}
+
+pub fn debug_jit_memory_permit_end(index: u32) -> u64 {
+    crate::syscall::memory::jit_memory_snapshot()
+        .permits
+        .get(index as usize)
+        .map_or(0, |permit| permit.end)
+}
+
+pub fn debug_jit_memory_permit_prot(index: u32) -> i32 {
+    crate::syscall::memory::jit_memory_snapshot()
+        .permits
+        .get(index as usize)
+        .map_or(0, |permit| permit.prot)
+}

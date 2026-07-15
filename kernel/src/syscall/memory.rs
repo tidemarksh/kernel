@@ -416,6 +416,33 @@ pub(crate) fn permit_cache_generation() -> u32 {
     PERMIT_CACHE_GENERATION.load(Ordering::Acquire)
 }
 
+pub(crate) fn jit_memory_snapshot() -> crate::jit::wasm_gen::JitMemorySnapshot {
+    let _guard = address_space_lock();
+    let state = ms();
+    let mut permits = Vec::with_capacity(state.vmas.len() + 1);
+    if state.brk_current > state.brk_base {
+        permits.push(crate::jit::wasm_gen::JitMemoryPermit {
+            start: state.brk_base,
+            end: state.brk_current,
+            prot: PROT_READ | PROT_WRITE,
+        });
+    }
+    for vma in &state.vmas {
+        if vma.prot != PROT_NONE {
+            permits.push(crate::jit::wasm_gen::JitMemoryPermit {
+                start: vma.start,
+                end: vma.end,
+                prot: vma.prot,
+            });
+        }
+    }
+    crate::jit::wasm_gen::JitMemorySnapshot {
+        generation_address: core::ptr::addr_of!(PERMIT_CACHE_GENERATION) as usize as u64,
+        generation: PERMIT_CACHE_GENERATION.load(Ordering::Acquire),
+        permits,
+    }
+}
+
 #[inline(always)]
 fn permit_cache_slot(prot: i32) -> usize {
     ((prot as usize) & (PERMIT_CACHE_PROT_SLOTS - 1)) * PERMIT_CACHE_WAYS

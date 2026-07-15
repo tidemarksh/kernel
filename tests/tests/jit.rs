@@ -1,7 +1,8 @@
 use tidemark_kernel::cpu::trace::TraceEntry;
 use tidemark_kernel::jit::cache::{AddressRange, CompiledRegion, RegionCache};
 use tidemark_kernel::jit::wasm_gen::{
-    JitCompileError, JitModuleConfig, Region, RegionBlock, RegionInstruction, compile_region,
+    JitCompileError, JitMemoryPermit, JitModuleConfig, Region, RegionBlock, RegionInstruction,
+    compile_region,
 };
 use tidemark_kernel::jit::{TraceRegionError, region_from_trace};
 use wasmparser::{Imports, Operator, Parser, Payload, Validator, WasmFeatures};
@@ -20,6 +21,15 @@ fn op_imm(rd: u32, rs1: u32, imm: u32, funct3: u32) -> u32 {
 
 fn op(rd: u32, rs1: u32, rs2: u32, funct3: u32, funct7: u32) -> u32 {
     (funct7 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | 0x33
+}
+
+fn load(rd: u32, rs1: u32, imm: i32, funct3: u32) -> u32 {
+    ((imm as u32 & 0xfff) << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | 0x03
+}
+
+fn store(rs1: u32, rs2: u32, imm: i32, funct3: u32) -> u32 {
+    let imm = imm as u32 & 0xfff;
+    ((imm >> 5) << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | ((imm & 0x1f) << 7) | 0x23
 }
 
 fn branch(pc: u64, target: u64, rs1: u32, rs2: u32, funct3: u32) -> u32 {
@@ -80,6 +90,9 @@ fn compile(region: &Region) -> Result<Vec<u8>, JitCompileError> {
         region,
         JitModuleConfig {
             memory_max_pages: 32_768,
+            permit_generation_address: 0,
+            permit_generation: 0,
+            memory_permits: &[],
         },
     )
 }
@@ -166,6 +179,9 @@ fn rejects_an_unusable_memory_import_maximum() {
             &diamond_region(),
             JitModuleConfig {
                 memory_max_pages: 0,
+                permit_generation_address: 0,
+                permit_generation: 0,
+                memory_permits: &[],
             },
         ),
         Err(JitCompileError::InvalidMemoryMaximum(0))
@@ -210,6 +226,86 @@ fn emits_rv64_integer_alu_and_word_operators() {
         }
     }
     assert!(saw_or && saw_shl && saw_sar && saw_i32_add && saw_i32_shl);
+}
+
+#[test]
+fn memory_ops_emit_vma_generation_thread_and_permission_guards() {
+    let permits = [
+        JitMemoryPermit {
+            start: 0x2000,
+            end: 0x3000,
+            prot: tidemark_kernel::abi::PROT_READ,
+        },
+        JitMemoryPermit {
+            start: 0x4000,
+            end: 0x5000,
+            prot: tidemark_kernel::abi::PROT_READ | tidemark_kernel::abi::PROT_WRITE,
+        },
+    ];
+    let region = Region {
+        entry_pc: 0x1000,
+        max_instructions: 8,
+        blocks: vec![RegionBlock {
+            start_pc: 0x1000,
+            instructions: vec![
+                instruction(0x1000, load(3, 4, 8, 3)),
+                instruction(0x1004, store(5, 6, 16, 2)),
+            ],
+        }],
+    };
+    let bytes = compile_region(
+        &region,
+        JitModuleConfig {
+            memory_max_pages: 32_768,
+            permit_generation_address: 0x1800,
+            permit_generation: 7,
+            memory_permits: &permits,
+        },
+    )
+    .expect("guarded memory region compiles");
+    Validator::new_with_features(WasmFeatures::default() | WasmFeatures::THREADS)
+        .validate_all(&bytes)
+        .expect("guarded memory module validates");
+
+    let mut atomic_loads = 0;
+    let mut saw_load = false;
+    let mut saw_store = false;
+    let mut saw_unsigned_range_check = false;
+    for payload in Parser::new(0).parse_all(&bytes) {
+        if let Payload::CodeSectionEntry(body) = payload.expect("module parses") {
+            let mut operators = body.get_operators_reader().expect("operators parse");
+            while !operators.eof() {
+                match operators.read().expect("operator parses") {
+                    Operator::I32AtomicLoad { .. } => atomic_loads += 1,
+                    Operator::I64Load { .. } => saw_load = true,
+                    Operator::I64Store32 { .. } => saw_store = true,
+                    Operator::I64GeU => saw_unsigned_range_check = true,
+                    _ => {}
+                }
+            }
+        }
+    }
+    assert!(
+        atomic_loads >= 4,
+        "generation and thread count guard each access"
+    );
+    assert!(saw_load && saw_store && saw_unsigned_range_check);
+}
+
+#[test]
+fn memory_ops_require_a_vma_generation_address() {
+    let region = Region {
+        entry_pc: 0x1000,
+        max_instructions: 1,
+        blocks: vec![RegionBlock {
+            start_pc: 0x1000,
+            instructions: vec![instruction(0x1000, load(3, 4, 0, 2))],
+        }],
+    };
+    assert_eq!(
+        compile(&region),
+        Err(JitCompileError::MissingPermitGeneration)
+    );
 }
 
 fn cached_region(id: u32, entry_pc: u64, ranges: &[(u64, u64)]) -> CompiledRegion {

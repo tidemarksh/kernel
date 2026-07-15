@@ -3,7 +3,9 @@
 use alloc_crate::vec::Vec;
 
 use crate::cpu::{decode, trace::TraceEntry};
-use wasm_gen::{Region, RegionBlock, RegionInstruction};
+use wasm_gen::{
+    JitCompileError, JitModuleConfig, Region, RegionBlock, RegionInstruction, compile_region,
+};
 
 pub mod cache;
 pub mod wasm_gen;
@@ -13,6 +15,31 @@ pub enum TraceRegionError {
     Empty,
     InvalidStep(u64),
     DuplicatePc(u64),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TraceCompileError {
+    Trace(TraceRegionError),
+    Compile(JitCompileError),
+}
+
+pub fn compile_trace_for_current_address_space(
+    entries: &[TraceEntry],
+    max_instructions: u32,
+    memory_max_pages: u64,
+) -> Result<Vec<u8>, TraceCompileError> {
+    let region = region_from_trace(entries, max_instructions).map_err(TraceCompileError::Trace)?;
+    let snapshot = crate::syscall::memory::jit_memory_snapshot();
+    compile_region(
+        &region,
+        JitModuleConfig {
+            memory_max_pages,
+            permit_generation_address: snapshot.generation_address,
+            permit_generation: snapshot.generation,
+            memory_permits: &snapshot.permits,
+        },
+    )
+    .map_err(TraceCompileError::Compile)
 }
 
 /// Convert one completed dynamic loop trace into linked basic blocks.

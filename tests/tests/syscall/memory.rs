@@ -161,6 +161,52 @@ fn vmas_are_sorted_after_multiple_mmaps() {
 }
 
 #[test]
+fn jit_memory_snapshot_tracks_vma_permissions_and_generation() {
+    let mut t = TestVm::new();
+    let generation_before =
+        tidemark_kernel::harness::memory::debug_jit_memory_snapshot_generation();
+    let mapped = t.sys_mmap(
+        0,
+        PAGE_SIZE,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    );
+    assert!(mapped > 0);
+    let generation_after = tidemark_kernel::harness::memory::debug_jit_memory_snapshot_generation();
+    assert_ne!(generation_after, generation_before);
+
+    let permit = (0..tidemark_kernel::harness::memory::debug_jit_memory_permit_len())
+        .find(|index| {
+            tidemark_kernel::harness::memory::debug_jit_memory_permit_start(*index) == mapped as u64
+        })
+        .expect("mapped VMA appears in JIT snapshot");
+    assert_eq!(
+        tidemark_kernel::harness::memory::debug_jit_memory_permit_end(permit),
+        mapped as u64 + PAGE_SIZE
+    );
+    assert_eq!(
+        tidemark_kernel::harness::memory::debug_jit_memory_permit_prot(permit),
+        (PROT_READ | PROT_WRITE) as i32
+    );
+
+    assert_eq!(t.sys_mprotect(mapped as u64, PAGE_SIZE, PROT_READ), 0);
+    let generation_protected =
+        tidemark_kernel::harness::memory::debug_jit_memory_snapshot_generation();
+    assert_ne!(generation_protected, generation_after);
+    let permit = (0..tidemark_kernel::harness::memory::debug_jit_memory_permit_len())
+        .find(|index| {
+            tidemark_kernel::harness::memory::debug_jit_memory_permit_start(*index) == mapped as u64
+        })
+        .expect("protected VMA remains in JIT snapshot");
+    assert_eq!(
+        tidemark_kernel::harness::memory::debug_jit_memory_permit_prot(permit),
+        PROT_READ as i32
+    );
+}
+
+#[test]
 fn map_fixed_replaces_existing_vma() {
     let mut t = TestVm::new();
     let a = t.sys_mmap(
