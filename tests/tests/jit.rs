@@ -362,6 +362,9 @@ fn thread_jit_handoff_compiles_installs_and_invalidates_a_hot_region() {
     assert_eq!(t.vm.status, abi::STATUS_OK);
     assert_eq!(abi::thread_jit_module_len(vm_ptr), 0);
     assert_eq!(abi::thread_jit_compiled_id(vm_ptr), 41);
+    let ticks = abi::monotonic_ticks_current();
+    assert_eq!(abi::thread_jit_complete(vm_ptr, 7), abi::STATUS_OK);
+    assert_eq!(abi::monotonic_ticks_current(), ticks + 7);
 
     tidemark_kernel::syscall::identity::sys_riscv_flush_icache(
         &mut t.vm,

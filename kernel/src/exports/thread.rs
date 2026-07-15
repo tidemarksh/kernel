@@ -219,6 +219,23 @@ pub extern "C" fn thread_jit_compiled_id(vm_ptr: u32) -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn thread_jit_complete(vm_ptr: u32, executed: u32) -> i32 {
+    if vm_ptr == 0 {
+        return STATUS_FAULT;
+    }
+    unsafe {
+        let vm = &mut *(vm_ptr as *mut ThreadState);
+        crate::syscall::time::advance_monotonic(executed as u64);
+        crate::syscall::signal::check_pending_at_boundary(
+            vm,
+            vm.guest_base,
+            crate::supervisor::SUPERVISOR_SIGNAL_BOUNDARY_STEP,
+        );
+        vm.status
+    }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn thread_jit_clear_pending(vm_ptr: u32) {
     unsafe {
         if let Some(jit) = existing_thread_jit_state(vm_ptr) {
