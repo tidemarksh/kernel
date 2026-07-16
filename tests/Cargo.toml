@@ -78,6 +78,10 @@ name = "cpu_block_cache"
 path = "tests/cpu/block_cache.rs"
 
 [[test]]
+name = "cpu_performance"
+path = "tests/cpu/performance.rs"
+
+[[test]]
 name = "jit_tests"
 path = "tests/jit.rs"
 
