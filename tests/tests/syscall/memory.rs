@@ -563,6 +563,35 @@ fn mprotect_split_on_boundary_mismatch() {
 }
 
 #[test]
+fn repeated_mprotect_reuses_vma_capacity_without_growing_kernel_heap() {
+    let mut t = TestVm::new();
+    let a = t.sys_mmap(
+        0,
+        0x3000,
+        PROT_READ | PROT_WRITE,
+        MAP_ANONYMOUS | MAP_PRIVATE,
+        -1,
+        0,
+    );
+    assert!(a > 0);
+
+    assert_eq!(t.sys_mprotect(a as u64 + 0x1000, 0x1000, PROT_READ), 0);
+    let heap_after_split = tidemark_kernel::alloc::heap_ptr();
+
+    for iteration in 0..1024 {
+        let prot = if iteration & 1 == 0 {
+            PROT_READ | PROT_WRITE
+        } else {
+            PROT_READ
+        };
+        assert_eq!(t.sys_mprotect(a as u64 + 0x1000, 0x1000, prot), 0);
+    }
+
+    assert_eq!(tidemark_kernel::alloc::heap_ptr(), heap_after_split);
+    assert_eq!(t.sys_munmap(a as u64, 0x3000), 0);
+}
+
+#[test]
 fn mprotect_rejects_ranges_that_are_not_fully_mapped() {
     let mut t = TestVm::new();
     let a = t.sys_mmap(

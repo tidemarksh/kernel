@@ -1718,63 +1718,75 @@ pub fn sys_mprotect(vm: &mut ThreadState, base: u32, addr: u64, length: u64, pro
         return ENOMEM;
     }
 
-    let original_vmas = s.vmas.clone();
-    let mut rebuilt_vmas = Vec::with_capacity(original_vmas.len() + 2);
+    if s.vmas.try_reserve(2).is_err() {
+        return ENOMEM;
+    }
 
-    for v in original_vmas {
-        if v.end <= addr || v.start >= end {
-            rebuilt_vmas.push(v);
+    let materializes_sparse_anon = prot as i32 != PROT_NONE
+        && s.vmas.iter().any(|v| {
+            v.start < end
+                && v.end > addr
+                && v.prot == PROT_NONE
+                && (v.flags as u64 & MAP_ANONYMOUS) != 0
+        });
+    if materializes_sparse_anon {
+        if end > guest_limit {
+            return ENOMEM;
+        }
+        if !ensure_memory_capacity_for_guest_range(base, end) {
+            return ENOMEM;
+        }
+    }
+
+    let mut i = 0;
+    while i < s.vmas.len() {
+        let v = s.vmas[i];
+        if v.end <= addr {
+            i += 1;
             continue;
         }
-
-        if v.start < addr {
-            rebuilt_vmas.push(Vma {
-                start: v.start,
-                end: addr,
-                ..v
-            });
+        if v.start >= end {
+            break;
         }
 
+        let segment_start = v.start.max(addr);
+        let segment_end = v.end.min(end);
         let segment = Vma {
-            start: v.start.max(addr),
-            end: v.end.min(end),
+            start: segment_start,
+            end: segment_end,
             prot: prot as i32,
             ..v
         };
 
-        if segment.end > segment.start {
-            let was_prot_none = v.prot == PROT_NONE;
-            if prot as i32 != PROT_NONE
-                && was_prot_none
-                && (segment.flags as u64 & MAP_ANONYMOUS) != 0
-            {
-                if segment.end > guest_limit {
-                    return ENOMEM;
-                }
-                unsafe {
-                    if !ensure_memory_capacity_for_guest_range(base, segment.end) {
-                        return ENOMEM;
-                    }
-                    guest_mem::zero_mem(
-                        base,
-                        segment.start,
-                        (segment.end - segment.start) as usize,
-                    );
-                }
-            }
-            rebuilt_vmas.push(segment);
+        if v.start < segment_start {
+            s.vmas[i].end = segment_start;
+            i += 1;
+            s.vmas.insert(i, segment);
+        } else {
+            s.vmas[i] = segment;
         }
 
-        if v.end > end {
-            rebuilt_vmas.push(Vma {
-                start: end,
-                end: v.end,
-                ..v
-            });
+        if v.prot == PROT_NONE && prot as i32 != PROT_NONE && (v.flags as u64 & MAP_ANONYMOUS) != 0
+        {
+            unsafe {
+                guest_mem::zero_mem(base, segment_start, (segment_end - segment_start) as usize);
+            }
         }
+
+        if segment_end < v.end {
+            s.vmas.insert(
+                i + 1,
+                Vma {
+                    start: segment_end,
+                    end: v.end,
+                    ..v
+                },
+            );
+            break;
+        }
+        i += 1;
     }
 
-    s.vmas = rebuilt_vmas;
     mark_writable_exec_seen(s, prot as i32);
     recompute_prot_none(s);
     invalidate_permit_cache(s);
