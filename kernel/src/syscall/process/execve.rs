@@ -7,6 +7,8 @@ use crate::fs::{fd_table, memfs};
 use crate::guest_mem;
 use crate::types::{FdEntry, ProcessState, THREAD_RUNNING, ThreadRecord, ThreadState};
 use alloc_crate::{format, vec, vec::Vec};
+use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 pub const EXECVE_GUEST_MEMORY_LIMIT: u64 = 0x8000_0000;
 const EXECVE_PATH_MAX: usize = 4096;
@@ -25,6 +27,43 @@ struct ExecveFileReadCache {
     bytes: Vec<u8>,
 }
 
+struct ExecveFileReadCacheSlot {
+    lock: AtomicU32,
+    cache: UnsafeCell<Option<ExecveFileReadCache>>,
+}
+
+unsafe impl Sync for ExecveFileReadCacheSlot {}
+
+impl ExecveFileReadCacheSlot {
+    const fn new() -> Self {
+        Self {
+            lock: AtomicU32::new(0),
+            cache: UnsafeCell::new(None),
+        }
+    }
+
+    fn lock(&self) -> ExecveFileReadCacheGuard<'_> {
+        while self
+            .lock
+            .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            core::hint::spin_loop();
+        }
+        ExecveFileReadCacheGuard { slot: self }
+    }
+}
+
+struct ExecveFileReadCacheGuard<'a> {
+    slot: &'a ExecveFileReadCacheSlot,
+}
+
+impl Drop for ExecveFileReadCacheGuard<'_> {
+    fn drop(&mut self) {
+        self.slot.lock.store(0, Ordering::Release);
+    }
+}
+
 struct ExecveImage {
     path_bytes: Vec<u8>,
     argv: Vec<Vec<u8>>,
@@ -41,9 +80,9 @@ struct ExecveFileBytes {
     owned: Vec<u8>,
 }
 
-static mut EXECVE_PREFIX_READ_CACHE: Option<ExecveFileReadCache> = None;
-static mut EXECVE_FILE_READ_CACHE: Option<ExecveFileReadCache> = None;
-static mut EXECVE_INTERP_FILE_READ_CACHE: Option<ExecveFileReadCache> = None;
+static EXECVE_PREFIX_READ_CACHE: ExecveFileReadCacheSlot = ExecveFileReadCacheSlot::new();
+static EXECVE_FILE_READ_CACHE: ExecveFileReadCacheSlot = ExecveFileReadCacheSlot::new();
+static EXECVE_INTERP_FILE_READ_CACHE: ExecveFileReadCacheSlot = ExecveFileReadCacheSlot::new();
 
 impl ExecveFileBytes {
     fn from_owned(bytes: Vec<u8>) -> Self {
@@ -75,25 +114,21 @@ pub fn clear_execve_backing_miss(vm_ptr: u32) {
     }
 }
 
-fn clear_execve_file_cache(cache_slot: *mut Option<ExecveFileReadCache>, vm_ptr: u32) {
+fn clear_execve_file_cache(cache_slot: &ExecveFileReadCacheSlot, vm_ptr: u32) {
+    let _guard = cache_slot.lock();
     unsafe {
-        if (*cache_slot)
-            .as_ref()
-            .is_some_and(|cache| cache.vm_ptr == vm_ptr)
-        {
-            *cache_slot = None;
+        let cache = &mut *cache_slot.cache.get();
+        if cache.as_ref().is_some_and(|cache| cache.vm_ptr == vm_ptr) {
+            *cache = None;
         }
     }
 }
 
 pub fn clear_execve_backing_state(vm_ptr: u32) {
     clear_execve_backing_miss(vm_ptr);
-    clear_execve_file_cache(core::ptr::addr_of_mut!(EXECVE_PREFIX_READ_CACHE), vm_ptr);
-    clear_execve_file_cache(core::ptr::addr_of_mut!(EXECVE_FILE_READ_CACHE), vm_ptr);
-    clear_execve_file_cache(
-        core::ptr::addr_of_mut!(EXECVE_INTERP_FILE_READ_CACHE),
-        vm_ptr,
-    );
+    clear_execve_file_cache(&EXECVE_PREFIX_READ_CACHE, vm_ptr);
+    clear_execve_file_cache(&EXECVE_FILE_READ_CACHE, vm_ptr);
+    clear_execve_file_cache(&EXECVE_INTERP_FILE_READ_CACHE, vm_ptr);
 }
 
 pub fn execve_backing_miss_ino(vm_ptr: u32) -> u32 {
@@ -113,14 +148,16 @@ pub fn execve_backing_miss_expected_size(vm_ptr: u32) -> u32 {
 }
 
 fn read_execve_file_bytes_cached(
-    cache_slot: *mut Option<ExecveFileReadCache>,
+    cache_slot: &ExecveFileReadCacheSlot,
     vm_ptr: u32,
     ino: u32,
     read_len: u32,
     expected_size: u32,
 ) -> Result<Vec<u8>, i64> {
+    let _guard = cache_slot.lock();
     unsafe {
-        let reset_cache = !(*cache_slot).as_ref().is_some_and(|cache| {
+        let cache_slot = &mut *cache_slot.cache.get();
+        let reset_cache = !cache_slot.as_ref().is_some_and(|cache| {
             cache.vm_ptr == vm_ptr
                 && cache.ino == ino
                 && cache.read_len == read_len
@@ -137,7 +174,7 @@ fn read_execve_file_bytes_cached(
             });
         }
 
-        let cache = (*cache_slot).as_mut().ok_or(ENOMEM)?;
+        let cache = cache_slot.as_mut().ok_or(ENOMEM)?;
         while cache.filled < cache.read_len {
             let offset = cache.filled;
             let chunk_len = (cache.read_len - offset).min(EXECVE_BACKING_FILL_CHUNK as u32);
@@ -317,7 +354,7 @@ fn read_guest_strvec(base: u32, vec_addr: u64) -> Result<Vec<Vec<u8>>, i64> {
 }
 
 fn read_execve_elf_image_bytes_with_cache(
-    cache_slot: *mut Option<ExecveFileReadCache>,
+    cache_slot: &ExecveFileReadCacheSlot,
     vm_ptr: u32,
     ino: u32,
     elf_len: u32,
@@ -363,12 +400,7 @@ fn read_execve_elf_image_bytes(
     ino: u32,
     elf_len: u32,
 ) -> Result<ExecveFileBytes, i64> {
-    read_execve_elf_image_bytes_with_cache(
-        core::ptr::addr_of_mut!(EXECVE_FILE_READ_CACHE),
-        vm_ptr,
-        ino,
-        elf_len,
-    )
+    read_execve_elf_image_bytes_with_cache(&EXECVE_FILE_READ_CACHE, vm_ptr, ino, elf_len)
 }
 
 fn read_execve_interp_elf_image_bytes(
@@ -376,12 +408,7 @@ fn read_execve_interp_elf_image_bytes(
     ino: u32,
     elf_len: u32,
 ) -> Result<ExecveFileBytes, i64> {
-    read_execve_elf_image_bytes_with_cache(
-        core::ptr::addr_of_mut!(EXECVE_INTERP_FILE_READ_CACHE),
-        vm_ptr,
-        ino,
-        elf_len,
-    )
+    read_execve_elf_image_bytes_with_cache(&EXECVE_INTERP_FILE_READ_CACHE, vm_ptr, ino, elf_len)
 }
 
 fn read_execve_elf_metadata_or_image_bytes(
@@ -407,13 +434,7 @@ fn read_execve_elf_metadata_or_image_bytes(
 
 fn read_execve_elf_prefix(vm_ptr: u32, ino: u32, elf_len: u32) -> Result<Vec<u8>, i64> {
     let prefix_len = (elf_len as usize).min(EXECVE_PREFLIGHT_ELF_PREFIX_MAX) as u32;
-    read_execve_file_bytes_cached(
-        core::ptr::addr_of_mut!(EXECVE_PREFIX_READ_CACHE),
-        vm_ptr,
-        ino,
-        prefix_len,
-        elf_len,
-    )
+    read_execve_file_bytes_cached(&EXECVE_PREFIX_READ_CACHE, vm_ptr, ino, prefix_len, elf_len)
 }
 
 fn parse_interpreter_script_header(
