@@ -387,6 +387,38 @@ pub fn socket_read(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, len: u64)
 
     let recv_buf_idx = socket_table()[idx].recv_buf_idx;
     let available = crate::net::ring_buffer::available(recv_buf_idx as u32);
+    if socket_table()[idx].sock_type == SOCK_SEQPACKET {
+        const HEADER_LEN: usize = core::mem::size_of::<u32>();
+        if available < HEADER_LEN {
+            return if slot_peer_is_closed(idx) { 0 } else { EAGAIN };
+        }
+        let mut header = [0u8; HEADER_LEN];
+        if crate::net::ring_buffer::peek(recv_buf_idx as u32, &mut header) != HEADER_LEN {
+            return EIO;
+        }
+        let packet_len = u32::from_le_bytes(header) as usize;
+        if available < HEADER_LEN + packet_len {
+            return EIO;
+        }
+        let to_read = (len as usize).min(packet_len);
+        if to_read > 0 && !crate::syscall::memory::guest_range_accessible(base, buf, to_read as u64)
+        {
+            return EFAULT;
+        }
+        crate::net::ring_buffer::discard(recv_buf_idx as u32, HEADER_LEN);
+        let n = if to_read == 0 {
+            0
+        } else {
+            unsafe {
+                guest_mem::with_write_slice(base, buf, to_read, |dst| {
+                    crate::net::ring_buffer::read(recv_buf_idx as u32, dst)
+                })
+            }
+        };
+        crate::net::ring_buffer::discard(recv_buf_idx as u32, packet_len - n);
+        record_socket_read_debug(idx, fd, before, n as i64, socket_recv_available(idx));
+        return n as i64;
+    }
     let to_read = (len as usize).min(available);
     if to_read > 0 {
         if !crate::syscall::memory::guest_range_accessible(base, buf, to_read as u64) {
@@ -429,6 +461,38 @@ pub fn socket_write(vm: &mut ThreadState, base: u32, fd: u64, buf: u64, len: u64
     let peer = &socket_table()[peer_idx as usize];
     if peer.recv_buf_idx < 0 {
         return EPIPE;
+    }
+
+    if slot.sock_type == SOCK_SEQPACKET {
+        const HEADER_LEN: usize = core::mem::size_of::<u32>();
+        let Ok(packet_len) = usize::try_from(len) else {
+            return EMSGSIZE;
+        };
+        if packet_len > crate::net::ring_buffer::BUF_SIZE as usize - HEADER_LEN - 1 {
+            return EMSGSIZE;
+        }
+        if packet_len > 0
+            && !crate::syscall::memory::guest_range_accessible(base, buf, packet_len as u64)
+        {
+            return EFAULT;
+        }
+        let framed_len = HEADER_LEN + packet_len;
+        if crate::net::ring_buffer::space(peer.recv_buf_idx as u32) < framed_len {
+            return EAGAIN;
+        }
+        let mut framed = alloc_crate::vec![0u8; framed_len];
+        framed[..HEADER_LEN].copy_from_slice(&(packet_len as u32).to_le_bytes());
+        if packet_len > 0 {
+            unsafe {
+                guest_mem::read_bytes(base, buf, &mut framed[HEADER_LEN..]);
+            }
+        }
+        let written = crate::net::ring_buffer::write(peer.recv_buf_idx as u32, &framed);
+        return if written == framed_len {
+            len as i64
+        } else {
+            EIO
+        };
     }
 
     let mut tmp = [0u8; 4096];

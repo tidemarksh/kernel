@@ -235,7 +235,7 @@ pub(super) fn reap_shutdown_socket_slots(excluded_idx: u32) {
         if external_peer_slot_has_live_owner(idx as u32) {
             continue;
         }
-        if !socket_slot_has_ofd_ref(idx as u32) || socket_table()[idx].state == SOCK_STATE_SHUTDOWN
+        if socket_table()[idx].state == SOCK_STATE_SHUTDOWN && !socket_slot_has_ofd_ref(idx as u32)
         {
             stale[stale_count] = idx as u32;
             stale_count += 1;

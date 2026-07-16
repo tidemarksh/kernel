@@ -40,10 +40,10 @@ use state::{
     IPPROTO_UDP, NETLINK_ROUTE, SHUT_RD_MASK, SHUT_WR_MASK, SOCK_STATE_BOUND, SOCK_STATE_CONNECTED,
     SOCK_STATE_CONNECTING, SOCK_STATE_IDLE, SOCK_STATE_LISTENING, SOCK_STATE_SHUTDOWN,
     SOCKADDR_STORAGE_LEN, SocketSlot, alloc_socket_cookie, alloc_socket_recv_buffer,
-    alloc_socket_slot, ensure_external_peer, ensure_external_peer_for_connected_socket,
-    ensure_socket_recv_buffer, free_recv_buffer_if_unreferenced, free_socket_slot, get_socket_idx,
-    record_socket_read_debug, shutdown_slot, socket_has_successful_read, socket_table,
-    thread_connect_target_fd,
+    alloc_socket_slot, alloc_socket_slot_excluding, ensure_external_peer,
+    ensure_external_peer_for_connected_socket, ensure_socket_recv_buffer,
+    free_recv_buffer_if_unreferenced, free_socket_slot, get_socket_idx, record_socket_read_debug,
+    shutdown_slot, socket_has_successful_read, socket_table, thread_connect_target_fd,
 };
 
 pub(super) fn socket_identity_detail(domain: u32, sock_type: u32, protocol: u32) -> u64 {

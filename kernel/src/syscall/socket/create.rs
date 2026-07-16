@@ -1,8 +1,8 @@
 use super::{
     ACCEPT_QUEUE_SIZE, DEFAULT_SOCKET_BUFFER, IPPROTO_TCP, IPPROTO_UDP, NETLINK_ROUTE,
     SOCK_STATE_CONNECTED, SOCK_STATE_IDLE, SOCKADDR_STORAGE_LEN, SocketSlot, alloc_socket_cookie,
-    alloc_socket_recv_buffer, alloc_socket_slot, free_socket_slot, record_socket_control,
-    shutdown_slot, socket_identity_detail, socket_table,
+    alloc_socket_recv_buffer, alloc_socket_slot, alloc_socket_slot_excluding, free_socket_slot,
+    record_socket_control, shutdown_slot, socket_identity_detail, socket_table,
 };
 use crate::abi::*;
 use crate::fs::fd_table;
@@ -119,7 +119,7 @@ pub fn sys_socketpair(
     let raw_type = stype as u32;
     let type_val = raw_type & 0xFF;
     let flags = raw_type & !0xFF;
-    if type_val != SOCK_STREAM && type_val != SOCK_DGRAM {
+    if type_val != SOCK_STREAM && type_val != SOCK_DGRAM && type_val != SOCK_SEQPACKET {
         return EINVAL;
     }
 
@@ -127,7 +127,8 @@ pub fn sys_socketpair(
     let Some(left_idx) = alloc_socket_slot().map(|idx| idx as usize) else {
         return ENOMEM;
     };
-    let Some(right_idx) = alloc_socket_slot().map(|idx| idx as usize) else {
+    let Some(right_idx) = alloc_socket_slot_excluding(left_idx as u32).map(|idx| idx as usize)
+    else {
         free_socket_slot(left_idx as u32);
         return ENOMEM;
     };

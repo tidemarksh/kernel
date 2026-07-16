@@ -228,6 +228,45 @@ pub fn read(idx: u32, buf: &mut [u8]) -> usize {
     to_read
 }
 
+/// Copy data from the front of buffer `idx` without consuming it.
+pub fn peek(idx: u32, buf: &mut [u8]) -> usize {
+    let addr = buf_addr(idx);
+    let head = head_val(addr) as usize;
+    let tail = tail_val(addr) as usize;
+    let cap = BUF_SIZE as usize;
+
+    if head == tail {
+        return 0;
+    }
+
+    let avail = if tail >= head {
+        tail - head
+    } else {
+        cap - head + tail
+    };
+    let to_read = buf.len().min(avail);
+    unsafe {
+        copy_from_ring(data_ptr(addr), head, cap, buf, to_read);
+    }
+    to_read
+}
+
+/// Consume up to `len` bytes from buffer `idx` without copying them.
+pub fn discard(idx: u32, len: usize) -> usize {
+    let addr = buf_addr(idx);
+    let head = head_val(addr) as usize;
+    let tail = tail_val(addr) as usize;
+    let cap = BUF_SIZE as usize;
+    let avail = if tail >= head {
+        tail - head
+    } else {
+        cap - head + tail
+    };
+    let discarded = len.min(avail);
+    set_head(addr, ((head + discarded) % cap) as u32);
+    discarded
+}
+
 /// Return number of bytes available for reading in buffer `idx`.
 pub fn available(idx: u32) -> usize {
     let addr = buf_addr(idx);

@@ -219,3 +219,71 @@ fn socketpair_unix_dgram_honors_type_flags() {
         0
     );
 }
+
+#[test]
+fn socketpair_unix_seqpacket_preserves_packet_boundaries_and_flags() {
+    let mut t = TestVm::new();
+    let sv_addr = t.scratch + 0x280;
+    assert_eq!(
+        socket::sys_socketpair(
+            &mut t.vm,
+            t.base,
+            AF_UNIX as u64,
+            (SOCK_SEQPACKET | SOCK_CLOEXEC) as u64,
+            0,
+            sv_addr,
+        ),
+        0
+    );
+
+    let left_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, sv_addr) } as u64;
+    let right_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, sv_addr + 4) } as u64;
+    assert_ne!(
+        fd_table::sys_fcntl(&mut t.vm, t.base, left_fd, F_GETFD, 0),
+        0
+    );
+
+    let write_addr = t.scratch + 0x300;
+    t.write_mem(write_addr, b"firstsecond");
+    assert_eq!(
+        socket::socket_write(&mut t.vm, t.base, left_fd, write_addr, 5),
+        5
+    );
+    assert_eq!(
+        socket::socket_write(&mut t.vm, t.base, left_fd, write_addr + 5, 6),
+        6
+    );
+
+    let read_addr = t.scratch + 0x380;
+    assert_eq!(
+        socket::socket_read(&mut t.vm, t.base, right_fd, read_addr, 3),
+        3
+    );
+    assert_eq!(
+        socket::socket_read(&mut t.vm, t.base, right_fd, read_addr + 3, 8),
+        6
+    );
+    let mut actual = [0u8; 9];
+    unsafe {
+        tidemark_kernel::guest_mem::read_bytes(t.base, read_addr, &mut actual);
+    }
+    assert_eq!(&actual, b"firsecond");
+
+    assert_eq!(fd_table::sys_close(&mut t.vm, t.base, left_fd), 0);
+    assert_eq!(
+        socket::socket_read(&mut t.vm, t.base, right_fd, read_addr, 1),
+        0
+    );
+
+    let replacement_fd =
+        socket::sys_socket(&mut t.vm, t.base, AF_UNIX as u64, SOCK_STREAM as u64, 0);
+    assert!(replacement_fd >= 0);
+    assert_ne!(
+        socket::debug_socket_idx_for_fd(t.base, &t.vm, replacement_fd as u64),
+        socket::debug_socket_idx_for_fd(t.base, &t.vm, right_fd),
+    );
+    assert_eq!(
+        socket::socket_read(&mut t.vm, t.base, right_fd, read_addr, 1),
+        0
+    );
+}

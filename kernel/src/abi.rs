@@ -372,6 +372,7 @@ pub const ELOOP: i64 = -40;
 pub const ENODATA: i64 = -61;
 pub const ENOTSOCK: i64 = -88;
 pub const EDESTADDRREQ: i64 = -89;
+pub const EMSGSIZE: i64 = -90;
 pub const EPROTOTYPE: i64 = -91;
 pub const ENOPROTOOPT: i64 = -92;
 pub const EPROTONOSUPPORT: i64 = -93;
@@ -401,6 +402,7 @@ pub const AF_NETLINK: u32 = 16;
 pub const SOCK_STREAM: u32 = 1;
 pub const SOCK_DGRAM: u32 = 2;
 pub const SOCK_RAW: u32 = 3;
+pub const SOCK_SEQPACKET: u32 = 5;
 pub const SOCK_NONBLOCK: u32 = 0x800;
 pub const SOCK_CLOEXEC: u32 = 0x80000;
 
