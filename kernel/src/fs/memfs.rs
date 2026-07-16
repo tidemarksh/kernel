@@ -56,6 +56,7 @@ struct PageCacheMeta {
 unsafe extern "C" {
     fn tidemark_page_cache_read(ino: u32, offset: u64, dst_ptr: usize, dst_len: u32) -> i64;
     fn tidemark_page_cache_stat(ino: u32, out_ptr: usize) -> i32;
+    fn tidemark_page_cache_set_mode(ino: u32, mode: u32) -> i32;
     fn tidemark_page_cache_flush(ino: u32) -> i32;
     fn tidemark_page_cache_truncate(ino: u32, size: u64) -> i32;
     fn tidemark_page_cache_write(ino: u32, offset: u64, src_ptr: usize, src_len: u32) -> i64;
@@ -209,6 +210,30 @@ unsafe fn tidemark_page_cache_stat(ino: u32, out_ptr: usize) -> i32 {
     #[cfg(not(any(test, feature = "harness")))]
     {
         let _ = (ino, out_ptr);
+        0
+    }
+}
+
+#[cfg(not(all(
+    any(target_arch = "wasm32", target_arch = "wasm64"),
+    target_os = "unknown"
+)))]
+unsafe fn tidemark_page_cache_set_mode(ino: u32, mode: u32) -> i32 {
+    #[cfg(any(test, feature = "harness"))]
+    let Some(entries) = harness_page_cache_entries() else {
+        return 0;
+    };
+    #[cfg(any(test, feature = "harness"))]
+    {
+        let Some(entry) = entries.iter_mut().find(|entry| entry.ino == ino) else {
+            return 0;
+        };
+        entry.mode = mode;
+        1
+    }
+    #[cfg(not(any(test, feature = "harness")))]
+    {
+        let _ = (ino, mode);
         0
     }
 }
@@ -1621,7 +1646,12 @@ pub fn set_mode(ino: u32, mode: u32) -> i64 {
         return ENOENT;
     }
     let file_type = ins[idx].mode & S_IFMT;
-    inodes()[idx].mode = file_type | (mode & 0o7777);
+    let next_mode = file_type | (mode & 0o7777);
+    let published = unsafe { tidemark_page_cache_set_mode(ino, next_mode) };
+    if published < 0 {
+        return published as i64;
+    }
+    inodes()[idx].mode = next_mode;
     0
 }
 

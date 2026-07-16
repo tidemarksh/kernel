@@ -277,6 +277,21 @@ fn page_cache_shim_requires_harness_opt_in() {
 }
 
 #[test]
+fn page_cache_refresh_preserves_chmod_mode() {
+    let _t = TestVm::new();
+    let ino = memfs::create_file(1, b"generated", 0o644);
+    assert!(ino > 0);
+    assert_eq!(memfs::write_file(ino, 0, b"payload"), 7);
+
+    assert_eq!(memfs::set_mode(ino, 0o755), 0);
+    assert_eq!(memfs::set_file_size_shallow(ino, 7), 0);
+
+    let st = memfs::stat(ino).unwrap();
+    assert_eq!(st.mode & 0o7777, 0o755);
+    assert_eq!(st.size, 7);
+}
+
+#[test]
 fn truncate_zero_external_file_keeps_data_external() {
     let _t = TestVm::new();
     let ino = memfs::create_file(1, b"external-truncate.bin", 0o644);
