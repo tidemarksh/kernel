@@ -1,7 +1,8 @@
 //! Bump allocator for kernel Worker's WASM linear memory.
 //!
 //! Used to allocate ProcessState, ThreadState, OFD table, Vec<Vma>, etc.
-//! Free is a no-op (kernel objects are long-lived).
+//! Deallocation reclaims only the current top allocation. Non-top allocations
+//! remain in the bump arena because kernel objects are generally long-lived.
 //! Implements GlobalAlloc to enable `extern crate alloc` (Vec, etc.).
 
 use core::alloc::{GlobalAlloc, Layout};
@@ -66,8 +67,11 @@ unsafe impl GlobalAlloc for BumpAlloc {
             ptr as *mut u8
         }
     }
-    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
-        // No-op: bump allocator does not free.
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        if ptr.is_null() || layout.size() > u32::MAX as usize {
+            return;
+        }
+        unsafe { dealloc(ptr as u32, layout.size() as u32) };
     }
 }
 
@@ -167,6 +171,27 @@ pub unsafe fn alloc(size: u32, align: u32) -> u32 {
     }
     unsafe { HEAP_PTR = end };
     aligned
+}
+
+/// Reclaim an allocation only when it is still at the top of the bump arena.
+///
+/// # Safety
+/// `ptr` and `size` must describe an allocation returned by this allocator.
+unsafe fn dealloc(ptr: u32, size: u32) {
+    let Some(end) = ptr.checked_add(size) else {
+        return;
+    };
+
+    #[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
+    if crate::syscall::process::runtime::shared_heap_dealloc(ptr, size).is_some() {
+        return;
+    }
+
+    unsafe {
+        if ptr >= HEAP_BASE && HEAP_PTR == end {
+            HEAP_PTR = ptr;
+        }
+    }
 }
 
 #[cfg(not(all(target_arch = "wasm32", target_os = "wasi")))]
@@ -383,6 +408,36 @@ mod tests {
             for (i, &byte) in slice.iter().enumerate() {
                 assert_eq!(byte, 0, "byte at offset {} should be zero, got {}", i, byte);
             }
+        }
+    }
+
+    #[test]
+    fn dealloc_reclaims_latest_allocation() {
+        unsafe {
+            super::reset(0x20_0000);
+
+            let ptr = super::alloc(64, 16);
+            assert_ne!(ptr, 0);
+            super::dealloc(ptr, 64);
+
+            assert_eq!(super::alloc(64, 16), ptr);
+        }
+    }
+
+    #[test]
+    fn dealloc_keeps_non_top_allocation_live() {
+        unsafe {
+            super::reset(0x20_0000);
+
+            let first = super::alloc(64, 16);
+            let second = super::alloc(64, 16);
+            assert_ne!(first, 0);
+            assert_ne!(second, 0);
+
+            super::dealloc(first, 64);
+
+            let third = super::alloc(64, 16);
+            assert!(third >= second + 64);
         }
     }
 }

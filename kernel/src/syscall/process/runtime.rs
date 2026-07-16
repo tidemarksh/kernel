@@ -608,6 +608,26 @@ pub fn shared_heap_alloc(size: u32, align: u32) -> Option<u32> {
     shared_heap_alloc_below(size, align, u32::MAX)
 }
 
+pub(crate) fn shared_heap_dealloc(ptr: u32, size: u32) -> Option<bool> {
+    let state_ptr = checked_process_runtime_state_ptr();
+    if state_ptr.is_null() {
+        return None;
+    }
+    let state = unsafe { &*state_ptr };
+    let Some(end) = ptr.checked_add(size) else {
+        return Some(false);
+    };
+    if ptr < state.heap_base {
+        return Some(false);
+    }
+    Some(
+        state
+            .heap_ptr
+            .compare_exchange(end, ptr, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok(),
+    )
+}
+
 pub fn shared_heap_alloc_below(size: u32, align: u32, limit: u32) -> Option<u32> {
     let ptr = checked_process_runtime_state_ptr();
     if ptr.is_null() {
@@ -715,5 +735,34 @@ pub fn vfork_child_pid() -> i32 {
         0
     } else {
         prs().vfork_snapshot.child_pid
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn shared_heap_dealloc_reclaims_latest_allocation() {
+        unsafe { crate::alloc::reset(0x20_0000) };
+        super::init();
+
+        let ptr = super::shared_heap_alloc(64, 16).expect("shared heap should be attached");
+        assert_ne!(ptr, 0);
+        assert_eq!(super::shared_heap_dealloc(ptr, 64), Some(true));
+        assert_eq!(super::shared_heap_alloc(64, 16), Some(ptr));
+    }
+
+    #[test]
+    fn shared_heap_dealloc_rejects_non_top_allocation() {
+        unsafe { crate::alloc::reset(0x20_0000) };
+        super::init();
+
+        let first = super::shared_heap_alloc(64, 16).expect("shared heap should be attached");
+        let second = super::shared_heap_alloc(64, 16).expect("shared heap should be attached");
+        assert_ne!(first, 0);
+        assert_ne!(second, 0);
+
+        assert_eq!(super::shared_heap_dealloc(first, 64), Some(false));
+        let third = super::shared_heap_alloc(64, 16).expect("shared heap should be attached");
+        assert!(third >= second + 64);
     }
 }
