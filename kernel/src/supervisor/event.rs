@@ -140,6 +140,11 @@ fn stale_after_authoritative_transition(event: ThreadEventState) -> bool {
     if event.status == crate::abi::STATUS_OK as u32 {
         return true;
     }
+    if event.status == crate::abi::STATUS_FUTEX_WAIT as u32
+        && super::futex::blocked_wait_word_mismatched(event.vm_ptr)
+    {
+        return true;
+    }
     super::thread::state_from_ptr(event.vm_ptr)
         .is_some_and(|thread| thread.status as u32 != event.status)
 }

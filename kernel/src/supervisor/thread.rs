@@ -6,6 +6,10 @@ use crate::types::{
     ProcessState, THREAD_BLOCKED_FUTEX, THREAD_DEAD, THREAD_EXITING, THREAD_NONE, THREAD_RUNNING,
     THREAD_STARTING, ThreadRecord, ThreadState,
 };
+use crate::{
+    cpu::block_cache::{BlockCache, BlockEntry},
+    jit::JitState,
+};
 
 const THREAD_COUNT_TRACE_INIT_MAIN: u32 = 1;
 const THREAD_COUNT_TRACE_CLONE_INC: u32 = 2;
@@ -189,7 +193,7 @@ pub(super) fn mark_current_thread_exiting(vm: &ThreadState, base: u32) {
             let mut updated = read_thread_record(record);
             updated.state = THREAD_EXITING;
             updated.blocked_addr = 0;
-            updated.thread_ptr = 0;
+            updated.thread_ptr = vm as *const ThreadState as u32;
             updated.clear_child_tid = vm.clear_child_tid;
             write_thread_record(record, updated);
         }
@@ -226,6 +230,12 @@ pub(super) fn clear_next_tid_hint(base: u32, process_ptr: u32) {
 
 pub(super) fn mark_current_thread_dead(vm: &ThreadState, base: u32) {
     unsafe {
+        if let Some(ps) = process_state_ptr(base, vm.process_ptr) {
+            crate::guest_mem::release_reservation_locks_owned_by(
+                &*ps,
+                vm as *const ThreadState as u32,
+            );
+        }
         if let Some(record) = thread_record_ptr(base, vm.process_ptr, vm.tid) {
             write_thread_record(record, ThreadRecord::new(vm.tid, THREAD_DEAD, 0, 0, 0));
         }
@@ -246,14 +256,26 @@ pub fn apply_exited_thread_publication(
     };
     unsafe {
         let record = &mut (*ps).threads[(exited_tid - 1) as usize];
-        if record.state == THREAD_NONE || record.state == THREAD_DEAD {
+        if record.state == THREAD_NONE {
+            reconcile_thread_count(&*ps);
+            return 0;
+        }
+        if record.state == THREAD_DEAD {
+            if record.tid == exited_tid && record.thread_ptr == 0 {
+                crate::guest_mem::release_reservation_locks_owned_by(&*ps, exited_vm_ptr);
+                *record = ThreadRecord::new(exited_tid, THREAD_DEAD, exited_vm_ptr, 0, 0);
+            }
             reconcile_thread_count(&*ps);
             return 0;
         }
         if record.tid != exited_tid || record.thread_ptr != exited_vm_ptr {
             return 0;
         }
-        *record = ThreadRecord::new(exited_tid, THREAD_DEAD, 0, 0, 0);
+        if record.clear_child_tid != 0 {
+            super::thread_exit::clear_tid_and_wake(vm.process_ptr, base, record.clear_child_tid);
+        }
+        crate::guest_mem::release_reservation_locks_owned_by(&*ps, exited_vm_ptr);
+        *record = ThreadRecord::new(exited_tid, THREAD_DEAD, exited_vm_ptr, 0, 0);
         reconcile_thread_count(&*ps);
     }
     0
@@ -489,15 +511,48 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
             return 0;
         }
 
-        let child_ptr = crate::alloc::alloc_zeroed(
-            core::mem::size_of::<ThreadState>() as u32,
-            core::mem::align_of::<ThreadState>() as u32,
-        );
+        let ps = &mut *((base as u64 + parent.process_ptr as u64) as *mut ProcessState);
+        let child_record = &ps.threads[(parent.clone_child_tid - 1) as usize];
+        let reusable_child_ptr = if child_record.state == THREAD_STARTING {
+            thread_state_from_record_ptr(child_record.thread_ptr)
+                .map(|ptr| ptr as u32)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let child_ptr = if reusable_child_ptr != 0 {
+            reusable_child_ptr
+        } else {
+            crate::alloc::alloc_zeroed(
+                core::mem::size_of::<ThreadState>() as u32,
+                core::mem::align_of::<ThreadState>() as u32,
+            )
+        };
         if child_ptr == 0 {
             return 0;
         }
 
+        if reusable_child_ptr != 0 {
+            crate::guest_mem::release_reservation_locks_owned_by(ps, reusable_child_ptr);
+        }
         let child = &mut *(child_ptr as *mut ThreadState);
+        let retained_block_cache_ptr = if reusable_child_ptr != 0 {
+            child.block_cache_ptr
+        } else {
+            0
+        };
+        let retained_jit_state_ptr = if reusable_child_ptr != 0 {
+            child.jit_state_ptr
+        } else {
+            0
+        };
+        if retained_block_cache_ptr != 0 {
+            let mut cache = BlockCache::from_ptr(retained_block_cache_ptr as *mut BlockEntry);
+            cache.clear();
+        }
+        if retained_jit_state_ptr != 0 {
+            (&mut *(retained_jit_state_ptr as *mut JitState)).clear();
+        }
         core::ptr::write_bytes(child_ptr as *mut u8, 0, core::mem::size_of::<ThreadState>());
 
         child.x = parent.x;
@@ -544,8 +599,8 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
         child.completed_pipe_fresh_slots = 0;
         child.completed_pipe_read_guest_ptr = 0;
         child.completed_pipe_read_len = 0;
-        child.block_cache_ptr = 0;
-        child.jit_state_ptr = 0;
+        child.block_cache_ptr = retained_block_cache_ptr;
+        child.jit_state_ptr = retained_jit_state_ptr;
         child.execve_backing_miss_ino = 0;
         child.execve_backing_miss_len = 0;
         child.execve_backing_miss_offset = 0;
@@ -577,7 +632,6 @@ pub fn spawn_from_clone(parent_vm_ptr: u32, base: u32) -> u32 {
             );
         }
 
-        let ps = &mut *((base as u64 + child.process_ptr as u64) as *mut ProcessState);
         ps.threads[(parent.clone_child_tid - 1) as usize] = ThreadRecord::new(
             parent.clone_child_tid,
             THREAD_STARTING,
@@ -731,17 +785,32 @@ fn allocate_tid(vm: &ThreadState, base: u32) -> i32 {
         let Some(ps) = process_state_ptr(base, vm.process_ptr) else {
             return -1;
         };
-        let mut start_tid = next_tid_hint(base, vm.process_ptr).max(1);
-        if start_tid <= vm.tid {
-            start_tid = vm.tid.saturating_add(1).max(1);
-        }
-        for tid in start_tid..=(MAX_THREADS as i32) {
-            let record = &mut (*ps).threads[(tid - 1) as usize];
-            if record.state == THREAD_NONE || record.state == THREAD_DEAD {
-                *record = ThreadRecord::new(tid, THREAD_STARTING, 0, 0, 0);
-                set_next_tid_hint(base, vm.process_ptr, tid.saturating_add(1));
-                return tid;
+        let max_tid = MAX_THREADS as i32;
+        let hint = next_tid_hint(base, vm.process_ptr);
+        let start_tid = if hint <= 0 {
+            vm.tid.rem_euclid(max_tid) + 1
+        } else if hint > max_tid {
+            1
+        } else {
+            hint
+        };
+        for reusable_only in [true, false] {
+            for offset in 0..MAX_THREADS {
+                let tid = ((start_tid - 1 + offset as i32) % max_tid) + 1;
+                let record = &mut (*ps).threads[(tid - 1) as usize];
+                let reusable = record.state == THREAD_DEAD;
+                if (reusable_only && reusable) || (!reusable_only && record.state == THREAD_NONE) {
+                    let reusable_thread_ptr = if reusable { record.thread_ptr } else { 0 };
+                    *record = ThreadRecord::new(tid, THREAD_STARTING, reusable_thread_ptr, 0, 0);
+                    let next_tid = if tid == max_tid { 1 } else { tid + 1 };
+                    set_next_tid_hint(base, vm.process_ptr, next_tid);
+                    return tid;
+                }
             }
+            if reusable_only {
+                continue;
+            }
+            break;
         }
     }
     -1

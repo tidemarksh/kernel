@@ -75,18 +75,58 @@ fn supervisor_exit_publication_updates_only_matching_thread_incarnation() {
     let mut t = TestVm::new();
     install_current_thread_record(&mut t);
     let exited_vm_ptr = 0x1234_5000;
+    let clear_child_tid = t.scratch + 0x80;
+    unsafe {
+        tidemark_kernel::guest_mem::write_u32(t.base, clear_child_tid, 2);
+    }
+    t.vm.status = STATUS_FUTEX_WAIT;
+    t.vm.futex_wait_addr = clear_child_tid;
+    t.vm.futex_wait_expected = 2;
+    t.vm.futex_wait_bitset = FUTEX_BITSET_MATCH_ANY;
     let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
-    ps.threads[1] = ThreadRecord::new(2, THREAD_BLOCKED_FUTEX, exited_vm_ptr, 0x8000, 0x9000);
+    ps.threads[0].state = THREAD_BLOCKED_FUTEX;
+    ps.threads[0].blocked_addr = clear_child_tid;
+    ps.threads[1] = ThreadRecord::new(
+        2,
+        THREAD_BLOCKED_FUTEX,
+        exited_vm_ptr,
+        clear_child_tid,
+        0x9000,
+    );
     ps.thread_count.store(2, Ordering::Release);
+    ps.reservation_lock[31].store(exited_vm_ptr, Ordering::Release);
+    ps.reservation_gen[31].store(9, Ordering::Release);
 
     let vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    submit_blocked_thread_event(
+        vm_ptr,
+        tidemark_kernel::syscall::process::current_process_pid(&t.vm, t.base) as u32,
+        t.vm.tid as u32,
+        STATUS_FUTEX_WAIT as u32,
+        clear_child_tid,
+    );
     assert_eq!(
         supervisor_apply_exited_thread_publication(vm_ptr, exited_vm_ptr, 2),
         0
     );
     assert_eq!(ps.thread_count.load(Ordering::Acquire), 1);
+    assert_eq!(ps.reservation_lock[31].load(Ordering::Acquire), 0);
+    assert_eq!(ps.reservation_gen[31].load(Ordering::Acquire) & 1, 0);
+    assert_eq!(ps.threads[0].state, THREAD_RUNNING);
+    assert_eq!(ps.threads[0].blocked_addr, 0);
+    assert_eq!(
+        unsafe { tidemark_kernel::guest_mem::read_u32(t.base, clear_child_tid) },
+        0
+    );
     assert_eq!(ps.threads[1].state, THREAD_DEAD);
-    assert_eq!(ps.threads[1].thread_ptr, 0);
+    assert_eq!(ps.threads[1].thread_ptr, exited_vm_ptr);
+    let mut resume = [0u8; 48];
+    assert_eq!(
+        supervisor_process_resume(vm_ptr, resume.as_mut_ptr() as u32, resume.len() as u32),
+        supervisor_resume_record_bytes() as i32
+    );
+    assert_eq!(read_u32_le(&resume, 24), vm_ptr);
+    assert_eq!(t.vm.status, STATUS_OK);
     ps.thread_count.store(2, Ordering::Release);
     assert_eq!(
         supervisor_apply_exited_thread_publication(vm_ptr, exited_vm_ptr, 2),
@@ -96,12 +136,17 @@ fn supervisor_exit_publication_updates_only_matching_thread_incarnation() {
 
     ps.threads[1] = ThreadRecord::new(2, THREAD_RUNNING, 0x5678_9000, 0, 0);
     ps.thread_count.store(2, Ordering::Release);
+    ps.reservation_lock[31].store(exited_vm_ptr, Ordering::Release);
     assert_eq!(
         supervisor_apply_exited_thread_publication(vm_ptr, exited_vm_ptr, 2),
         0
     );
     assert_eq!(ps.thread_count.load(Ordering::Acquire), 2);
     assert_eq!(ps.threads[1].thread_ptr, 0x5678_9000);
+    assert_eq!(
+        ps.reservation_lock[31].load(Ordering::Acquire),
+        exited_vm_ptr
+    );
 }
 
 #[test]

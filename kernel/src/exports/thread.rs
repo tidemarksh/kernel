@@ -103,6 +103,7 @@ unsafe fn thread_step_with_modes(
     unsafe {
         let vm = &mut *(vm_ptr as *mut ThreadState);
         let base = vm.guest_base;
+        crate::guest_mem::set_reservation_lock_owner(vm_ptr);
         crate::tracepoints::record_thread_step_entry_trace(vm, budget);
         crate::tracepoints::record_thread_step_phase(vm, 1, budget, 0);
         if vm.process_ptr != 0 {

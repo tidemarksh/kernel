@@ -936,7 +936,11 @@ pub(super) fn retry_result_action(vm_ptr: u32, result_status: i32) -> i32 {
             0 => RETRY_RESULT_ACTION_NONE as i32,
             _ => RETRY_RESULT_ACTION_SCHEDULE_RETRY_AND_PUMP as i32,
         },
-        _ => RETRY_RESULT_ACTION_SCHEDULE_RETRY as i32,
+        _ => match super::runnable::has_other_selection(vm_ptr) {
+            Ok(true) => RETRY_RESULT_ACTION_SCHEDULE_RETRY_AND_PUMP as i32,
+            Ok(false) => RETRY_RESULT_ACTION_SCHEDULE_RETRY as i32,
+            Err(errno) => -errno,
+        },
     }
 }
 

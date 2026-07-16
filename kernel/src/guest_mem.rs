@@ -34,9 +34,9 @@ static mut RESERVATION_GEN: *const AtomicU32 = core::ptr::null();
 static mut RESERVATION_LOCK: *const AtomicU32 = core::ptr::null();
 /// Pointer to thread_count in ProcessState. null = single-thread (skip seqlock).
 static mut THREAD_COUNT: *const AtomicU32 = core::ptr::null();
-const RESERVATION_LOCK_SPIN_LIMIT: u32 = 1 << 20;
+static RESERVATION_LOCK_OWNER: AtomicU32 = AtomicU32::new(1);
 #[cfg(not(test))]
-const SEQLOCK_READ_SPIN_LIMIT: u32 = RESERVATION_LOCK_SPIN_LIMIT;
+const SEQLOCK_READ_SPIN_LIMIT: u32 = 1 << 20;
 #[cfg(test)]
 const SEQLOCK_READ_SPIN_LIMIT: u32 = 16;
 const ACCESS_READ: u32 = 1;
@@ -117,6 +117,25 @@ pub unsafe fn init(
 pub fn init_single_threaded() {
     unsafe {
         init(core::ptr::null(), core::ptr::null(), core::ptr::null());
+    }
+}
+
+pub(crate) fn set_reservation_lock_owner(vm_ptr: u32) {
+    RESERVATION_LOCK_OWNER.store(vm_ptr.max(1), Ordering::Release);
+}
+
+pub(crate) fn release_reservation_locks_owned_by(ps: &crate::types::ProcessState, owner: u32) {
+    if owner == 0 {
+        return;
+    }
+    for (slot, lock) in ps.reservation_lock.iter().enumerate() {
+        if lock
+            .compare_exchange(owner, 0, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+            && ps.reservation_gen[slot].load(Ordering::Acquire) & 1 != 0
+        {
+            ps.reservation_gen[slot].fetch_add(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -509,18 +528,13 @@ unsafe fn lock_slot_with(reservation_lock: *const AtomicU32, slot: usize) {
 
 #[inline(always)]
 pub(crate) fn acquire_reservation_lock(lock: &AtomicU32) {
-    let mut spins = 0u32;
+    let owner = RESERVATION_LOCK_OWNER.load(Ordering::Acquire);
     loop {
         if lock
-            .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .compare_exchange_weak(0, owner, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
         {
             return;
-        }
-        spins = spins.wrapping_add(1);
-        if spins >= RESERVATION_LOCK_SPIN_LIMIT {
-            let _ = lock.compare_exchange(1, 0, Ordering::AcqRel, Ordering::Relaxed);
-            spins = 0;
         }
         core::hint::spin_loop();
     }

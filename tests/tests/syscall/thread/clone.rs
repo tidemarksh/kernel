@@ -40,6 +40,102 @@ fn contract_clone_thread_returns_status_clone_spawn() {
 }
 
 #[test]
+fn contract_clone_thread_reuses_dead_tid_after_allocator_wraps() {
+    let mut t = TestVm::new();
+    t.vm.tid = (MAX_THREADS - 1) as i32;
+    let parent_vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    let ps = unsafe { &mut *((t.base as u64 + t.vm.process_ptr as u64) as *mut ProcessState) };
+    for tid in 1..MAX_THREADS {
+        ps.threads[tid - 1] = ThreadRecord::new(tid as i32, THREAD_RUNNING, 1, 0, 0);
+    }
+    ps.thread_count.store(
+        (MAX_THREADS - 1) as u32,
+        core::sync::atomic::Ordering::Release,
+    );
+
+    let flags = (CLONE_VM | CLONE_THREAD | CLONE_SIGHAND | CLONE_FS) as u64;
+    assert_eq!(
+        thread_impl::sys_clone(&mut t.vm, t.base, flags, 0x88000, 0, 0, 0),
+        MAX_THREADS as i64
+    );
+    assert_ne!(
+        tidemark_kernel::supervisor::spawn_from_clone(parent_vm_ptr, t.base),
+        0
+    );
+
+    ps.threads[1] = ThreadRecord::new(2, THREAD_DEAD, 0, 0, 0);
+    ps.threads[MAX_THREADS - 1] = ThreadRecord::new(MAX_THREADS as i32, THREAD_DEAD, 0, 0, 0);
+    ps.thread_count.store(
+        (MAX_THREADS - 2) as u32,
+        core::sync::atomic::Ordering::Release,
+    );
+
+    assert_eq!(
+        thread_impl::sys_clone(&mut t.vm, t.base, flags, 0x89000, 0, 0, 0),
+        2
+    );
+}
+
+#[test]
+fn contract_clone_thread_reuses_dead_vm_state() {
+    let mut t = TestVm::new();
+    t.vm.tid = 1;
+    let parent_vm_ptr = &mut t.vm as *mut ThreadState as u32;
+    let flags = (CLONE_VM | CLONE_THREAD | CLONE_SIGHAND | CLONE_FS) as u64;
+
+    assert_eq!(
+        thread_impl::sys_clone(&mut t.vm, t.base, flags, 0x88000, 0, 0, 0),
+        2
+    );
+    let first_child_ptr = tidemark_kernel::supervisor::spawn_from_clone(parent_vm_ptr, t.base);
+    assert_ne!(first_child_ptr, 0);
+    let first_child = unsafe { &mut *(first_child_ptr as *mut ThreadState) };
+    let ps = unsafe { &*((t.base as u64 + t.vm.process_ptr as u64) as *const ProcessState) };
+    ps.reservation_lock[31].store(first_child_ptr, core::sync::atomic::Ordering::Release);
+    ps.reservation_gen[31].store(7, core::sync::atomic::Ordering::Release);
+    assert_eq!(
+        tidemark_kernel::supervisor::complete_thread_exit(first_child, t.base),
+        1
+    );
+    assert_eq!(
+        ps.reservation_lock[31].load(core::sync::atomic::Ordering::Acquire),
+        0
+    );
+    assert_eq!(
+        ps.reservation_gen[31].load(core::sync::atomic::Ordering::Acquire) & 1,
+        0
+    );
+    assert_eq!(ps.threads[1].state, THREAD_DEAD);
+    assert_eq!(ps.threads[1].thread_ptr, 0);
+
+    assert_eq!(
+        supervisor_apply_exited_thread_publication(parent_vm_ptr, first_child_ptr, 2),
+        0
+    );
+    assert_eq!(ps.threads[1].thread_ptr, first_child_ptr);
+
+    ps.reservation_lock[57].store(first_child_ptr, core::sync::atomic::Ordering::Release);
+    ps.reservation_gen[57].store(11, core::sync::atomic::Ordering::Release);
+
+    assert_eq!(
+        thread_impl::sys_clone(&mut t.vm, t.base, flags, 0x89000, 0, 0, 0),
+        2
+    );
+    let second_child_ptr = tidemark_kernel::supervisor::spawn_from_clone(parent_vm_ptr, t.base);
+    assert_eq!(second_child_ptr, first_child_ptr);
+    assert_eq!(
+        ps.reservation_lock[57].load(core::sync::atomic::Ordering::Acquire),
+        0
+    );
+    assert_eq!(
+        ps.reservation_gen[57].load(core::sync::atomic::Ordering::Acquire) & 1,
+        0
+    );
+    let second_child = unsafe { &*(second_child_ptr as *const ThreadState) };
+    assert_eq!(second_child.x[2], 0x89000);
+}
+
+#[test]
 fn contract_supervisor_host_op_spawns_clone_thread_state() {
     supervisor_reset_shadow_log();
 

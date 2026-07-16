@@ -30,7 +30,12 @@ pub(super) fn init() {
     SELECTION_CURSOR.store(0, Ordering::Relaxed);
 }
 
-fn find_from_supervisor_state(vm_ptr: u32, commit: bool) -> Result<Option<RunnableSelection>, i32> {
+fn find_from_supervisor_state(
+    vm_ptr: u32,
+    commit: bool,
+    excluded_vm_ptr: u32,
+    excluded_tid: i32,
+) -> Result<Option<RunnableSelection>, i32> {
     if vm_ptr == 0 {
         return Err(crate::abi::EFAULT as i32);
     }
@@ -55,11 +60,12 @@ fn find_from_supervisor_state(vm_ptr: u32, commit: bool) -> Result<Option<Runnab
             record.state,
             crate::types::THREAD_NONE | crate::types::THREAD_DEAD
         ) || record.thread_ptr == 0
+            || record.thread_ptr == excluded_vm_ptr
+            || (excluded_tid > 0 && record.tid == excluded_tid)
         {
             continue;
         }
-        let futex_word_mismatched = record.state == crate::types::THREAD_BLOCKED_FUTEX
-            && super::futex::blocked_wait_word_mismatched(record.thread_ptr);
+        let futex_word_mismatched = super::futex::blocked_wait_word_mismatched(record.thread_ptr);
         if futex_word_mismatched {
             if !commit {
                 return Ok(Some(RunnableSelection {
@@ -274,9 +280,14 @@ fn active_vfork_child_selection_from_record(
 }
 
 pub(super) fn has_selection(vm_ptr: u32) -> Result<bool, i32> {
-    find_from_supervisor_state(vm_ptr, false).map(|selection| selection.is_some())
+    find_from_supervisor_state(vm_ptr, false, 0, 0).map(|selection| selection.is_some())
+}
+
+pub(super) fn has_other_selection(vm_ptr: u32) -> Result<bool, i32> {
+    let vm = super::thread::state_from_ptr(vm_ptr).ok_or(crate::abi::EFAULT as i32)?;
+    find_from_supervisor_state(vm_ptr, false, vm_ptr, vm.tid).map(|selection| selection.is_some())
 }
 
 pub(super) fn select_from_supervisor_state(vm_ptr: u32) -> Result<Option<RunnableSelection>, i32> {
-    find_from_supervisor_state(vm_ptr, true)
+    find_from_supervisor_state(vm_ptr, true, 0, 0)
 }

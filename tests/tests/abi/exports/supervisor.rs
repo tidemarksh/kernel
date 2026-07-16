@@ -108,6 +108,42 @@ fn supervisor_pipe_slot_snapshot_merge_actions_are_kernel_owned() {
     );
     assert_eq!(
         supervisor_pipe_slot_snapshot_merge_action(
+            thread,
+            read | write | control,
+            0,
+            0,
+            0,
+            0,
+            0,
+            7,
+            0,
+            0,
+            0,
+            0,
+            8,
+        ),
+        skip | stop,
+    );
+    assert_eq!(
+        supervisor_pipe_slot_snapshot_merge_action(
+            thread,
+            read | write | control,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            8,
+        ),
+        skip | stop,
+    );
+    assert_eq!(
+        supervisor_pipe_slot_snapshot_merge_action(
             shared,
             read | write | control,
             1,
@@ -131,6 +167,18 @@ fn supervisor_pipe_slot_snapshot_merge_actions_are_kernel_owned() {
     assert_eq!(
         supervisor_pipe_slot_snapshot_merge_action(thread, write, 0, 2, 10, 1, 1, 0, 2, 3, 1, 1, 0,),
         tail | copy_delta | sync,
+    );
+    assert_eq!(
+        supervisor_pipe_slot_snapshot_merge_action(
+            thread, write, 0, 0, 104, 1, 1, 0, 50, 50, 1, 1, 0,
+        ),
+        tail | copy_delta | sync,
+    );
+    assert_eq!(
+        supervisor_pipe_slot_snapshot_merge_action(
+            thread, read, 0, 128, 128, 1, 1, 0, 104, 178, 1, 1, 0,
+        ),
+        head | sync,
     );
     assert_eq!(
         supervisor_pipe_slot_snapshot_merge_action(
@@ -209,6 +257,42 @@ fn supervisor_pipe_slot_snapshot_merge_actions_are_kernel_owned() {
             2,
         ),
         skip | stop,
+    );
+    assert_eq!(
+        supervisor_pipe_slot_snapshot_merge_action(
+            kernel_worker_canonical,
+            read | write,
+            0,
+            104,
+            201,
+            1,
+            1,
+            22,
+            104,
+            201,
+            1,
+            1,
+            14,
+        ),
+        skip | stop,
+    );
+    assert_eq!(
+        supervisor_pipe_slot_snapshot_merge_action(
+            kernel_worker_canonical,
+            read | write,
+            1,
+            0,
+            0,
+            1,
+            1,
+            22,
+            0,
+            0,
+            0,
+            0,
+            14,
+        ),
+        apply | sync | stop,
     );
 }
 
@@ -2845,6 +2929,30 @@ fn supervisor_shadow_exports_are_additive_and_deterministic() {
         supervisor_blocked_retry_result_action(vm_ptr, STATUS_PIPE_WAIT),
         supervisor_blocked_retry_result_action_schedule_retry() as i32
     );
+    let mut runnable_vm: tidemark_kernel::types::ThreadState = unsafe { core::mem::zeroed() };
+    runnable_vm.guest_base = t.base;
+    runnable_vm.process_ptr = t.vm.process_ptr;
+    runnable_vm.tid = 2;
+    runnable_vm.status = STATUS_OK;
+    let runnable_vm_ptr = &mut runnable_vm as *mut _ as u32;
+    let process_state_mut = (u64::from(t.base) + u64::from(t.vm.process_ptr))
+        as *mut tidemark_kernel::types::ProcessState;
+    unsafe {
+        (*process_state_mut).threads[1] = tidemark_kernel::types::ThreadRecord::new(
+            2,
+            tidemark_kernel::types::THREAD_RUNNING,
+            runnable_vm_ptr,
+            0,
+            0,
+        );
+    }
+    assert_eq!(
+        supervisor_blocked_retry_result_action(vm_ptr, STATUS_PIPE_WAIT),
+        supervisor_blocked_retry_result_action_schedule_retry_and_pump() as i32
+    );
+    unsafe {
+        (*process_state_mut).threads[1] = tidemark_kernel::types::ThreadRecord::empty();
+    }
     assert_eq!(
         supervisor_blocked_post_network_pump_action(vm_ptr, 0, 0),
         supervisor_blocked_post_network_pump_action_schedule_retry_with_host_progress() as i32

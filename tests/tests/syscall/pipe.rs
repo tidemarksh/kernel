@@ -181,6 +181,31 @@ fn supervisor_blocked_pipe_resume_action_reports_defer_and_direct() {
 }
 
 #[test]
+fn supervisor_blocked_pipe_resume_action_is_direct_for_interrupting_signal() {
+    let mut t = TestVm::new();
+    let pipefd_addr = t.scratch + 0x1000;
+    assert_eq!(pipe::sys_pipe2(&mut t.vm, t.base, pipefd_addr, 0), 0);
+    let read_fd = unsafe { tidemark_kernel::guest_mem::read_u32(t.base, pipefd_addr) };
+
+    t.vm.x[17] = SYS_READ;
+    t.vm.x[10] = read_fd as u64;
+    t.vm.x[11] = t.scratch + 0x1100;
+    t.vm.x[12] = 16;
+    assert_eq!(
+        tidemark_kernel::syscall::dispatch(&mut t.vm, t.base),
+        STATUS_PIPE_WAIT
+    );
+
+    const SIGUSR1: usize = 10;
+    t.vm.sig_pending |= 1u64 << (SIGUSR1 - 1);
+    let vm_ptr = &mut t.vm as *mut _ as u32;
+    assert_eq!(
+        supervisor_blocked_pipe_resume_action(vm_ptr),
+        supervisor_blocked_pipe_resume_action_direct() as i32
+    );
+}
+
+#[test]
 fn supervisor_blocked_pipe_sync_before_retry_tracks_request_by_wait_signature() {
     let mut t = TestVm::new();
     let pipefd_addr = t.scratch + 0x1000;

@@ -46,10 +46,8 @@ pub(super) fn blocked_wait_word_mismatched(vm_ptr: u32) -> bool {
     if thread.status != crate::abi::STATUS_FUTEX_WAIT {
         return false;
     }
-    let blocked_addr = super::thread::thread_record_blocked_addr(thread, thread.guest_base);
-    blocked_addr != 0
-        && blocked_addr == thread.futex_wait_addr
-        && wait_word_mismatched(thread, blocked_addr)
+    let blocked_addr = thread.futex_wait_addr;
+    blocked_addr != 0 && wait_word_mismatched(thread, blocked_addr)
 }
 
 pub(super) fn complete_wait_if_word_mismatched(vm_ptr: u32) -> bool {
