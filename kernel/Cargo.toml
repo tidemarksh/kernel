@@ -7,6 +7,7 @@ description = "RISC-V Linux userland kernel for WebAssembly"
 
 [features]
 harness = []
+benchmark = []
 
 [lib]
 crate-type = ["cdylib", "rlib"]

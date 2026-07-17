@@ -8,8 +8,8 @@ use tidemark_kernel_tests::performance::{
 
 const WARMUP_RUNS: usize = 1;
 const MEASUREMENT_RUNS: usize = 5;
-const INTEGER_ITERATIONS: u64 = 2_000_000;
-const MEMORY_ITERATIONS: u64 = 1_000_000;
+const INTEGER_ITERATIONS: u64 = 8_000_000;
+const MEMORY_ITERATIONS: u64 = 8_000_000;
 
 fn alloc_block_cache() -> BlockCache {
     let alloc_size = BlockCache::allocation_size();
@@ -150,6 +150,62 @@ fn synthetic_cached_integer_mix_benchmark() {
 }
 
 #[test]
+fn synthetic_interpreter_integer_mix_benchmark() {
+    let mut t = TestVm::new();
+    let code = mmap(
+        &mut t,
+        4096,
+        abi::PROT_READ | abi::PROT_WRITE | abi::PROT_EXEC,
+    );
+    let program = [
+        encode_addi(5, 5, 1),
+        encode_add(6, 6, 5),
+        encode_xor(7, 7, 6),
+        encode_addi(8, 8, 3),
+        encode_add(9, 9, 8),
+        encode_addi(10, 10, -1),
+        encode_bne(10, 0, -24),
+    ];
+    write_program(&t, code, &program);
+    let units_per_run = INTEGER_ITERATIONS * program.len() as u64;
+    let protocol = BenchmarkProtocol {
+        id: "kernel-interpreter-integer-mix-v1",
+        witness_hash: fnv1a64_words(&program),
+        unit: "guest-instruction",
+        units_per_run,
+        warmup_runs: WARMUP_RUNS,
+        measurement_runs: MEASUREMENT_RUNS,
+    };
+
+    let summary = run_benchmark(protocol, || {
+        t.vm.pc = code;
+        t.vm.x = [0; 32];
+        t.vm.x[10] = INTEGER_ITERATIONS;
+        t.vm.status = abi::STATUS_OK;
+        let remaining = unsafe {
+            tidemark_kernel::cpu::exec_at_base(
+                &mut t.vm,
+                units_per_run as i32,
+                t.base,
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+        assert_eq!(remaining, 0);
+        assert_eq!(t.vm.status, abi::STATUS_OK);
+        assert_eq!(t.vm.pc, code + program.len() as u64 * 4);
+        assert_eq!(t.vm.x[10], 0);
+    })
+    .expect("interpreter integer benchmark must produce a summary");
+
+    println!("TIDEMARK_BENCHMARK {}", report_json(&summary).unwrap());
+    assert_eq!(summary.elapsed_ns.len(), MEASUREMENT_RUNS);
+    assert!(summary.median_units_per_second.is_finite());
+}
+
+#[test]
 fn synthetic_cached_load_store_benchmark() {
     let mut t = TestVm::new();
     let mut cache = alloc_block_cache();
@@ -205,6 +261,67 @@ fn synthetic_cached_load_store_benchmark() {
         );
     })
     .expect("load/store benchmark must produce a summary");
+
+    println!("TIDEMARK_BENCHMARK {}", report_json(&summary).unwrap());
+    assert_eq!(summary.elapsed_ns.len(), MEASUREMENT_RUNS);
+    assert!(summary.median_units_per_second.is_finite());
+}
+
+#[test]
+fn synthetic_interpreter_load_store_benchmark() {
+    let mut t = TestVm::new();
+    let code = mmap(
+        &mut t,
+        4096,
+        abi::PROT_READ | abi::PROT_WRITE | abi::PROT_EXEC,
+    );
+    let data = mmap(&mut t, 4096, abi::PROT_READ | abi::PROT_WRITE);
+    let program = [
+        encode_load(5, 11, 0),
+        encode_addi(5, 5, 1),
+        encode_store(5, 11, 0),
+        encode_addi(10, 10, -1),
+        encode_bne(10, 0, -16),
+    ];
+    write_program(&t, code, &program);
+    let units_per_run = MEMORY_ITERATIONS * program.len() as u64;
+    let protocol = BenchmarkProtocol {
+        id: "kernel-interpreter-load-store-v1",
+        witness_hash: fnv1a64_words(&program),
+        unit: "guest-instruction",
+        units_per_run,
+        warmup_runs: WARMUP_RUNS,
+        measurement_runs: MEASUREMENT_RUNS,
+    };
+
+    let summary = run_benchmark(protocol, || {
+        unsafe { guest_mem::write_u64(t.base, data, 0) };
+        t.vm.pc = code;
+        t.vm.x = [0; 32];
+        t.vm.x[10] = MEMORY_ITERATIONS;
+        t.vm.x[11] = data;
+        t.vm.status = abi::STATUS_OK;
+        let remaining = unsafe {
+            tidemark_kernel::cpu::exec_at_base(
+                &mut t.vm,
+                units_per_run as i32,
+                t.base,
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+        assert_eq!(remaining, 0);
+        assert_eq!(t.vm.status, abi::STATUS_OK);
+        assert_eq!(t.vm.pc, code + program.len() as u64 * 4);
+        assert_eq!(t.vm.x[10], 0);
+        assert_eq!(
+            unsafe { guest_mem::read_u64(t.base, data) },
+            MEMORY_ITERATIONS
+        );
+    })
+    .expect("interpreter load/store benchmark must produce a summary");
 
     println!("TIDEMARK_BENCHMARK {}", report_json(&summary).unwrap());
     assert_eq!(summary.elapsed_ns.len(), MEASUREMENT_RUNS);

@@ -9,6 +9,9 @@ build = "build.rs"
 tidemark-kernel = { path = "../kernel", features = ["harness"] }
 wasmparser = { version = "0.244", default-features = false, features = ["features", "validate"] }
 
+[features]
+benchmark = ["tidemark-kernel/benchmark"]
+
 [[test]]
 name = "abi_exports"
 path = "tests/abi/exports/mod.rs"

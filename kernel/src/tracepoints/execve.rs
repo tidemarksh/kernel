@@ -2,7 +2,8 @@
     test,
     all(
         any(target_arch = "wasm32", target_arch = "wasm64"),
-        feature = "harness"
+        feature = "harness",
+        not(feature = "benchmark")
     )
 ))]
 pub(crate) use crate::harness::trace::{
@@ -13,7 +14,7 @@ pub(crate) use crate::harness::trace::{
 macro_rules! noop_tracepoint {
     ($(fn $name:ident($($arg:ident : $ty:ty),* $(,)?) $(-> $ret:ty)? $body:block)*) => {
         $(
-            #[cfg(not(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness"))))]
+            #[cfg(not(any(test, all(any(target_arch = "wasm32", target_arch = "wasm64"), feature = "harness", not(feature = "benchmark")))))]
             #[inline(always)]
             pub(crate) fn $name($($arg: $ty),*) $(-> $ret)? {
                 let _ = ($($arg),*);
