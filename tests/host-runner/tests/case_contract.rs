@@ -1,4 +1,5 @@
 use std::time::Duration;
+use std::{cell::Cell, hint::black_box};
 
 use tidemark_kernel_host_runner::case::{
     CaseClass, ExecutionCase, ExecutionIdentity, ExpectedCounter, ObservedCounter,
@@ -77,7 +78,7 @@ fn accepts_exact_case_and_emits_raw_result() {
 fn times_only_the_supplied_operation() {
     let case = case();
     let identity = identity();
-    let mut calls = 0;
+    let stage = Cell::new(0);
     let result = measure_case(
         &case,
         case.clone(),
@@ -86,13 +87,18 @@ fn times_only_the_supplied_operation() {
         "x5=8;pc=32",
         &counters(),
         || {
-            calls += 1;
-            std::hint::black_box(0..128).for_each(drop);
+            assert_eq!(stage.replace(1), 0);
+            black_box(0..128).for_each(drop);
+            12
+        },
+        |value| {
+            assert_eq!(value, 12);
+            assert_eq!(stage.replace(2), 1);
             observation()
         },
     )
     .expect("measured exact case result");
-    assert_eq!(calls, 1);
+    assert_eq!(stage.get(), 2);
     assert!(result.elapsed_ns() > 0);
 }
 

@@ -80,18 +80,20 @@ impl RawCaseResult {
     }
 }
 
-pub fn measure_case(
+pub fn measure_case<Output>(
     expected_case: &ExecutionCase,
     observed_case: ExecutionCase,
     expected_execution: &ExecutionIdentity,
     observed_execution: ExecutionIdentity,
     oracle_expected: &str,
     counters_expected: &[ExpectedCounter],
-    operation: impl FnOnce() -> OperationObservation,
+    operation: impl FnOnce() -> Output,
+    observe: impl FnOnce(Output) -> OperationObservation,
 ) -> Result<RawCaseResult, String> {
     let started = Instant::now();
-    let observation = operation();
+    let output = operation();
     let elapsed = started.elapsed();
+    let observation = observe(output);
     accept_case_result(
         expected_case,
         observed_case,
