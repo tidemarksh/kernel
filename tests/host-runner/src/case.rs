@@ -66,12 +66,18 @@ pub struct CounterResult {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RawCaseResult {
-    pub case: ExecutionCase,
-    pub execution: ExecutionIdentity,
-    pub elapsed_ns: u64,
-    pub oracle_expected: String,
-    pub oracle_observed: String,
-    pub counters: Vec<CounterResult>,
+    case: ExecutionCase,
+    execution: ExecutionIdentity,
+    elapsed_ns: u64,
+    oracle_expected: String,
+    oracle_observed: String,
+    counters: Vec<CounterResult>,
+}
+
+impl RawCaseResult {
+    pub fn elapsed_ns(&self) -> u64 {
+        self.elapsed_ns
+    }
 }
 
 pub fn measure_case(

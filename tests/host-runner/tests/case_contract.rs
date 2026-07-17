@@ -93,7 +93,7 @@ fn times_only_the_supplied_operation() {
     )
     .expect("measured exact case result");
     assert_eq!(calls, 1);
-    assert!(result.elapsed_ns > 0);
+    assert!(result.elapsed_ns() > 0);
 }
 
 #[test]
@@ -167,5 +167,61 @@ fn rejects_oracle_counter_and_identity_drift() {
         )
         .unwrap_err()
         .contains("case identity drift")
+    );
+}
+
+#[test]
+fn rejects_incomplete_results_before_raw_emission() {
+    let case = case();
+    let identity = identity();
+
+    let mut no_work = case.clone();
+    no_work.useful_work_count = 0;
+    assert!(
+        accept_case_result(
+            &no_work,
+            no_work.clone(),
+            &identity,
+            identity.clone(),
+            Duration::from_nanos(1),
+            "x5=8;pc=32",
+            observation(),
+            &counters(),
+        )
+        .unwrap_err()
+        .contains("useful_work_count")
+    );
+
+    assert!(
+        accept_case_result(
+            &case,
+            case.clone(),
+            &identity,
+            identity.clone(),
+            Duration::ZERO,
+            "x5=8;pc=32",
+            observation(),
+            &counters(),
+        )
+        .unwrap_err()
+        .contains("elapsed duration")
+    );
+
+    assert!(
+        accept_case_result(
+            &case,
+            case.clone(),
+            &identity,
+            identity.clone(),
+            Duration::from_nanos(1),
+            "x5=8;pc=32",
+            OperationObservation {
+                oracle: "x5=8;pc=32".into(),
+                counters: vec![],
+            },
+            &[],
+        )
+        .unwrap_err()
+        .contains("at least one exact counter")
     );
 }
