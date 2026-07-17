@@ -116,6 +116,62 @@ pub(super) unsafe fn exec_simple_load_scan_loop<const FIRST_CONSUMED: bool>(
     remaining: &mut i32,
     access_cache: &mut AccessPermitCache,
     memory_is_multi_threaded: bool,
+    hot_counts: Option<&mut HotCounts>,
+    jit_bitmap: Option<&JitBitmap>,
+    trace_buf: Option<&mut TraceBuffer>,
+) -> BlockOutcome {
+    // Select the memory synchronization mode once, outside the cached loop.
+    if memory_is_multi_threaded {
+        unsafe {
+            exec_simple_load_scan_loop_for_mode::<FIRST_CONSUMED, true>(
+                blk,
+                vm,
+                x,
+                f,
+                fcsr,
+                pc,
+                base,
+                remaining,
+                access_cache,
+                hot_counts,
+                jit_bitmap,
+                trace_buf,
+            )
+        }
+    } else {
+        unsafe {
+            exec_simple_load_scan_loop_for_mode::<FIRST_CONSUMED, false>(
+                blk,
+                vm,
+                x,
+                f,
+                fcsr,
+                pc,
+                base,
+                remaining,
+                access_cache,
+                hot_counts,
+                jit_bitmap,
+                trace_buf,
+            )
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn exec_simple_load_scan_loop_for_mode<
+    const FIRST_CONSUMED: bool,
+    const MULTI_THREADED: bool,
+>(
+    blk: &BlockEntry,
+    vm: &mut ThreadState,
+    x: &mut [u64; 32],
+    f: &mut [u64; 32],
+    fcsr: &mut u32,
+    pc: &mut u64,
+    base: u32,
+    remaining: &mut i32,
+    access_cache: &mut AccessPermitCache,
     mut hot_counts: Option<&mut HotCounts>,
     jit_bitmap: Option<&JitBitmap>,
     mut trace_buf: Option<&mut TraceBuffer>,
@@ -236,21 +292,21 @@ pub(super) unsafe fn exec_simple_load_scan_loop<const FIRST_CONSUMED: bool>(
                     let val: u64 = match f3 {
                         0 => unsafe { guest_mem::read_u8_unchecked(base, addr) as i8 as u64 },
                         1 => unsafe {
-                            (if memory_is_multi_threaded {
+                            (if MULTI_THREADED {
                                 guest_mem::read_u16_seqlock(base, addr)
                             } else {
                                 guest_mem::read_u16(base, addr)
                             }) as i16 as u64
                         },
                         2 => unsafe {
-                            (if memory_is_multi_threaded {
+                            (if MULTI_THREADED {
                                 guest_mem::read_u32_seqlock(base, addr)
                             } else {
                                 guest_mem::read_u32(base, addr)
                             }) as i32 as u64
                         },
                         3 => unsafe {
-                            if memory_is_multi_threaded {
+                            if MULTI_THREADED {
                                 guest_mem::read_u64_seqlock(base, addr)
                             } else {
                                 guest_mem::read_u64(base, addr)
@@ -258,14 +314,14 @@ pub(super) unsafe fn exec_simple_load_scan_loop<const FIRST_CONSUMED: bool>(
                         },
                         4 => unsafe { guest_mem::read_u8_unchecked(base, addr) as u64 },
                         5 => unsafe {
-                            (if memory_is_multi_threaded {
+                            (if MULTI_THREADED {
                                 guest_mem::read_u16_seqlock(base, addr)
                             } else {
                                 guest_mem::read_u16(base, addr)
                             }) as u64
                         },
                         6 => unsafe {
-                            (if memory_is_multi_threaded {
+                            (if MULTI_THREADED {
                                 guest_mem::read_u32_seqlock(base, addr)
                             } else {
                                 guest_mem::read_u32(base, addr)
@@ -365,6 +421,59 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
     remaining: &mut i32,
     access_cache: &mut AccessPermitCache,
     memory_is_multi_threaded: bool,
+    hot_counts: Option<&mut HotCounts>,
+    jit_bitmap: Option<&JitBitmap>,
+    trace_buf: Option<&mut TraceBuffer>,
+) -> BlockOutcome {
+    // Const specialization removes a per-load/store mode branch from hot blocks.
+    if memory_is_multi_threaded {
+        unsafe {
+            exec_block_for_mode::<FIRST_CONSUMED, true>(
+                blk,
+                vm,
+                x,
+                f,
+                fcsr,
+                pc,
+                base,
+                remaining,
+                access_cache,
+                hot_counts,
+                jit_bitmap,
+                trace_buf,
+            )
+        }
+    } else {
+        unsafe {
+            exec_block_for_mode::<FIRST_CONSUMED, false>(
+                blk,
+                vm,
+                x,
+                f,
+                fcsr,
+                pc,
+                base,
+                remaining,
+                access_cache,
+                hot_counts,
+                jit_bitmap,
+                trace_buf,
+            )
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn exec_block_for_mode<const FIRST_CONSUMED: bool, const MULTI_THREADED: bool>(
+    blk: &BlockEntry,
+    vm: &mut ThreadState,
+    x: &mut [u64; 32],
+    f: &mut [u64; 32],
+    fcsr: &mut u32,
+    pc: &mut u64,
+    base: u32,
+    remaining: &mut i32,
+    access_cache: &mut AccessPermitCache,
     mut hot_counts: Option<&mut HotCounts>,
     jit_bitmap: Option<&JitBitmap>,
     mut trace_buf: Option<&mut TraceBuffer>,
@@ -582,21 +691,21 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                     let val: u64 = match f3 {
                         0 => unsafe { guest_mem::read_u8_unchecked(base, addr) as i8 as u64 },
                         1 => unsafe {
-                            (if memory_is_multi_threaded {
+                            (if MULTI_THREADED {
                                 guest_mem::read_u16_seqlock(base, addr)
                             } else {
                                 guest_mem::read_u16(base, addr)
                             }) as i16 as u64
                         },
                         2 => unsafe {
-                            (if memory_is_multi_threaded {
+                            (if MULTI_THREADED {
                                 guest_mem::read_u32_seqlock(base, addr)
                             } else {
                                 guest_mem::read_u32(base, addr)
                             }) as i32 as u64
                         },
                         3 => unsafe {
-                            if memory_is_multi_threaded {
+                            if MULTI_THREADED {
                                 guest_mem::read_u64_seqlock(base, addr)
                             } else {
                                 guest_mem::read_u64(base, addr)
@@ -604,14 +713,14 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                         },
                         4 => unsafe { guest_mem::read_u8_unchecked(base, addr) as u64 },
                         5 => unsafe {
-                            (if memory_is_multi_threaded {
+                            (if MULTI_THREADED {
                                 guest_mem::read_u16_seqlock(base, addr)
                             } else {
                                 guest_mem::read_u16(base, addr)
                             }) as u64
                         },
                         6 => unsafe {
-                            (if memory_is_multi_threaded {
+                            (if MULTI_THREADED {
                                 guest_mem::read_u32_seqlock(base, addr)
                             } else {
                                 guest_mem::read_u32(base, addr)
@@ -664,7 +773,7 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                                 base,
                                 addr,
                                 x[r2] as u8,
-                                memory_is_multi_threaded,
+                                MULTI_THREADED,
                             )
                         },
                         1 => unsafe {
@@ -672,7 +781,7 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                                 base,
                                 addr,
                                 x[r2] as u16,
-                                memory_is_multi_threaded,
+                                MULTI_THREADED,
                             )
                         },
                         2 => unsafe {
@@ -680,7 +789,7 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                                 base,
                                 addr,
                                 x[r2] as u32,
-                                memory_is_multi_threaded,
+                                MULTI_THREADED,
                             )
                         },
                         3 => unsafe {
@@ -688,7 +797,7 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                                 base,
                                 addr,
                                 x[r2],
-                                memory_is_multi_threaded,
+                                MULTI_THREADED,
                             )
                         },
                         _ => {}
@@ -764,7 +873,7 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                     match f3 {
                         2 => {
                             let value = unsafe {
-                                if memory_is_multi_threaded {
+                                if MULTI_THREADED {
                                     guest_mem::read_u32_seqlock(base, addr)
                                 } else {
                                     guest_mem::read_u32(base, addr)
@@ -774,7 +883,7 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                         }
                         3 => {
                             f[rd] = unsafe {
-                                if memory_is_multi_threaded {
+                                if MULTI_THREADED {
                                     guest_mem::read_u64_seqlock(base, addr)
                                 } else {
                                     guest_mem::read_u64(base, addr)
@@ -823,7 +932,7 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                                 base,
                                 addr,
                                 f[r2] as u32,
-                                memory_is_multi_threaded,
+                                MULTI_THREADED,
                             )
                         },
                         3 => unsafe {
@@ -831,7 +940,7 @@ pub(super) unsafe fn exec_block<const FIRST_CONSUMED: bool>(
                                 base,
                                 addr,
                                 f[r2],
-                                memory_is_multi_threaded,
+                                MULTI_THREADED,
                             )
                         },
                         _ => {}
