@@ -1,0 +1,8 @@
+[package]
+name = "tidemark-kernel-host-runner"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+wasmparser = { version = "0.244", default-features = false, features = ["features", "validate"] }

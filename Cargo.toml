@@ -1,5 +1,5 @@
 [workspace]
-members = ["kernel", "tests"]
+members = ["kernel", "tests", "tests/host-runner"]
 default-members = ["kernel"]
 resolver = "3"
 
