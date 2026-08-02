@@ -236,6 +236,7 @@ fn classify_loop_flags(ops: &[PackedOp; MAX_BLOCK_OPS], len: u16, start_pc: u64)
 /// Heap-allocated due to large size (~2.2MB for 8192 entries).
 pub struct BlockCache {
     entries: *mut BlockEntry,
+    fetch_permit_cache: BlockFetchPermitCache,
 }
 
 impl BlockCache {
@@ -245,7 +246,10 @@ impl BlockCache {
     /// # Safety
     /// `base_ptr` must cover `allocation_size()` bytes and be valid and zeroed.
     pub unsafe fn from_ptr(base_ptr: *mut BlockEntry) -> Self {
-        Self { entries: base_ptr }
+        Self {
+            entries: base_ptr,
+            fetch_permit_cache: BlockFetchPermitCache::new(),
+        }
     }
 
     /// Size in bytes needed for the cache allocation.
@@ -319,10 +323,8 @@ impl BlockCache {
 
             let mut cur_pc = pc;
             let mut count = 0u16;
-            let mut permit_cache = BlockFetchPermitCache::new();
-
             while (count as usize) < MAX_BLOCK_OPS {
-                if !permit_cache.permitted(vm, guest_base, cur_pc, 2) {
+                if !self.fetch_permit_cache.permitted(vm, guest_base, cur_pc, 2) {
                     break;
                 }
                 let raw16 = guest_mem::read_u16(guest_base, cur_pc);
@@ -333,7 +335,7 @@ impl BlockCache {
                     } // unknown compressed
                     (expanded, 2u64)
                 } else {
-                    if !permit_cache.permitted(vm, guest_base, cur_pc, 4) {
+                    if !self.fetch_permit_cache.permitted(vm, guest_base, cur_pc, 4) {
                         break;
                     }
                     (guest_mem::read_u32(guest_base, cur_pc), 4u64)
@@ -407,6 +409,7 @@ impl BlockCache {
 
     /// Invalidate all entries (e.g., after execve).
     pub fn clear(&mut self) {
+        self.fetch_permit_cache = BlockFetchPermitCache::new();
         for i in 0..CACHE_SIZE {
             let entry = unsafe { &mut *self.entries.add(i) };
             entry.start_pc = 0;

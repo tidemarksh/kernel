@@ -1153,6 +1153,37 @@ fn cached_exec_revalidates_pc_tags_after_index_collision() {
 }
 
 #[test]
+fn checked_block_cache_revalidates_execute_permission_after_mprotect() {
+    let mut t = TestVm::new();
+    let mut cache = alloc_block_cache();
+    let code = mmap_exec(&mut t, 4096);
+    let first = code;
+    let second = code + 64;
+
+    unsafe {
+        guest_mem::write_u32(t.base, first, 0x0010_0093);
+        guest_mem::write_u32(t.base, second, 0x0020_0113);
+    }
+
+    assert!(unsafe { cache.get_or_build_checked(&t.vm, first, t.base) }.is_some());
+    assert_eq!(
+        t.sys_mprotect(code, 4096, abi::PROT_READ | abi::PROT_WRITE),
+        0,
+    );
+    assert!(unsafe { cache.get_or_build_checked(&t.vm, second, t.base) }.is_none());
+
+    assert_eq!(
+        t.sys_mprotect(
+            code,
+            4096,
+            abi::PROT_READ | abi::PROT_WRITE | abi::PROT_EXEC,
+        ),
+        0,
+    );
+    assert!(unsafe { cache.get_or_build_checked(&t.vm, second, t.base) }.is_some());
+}
+
+#[test]
 fn cached_backedge_starts_and_completes_a_jit_trace() {
     let mut t = TestVm::new();
     let mut cache = alloc_block_cache();
