@@ -10,6 +10,9 @@ const WARMUP_RUNS: usize = 1;
 const MEASUREMENT_RUNS: usize = 5;
 const INTEGER_ITERATIONS: u64 = 8_000_000;
 const MEMORY_ITERATIONS: u64 = 8_000_000;
+const BLOCK_COLLISION_ITERATIONS: u64 = 250_000;
+const BLOCK_COLLISION_STRIDE: u64 = 16 * 1024;
+const LONG_BLOCK_ITERATIONS: u64 = 1_000_000;
 
 fn alloc_block_cache() -> BlockCache {
     let alloc_size = BlockCache::allocation_size();
@@ -55,6 +58,21 @@ fn encode_bne(rs1: u32, rs2: u32, imm: i32) -> u32 {
         | ((imm >> 1) & 0x0f) << 8
         | ((imm >> 11) & 1) << 7
         | 0x63
+}
+
+fn encode_beq(rs1: u32, rs2: u32, imm: i32) -> u32 {
+    let imm = imm as u32;
+    ((imm >> 12) & 1) << 31
+        | ((imm >> 5) & 0x3f) << 25
+        | (rs2 << 20)
+        | (rs1 << 15)
+        | ((imm >> 1) & 0x0f) << 8
+        | ((imm >> 11) & 1) << 7
+        | 0x63
+}
+
+fn encode_jalr(rd: u32, rs1: u32, imm: i32) -> u32 {
+    ((imm as u32 & 0x0fff) << 20) | (rs1 << 15) | (rd << 7) | 0x67
 }
 
 fn write_program(t: &TestVm, code: u64, words: &[u32]) {
@@ -143,6 +161,131 @@ fn synthetic_cached_integer_mix_benchmark() {
         assert_eq!(t.vm.x[10], 0);
     })
     .expect("integer benchmark must produce a summary");
+
+    println!("TIDEMARK_BENCHMARK {}", report_json(&summary).unwrap());
+    assert_eq!(summary.elapsed_ns.len(), MEASUREMENT_RUNS);
+    assert!(summary.median_units_per_second.is_finite());
+}
+
+#[test]
+fn synthetic_cached_two_block_collision_benchmark() {
+    let mut t = TestVm::new();
+    let mut cache = alloc_block_cache();
+    let code_a = mmap(
+        &mut t,
+        BLOCK_COLLISION_STRIDE + 4096,
+        abi::PROT_READ | abi::PROT_WRITE | abi::PROT_EXEC,
+    );
+    let code_b = code_a + BLOCK_COLLISION_STRIDE;
+
+    let block_a = [encode_addi(5, 5, 1), encode_jalr(0, 12, 0)];
+    let block_b = [
+        encode_addi(6, 6, 1),
+        encode_addi(10, 10, -1),
+        encode_beq(10, 0, 8),
+        encode_jalr(0, 11, 0),
+    ];
+    write_program(&t, code_a, &block_a);
+    write_program(&t, code_b, &block_b);
+
+    let witness = [
+        block_a[0],
+        block_a[1],
+        block_b[0],
+        block_b[1],
+        block_b[2],
+        block_b[3],
+        BLOCK_COLLISION_STRIDE as u32,
+    ];
+    let units_per_run = BLOCK_COLLISION_ITERATIONS * 6 - 1;
+    let protocol = BenchmarkProtocol {
+        id: "kernel-cached-two-block-collision-v1",
+        witness_hash: fnv1a64_words(&witness),
+        unit: "guest-instruction",
+        units_per_run,
+        warmup_runs: WARMUP_RUNS,
+        measurement_runs: MEASUREMENT_RUNS,
+    };
+
+    let summary = run_benchmark(protocol, || {
+        t.vm.pc = code_a;
+        t.vm.x = [0; 32];
+        t.vm.x[10] = BLOCK_COLLISION_ITERATIONS;
+        t.vm.x[11] = code_a;
+        t.vm.x[12] = code_b;
+        t.vm.status = abi::STATUS_OK;
+        let remaining = unsafe {
+            tidemark_kernel::cpu::exec_at_base(
+                &mut t.vm,
+                units_per_run as i32,
+                t.base,
+                Some(&mut cache),
+                None,
+                None,
+                None,
+            )
+        };
+        assert_eq!(remaining, 0);
+        assert_eq!(t.vm.status, abi::STATUS_OK);
+        assert_eq!(t.vm.pc, code_b + block_b.len() as u64 * 4);
+        assert_eq!(t.vm.x[5], BLOCK_COLLISION_ITERATIONS);
+        assert_eq!(t.vm.x[6], BLOCK_COLLISION_ITERATIONS);
+        assert_eq!(t.vm.x[10], 0);
+    })
+    .expect("two-block collision benchmark must produce a summary");
+
+    println!("TIDEMARK_BENCHMARK {}", report_json(&summary).unwrap());
+    assert_eq!(summary.elapsed_ns.len(), MEASUREMENT_RUNS);
+    assert!(summary.median_units_per_second.is_finite());
+}
+
+#[test]
+fn synthetic_cached_long_block_benchmark() {
+    let mut t = TestVm::new();
+    let mut cache = alloc_block_cache();
+    let code = mmap(
+        &mut t,
+        4096,
+        abi::PROT_READ | abi::PROT_WRITE | abi::PROT_EXEC,
+    );
+    let mut program = [encode_addi(5, 5, 1); 32];
+    program[30] = encode_addi(10, 10, -1);
+    program[31] = encode_bne(10, 0, -124);
+    write_program(&t, code, &program);
+
+    let units_per_run = LONG_BLOCK_ITERATIONS * program.len() as u64;
+    let protocol = BenchmarkProtocol {
+        id: "kernel-cached-long-block-v1",
+        witness_hash: fnv1a64_words(&program),
+        unit: "guest-instruction",
+        units_per_run,
+        warmup_runs: WARMUP_RUNS,
+        measurement_runs: MEASUREMENT_RUNS,
+    };
+
+    let summary = run_benchmark(protocol, || {
+        t.vm.pc = code;
+        t.vm.x = [0; 32];
+        t.vm.x[10] = LONG_BLOCK_ITERATIONS;
+        t.vm.status = abi::STATUS_OK;
+        let remaining = unsafe {
+            tidemark_kernel::cpu::exec_at_base(
+                &mut t.vm,
+                units_per_run as i32,
+                t.base,
+                Some(&mut cache),
+                None,
+                None,
+                None,
+            )
+        };
+        assert_eq!(remaining, 0);
+        assert_eq!(t.vm.status, abi::STATUS_OK);
+        assert_eq!(t.vm.pc, code + program.len() as u64 * 4);
+        assert_eq!(t.vm.x[5], LONG_BLOCK_ITERATIONS * 30);
+        assert_eq!(t.vm.x[10], 0);
+    })
+    .expect("long-block benchmark must produce a summary");
 
     println!("TIDEMARK_BENCHMARK {}", report_json(&summary).unwrap());
     assert_eq!(summary.elapsed_ns.len(), MEASUREMENT_RUNS);
@@ -265,6 +408,231 @@ fn synthetic_cached_load_store_benchmark() {
     println!("TIDEMARK_BENCHMARK {}", report_json(&summary).unwrap());
     assert_eq!(summary.elapsed_ns.len(), MEASUREMENT_RUNS);
     assert!(summary.median_units_per_second.is_finite());
+}
+
+#[test]
+fn synthetic_cached_multi_thread_load_store_benchmark() {
+    let mut t = TestVm::new();
+    let process = unsafe {
+        &*((t.base as u64 + t.vm.process_ptr as u64) as *const tidemark_kernel::types::ProcessState)
+    };
+    process
+        .thread_count
+        .store(2, std::sync::atomic::Ordering::Release);
+
+    let mut cache = alloc_block_cache();
+    let code = mmap(
+        &mut t,
+        4096,
+        abi::PROT_READ | abi::PROT_WRITE | abi::PROT_EXEC,
+    );
+    let data = mmap(&mut t, 4096, abi::PROT_READ | abi::PROT_WRITE);
+    let program = [
+        encode_load(5, 11, 0),
+        encode_addi(5, 5, 1),
+        encode_store(5, 11, 0),
+        encode_addi(10, 10, -1),
+        encode_bne(10, 0, -16),
+    ];
+    write_program(&t, code, &program);
+    let units_per_run = MEMORY_ITERATIONS * program.len() as u64;
+    let protocol = BenchmarkProtocol {
+        id: "kernel-cached-multi-thread-load-store-v1",
+        witness_hash: fnv1a64_words(&program),
+        unit: "guest-instruction",
+        units_per_run,
+        warmup_runs: WARMUP_RUNS,
+        measurement_runs: MEASUREMENT_RUNS,
+    };
+
+    let summary = run_benchmark(protocol, || {
+        unsafe { guest_mem::write_u64(t.base, data, 0) };
+        t.vm.pc = code;
+        t.vm.x = [0; 32];
+        t.vm.x[10] = MEMORY_ITERATIONS;
+        t.vm.x[11] = data;
+        t.vm.status = abi::STATUS_OK;
+        let remaining = unsafe {
+            tidemark_kernel::cpu::exec_at_base(
+                &mut t.vm,
+                units_per_run as i32,
+                t.base,
+                Some(&mut cache),
+                None,
+                None,
+                None,
+            )
+        };
+        assert_eq!(remaining, 0);
+        assert_eq!(t.vm.status, abi::STATUS_OK);
+        assert_eq!(t.vm.pc, code + program.len() as u64 * 4);
+        assert_eq!(t.vm.x[10], 0);
+        assert_eq!(
+            unsafe { guest_mem::read_u64(t.base, data) },
+            MEMORY_ITERATIONS
+        );
+    })
+    .expect("multi-thread load/store benchmark must produce a summary");
+
+    println!("TIDEMARK_BENCHMARK {}", report_json(&summary).unwrap());
+    assert_eq!(summary.elapsed_ns.len(), MEASUREMENT_RUNS);
+    assert!(summary.median_units_per_second.is_finite());
+}
+
+fn run_synthetic_cached_threaded_load_benchmark(multi_threaded: bool, id: &'static str) {
+    let mut t = TestVm::new();
+    let process = unsafe {
+        &*((t.base as u64 + t.vm.process_ptr as u64) as *const tidemark_kernel::types::ProcessState)
+    };
+    process.thread_count.store(
+        u32::from(multi_threaded) + 1,
+        std::sync::atomic::Ordering::Release,
+    );
+
+    let mut cache = alloc_block_cache();
+    let code = mmap(
+        &mut t,
+        4096,
+        abi::PROT_READ | abi::PROT_WRITE | abi::PROT_EXEC,
+    );
+    let data = mmap(&mut t, 4096, abi::PROT_READ | abi::PROT_WRITE);
+    let program = [
+        encode_load(5, 11, 0),
+        encode_addi(6, 6, 1),
+        encode_addi(10, 10, -1),
+        encode_bne(10, 0, -12),
+    ];
+    write_program(&t, code, &program);
+    let units_per_run = MEMORY_ITERATIONS * program.len() as u64;
+    let protocol = BenchmarkProtocol {
+        id,
+        witness_hash: fnv1a64_words(&program),
+        unit: "guest-instruction",
+        units_per_run,
+        warmup_runs: WARMUP_RUNS,
+        measurement_runs: MEASUREMENT_RUNS,
+    };
+
+    let summary = run_benchmark(protocol, || {
+        unsafe { guest_mem::write_u64(t.base, data, 0x1122_3344_5566_7788) };
+        t.vm.pc = code;
+        t.vm.x = [0; 32];
+        t.vm.x[10] = MEMORY_ITERATIONS;
+        t.vm.x[11] = data;
+        t.vm.status = abi::STATUS_OK;
+        let remaining = unsafe {
+            tidemark_kernel::cpu::exec_at_base(
+                &mut t.vm,
+                units_per_run as i32,
+                t.base,
+                Some(&mut cache),
+                None,
+                None,
+                None,
+            )
+        };
+        assert_eq!(remaining, 0);
+        assert_eq!(t.vm.status, abi::STATUS_OK);
+        assert_eq!(t.vm.pc, code + program.len() as u64 * 4);
+        assert_eq!(t.vm.x[5], 0x1122_3344_5566_7788);
+        assert_eq!(t.vm.x[6], MEMORY_ITERATIONS);
+        assert_eq!(t.vm.x[10], 0);
+    })
+    .expect("threaded load benchmark must produce a summary");
+
+    println!("TIDEMARK_BENCHMARK {}", report_json(&summary).unwrap());
+    assert_eq!(summary.elapsed_ns.len(), MEASUREMENT_RUNS);
+    assert!(summary.median_units_per_second.is_finite());
+}
+
+#[test]
+fn synthetic_cached_single_thread_load_benchmark() {
+    run_synthetic_cached_threaded_load_benchmark(false, "kernel-cached-single-thread-load-v1");
+}
+
+#[test]
+fn synthetic_cached_multi_thread_load_benchmark() {
+    run_synthetic_cached_threaded_load_benchmark(true, "kernel-cached-multi-thread-load-v1");
+}
+
+fn run_synthetic_cached_threaded_store_benchmark(multi_threaded: bool, id: &'static str) {
+    let mut t = TestVm::new();
+    let process = unsafe {
+        &*((t.base as u64 + t.vm.process_ptr as u64) as *const tidemark_kernel::types::ProcessState)
+    };
+    process.thread_count.store(
+        u32::from(multi_threaded) + 1,
+        std::sync::atomic::Ordering::Release,
+    );
+
+    let mut cache = alloc_block_cache();
+    let code = mmap(
+        &mut t,
+        4096,
+        abi::PROT_READ | abi::PROT_WRITE | abi::PROT_EXEC,
+    );
+    let data = mmap(&mut t, 4096, abi::PROT_READ | abi::PROT_WRITE);
+    let program = [
+        encode_store(5, 11, 0),
+        encode_addi(5, 5, 1),
+        encode_addi(10, 10, -1),
+        encode_bne(10, 0, -12),
+    ];
+    write_program(&t, code, &program);
+    let units_per_run = MEMORY_ITERATIONS * program.len() as u64;
+    let protocol = BenchmarkProtocol {
+        id,
+        witness_hash: fnv1a64_words(&program),
+        unit: "guest-instruction",
+        units_per_run,
+        warmup_runs: WARMUP_RUNS,
+        measurement_runs: MEASUREMENT_RUNS,
+    };
+
+    let summary = run_benchmark(protocol, || {
+        unsafe { guest_mem::write_u64(t.base, data, 0) };
+        t.vm.pc = code;
+        t.vm.x = [0; 32];
+        t.vm.x[5] = 1;
+        t.vm.x[10] = MEMORY_ITERATIONS;
+        t.vm.x[11] = data;
+        t.vm.status = abi::STATUS_OK;
+        let remaining = unsafe {
+            tidemark_kernel::cpu::exec_at_base(
+                &mut t.vm,
+                units_per_run as i32,
+                t.base,
+                Some(&mut cache),
+                None,
+                None,
+                None,
+            )
+        };
+        assert_eq!(remaining, 0);
+        assert_eq!(t.vm.status, abi::STATUS_OK);
+        assert_eq!(t.vm.pc, code + program.len() as u64 * 4);
+        assert_eq!(t.vm.x[5], MEMORY_ITERATIONS + 1);
+        assert_eq!(t.vm.x[10], 0);
+        assert_eq!(
+            unsafe { guest_mem::read_u64(t.base, data) },
+            MEMORY_ITERATIONS
+        );
+    })
+    .expect("threaded store benchmark must produce a summary");
+
+    println!("TIDEMARK_BENCHMARK {}", report_json(&summary).unwrap());
+    assert_eq!(summary.elapsed_ns.len(), MEASUREMENT_RUNS);
+    assert!(summary.median_units_per_second.is_finite());
+}
+
+#[test]
+fn synthetic_cached_single_thread_store_benchmark() {
+    run_synthetic_cached_threaded_store_benchmark(false, "kernel-cached-single-thread-store-v1");
+}
+
+#[test]
+fn synthetic_cached_multi_thread_store_benchmark() {
+    run_synthetic_cached_threaded_store_benchmark(true, "kernel-cached-multi-thread-store-v1");
 }
 
 #[test]
