@@ -880,15 +880,30 @@ pub(crate) unsafe fn write_u64_unchecked_for_mode(
         crate::tracepoints::record_guest_write_overlap(addr, 8, WRITE_OP_U64, val, 8);
     }
     if memory_is_multi_threaded {
-        let mask = stripe_mask(addr, 8);
-        unsafe { lock_mask(mask) };
-        unsafe { seqlock_begin_mask(mask) };
-        unsafe { ptr.write_unaligned(val) };
-        unsafe { seqlock_end_mask(mask) };
-        unsafe { unlock_mask(mask) };
+        unsafe { write_u64_multi_threaded(ptr, addr, val) };
     } else {
         unsafe { ptr.write_unaligned(val) };
     }
+}
+
+#[inline(never)]
+unsafe fn write_u64_multi_threaded(ptr: *mut u64, addr: u64, val: u64) {
+    if addr & 7 == 0 {
+        let slot = ((addr >> 3) & 63) as usize;
+        unsafe { lock_slot_with(RESERVATION_LOCK, slot) };
+        unsafe { bump_gen_with(RESERVATION_GEN, slot) };
+        unsafe { ptr.write_unaligned(val) };
+        unsafe { bump_gen_with(RESERVATION_GEN, slot) };
+        unsafe { unlock_slot_with(RESERVATION_LOCK, slot) };
+        return;
+    }
+
+    let mask = stripe_mask(addr, 8);
+    unsafe { lock_mask(mask) };
+    unsafe { seqlock_begin_mask(mask) };
+    unsafe { ptr.write_unaligned(val) };
+    unsafe { seqlock_end_mask(mask) };
+    unsafe { unlock_mask(mask) };
 }
 
 #[inline(always)]
