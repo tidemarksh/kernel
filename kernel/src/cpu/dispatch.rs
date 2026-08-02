@@ -41,6 +41,7 @@ pub(super) enum StepOutcome {
 
 /// Execute one already-decoded instruction.
 #[allow(clippy::too_many_arguments)]
+#[inline(always)]
 pub(super) unsafe fn exec_decoded(
     vm: &mut ThreadState,
     raw: u32,
