@@ -75,6 +75,53 @@ fn accepts_exact_case_and_emits_raw_result() {
 }
 
 #[test]
+fn emits_the_canonical_cross_language_raw_case_golden_bytes() {
+    let case = ExecutionCase {
+        technical_name: "runtime/worker/roundtrip-contract".into(),
+        class: CaseClass::Diagnostic,
+        repository_owner: "runtime".into(),
+        definition_source_digest: digest('1'),
+        input_digest: digest('2'),
+        useful_work_unit: "worker-roundtrip".into(),
+        useful_work_count: 4,
+        calibrated_repetition_count: 1,
+        oracle_contract_digest: digest('3'),
+        counter_contract_digest: digest('4'),
+        case_schedule_digest: digest('5'),
+    };
+    let identity = ExecutionIdentity {
+        engine: "interpreter".into(),
+        configuration_digest: digest('6'),
+        artifact_digest: digest('7'),
+    };
+    let result = accept_case_result(
+        &case,
+        case.clone(),
+        &identity,
+        identity.clone(),
+        Duration::from_nanos(125),
+        "responses=4",
+        OperationObservation {
+            oracle: "responses=4".into(),
+            counters: vec![ObservedCounter {
+                name: "responses".into(),
+                value: 4,
+            }],
+        },
+        &[ExpectedCounter {
+            name: "responses".into(),
+            value: 4,
+        }],
+    )
+    .expect("cross-language golden case");
+
+    assert_eq!(
+        raw_result_json(&result),
+        "{\"schema\":\"execution-case-result-v1\",\"technical_name\":\"runtime/worker/roundtrip-contract\",\"class\":\"diagnostic\",\"repository_owner\":\"runtime\",\"definition_source_digest\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"input_digest\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"useful_work_unit\":\"worker-roundtrip\",\"useful_work_count\":\"4\",\"calibrated_repetition_count\":\"1\",\"oracle_contract_digest\":\"3333333333333333333333333333333333333333333333333333333333333333\",\"counter_contract_digest\":\"4444444444444444444444444444444444444444444444444444444444444444\",\"case_schedule_digest\":\"5555555555555555555555555555555555555555555555555555555555555555\",\"engine\":\"interpreter\",\"configuration_digest\":\"6666666666666666666666666666666666666666666666666666666666666666\",\"artifact_digest\":\"7777777777777777777777777777777777777777777777777777777777777777\",\"elapsed_ns\":\"125\",\"correctness\":\"pass\",\"oracle_expected\":\"responses=4\",\"oracle_observed\":\"responses=4\",\"counters\":[{\"name\":\"responses\",\"expected\":\"4\",\"observed\":\"4\"}]}"
+    );
+}
+
+#[test]
 fn times_only_the_supplied_operation() {
     let case = case();
     let identity = identity();
