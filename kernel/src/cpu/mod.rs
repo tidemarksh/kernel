@@ -175,6 +175,54 @@ unsafe fn exec_at_base_impl(
     }
 }
 
+#[cold]
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+unsafe fn handle_rt_sigreturn_trampoline(
+    vm: &mut ThreadState,
+    x: &mut [u64; 32],
+    f: &mut [u64; 32],
+    fcsr: &mut u32,
+    pc: &mut u64,
+    base: u32,
+    instr_pc: u64,
+    prev_sp: u64,
+    prev_tp: u64,
+    prev_s11: u64,
+) {
+    vm.x = *x;
+    vm.f = *f;
+    vm.pc = *pc;
+    vm.fcsr = *fcsr;
+    crate::syscall::signal::sys_rt_sigreturn(vm, base);
+    *x = vm.x;
+    normalize_x0(x);
+    *f = vm.f;
+    *pc = vm.pc;
+    *fcsr = vm.fcsr;
+    crate::tracepoints::record_special_reg_transitions(
+        vm as *const ThreadState as u32,
+        vm.tid,
+        instr_pc,
+        0,
+        REG_WRITE_SOURCE_VM_RESTORE,
+        prev_sp,
+        prev_tp,
+        prev_s11,
+        x,
+    );
+    x[0] = 0;
+    crate::tracepoints::record_zero_reg_transition(
+        vm as *const ThreadState as u32,
+        vm.tid,
+        instr_pc,
+        0,
+        prev_sp,
+        prev_s11,
+        x,
+    );
+}
+
 #[inline(never)]
 unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
     let vm = &mut *ctx.vm;
@@ -237,37 +285,11 @@ unsafe fn exec_at_base_loop(ctx: &mut ExecLoopCtx<'_>) -> i32 {
 
         crate::syscall::signal::note_pc(vm, *pc);
         if crate::syscall::signal::is_current_sigreturn_trampoline(x[2], *pc) {
-            vm.x = *x;
-            vm.f = *f;
-            vm.pc = *pc;
-            vm.fcsr = *fcsr;
-            crate::syscall::signal::sys_rt_sigreturn(vm, base);
-            *x = vm.x;
-            normalize_x0(x);
-            *f = vm.f;
-            *pc = vm.pc;
-            *fcsr = vm.fcsr;
-            crate::tracepoints::record_special_reg_transitions(
-                vm as *const ThreadState as u32,
-                vm.tid,
-                instr_pc,
-                0,
-                REG_WRITE_SOURCE_VM_RESTORE,
-                prev_sp,
-                prev_tp,
-                prev_s11,
-                x,
-            );
-            x[0] = 0;
-            crate::tracepoints::record_zero_reg_transition(
-                vm as *const ThreadState as u32,
-                vm.tid,
-                instr_pc,
-                0,
-                prev_sp,
-                prev_s11,
-                x,
-            );
+            unsafe {
+                handle_rt_sigreturn_trampoline(
+                    vm, x, f, fcsr, pc, base, instr_pc, prev_sp, prev_tp, prev_s11,
+                );
+            }
             continue;
         }
         if !cached_exec_fetch_permitted(
